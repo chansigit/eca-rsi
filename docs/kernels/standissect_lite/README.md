@@ -39,19 +39,25 @@ It crosses two partitions of the same cells:
 2. a **UMAP-side clustering** computed here — kNN graph on the 2-D UMAP
    coordinates + Leiden on that graph.
 
-Their overlap table (the "cartesian product" of the two labelings) splits each
-RNA cluster into fragments, ranked by size:
+Naming happens in two steps. **Step 1 — cartesian product**: each non-empty
+(RNA cluster × UMAP cluster) combination is a fragment; think of it as the
+concatenated name `c3u5` = cells in RNA cluster 3 ∩ UMAP cluster u5.
+**Step 2 — rank by size**: within each RNA cluster, fragments are sorted by
+cell count and renamed `c{cluster}_{rank}` — the largest becomes the main
+core, the rest are candidate minors:
 
 ```
-RNA cluster "3"          × UMAP clustering            fragment name
-───────────────          ───────────────────          ─────────────
-                     ┌── u5 (8,021 cells, largest) →  c3_0  main core
-  cluster 3 ─────────┼── u9 (  412 cells)          →  c3_1  minor
-  (8,800 cells)      └── u2 (  367 cells)          →  c3_2  minor
+  step 1: product names                    step 2: sort by size, rename
+  ─────────────────────                    ────────────────────────────
+                    ┌── u2 (  412 cells) → c3u2 ─┐        ┌ c3_0 = c3u5 (8,021)  main core
+  cluster 3 ────────┼── u5 (8,021 cells) → c3u5 ─┼───────▶┤ c3_1 = c3u2 (  412)  minor
+  (8,800 cells)     └── u9 (  367 cells) → c3u9 ─┘        └ c3_2 = c3u9 (  367)  minor
 ```
 
-Fragment names are byte-compatible with standissect's
-(`c{cluster}_{rank}`, rank 0 = main core), so outputs interoperate.
+The `fragments` table keeps both identities per row (`subcluster` = the
+ranked name, `umap_label` = the UMAP side of the product). Ranked names are
+byte-compatible with standissect's (`c{cluster}_{rank}`, rank 0 = main core),
+so outputs interoperate.
 
 ## Usage
 
