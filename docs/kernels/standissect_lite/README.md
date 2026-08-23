@@ -9,20 +9,23 @@ Single-cell annotation and quality control both lean on clustering — yet
 clustering followed by subset-and-recluster often fails to cleanly separate
 tiny subpopulations and low-quality subgroups from their parent cluster.
 
-UMAP is rightly criticised against over-interpretation; still, a locally
-compact, well-connected group of points on the UMAP carries a genuine
-data-level clue. This package uses that signal to sharpen the detection of
-tiny clusters hiding inside existing ones: it clusters the UMAP coordinates
-(at a granularity matched to the RNA-side clustering) and crosses the two
-partitions, so the islands a human would otherwise lasso by hand fall out as
-named, ranked fragments.
+In practice analysts fall back on the UMAP: spot a small island sitting apart
+from its cluster's main blob, and lasso it by hand. UMAP is rightly
+criticised against over-interpretation; still, local separations in the
+embedding can provide useful candidate structure, because UMAP is built to
+preserve aspects of the high-dimensional neighbourhood graph. Analysts
+already treat UMAP islands as hypotheses — this package turns that visual
+heuristic into a systematic candidate-detection procedure: it clusters the
+UMAP coordinates (granularity-matched to the RNA-side clustering), crosses
+the two partitions, and hands the islands back as named, ranked fragments,
+while explicitly leaving validation to downstream evidence.
 
 Two boundaries are deliberate:
 
-- **Detection, not interpretation.** Whether a detected tiny cluster is
-  biologically meaningful (or a doublet pocket / low-quality tail) still
-  requires downstream verification. This is a data-driven method whose only
-  job is to replace inefficient manual lassoing with something reproducible.
+- **Candidates, not conclusions.** Whether a detected tiny cluster is
+  biologically meaningful (or a doublet pocket / low-quality tail) is decided
+  by downstream evidence, not by this method. Its only job is to replace
+  inefficient manual lassoing with something reproducible.
 - **Light by construction.** The full
   [standissect](https://github.com/chansigit/standissect) adds that
   interpretation layer (DEG, QC drift, LLM diagnosis, reports, review

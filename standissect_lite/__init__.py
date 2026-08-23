@@ -1,12 +1,13 @@
 """standissect-lite — data-driven tiny-cluster detection inside existing clusters.
 
 Clustering + subset-reclustering often fails to separate tiny subpopulations
-and low-quality subgroups from their parent cluster; locally compact UMAP
-point groups still carry a data-level clue. This package crosses a
-precomputed RNA-side Leiden clustering with a UMAP-coordinate clustering
-(granularity-matched) and ranks each RNA cluster's fragments (rank 0 = main
-core, the rest = candidate minors) — a reproducible replacement for manual
-lassoing. Detection only: biological meaning needs downstream verification.
+and low-quality subgroups from their parent cluster, so analysts fall back on
+lassoing suspicious UMAP islands by hand. This package turns that visual
+heuristic into a systematic candidate-detection procedure: it crosses a
+precomputed RNA-side Leiden clustering with a granularity-matched
+UMAP-coordinate clustering and ranks each RNA cluster's fragments (rank 0 =
+main core, the rest = candidate minors). Candidates only — validation is
+explicitly left to downstream evidence.
 No scanpy, no DEG, no diagnosis, no reports — made to be imported by other
 projects.
 

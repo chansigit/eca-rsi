@@ -4,17 +4,19 @@ Why this exists (出发点)
 ------------------------
 Single-cell annotation and QC lean on clustering, yet clustering followed by
 subset-and-recluster often fails to cleanly separate tiny subpopulations and
-low-quality subgroups from their parent cluster. UMAP is rightly criticised
-against over-interpretation — still, a locally compact, well-connected group
-of points on the UMAP carries a genuine data-level clue, and this module uses
-that signal to sharpen tiny-cluster detection: the islands a human would
-otherwise lasso by hand fall out as named, ranked fragments. Whether a
-detected tiny cluster is biologically meaningful still requires downstream
-verification — this is deliberately detection only, a reproducible
-replacement for inefficient manual lassoing. The full `standissect` package
-adds the interpretation layer (DEG, QC drift, LLM diagnosis, reports); this
-module is the detection step alone, extracted so other projects can reuse it
-without the heavy stack: no scanpy, no DEG, no diagnosis, no server.
+low-quality subgroups from their parent cluster — so in practice analysts
+fall back on the UMAP and lasso suspicious islands by hand. UMAP is rightly
+criticised against over-interpretation; still, local separations in the
+embedding can provide useful candidate structure, because UMAP is built to
+preserve aspects of the high-dimensional neighbourhood graph. Analysts
+already treat UMAP islands as hypotheses — this module turns that visual
+heuristic into a systematic candidate-detection procedure, and explicitly
+leaves validation to downstream evidence: whether a fragment is biologically
+meaningful (or a doublet pocket / low-quality tail) is not decided here. The
+full `standissect` package adds that interpretation layer (DEG, QC drift,
+LLM diagnosis, reports); this module is the detection step alone, extracted
+so other projects can reuse it without the heavy stack: no scanpy, no DEG,
+no diagnosis, no server.
 
 What it does
 ------------
