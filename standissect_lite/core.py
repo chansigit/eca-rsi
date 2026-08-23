@@ -33,23 +33,11 @@ RNA cluster into fragments, ranked by size: rank 0 is the cluster's clean
 "sibling" because it carries the same RNA label as the main core (same parent
 cluster), not some other small cluster elsewhere.
 
-Granularity matching
---------------------
-The split is only meaningful when the UMAP-side clustering has roughly the
-same granularity as the RNA-side one: too fine chops clean cores into fake
-minors, too coarse swallows real minors into the core. Therefore, by default
-(``umap_target_k=None``) the UMAP-side target cluster count is taken from the
-RNA side — the number of distinct labels in ``cluster_col`` — and the
-UMAP-side Leiden resolution is binary-searched until the UMAP partition lands
-within ``umap_target_k ± umap_target_tol`` clusters.
-
-Who owns which parameter
-------------------------
-Every tuning knob steers the **UMAP-side** clustering and is prefixed
-``umap_``; the RNA side contributes nothing but its labels (and, through the
-default ``umap_target_k``, its cluster count). ``min_subcluster_size`` is not
-a clustering parameter at all — it only sets the ``is_minor_sibling`` flag in the
-returned fragment table.
+Every tuning knob steers the UMAP-side clustering and is prefixed ``umap_``;
+the RNA side contributes nothing but its labels (and, through the default
+``umap_target_k``, its cluster count — the granularity matching that keeps
+the two partitions comparable). Knob-by-knob detail lives in one place: the
+:func:`dissect_partition` docstring.
 
 Usage
 -----
@@ -145,6 +133,31 @@ def umap_leiden_partition(
         'history': history,
     }
     return labels, info
+
+
+def _coordinates(adata, umap_key, umap_Nx2_mat):
+    """The 2-D coordinates to cluster: ``umap_Nx2_mat`` if given, else
+    ``obsm[umap_key]``. Validated, never silently subset — dropping rows here
+    would misalign every downstream label with ``obs_names``."""
+    if umap_Nx2_mat is not None:
+        xy, src = np.asarray(umap_Nx2_mat, dtype=float), "umap_Nx2_mat"
+        if xy.ndim != 2 or xy.shape[0] != adata.n_obs:
+            raise ValueError(f"umap_Nx2_mat must have one row per cell "
+                             f"({adata.n_obs}), got shape {xy.shape}")
+    else:
+        if umap_key not in adata.obsm:
+            raise KeyError(f"umap_key {umap_key!r} not in adata.obsm")
+        xy, src = np.asarray(adata.obsm[umap_key], dtype=float), f"obsm[{umap_key!r}]"
+    if xy.ndim != 2 or xy.shape[1] < 2:
+        raise ValueError(f"{src} must be 2-D with >=2 columns, got shape {xy.shape}")
+    xy = xy[:, :2]
+    n_bad = int((~np.isfinite(xy)).any(axis=1).sum())
+    if n_bad:
+        raise ValueError(
+            f"{n_bad} cells have non-finite coordinates in {src} — clean or "
+            f"subset them first (silently dropping rows would misalign labels "
+            f"with obs_names)")
+    return xy
 
 
 @dataclass
@@ -243,62 +256,38 @@ def dissect_partition(
         coordinates (count reported; clean or subset first — silently
         dropping rows would misalign labels with ``obs_names``).
     """
+    # 1 — inputs: precomputed RNA labels + validated 2-D coordinates
     if cluster_col not in adata.obs.columns:
         raise KeyError(f"cluster_col {cluster_col!r} not in adata.obs")
-    if umap_Nx2_mat is not None:
-        xy = np.asarray(umap_Nx2_mat, dtype=float)
-        src = "umap_Nx2_mat"
-        if xy.ndim != 2 or xy.shape[0] != adata.n_obs:
-            raise ValueError(
-                f"umap_Nx2_mat must have one row per cell "
-                f"({adata.n_obs}), got shape {xy.shape}")
-    else:
-        if umap_key not in adata.obsm:
-            raise KeyError(f"umap_key {umap_key!r} not in adata.obsm")
-        xy = np.asarray(adata.obsm[umap_key], dtype=float)
-        src = f"obsm[{umap_key!r}]"
-    if xy.ndim != 2 or xy.shape[1] < 2:
-        raise ValueError(f"{src} must be 2-D with >=2 columns, "
-                         f"got shape {xy.shape}")
-    xy = xy[:, :2]
-    bad = int((~np.isfinite(xy)).any(axis=1).sum())
-    if bad:
-        raise ValueError(
-            f"{bad} cells have non-finite coordinates in {src} — "
-            f"clean or subset them first (silently dropping rows would "
-            f"misalign labels with obs_names)")
+    rna = adata.obs[cluster_col].astype(str).values
+    xy = _coordinates(adata, umap_key, umap_Nx2_mat)
 
-    rna = adata.obs[cluster_col].astype(str)
+    # 2 — UMAP-side clustering, granularity-matched to the RNA side by default
     if umap_target_k is None:
-        umap_target_k = int(rna.nunique())     # granularity matching (see docstring)
-
+        umap_target_k = len(pd.unique(rna))
     raw, info = umap_leiden_partition(
-        xy,
-        target_k=umap_target_k,
-        resolution=umap_resolution,
-        n_neighbors=umap_n_neighbors,
-        tol=umap_target_tol,
-        random_state=umap_random_state,
-    )
-    umap_label = pd.Series([f"u{int(x)}" for x in raw], index=adata.obs_names,
-                           name="umap_cluster")
+        xy, target_k=umap_target_k, resolution=umap_resolution,
+        n_neighbors=umap_n_neighbors, tol=umap_target_tol,
+        random_state=umap_random_state)
+    umap_lab = np.array([f"u{int(x)}" for x in raw])
 
-    overlap = pd.crosstab(rna.values, umap_label.values)
+    # 3 — the cartesian product: RNA-cluster × UMAP-cluster cell counts
+    overlap = pd.crosstab(rna, umap_lab)
     overlap.index.name = cluster_col
     overlap.columns.name = "umap_cluster"
 
-    # Per RNA cluster, rank its UMAP fragments by size (desc; ties broken by
-    # the crosstab's column order — deterministic) and name c{parent}_{rank}.
+    # 4 — within each RNA cluster, rank fragments by size (desc; ties broken
+    #     by the crosstab's column order — deterministic) → c{parent}_{rank}
     frag_rows, name_of = [], {}
     for parent, row in overlap.iterrows():
         row = row[row > 0].sort_values(ascending=False, kind="stable")
         total = int(row.sum())
         for rank, (ulab, n) in enumerate(row.items()):
-            sub = f"c{parent}_{rank}"
-            name_of[(parent, ulab)] = (sub, rank)
+            name_of[(parent, ulab)] = (f"c{parent}_{rank}", rank)
             frag_rows.append({
-                "parent": parent, "subcluster": sub, "umap_label": ulab,
-                "n_cells": int(n), "frac_of_parent": float(n) / total,
+                "parent": parent, "subcluster": f"c{parent}_{rank}",
+                "umap_label": ulab, "n_cells": int(n),
+                "frac_of_parent": float(n) / total,
                 "rank": rank, "is_main": rank == 0,
                 "is_minor_sibling": rank > 0 and int(n) >= min_subcluster_size,
             })
@@ -306,12 +295,14 @@ def dissect_partition(
         "parent", "subcluster", "umap_label", "n_cells", "frac_of_parent",
         "rank", "is_main", "is_minor_sibling"])
 
-    pairs = [name_of[(p, u)] for p, u in zip(rna.values, umap_label.values)]
+    # 5 — per-cell labels, aligned to obs_names
+    subs, ranks = zip(*(name_of[(p, u)] for p, u in zip(rna, umap_lab)))
     labels = pd.DataFrame({
-        "umap_cluster": umap_label.values,
-        "subcluster": [s for s, _ in pairs],
-        "rank": [r for _, r in pairs],
-        "is_main": [r == 0 for _, r in pairs],
+        "umap_cluster": umap_lab,
+        "subcluster": list(subs),
+        "rank": list(ranks),
+        "is_main": [r == 0 for r in ranks],
     }, index=adata.obs_names.copy())
+
     return PartitionResult(labels=labels, overlap=overlap,
                            fragments=fragments, info=info)
