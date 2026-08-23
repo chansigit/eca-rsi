@@ -92,24 +92,9 @@ Write-back is the caller's explicit one-liner:
 adata.obs["original_cluster_split"] = res.labels["subcluster"]
 ```
 
-## Who owns which parameter
-
-Every tuning knob steers the **UMAP-side** clustering and is prefixed
-`umap_`; the RNA side contributes nothing but its labels (and, via the default
-`umap_target_k`, its cluster count). Defaults are sane — rarely worth touching.
-
-| parameter | side | meaning |
-|---|---|---|
-| `umap_n_neighbors=30` | UMAP | kNN graph size on the 2-D coordinates |
-| `umap_resolution=0.5` | UMAP | Leiden resolution on that graph (search start when targeting) |
-| `umap_target_k=None` | UMAP (target from RNA) | target cluster count; `None` → RNA cluster count (granularity matching — see the `dissect_partition` docstring) |
-| `umap_target_tol=2` | UMAP | allowed deviation from the target |
-| `umap_random_state=0` | UMAP | Leiden seed |
-| `min_subcluster_size=50` | neither | not a clustering knob — fragments with rank > 0 and ≥ this many cells get `is_minor_sibling=True` |
-
 The lower-level `umap_leiden_partition(umap_xy, ...)` is also exported for
-callers holding bare coordinates; its parameters carry no `umap_` prefix
-because the function is UMAP-side by definition.
+callers holding bare coordinates. All tuning knobs are documented in the
+`dissect_partition` docstring; defaults are sane and rarely worth touching.
 
 ## Install
 
@@ -119,10 +104,3 @@ pip install -e /path/to/standissect-lite     # or add the parent to PYTHONPATH
 
 Dependencies: `numpy`, `pandas`, `scikit-learn`, `python-igraph`, `leidenalg`,
 `anndata`. No scanpy.
-
-## Relationship to standissect
-
-The core partition function is vendored from `standissect/cluster.py`
-(canonical source) and kept semantically byte-compatible, so both packages
-name fragments identically. When you need diagnosis (DEG / QC drift /
-LLM `likely_cause` / reports / the review server), use the full package.
