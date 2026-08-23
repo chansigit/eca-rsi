@@ -129,3 +129,28 @@ def test_one_dim_embedding_raises():
     a.obsm["X_bad"] = np.zeros((a.n_obs, 1))
     with pytest.raises(ValueError, match=">=2 columns"):
         dissect_partition(a, cluster_col="leiden", umap_key="X_bad")
+
+
+# ------------------------------------------------------- direct-matrix input
+def test_umap_matrix_input_matches_obsm_path():
+    a = _planted_adata()
+    xy = np.array(a.obsm["X_umap"], copy=True)
+    by_key = dissect_partition(a, cluster_col="leiden")
+    by_mat = dissect_partition(a, cluster_col="leiden", umap_Nx2_mat=xy)
+    pd.testing.assert_frame_equal(by_key.labels, by_mat.labels)
+    pd.testing.assert_frame_equal(by_key.fragments, by_mat.fragments)
+
+
+def test_umap_matrix_works_without_obsm():
+    a = _planted_adata()
+    xy = np.array(a.obsm["X_umap"], copy=True)
+    del a.obsm["X_umap"]                        # obsm not consulted at all
+    res = dissect_partition(a, cluster_col="leiden", umap_Nx2_mat=xy)
+    assert int(res.overlap.values.sum()) == a.n_obs
+
+
+def test_umap_matrix_wrong_length_raises():
+    a = _planted_adata()
+    with pytest.raises(ValueError, match="one row per cell"):
+        dissect_partition(a, cluster_col="leiden",
+                          umap_Nx2_mat=np.zeros((5, 2)))

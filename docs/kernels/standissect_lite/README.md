@@ -68,6 +68,10 @@ from standissect_lite import dissect_partition
 adata = ad.read_h5ad("data.h5ad")   # needs obs['leiden'] + obsm['X_umap']
 res = dissect_partition(adata, cluster_col="leiden", umap_key="X_umap")
 
+# or hand a precomputed UMAP matrix directly (obsm not consulted;
+# one row per cell in adata order, >=2 columns):
+res = dissect_partition(adata, cluster_col="leiden", umap_Nx2_mat=my_umap)
+
 res.fragments[res.fragments.is_minor]   # the minors: parent, size, rank, ...
 res.overlap                             # RNA × UMAP cell-count crosstab
 res.labels                              # per-cell: umap_cluster / subcluster / rank
@@ -81,18 +85,6 @@ Write-back is the caller's explicit one-liner:
 adata.obs["original_cluster_split"] = res.labels["subcluster"]
 ```
 
-## Granularity matching (`umap_target_k`)
-
-The split is only meaningful when the UMAP-side clustering has roughly the
-**same granularity** as the RNA-side one: too fine chops clean cores into fake
-minors, too coarse swallows real minors into the core.
-
-By default (`umap_target_k=None`) the target UMAP-side cluster count is taken
-**from the RNA side** — the number of distinct labels in `cluster_col` — and
-the UMAP-side Leiden resolution is binary-searched (up to 12 iterations) until
-the UMAP partition lands within `umap_target_k ± umap_target_tol` clusters.
-Pass an int to override the target explicitly.
-
 ## Who owns which parameter
 
 Every tuning knob steers the **UMAP-side** clustering and is prefixed
@@ -103,7 +95,7 @@ Every tuning knob steers the **UMAP-side** clustering and is prefixed
 |---|---|---|
 | `umap_n_neighbors=30` | UMAP | kNN graph size on the 2-D coordinates |
 | `umap_resolution=0.5` | UMAP | Leiden resolution on that graph (search start when targeting) |
-| `umap_target_k=None` | UMAP (target from RNA) | target cluster count; `None` → RNA cluster count |
+| `umap_target_k=None` | UMAP (target from RNA) | target cluster count; `None` → RNA cluster count (granularity matching — see the `dissect_partition` docstring) |
 | `umap_target_tol=2` | UMAP | allowed deviation from the target |
 | `umap_random_state=0` | UMAP | Leiden seed |
 | `min_subcluster_size=50` | neither | not a clustering knob — fragments with rank > 0 and ≥ this many cells get `is_minor=True` |

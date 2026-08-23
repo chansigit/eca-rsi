@@ -54,6 +54,8 @@ Usage
 
     adata = ad.read_h5ad("data.h5ad")      # needs obs['leiden'] + obsm['X_umap']
     res = dissect_partition(adata, cluster_col="leiden", umap_key="X_umap")
+    # or hand a precomputed UMAP matrix directly (obsm not consulted):
+    res = dissect_partition(adata, cluster_col="leiden", umap_Nx2_mat=xy)
 
     res.fragments[res.fragments.is_minor]  # the minors, one row per fragment
     res.overlap                            # RNA-cluster × UMAP-cluster cell counts
@@ -174,6 +176,7 @@ def dissect_partition(
     *,
     cluster_col: str,
     umap_key: str = "X_umap",
+    umap_Nx2_mat: np.ndarray | None = None,
     umap_n_neighbors: int = 30,
     umap_resolution: float = 0.5,
     umap_target_k: int | None = None,
@@ -200,6 +203,12 @@ def dissect_partition(
         Name of the precomputed RNA-side cluster column in ``obs``.
     umap_key
         Key of the 2-D UMAP coordinates in ``obsm`` (extra columns ignored).
+    umap_Nx2_mat
+        Alternative to ``umap_key``: a precomputed UMAP coordinate matrix
+        passed directly, one row per cell in ``adata`` order (>=2 columns,
+        extra columns ignored). When given it takes precedence over
+        ``umap_key`` and ``obsm`` is not touched; row count must equal
+        ``adata.n_obs`` (``ValueError`` otherwise).
     umap_n_neighbors, umap_resolution, umap_random_state
         UMAP-side clustering knobs (kNN graph size, Leiden resolution / seed
         on that graph). Defaults are sane; rarely worth touching.
@@ -230,17 +239,26 @@ def dissect_partition(
     """
     if cluster_col not in adata.obs.columns:
         raise KeyError(f"cluster_col {cluster_col!r} not in adata.obs")
-    if umap_key not in adata.obsm:
-        raise KeyError(f"umap_key {umap_key!r} not in adata.obsm")
-    xy = np.asarray(adata.obsm[umap_key], dtype=float)
+    if umap_Nx2_mat is not None:
+        xy = np.asarray(umap_Nx2_mat, dtype=float)
+        src = "umap_Nx2_mat"
+        if xy.ndim != 2 or xy.shape[0] != adata.n_obs:
+            raise ValueError(
+                f"umap_Nx2_mat must have one row per cell "
+                f"({adata.n_obs}), got shape {xy.shape}")
+    else:
+        if umap_key not in adata.obsm:
+            raise KeyError(f"umap_key {umap_key!r} not in adata.obsm")
+        xy = np.asarray(adata.obsm[umap_key], dtype=float)
+        src = f"obsm[{umap_key!r}]"
     if xy.ndim != 2 or xy.shape[1] < 2:
-        raise ValueError(f"obsm[{umap_key!r}] must be 2-D with >=2 columns, "
+        raise ValueError(f"{src} must be 2-D with >=2 columns, "
                          f"got shape {xy.shape}")
     xy = xy[:, :2]
     bad = int((~np.isfinite(xy)).any(axis=1).sum())
     if bad:
         raise ValueError(
-            f"{bad} cells have non-finite coordinates in obsm[{umap_key!r}] — "
+            f"{bad} cells have non-finite coordinates in {src} — "
             f"clean or subset them first (silently dropping rows would "
             f"misalign labels with obs_names)")
 
