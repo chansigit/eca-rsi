@@ -1,7 +1,7 @@
 # standissect-lite
 
-> **Find the minor fragments hiding inside your existing single-cell clusters —
-> and nothing else.**
+> **Find each cluster's minor siblings — the small stray fragments carrying its
+> own label — and nothing else.**
 
 ## Why (出发点)
 
@@ -47,15 +47,19 @@ Naming happens in two steps. **Step 1 — cartesian product**: each non-empty
 concatenated name `c3u5` = cells in RNA cluster 3 ∩ UMAP cluster u5.
 **Step 2 — rank by size**: within each RNA cluster, fragments are sorted by
 cell count and renamed `c{cluster}_{rank}` — the largest becomes the main
-core, the rest are candidate minors:
+core, the rest are its minor siblings:
 
 ```
   step 1: product names                    step 2: sort by size, rename
   ─────────────────────                    ────────────────────────────
                     ┌── u2 (  412 cells) → c3u2 ─┐        ┌ c3_0 = c3u5 (8,021)  main core
-  cluster 3 ────────┼── u5 (8,021 cells) → c3u5 ─┼───────▶┤ c3_1 = c3u2 (  412)  minor
-  (8,800 cells)     └── u9 (  367 cells) → c3u9 ─┘        └ c3_2 = c3u9 (  367)  minor
+  cluster 3 ────────┼── u5 (8,021 cells) → c3u5 ─┼───────▶┤ c3_1 = c3u2 (  412)  minor sibling
+  (8,800 cells)     └── u9 (  367 cells) → c3u9 ─┘        └ c3_2 = c3u9 (  367)  minor sibling
 ```
+
+A **minor sibling** is a small fragment carrying the *same* RNA label as its
+main core — "sibling" stresses that it belongs to the same parent cluster,
+not that it is some other small cluster elsewhere on the map.
 
 The `fragments` table keeps both identities per row (`subcluster` = the
 ranked name, `umap_label` = the UMAP side of the product). Ranked names are
@@ -75,7 +79,7 @@ res = dissect_partition(adata, cluster_col="leiden", umap_key="X_umap")
 # one row per cell in adata order, >=2 columns):
 res = dissect_partition(adata, cluster_col="leiden", umap_Nx2_mat=my_umap)
 
-res.fragments[res.fragments.is_minor]   # the minors: parent, size, rank, ...
+res.fragments[res.fragments.is_minor_sibling]   # minor siblings: parent, size, rank, ...
 res.overlap                             # RNA × UMAP cell-count crosstab
 res.labels                              # per-cell: umap_cluster / subcluster / rank
 res.info                                # UMAP-side resolution search diagnostics
@@ -101,7 +105,7 @@ Every tuning knob steers the **UMAP-side** clustering and is prefixed
 | `umap_target_k=None` | UMAP (target from RNA) | target cluster count; `None` → RNA cluster count (granularity matching — see the `dissect_partition` docstring) |
 | `umap_target_tol=2` | UMAP | allowed deviation from the target |
 | `umap_random_state=0` | UMAP | Leiden seed |
-| `min_subcluster_size=50` | neither | not a clustering knob — fragments with rank > 0 and ≥ this many cells get `is_minor=True` |
+| `min_subcluster_size=50` | neither | not a clustering knob — fragments with rank > 0 and ≥ this many cells get `is_minor_sibling=True` |
 
 The lower-level `umap_leiden_partition(umap_xy, ...)` is also exported for
 callers holding bare coordinates; its parameters carry no `umap_` prefix

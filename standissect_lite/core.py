@@ -1,4 +1,4 @@
-"""standissect_lite.core — minor-fragment detection inside existing clusters.
+"""standissect_lite.core — minor-sibling detection inside existing clusters.
 
 Why this exists (出发点)
 ------------------------
@@ -29,7 +29,9 @@ Cross two partitions of the same cells:
 
 Their overlap table (the "cartesian product" of the two labelings) splits each
 RNA cluster into fragments, ranked by size: rank 0 is the cluster's clean
-**main core**, every other fragment is a candidate **minor**.
+**main core**, every other fragment is a **minor sibling** of that core —
+"sibling" because it carries the same RNA label as the main core (same parent
+cluster), not some other small cluster elsewhere.
 
 Granularity matching
 --------------------
@@ -46,7 +48,7 @@ Who owns which parameter
 Every tuning knob steers the **UMAP-side** clustering and is prefixed
 ``umap_``; the RNA side contributes nothing but its labels (and, through the
 default ``umap_target_k``, its cluster count). ``min_subcluster_size`` is not
-a clustering parameter at all — it only sets the ``is_minor`` flag in the
+a clustering parameter at all — it only sets the ``is_minor_sibling`` flag in the
 returned fragment table.
 
 Usage
@@ -59,7 +61,7 @@ Usage
     # or hand a precomputed UMAP matrix directly (obsm not consulted):
     res = dissect_partition(adata, cluster_col="leiden", umap_Nx2_mat=xy)
 
-    res.fragments[res.fragments.is_minor]  # the minors, one row per fragment
+    res.fragments[res.fragments.is_minor_sibling]  # minor siblings, one row each
     res.overlap                            # RNA-cluster × UMAP-cluster cell counts
     # opt-in write-back (this module never touches adata itself):
     adata.obs["original_cluster_split"] = res.labels["subcluster"]
@@ -160,9 +162,11 @@ class PartitionResult:
     fragments
         One row per non-empty (RNA cluster, UMAP fragment) combination:
         ``parent``, ``subcluster``, ``umap_label``, ``n_cells``,
-        ``frac_of_parent``, ``rank``, ``is_main``, ``is_minor``.
-        ``is_minor`` = rank > 0 **and** n_cells >= ``min_subcluster_size`` —
-        the direct answer to "which minors hide in my clusters?".
+        ``frac_of_parent``, ``rank``, ``is_main``, ``is_minor_sibling``.
+        ``is_minor_sibling`` = rank > 0 **and** n_cells >= ``min_subcluster_size``
+        — a small fragment carrying the *same* RNA label as its main core
+        (hence sibling), the direct answer to "which tiny same-label
+        fragments hide in my clusters?".
     info
         UMAP-side clustering diagnostics: ``final_resolution``, ``n_clusters``
         and the (resolution, k) binary-search ``history``.
@@ -186,13 +190,13 @@ def dissect_partition(
     umap_random_state: int = 0,
     min_subcluster_size: int = 50,
 ) -> PartitionResult:
-    """Split each precomputed RNA cluster into a main core + minor fragments.
+    """Split each precomputed RNA cluster into a main core + minor siblings.
 
     Crosses the **precomputed** RNA-side clustering in ``adata.obs[cluster_col]``
     with a UMAP-side clustering computed here (kNN + Leiden on
     ``adata.obsm[umap_key][:, :2]``). Within each RNA cluster its UMAP fragments
     are ranked by size and named ``c{cluster}_{rank}``: rank 0 is the clean
-    main core, the rest are candidate minors. Pure function — ``adata`` is
+    main core, the rest are its minor siblings. Pure function — ``adata`` is
     read-only and never modified; write-back is the caller's one-liner.
 
     Parameters
@@ -219,11 +223,11 @@ def dissect_partition(
         RNA side's own cluster count: the UMAP-side resolution is
         binary-searched until the UMAP partition has ``umap_target_k ±
         umap_target_tol`` clusters, so both partitions have comparable
-        granularity — too fine chops cores into fake minors, too coarse
+        granularity — too fine chops cores into fake siblings, too coarse
         swallows real ones. Pass an int to override the target explicitly.
     min_subcluster_size
         Not a clustering knob: fragments with rank > 0 and at least this many
-        cells get ``is_minor=True`` in the fragment table.
+        cells get ``is_minor_sibling=True`` in the fragment table.
 
     Returns
     -------
@@ -296,11 +300,11 @@ def dissect_partition(
                 "parent": parent, "subcluster": sub, "umap_label": ulab,
                 "n_cells": int(n), "frac_of_parent": float(n) / total,
                 "rank": rank, "is_main": rank == 0,
-                "is_minor": rank > 0 and int(n) >= min_subcluster_size,
+                "is_minor_sibling": rank > 0 and int(n) >= min_subcluster_size,
             })
     fragments = pd.DataFrame(frag_rows, columns=[
         "parent", "subcluster", "umap_label", "n_cells", "frac_of_parent",
-        "rank", "is_main", "is_minor"])
+        "rank", "is_main", "is_minor_sibling"])
 
     pairs = [name_of[(p, u)] for p, u in zip(rna.values, umap_label.values)]
     labels = pd.DataFrame({

@@ -6,14 +6,15 @@ lassoing suspicious UMAP islands by hand. This package turns that visual
 heuristic into a systematic candidate-detection procedure: it crosses a
 precomputed RNA-side Leiden clustering with a granularity-matched
 UMAP-coordinate clustering and ranks each RNA cluster's fragments (rank 0 =
-main core, the rest = candidate minors). Candidates only — validation is
-explicitly left to downstream evidence.
+main core, the rest = its minor siblings — small fragments carrying the same
+RNA label as the core). Candidates only — validation is explicitly left to
+downstream evidence.
 No scanpy, no DEG, no diagnosis, no reports — made to be imported by other
 projects.
 
     from standissect_lite import dissect_partition
     res = dissect_partition(adata, cluster_col="leiden", umap_key="X_umap")
-    res.fragments[res.fragments.is_minor]
+    res.fragments[res.fragments.is_minor_sibling]
 
 See :mod:`standissect_lite.core` for the full rationale and the
 granularity-matching behaviour of ``umap_target_k``.

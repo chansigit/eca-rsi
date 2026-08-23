@@ -54,22 +54,22 @@ def test_planted_minor_is_found():
     assert list(f0["subcluster"])[:2] == ["c0_0", "c0_1"]
     assert f0.iloc[0]["n_cells"] == 300 and bool(f0.iloc[0]["is_main"])
     assert f0.iloc[1]["n_cells"] == 60 and not bool(f0.iloc[1]["is_main"])
-    assert bool(f0.iloc[1]["is_minor"])          # 60 >= default threshold 50
+    assert bool(f0.iloc[1]["is_minor_sibling"])          # 60 >= default threshold 50
     # RNA cluster 1 stays whole: one fragment, no minors
     f1 = f[f.parent == "1"]
     assert len(f1) == 1 and bool(f1.iloc[0]["is_main"])
 
 
-def test_min_subcluster_size_gates_is_minor():
+def test_min_subcluster_size_gates_is_minor_sibling():
     a = _planted_adata(n_minor=40)
     small = dissect_partition(a, cluster_col="leiden", min_subcluster_size=50)
     fr = small.fragments
     minor = fr[(fr.parent == "0") & (fr["rank"] == 1)].iloc[0]
-    assert not bool(minor["is_minor"])           # 40 < 50 -> flagged off
+    assert not bool(minor["is_minor_sibling"])           # 40 < 50 -> flagged off
     loose = dissect_partition(a, cluster_col="leiden", min_subcluster_size=10)
     minor = loose.fragments
     minor = minor[(minor.parent == "0") & (minor["rank"] == 1)].iloc[0]
-    assert bool(minor["is_minor"])               # 40 >= 10 -> on
+    assert bool(minor["is_minor_sibling"])               # 40 >= 10 -> on
 
 
 def test_labels_align_and_agree_with_fragments():
