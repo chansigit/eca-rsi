@@ -29,6 +29,12 @@
   纯 prompt 指引,无硬编码;没有上游产物照常跑。
 - 停机判决走 `rounds/roundNN/decision.txt`(仅一个小写单词 continue 或
   release)—— 机器读机器文件,散文归 stop.md,不做文本捞词。
+- **重开**:`--force-reopen` 可越过启动前已存在的 release 判决继续开新轮
+  (本次运行新产生的 release 不受影响),事件记入 progress.log,再次收敛
+  时原地更新 release/ 并在 summary 注明取代关系。
+- progress.log 每轮记 stats 事件(removed / label_l1_changed /
+  label_l2_changed,由 apply 写 stats.txt、runner 中继);apply 另出
+  `umap_removed.png`(本轮删除红/保留浅灰,零删除也出全灰图)。
 
 ## 核心设计哲学(与上一版的根本区别)
 
@@ -62,8 +68,7 @@ silent bug 全部长在"规格与实现的接缝"上(记录了但没人执行、
   增量解析隐患(包 main() 可解)、启动时不验证输入、限额等待逻辑未经实战
   (措辞变体覆盖未知)、强制末轮 release 与 exhausted 路径从未走过、
   checkpoint 逐轮列膨胀(35k 细胞已 791MB,大数据集需归档策略)、
-  progress.log retry 事件措辞不准、release 后"带意见重开"机制未定义、
-  "每个大谱系 release 前至少一次专属重嵌入"是否入收敛判据待用户拍板。
+  progress.log retry 事件措辞不准、"每个大谱系 release 前至少一次专属重嵌入"是否入收敛判据待用户拍板。
 
 ## 环境
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # eca-rsi — iterative single-cell curation loop.
 #
-#   ./run.sh <h5ad-folder> <workdir> [max_rounds]
+#   ./run.sh <h5ad-folder> <workdir> [max_rounds] [--force-reopen]
 #
 # Each round = six steps; each step is one fresh `claude -p` with full tools,
 # working inside <workdir>. A step is done when it has written its report
@@ -14,9 +14,14 @@
 # by the agent per round, guided by steps/*.md and the method docs.
 set -euo pipefail
 
-DATA=$(readlink -f "$1")
-WORK=$(readlink -f -m "$2")
-MAX=${3:-10}
+FORCE_REOPEN=0
+ARGS=()
+for a in "$@"; do
+  [[ $a == --force-reopen ]] && FORCE_REOPEN=1 || ARGS+=("$a")
+done
+DATA=$(readlink -f "${ARGS[0]}")
+WORK=$(readlink -f -m "${ARGS[1]}")
+MAX=${ARGS[2]:-10}
 ECA=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PY=${PY:-/scratch/users/chensj16/venvs/dl2025/.venv/bin/python}
 STANHUE=${STANHUE:-/home/users/chensj16/.claude/skills/stanhue/scripts}
@@ -28,10 +33,18 @@ mkdir -p "$WORK" && cd "$WORK"
 # progress log: append-only TSV in the workdir — one event per line, for
 # humans (tail -f) and future UIs alike. Columns:
 #   time <TAB> round <TAB> step <TAB> event <TAB> detail
-# events: start|skip|retry|wait|done|failed (steps); decision|release|exhausted (loop)
+# events: start|skip|retry|wait|done|failed (steps);
+#         stats (per-round counts, relayed from apply's stats.txt);
+#         decision|reopen|release|exhausted (loop)
 PROG=$WORK/progress.log
 [[ -f $PROG ]] || printf '#time\tround\tstep\tevent\tdetail\n' > "$PROG"
 plog() { printf '%s\t%s\t%s\t%s\t%s\n' "$(date +%FT%T)" "$1" "$2" "$3" "${4:-}" >> "$PROG"; }
+
+# rounds already decided before this invocation: --force-reopen may only
+# step past THEIR release verdicts, never a release produced by this run
+LAST_DONE=$(ls rounds/round*/decision.txt 2>/dev/null \
+  | sed 's|.*round0*\([0-9]*\)/.*|\1|' | sort -n | tail -1)
+LAST_DONE=${LAST_DONE:-0}
 
 context() {  # facts every step gets; nothing here is advice
   local r=$1 rd=$2 prev="none"
@@ -119,14 +132,28 @@ Finish the step now and write that report." \
 for ((r = 1; r <= MAX; r++)); do
   RD=$(printf "rounds/round%02d" "$r")
   mkdir -p "$RD"
-  for s in "${STEPS[@]}"; do run_step "$r" "$s" "$RD"; done
+  for s in "${STEPS[@]}"; do
+    run_step "$r" "$s" "$RD"
+    # apply reports its counts in stats.txt; relay once into the progress log
+    if [[ $s == apply && -f $RD/stats.txt && ! -f $RD/.stats_logged ]]; then
+      plog "$(printf round%02d "$r")" apply stats "$(tr -d '\n' < "$RD/stats.txt")"
+      touch "$RD/.stats_logged"
+    fi
+  done
   # machine decision lives in its own one-word file; prose stays in stop.md
   decision=$(tr -d '[:space:]' < "$RD/decision.txt" 2>/dev/null || echo continue)
   [[ $decision == release || $decision == continue ]] || decision=continue
   echo "[stop] round $r decision: $decision"
   plog "$(printf round%02d "$r")" "-" decision "$decision"
-  [[ $decision == release ]] && { plog "-" "-" release "round $r"
-    echo "converged — see $WORK/release/"; exit 0; }
+  if [[ $decision == release ]]; then
+    if ((FORCE_REOPEN)) && ((r <= LAST_DONE)); then
+      plog "$(printf round%02d "$r")" "-" reopen "force-reopen past prior release"
+      echo "[reopen] round $r had released — continuing (--force-reopen)"
+    else
+      plog "-" "-" release "round $r"
+      echo "converged — see $WORK/release/"; exit 0
+    fi
+  fi
 done
 plog "-" "-" exhausted "max_rounds=$MAX"
 echo "max rounds ($MAX) reached without convergence — see rounds/*/stop.md"

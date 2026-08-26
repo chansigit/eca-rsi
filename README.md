@@ -7,6 +7,7 @@ every decision, every script, and every removed cell on the record.
 
 ```bash
 ./run.sh <h5ad-folder> <workdir> [max_rounds]
+./run.sh <h5ad-folder> <workdir> [max_rounds] --force-reopen   # continue past a prior release
 ```
 
 No supervision required. The loop never pauses to ask a human anything;

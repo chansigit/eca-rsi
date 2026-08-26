@@ -47,7 +47,11 @@ then keep going.
 
 If releasing: create `release/` in the workspace — copy the final
 `checkpoint.h5ad` there as `annotated.h5ad`, export the per-cell obs table as
-`percell.csv.gz`. No figures are duplicated into the release: the final
+`percell.csv.gz`. On a **reopened** run (the loop was continued past an
+earlier release with `--force-reopen`), a `release/` already exists: update
+its files in place with the new state, and state in `summary.md` that this
+release supersedes the earlier one, which rounds were added, and why the
+loop was reopened. No figures are duplicated into the release: the final
 round's fixed figure set (`umap_*.png`, `lineage_*.png` in its round dir) is
 the visual record — point to it from the summary. Then write `summary.md`
 (what the dataset is, rounds run,

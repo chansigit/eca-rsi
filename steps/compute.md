@@ -55,6 +55,9 @@ checkpoint, and are produced every round regardless.
   - `umap_label_coarse.png` — `label_l1` (once labels exist)
   - `umap_label_fine.png` — `label_l2` (once labels exist; legend outside
     the axes, small font — fine labels are long)
+  - `umap_removed.png` — this round's removals in red on lightgray retained
+    cells (produced by the **apply** step, listed here so the fixed set is
+    documented in one place)
 
   **Every categorical coloring uses a stanhue palette** (the context header
   gives the scripts path): `sys.path.insert(0, <that path>)`, then
