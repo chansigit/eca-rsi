@@ -64,10 +64,6 @@ silent bug 全部长在"规格与实现的接缝"上(记录了但没人执行、
   全局重算的 <1% 豁免成文(但全局四图每轮必出)、flag 必附了结检验
   (无检验的 flag 直进 needs-review 不占悬案)、standissect-lite 每轮 qc
   必调(R11)、逐轮列命名 roundNN_* 升格为正式约定(agent 自发发明)。
-- **步骤 agent 会读 Sherlock 组织级 CLAUDE.md 而自行 sbatch**(2026-08-26 Jia/Gan
-  实测):临时解法是往每个 workdir 放一份 CLAUDE.md 声明"已在 Slurm 分配内,
-  直接跑";长期应由 run.sh 在 mkdir workdir 时自动写入(或写进 context header),
-  待无运行中实例时改 run.sh。
 - **未修 backlog**:步骤无墙钟超时、无并发锁、run.sh 运行中被编辑有 bash
   增量解析隐患(包 main() 可解)、启动时不验证输入、限额等待逻辑未经实战
   (措辞变体覆盖未知)、强制末轮 release 与 exhausted 路径从未走过、
