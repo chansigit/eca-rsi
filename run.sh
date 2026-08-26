@@ -108,7 +108,7 @@ run_step() {
     ${model:+--model "$model"} >"$rd/$s.log" 2>&1 || true
   local waits=0   # quota exhaustion is not failure: sleep to the reset, try again
   while [[ ! -f $out ]] && ((waits < 4)) && wait_if_limited "$rd/$s.log"; do
-    ((waits++))
+    waits=$((waits + 1))   # NOT ((waits++)): status 1 at 0 under set -e
     claude -p "$prompt" --dangerously-skip-permissions --max-turns 200 \
       ${model:+--model "$model"} >>"$rd/$s.log" 2>&1 || true
   done
