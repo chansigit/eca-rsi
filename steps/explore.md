@@ -6,10 +6,31 @@ modify anything.
 ## Round 1 (no checkpoint yet): survey the input folder from scratch
 
 **First, look for upstream provenance.** The inputs may have been prepared by
-**eca-pp / ecasteps** (github.com/chansigit/eca-pp), which leaves its results
-next to its outputs — typically a `result.json` beside a `standardized.h5ad`,
-often one output folder per sample, sometimes a `batch.tsv`. The layout is
-not fixed: search near the input files and read what you find. If present:
+**eca-pp / ecasteps** (github.com/chansigit/eca-pp). Its real output shape is
+one folder per sample containing step subfolders — e.g.
+`<sample>/standardize/{standardized.h5ad, result.json}` and
+`<sample>/identify_columns/result.json` — often with a run-level
+`SUMMARY.tsv` at the collection root (one row per sample: exit codes, batch
+and cell-type verdicts; a good entry point and cross-check). The layout is
+not fixed: search recursively and read what you find. Two consequences of
+this shape:
+
+- **Every h5ad is named `standardized.h5ad`.** A sample's identity is its
+  directory name, never the filename — use the directory name for
+  provenance, merge keys, and anything else that must distinguish samples.
+- **Every verdict is per-file, and per-file verdicts routinely disagree** —
+  each identify-columns run saw only its own slice. One file's batch =
+  `orig.ident`, another's = `project`, a third's = null can all be correct
+  locally: null means *no batch variation within that slice*, and after
+  merging those cells still occupy one level of the global batch design.
+  Reconcile before merging: check whether the named columns are
+  nested/equivalent across files, and derive one batch design for the merged
+  dataset — do not just adopt the first verdict you read. Same for cell-type
+  columns: different files may carry priors under different names
+  (`celltype` vs `ann210815`); plan for compute to unify them into one
+  prior-label column, recording each file's source column.
+
+If present:
 
 - `result.json` from **ecasteps-standardize** settles questions you would
   otherwise probe for: `status` (`ok` — usable; `rejected` — exclude the

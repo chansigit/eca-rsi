@@ -6,9 +6,14 @@ Read this round's `explore.md` for the scope and goals.
 ## Round 1 only: build the checkpoint
 
 - Merge the files explore selected into `checkpoint.h5ad` (save the merge
-  script; keep per-file provenance in an obs column). If explore's plan says
-  the batch key comes from an upstream `batch.tsv` (a derived per-cell
-  mapping, `cell_id<TAB>value`), merge those values into obs now.
+  script; keep per-file provenance in an obs column). The provenance value is
+  the sample's **directory name**, not the filename — ecasteps outputs are all
+  named `standardized.h5ad`, so filenames cannot distinguish samples. If
+  explore's plan says the batch key comes from an upstream `batch.tsv` (a
+  derived per-cell mapping, `cell_id<TAB>value`), merge those values into obs
+  now. If files carry prior labels under different column names, unify them
+  into one column (e.g. `prior_label`) per explore's plan, keeping a note of
+  each file's source column.
 - Ensure a raw-counts layer exists. Inputs that explore identified as
   ecasteps-standardized already carry `layers["counts"]` (integer, verified
   upstream) — use it, don't re-derive. Otherwise, if X is log-normalized,
