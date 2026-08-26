@@ -5,8 +5,42 @@ modify anything.
 
 ## Round 1 (no checkpoint yet): survey the input folder from scratch
 
-The input files are not self-describing — assume nothing about how they
-relate. Probe (with your own short scripts, saved to the round dir):
+**First, look for upstream provenance.** The inputs may have been prepared by
+**eca-pp / ecasteps** (github.com/chansigit/eca-pp), which leaves its results
+next to its outputs — typically a `result.json` beside a `standardized.h5ad`,
+often one output folder per sample, sometimes a `batch.tsv`. The layout is
+not fixed: search near the input files and read what you find. If present:
+
+- `result.json` from **ecasteps-standardize** settles questions you would
+  otherwise probe for: `status` (`ok` — usable; `rejected` — exclude the
+  sample, record its reason; `needs_review` — usable but carry the concern
+  forward as a flag), `species` (resolved, with source and confidence),
+  `metrics.counts_source`, and gene-harmonization statistics. A
+  `standardized.h5ad` with status ok guarantees: `layers["counts"]` = integer
+  raw counts, `X` = log1p(normalize_total(counts, 1e4)), `var_names` =
+  canonical gene symbols (originals in `var["original_feature_name"]`), and
+  authoritative QC columns in obs (`pct_counts_mt`, `pct_counts_hb`,
+  `total_counts`, `n_genes_by_counts`). Obs columns ending `__original` are
+  superseded copies the upstream renamed aside — never treat them as
+  independent metadata.
+- `result.json` from **ecasteps-identify-columns** carries a verified verdict
+  under `columns`: the **batch column** (an obs column name, or a `batch.tsv`
+  of derived per-cell values to merge into obs, or null = no batch structure)
+  with whether correction is even needed (`correction: recommended` vs
+  `unnecessary`), and the **cell-type column** if one exists — use it as
+  prior labels (evidence, not truth). These verdicts were validated by
+  integration trials; take them as your sample/batch key and prior-label
+  source instead of guessing from column names.
+
+Cite these files as evidence like any probe output. Trust them for what they
+assert, and spend your own probing on what they do not cover — how *multiple*
+standardized files relate to each other (below) is exactly the question the
+upstream, which sees one file at a time, structurally cannot answer.
+
+**Then probe what provenance does not settle** — and everything, if there is
+no provenance at all. The input files are not self-describing — assume
+nothing about how they relate. Probe (with your own short scripts, saved to
+the round dir):
 
 - Each file: shape, obs columns + example values, whether X is raw counts or
   normalized, species, gene-name style.

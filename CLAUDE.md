@@ -23,6 +23,10 @@
   RULES_data_cleaning),相对 symlink 引用不复制;任务书让 agent 按需读
   具体条款,不全文注入。
 - `attic-v01/` — 上一版(skills + bin/eca-check + schema)的封存,勿用。
+- 上游兼容:输入旁若有 eca-pp/ecasteps 产物(`standardized.h5ad` +
+  `result.json`、`batch.tsv`),explore 任务书会让 agent 读取并采信
+  (物种/counts/批次列/先验标签),探查力气花在上游管不了的跨文件关系上。
+  纯 prompt 指引,无硬编码;没有上游产物照常跑。
 - 停机判决走 `rounds/roundNN/decision.txt`(仅一个小写单词 continue 或
   release)—— 机器读机器文件,散文归 stop.md,不做文本捞词。
 

@@ -6,11 +6,19 @@ Read this round's `explore.md` for the scope and goals.
 ## Round 1 only: build the checkpoint
 
 - Merge the files explore selected into `checkpoint.h5ad` (save the merge
-  script; keep per-file provenance in an obs column).
-- Ensure a raw-counts layer exists. If X is log-normalized, recover counts
-  (reverse log1p) and sanity-check the recovery (integer-ness, or correlation
-  with a provided total-counts column). Never fabricate counts.
-- Per-cell QC metrics (total counts, genes, pct mito/ribo/hb).
+  script; keep per-file provenance in an obs column). If explore's plan says
+  the batch key comes from an upstream `batch.tsv` (a derived per-cell
+  mapping, `cell_id<TAB>value`), merge those values into obs now.
+- Ensure a raw-counts layer exists. Inputs that explore identified as
+  ecasteps-standardized already carry `layers["counts"]` (integer, verified
+  upstream) — use it, don't re-derive. Otherwise, if X is log-normalized,
+  recover counts (reverse log1p) and sanity-check the recovery (integer-ness,
+  or correlation with a provided total-counts column). Never fabricate counts.
+- Per-cell QC metrics (total counts, genes, pct mito/ribo/hb). Standardized
+  inputs already carry authoritative `pct_counts_mt` / `pct_counts_hb` /
+  `total_counts` / `n_genes_by_counts` — keep them; `pct_counts_hb` is direct
+  evidence for the red-blood-cell noise class later. Ignore `*__original`
+  columns (superseded upstream copies).
 - Doublet scores per sample on the **complete** per-sample pool (scrublet).
   Cache scores in obs — this is the one thing computed once and kept, because
   it is only valid on the full pool.

@@ -98,6 +98,20 @@ their own code, kept as the audit trail), and the only fixed machinery is the
 loop skeleton and the briefs** — under 400 lines in total. The hard-won
 lessons survive as blunt sentences in the briefs rather than as code.
 
+## Upstream: eca-pp (optional)
+
+eca-rsi pairs naturally with [eca-pp](https://github.com/chansigit/eca-pp),
+which standardizes single `.h5ad` files of unknown provenance (recovers raw
+counts, resolves species, harmonizes gene names, computes authoritative QC
+columns) and identifies the batch and cell-type columns with
+integration-trial evidence. When its outputs (`standardized.h5ad` +
+`result.json`, optionally `batch.tsv`) are present near the input files, the
+explore step reads them and skips re-deriving what upstream already settled —
+species, counts location, batch key, prior labels — and spends its probing on
+the one question eca-pp structurally cannot answer: how multiple files relate
+to each other. The two are decoupled: eca-rsi runs fine on raw folders with
+no provenance at all.
+
 ## Requirements
 
 - [Claude Code](https://claude.com/claude-code) CLI (`claude`), authenticated
