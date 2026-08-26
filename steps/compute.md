@@ -47,9 +47,31 @@ checkpoint, and are produced every round regardless.
 - Whatever tables this round's goals need: per-cluster marker DE (with
   per-sample consistency if there are ≥2 samples), signature/QC summaries per
   cluster, composition crosstabs vs sample and condition.
-- UMAP figures for the human reviewer (they cannot read your tables):
-  `umap_clusters.png`, `umap_sample.png`, `umap_qc.png` (pct mito / doublet
-  score), and `umap_labels.png` once labels exist — saved in the round dir.
+- **Figures for the human reviewer** (they cannot read your tables). The
+  per-round set is fixed — same names in every round dir:
+  - `umap_clusters.png` — this round's clusters
+  - `umap_sample.png` — sample/batch key (the integration check)
+  - `umap_qc.png` — two panels: pct mitochondrial counts, doublet score
+  - `umap_label_coarse.png` — `label_l1` (once labels exist)
+  - `umap_label_fine.png` — `label_l2` (once labels exist; legend outside
+    the axes, small font — fine labels are long)
+
+  **Every categorical coloring uses a stanhue palette** (the context header
+  gives the scripts path): `sys.path.insert(0, <that path>)`, then
+  `from scatter_colormap import assign_celltype_colors`;
+  `assign_celltype_colors(coords, labels)` returns `{label: hex}` — related
+  populations get adjacent shades, distant lineages distinct hue families.
+  It is deterministic given coords+labels; colors may legitimately shift
+  between rounds because the coordinates change. Continuous panels (QC) use
+  a standard sequential colormap, not stanhue.
+
+  **Drill-down figures** (lineage re-embeddings, boundary tests) follow one
+  naming scheme so the same object lines up across rounds:
+  `lineage_<lineage>_<content>.png` — e.g. `lineage_endothelial_subembed.png`,
+  `lineage_endothelial_lymphatic_candidate.png`,
+  `lineage_fibrochondrocyte_depth_corrected.png`. Never prefix figures with
+  script numbers (`c01_`, `c02_`): those are per-round and make figures
+  impossible to align across rounds.
 - If a previous round exists: a crosstab of **this round's clusters vs the
   previous round's labels** (cells carry their labels in obs, so this is one
   line). Cluster numbering changes every round — this table is how annotate

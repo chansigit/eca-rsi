@@ -47,8 +47,10 @@ then keep going.
 
 If releasing: create `release/` in the workspace — copy the final
 `checkpoint.h5ad` there as `annotated.h5ad`, export the per-cell obs table as
-`percell.csv.gz`, save a final `umap_labels.png` (UMAP colored by label_l1,
-legible legend), and write `summary.md` (what the dataset is, rounds run,
+`percell.csv.gz`. No figures are duplicated into the release: the final
+round's fixed figure set (`umap_*.png`, `lineage_*.png` in its round dir) is
+the visual record — point to it from the summary. Then write `summary.md`
+(what the dataset is, rounds run,
 cells in/out, final populations with labels and sizes, everything removed and
 why, and a **"needs review"** section listing every remaining flag and
 unresolved concern with what a reviewer should look at).

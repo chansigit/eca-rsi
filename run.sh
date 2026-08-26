@@ -19,6 +19,7 @@ WORK=$(readlink -f -m "$2")
 MAX=${3:-10}
 ECA=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PY=${PY:-/scratch/users/chensj16/venvs/dl2025/.venv/bin/python}
+STANHUE=${STANHUE:-/home/users/chensj16/.claude/skills/stanhue/scripts}
 MODEL=${MODEL:-claude-sonnet-5}   # default model; MODEL_<STEP> overrides per step
 STEPS=(explore compute annotate qc apply stop)
 
@@ -44,6 +45,7 @@ context() {  # facts every step gets; nothing here is advice
 - previous round: $prev
 - working data: $WORK/checkpoint.h5ad (created by round 1 compute)
 - python (scanpy/harmonypy/scrublet/anndata): $PY
+- stanhue palette scripts (categorical colors for figures): $STANHUE
 - method docs: $ECA/docs/  (RULES_annotation.md, RULES_data_cleaning.md,
   CONSTITUTION.md — read the parts you need, when you need them)
 
