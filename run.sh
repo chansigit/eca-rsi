@@ -43,7 +43,7 @@ plog() { printf '%s\t%s\t%s\t%s\t%s\n' "$(date +%FT%T)" "$1" "$2" "$3" "${4:-}" 
 # rounds already decided before this invocation: --force-reopen may only
 # step past THEIR release verdicts, never a release produced by this run
 LAST_DONE=$(ls rounds/round*/decision.txt 2>/dev/null \
-  | sed 's|.*round0*\([0-9]*\)/.*|\1|' | sort -n | tail -1)
+  | sed 's|.*round0*\([0-9]*\)/.*|\1|' | sort -n | tail -1 || true)
 LAST_DONE=${LAST_DONE:-0}
 
 context() {  # facts every step gets; nothing here is advice
