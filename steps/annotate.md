@@ -33,3 +33,9 @@ table lines, your probe outputs), and stability across samples. List
 explicitly any: split (what along), merge (into which cluster), postpone
 (why). These become next steps' work — a claim without a concrete target is
 not executable.
+
+Cite only columns and files that are actually **persisted**. If your evidence
+lives in a transient object — a sub-clustering you computed but never wrote
+back — save the barcode list to the round dir (or the column to the
+checkpoint) before referencing it. A decision pointing at data that no longer
+exists cannot be executed; this exact failure cost a full round once.

@@ -31,7 +31,13 @@ Read this round's `explore.md` for the scope and goals.
 ## Every round, on the current cells (and this round's scope)
 
 Recompute — never reuse a previous round's result — because removing cells
-changes what the feature space can see (docs/CONSTITUTION.md, preamble):
+changes what the feature space can see (docs/CONSTITUTION.md, preamble).
+One sanctioned exception: if the previous round removed fewer than 1% of
+cells, you may skip the *global* re-embedding and scope this round's compute
+to the subsets the plan targets — state the skip and its justification in
+`compute.md`. The four global UMAP figures are **not** part of that
+exception: they are for the human reviewer, cost seconds from the existing
+checkpoint, and are produced every round regardless.
 
 - HVG selection → PCA → integration across the sample/batch key (harmonypy)
   → neighbors → leiden at 2–3 resolutions → UMAP.
@@ -53,8 +59,9 @@ changes what the feature space can see (docs/CONSTITUTION.md, preamble):
 Write cluster assignments and scores back into `checkpoint.h5ad` — but never
 in place: write `checkpoint.tmp.h5ad`, then rename it over the old file. The
 checkpoint is the loop's only state; a crash halfway through an in-place
-write destroys it unrecoverably, a rename cannot. Name results so
-the round they belong to is unambiguous; results from earlier rounds that no
+write destroys it unrecoverably, a rename cannot. The naming convention is
+`roundNN_<name>` (e.g. `round03_leiden_r10`, `round03_ec_leiden_r20`) —
+per-round columns are the audit trail that makes cross-round drift visible; results from earlier rounds that no
 longer apply (e.g. clustering of cells now outside the scope) must not be
 left looking current. Save every script. Report in `compute.md`: what was
 computed, cluster count and sizes, and anything anomalous you noticed on the

@@ -10,7 +10,9 @@ reason, so the stop step counts it as unresolved.
 
 What executing means:
 
-- Labels → write `label_l1`, `label_l2`, `cl_id` for the named clusters.
+- Labels → write `label_l1`, `label_l2`, `cl_id` for the named clusters, and
+  mirror them into `roundNN_label_l1` / `roundNN_label_l2` so the label
+  history stays on the checkpoint and cross-round drift is checkable.
 - Cell/cluster-level flags → boolean obs columns (`flag_<name>`); clear the
   ones qc resolved. Dataset-level concerns (e.g. the removal budget) are not
   obs columns — they live in the reports and must reach the release summary.

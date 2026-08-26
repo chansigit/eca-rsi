@@ -50,15 +50,20 @@ silent bug 全部长在"规格与实现的接缝"上(记录了但没人执行、
 
 ## 现状(2026-08-25)
 
-- 全流程已在 18_Clayton_2025(小鼠椎间盘,1766 细胞)真实跑通:3 轮 100
-  分钟自主收敛,产出 `release/`(annotated.h5ad + percell + summary + 整合
-  删除明细 + UMAP)。该数据集后发现上游转换丢了整个 r2_inj 样本,质量不佳,
-  **已弃用**,产物在 `runs/clayton/` 仅作参考。
-- code review 已做;已修:判决解析(decision.txt)、release 数字锚、原子写、
-  本文件。**未修小项**:无 git(任务书版本史即实验记录,应尽早 init)、
-  步骤无墙钟超时、无并发锁、run.sh 运行中被编辑有 bash 增量解析隐患
-  (包 main() 可解)、启动时不验证输入、标签大小写风格无人管、无人类
-  README、release 后"带意见重开"机制未定义。
+- 两个数据集真实跑通:18_Clayton_2025(1766 细胞,Fable,3 轮收敛;数据
+  后因上游丢样本弃用)与 **Fu 2022 半月板(35k 细胞,eca-pp 完整产物,
+  全 Sonnet,3 轮 67 分钟自主收敛)**,后者交付在
+  `$OAK/.../05_Fuetal/rsi/`,关键结论与手工分析一致且多出深度混杂检验。
+- Fu 跑后复盘已修:annotate 引用须持久化(round 2 幽灵拆分,系统一轮自愈)、
+  全局重算的 <1% 豁免成文(但全局四图每轮必出)、flag 必附了结检验
+  (无检验的 flag 直进 needs-review 不占悬案)、standissect-lite 每轮 qc
+  必调(R11)、逐轮列命名 roundNN_* 升格为正式约定(agent 自发发明)。
+- **未修 backlog**:步骤无墙钟超时、无并发锁、run.sh 运行中被编辑有 bash
+  增量解析隐患(包 main() 可解)、启动时不验证输入、限额等待逻辑未经实战
+  (措辞变体覆盖未知)、强制末轮 release 与 exhausted 路径从未走过、
+  checkpoint 逐轮列膨胀(35k 细胞已 791MB,大数据集需归档策略)、
+  progress.log retry 事件措辞不准、release 后"带意见重开"机制未定义、
+  "每个大谱系 release 前至少一次专属重嵌入"是否入收敛判据待用户拍板。
 
 ## 环境
 

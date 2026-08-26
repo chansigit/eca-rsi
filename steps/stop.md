@@ -17,8 +17,10 @@ Your decision goes in **two places**:
 
 - **continue** — actionable work remains: cells were removed this round,
   labels changed materially, or there are open items (splits, postpones,
-  unresolved flags, "not executed" entries from apply) that another round can
-  realistically resolve.
+  "not executed" entries from apply, and flags **that carry a resolving
+  test**) that another round can realistically resolve. A flag without a
+  resolving test is not an open item — it goes to the "needs review" section
+  and never blocks release.
 - **release** — converged, meaning ALL of:
   - (a) this round removed **fewer than 1% of the current cells** — count it,
     don't estimate; a round that removed 7.6% was once declared "almost none".

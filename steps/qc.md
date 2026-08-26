@@ -11,11 +11,23 @@ quiescence, an unusual but real cell type are *states or identities*, not
 grounds. Whole-cluster removal needs a pervasive flaw; a bad tail inside a
 coherent cluster is removed per-cell by an explicit criterion, not by
 condemning the cluster. When in doubt, flag — but a flag is a question for
-the next round, so say what would resolve it.
+the next round, so it must state **the concrete test that would resolve it**.
+A flag with no resolving test is not a question anyone can answer: it does
+not count as an open item, does not block convergence, and goes straight to
+the release summary's "needs review" section instead. (Precedent: four
+borderline-hemoglobin cells were flagged without a test and re-inspected
+three rounds in a row with zero new evidence — that is what this rule
+prevents.)
 
 You have this round's annotation (`annotate.md`): use it — a "doublet-like"
 cluster whose markers are a coherent single program is the classic false
 positive. Probe freely with your own scripts; save code + output as evidence.
+
+**Run `standissect-lite` every round** (installed in the python env; `import
+standissect`) on the current clustering: it surfaces candidate
+tiny/fragmented subclusters with QC drift. Its output is a candidate list,
+not a verdict — every candidate still goes through R11's five tests. Save
+its outputs in the round dir and cite them like any other evidence.
 
 Also check the budget: report cumulative removal across all rounds (original
 cell count vs current). Per-round removal above ~10%, or cumulative drifting
