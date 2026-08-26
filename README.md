@@ -117,7 +117,7 @@ no provenance at all.
 - [Claude Code](https://claude.com/claude-code) CLI (`claude`), authenticated
 - Python with `scanpy`, `anndata`, `harmonypy`, `scrublet`
   (path configurable via `PY=...`)
-- Optional: `MODEL=<model-id>` to override the agent model
+- Model defaults to `claude-sonnet-5`; override globally with `MODEL=<id>` or per step with `MODEL_<STEP>=<id>` (e.g. `MODEL_ANNOTATE=claude-opus-5`)
 
 ## Caveats
 

@@ -3,7 +3,7 @@
 一条命令处理一个装着 h5ad 的文件夹:
 
 ```bash
-./run.sh <h5ad文件夹> <工作目录> [最大轮数]     # 可设 MODEL=claude-sonnet-5 提速
+./run.sh <h5ad文件夹> <工作目录> [最大轮数]   # 默认 sonnet-5;MODEL/MODEL_<步骤> 可覆盖
 ```
 
 每轮六步:explore(探查规划)→ compute(重算特征空间)→ annotate(注释)

@@ -19,6 +19,7 @@ WORK=$(readlink -f -m "$2")
 MAX=${3:-10}
 ECA=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PY=${PY:-/scratch/users/chensj16/venvs/dl2025/.venv/bin/python}
+MODEL=${MODEL:-claude-sonnet-5}   # default model; MODEL_<STEP> overrides per step
 STEPS=(explore compute annotate qc apply stop)
 
 mkdir -p "$WORK" && cd "$WORK"
