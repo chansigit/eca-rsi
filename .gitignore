@@ -1,0 +1,5 @@
+attic-v01/
+.claude/
+runs/
+data/
+*.log
