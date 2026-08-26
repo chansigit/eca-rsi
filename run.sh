@@ -58,18 +58,20 @@ EOF
 run_step() {
   local r=$1 s=$2 rd=$3 out="$3/$2.md"
   [[ -f $out ]] && { echo "[skip] round $r $s (done)"; return 0; }
-  echo "[run ] round $r $s"
+  # model: MODEL_<STEP> overrides MODEL overrides the CLI default
+  local mvar="MODEL_${s^^}" model="${!mvar:-${MODEL:-}}"
+  echo "[run ] round $r $s${model:+ ($model)}"
   local prompt
   prompt="$(context "$r" "$rd" | sed "s/{{STEP}}/$s/g")$(cat "$ECA/steps/$s.md")"
   claude -p "$prompt" --dangerously-skip-permissions --max-turns 200 \
-    ${MODEL:+--model "$MODEL"} >"$rd/$s.log" 2>&1 || true
+    ${model:+--model "$model"} >"$rd/$s.log" 2>&1 || true
   if [[ ! -f $out ]]; then   # one retry, telling it exactly what is missing
     claude -p "${prompt}
 
 Your previous attempt ended without writing $out (its log is in $rd/$s.log).
 Finish the step now and write that report." \
       --dangerously-skip-permissions --max-turns 200 \
-      ${MODEL:+--model "$MODEL"} >>"$rd/$s.log" 2>&1 || true
+      ${model:+--model "$model"} >>"$rd/$s.log" 2>&1 || true
   fi
   [[ -f $out ]] || { echo "FAILED: round $r $s wrote no $out — see $rd/$s.log"; exit 1; }
 }
