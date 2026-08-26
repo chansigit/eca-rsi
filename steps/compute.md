@@ -53,25 +53,47 @@ checkpoint, and are produced every round regardless.
   - `umap_sample.png` — sample/batch key (the integration check)
   - `umap_qc.png` — two panels: pct mitochondrial counts, doublet score
   - `umap_label_coarse.png` — `label_l1` (once labels exist)
-  - `umap_label_fine.png` — `label_l2` (once labels exist; legend outside
-    the axes, small font — fine labels are long)
+  - `umap_label_fine.png` — `label_l2` (once labels exist)
   - `umap_removed.png` — this round's removals in red on lightgray retained
     cells (produced by the **apply** step, listed here so the fixed set is
     documented in one place)
+  - `dotplot_label_coarse.png` / `dotplot_label_fine.png` — dot plots
+    (`sc.pl.dotplot`) of the genes that carry this round's argument, grouped
+    by `label_l1` / `label_l2` (once labels exist): the top discriminating
+    markers per population (2–3 each at fine granularity, more at coarse),
+    plus doublet-indicator genes (the co-expressed cross-lineage markers
+    used in doublet verdicts) and any gene a decision cites. Order genes by
+    group so the diagonal reads.
 
-  **Every categorical coloring uses a stanhue palette** (the context header
-  gives the scripts path): `sys.path.insert(0, <that path>)`, then
-  `from scatter_colormap import assign_celltype_colors`;
-  `assign_celltype_colors(coords, labels)` returns `{label: hex}` — related
-  populations get adjacent shades, distant lineages distinct hue families.
-  It is deterministic given coords+labels; colors may legitimately shift
-  between rounds because the coordinates change. Continuous panels (QC) use
-  a standard sequential colormap, not stanhue.
+  **Figure quality rules — every UMAP, whoever produces it (compute or
+  apply), main set or `lineage_*` drill-down:**
+  - **Square, equal-scale axes**: `ax.set_aspect("equal")` and identical
+    x/y limits (one shared range covering both UMAP dimensions), so the
+    axes box is square and distances are undistorted. Never let a long
+    legend reshape the plot.
+  - **Legend below the axes, never beside them**:
+    `loc="upper center", bbox_to_anchor=(0.5, -0.06), frameon=False`, with
+    `ncol` chosen so entries wrap into tidy rows (long fine-granularity
+    labels → fewer columns; use a smaller font before using more space).
+  - **Legend markers are large filled circles, decoupled from scatter point
+    size**: build the handles yourself —
+    `Line2D([], [], marker="o", linestyle="", markersize=8, color=hex)` —
+    rather than reusing scatter handles, whose legend size follows the
+    point size and becomes invisible on large datasets.
+  - **Point size adapts to cell count** (e.g. `s = clip(12000/n, 0.5, 10)`),
+    which is exactly why the legend markers above must not inherit it.
+  - **Every categorical coloring uses a stanhue palette** (the context
+    header gives the scripts path): `sys.path.insert(0, <that path>)`, then
+    `from scatter_colormap import assign_celltype_colors`;
+    `assign_celltype_colors(coords, labels)` returns `{label: hex}` —
+    related populations get adjacent shades, distant lineages distinct hue
+    families. Deterministic given coords+labels; colors may legitimately
+    shift between rounds because coordinates change. Continuous panels (QC)
+    use a standard sequential colormap, not stanhue.
 
   **Drill-down figures** (lineage re-embeddings, boundary tests) follow one
   naming scheme so the same object lines up across rounds:
   `lineage_<lineage>_<content>.png` — e.g. `lineage_endothelial_subembed.png`,
-  `lineage_endothelial_lymphatic_candidate.png`,
   `lineage_fibrochondrocyte_depth_corrected.png`. Never prefix figures with
   script numbers (`c01_`, `c02_`): those are per-round and make figures
   impossible to align across rounds.

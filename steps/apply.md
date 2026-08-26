@@ -18,9 +18,10 @@ What executing means:
   obs columns — they live in the reports and must reach the release summary.
 - Removals → **first render `umap_removed.png`** into the round dir, from the
   current checkpoint's UMAP *before* dropping anything: this round's
-  to-be-removed cells in red, retained cells in lightgray. Produce it every
-  round, even with zero removals — an all-gray figure is the record that
-  nothing was removed. Then actually drop the cells from `checkpoint.h5ad`,
+  to-be-removed cells in red, retained cells in lightgray, following
+  compute.md's figure quality rules (square equal-scale axes, legend below,
+  adaptive point size). Produce it every round, even with zero removals — an
+  all-gray figure is the record that nothing was removed. Then actually drop the cells from `checkpoint.h5ad`,
   and append one tab-separated line per cell to `removed_cells.tsv` **in the
   workspace root** (one cumulative file, not per-round): barcode, round,
   cluster at removal, reason — so the history stays reconstructable.
