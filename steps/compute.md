@@ -32,17 +32,28 @@ Read this round's `explore.md` for the scope and goals.
 
 Recompute — never reuse a previous round's result — because removing cells
 changes what the feature space can see (docs/CONSTITUTION.md, preamble).
-The context header states a **re-embed exemption threshold**. At its default
-of 0% there is **no exception**: whenever the cell count has changed since
-the global embedding was last built, rebuild it this round. Only if the
-threshold is positive AND the previous round removed fewer than that percent
-of cells may you skip the *global* re-embedding and scope this round's
-compute to the subsets the plan targets — and then you must state the skip,
-the threshold, and the removal count in `compute.md`. (This exemption was
-once chained round after round, so a dataset shipped its round-1 partition —
-leftover crumbs of partially-removed clusters, including a 1-cell cluster,
-survived to release. Skipping is the exception, never the routine.) The
-global UMAP figures are **not** part of any exemption: they are for the
+
+The trigger is arithmetic, not judgment. Whenever you build the global
+embedding, record the cell count it was built on in the checkpoint:
+`uns["embedding_n_cells"]` (plus `uns["embedding_round"]`). At the start of
+every compute step, read that number and compare:
+
+    n_now = checkpoint cell count
+    n_emb = uns["embedding_n_cells"]   (missing → treat as "must rebuild")
+
+- `n_now != n_emb` → rebuild the global embedding this round. No judgment
+  call, no reading of history: two numbers differ, you rebuild. State both
+  numbers in `compute.md`.
+- `n_now == n_emb` → the embedding is exactly current; you may scope this
+  round's compute to the subsets the plan targets. Still state both numbers.
+
+The context header's re-embed exemption threshold (default 0%) only widens
+the skip window: at N%, you may also skip when `n_emb - n_now` is under N%
+of `n_now` — state the arithmetic when you use it. ("Since last round" is
+NOT the comparison: a round that removed 0 cells proves nothing if the
+embedding predates earlier removals — that exact misreading shipped a
+stale partition, 1-cell leftover clusters included, into a release once.)
+The global UMAP figures are **not** part of any exemption: they are for the
 human reviewer, cost seconds from the existing checkpoint, and are produced
 every round regardless.
 
@@ -109,6 +120,10 @@ every round regardless.
   line). Cluster numbering changes every round — this table is how annotate
   knows which new cluster is which old population, without it renames cannot
   be explained.
+
+When you rebuild the global embedding, update `uns["embedding_n_cells"]` and
+`uns["embedding_round"]` in the same write — the next round's skip decision
+reads these numbers, so an embedding without them is unusable.
 
 Write cluster assignments and scores back into `checkpoint.h5ad` — but never
 in place: write `checkpoint.tmp.h5ad`, then rename it over the old file. The
