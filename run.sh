@@ -79,6 +79,10 @@ context() {  # facts every step gets; nothing here is advice
   CONSTITUTION.md — read the parts you need, when you need them)
 
 Rules for every step:
+- If $WORK/humaninput.md exists, read it FIRST. It is direct instruction
+  from the human owner: it outranks every step brief, every prior round's
+  conclusion, and your own judgment. State in your report how each of its
+  points was honored (or why one could not be).
 - Do only this step's job, then stop.
 - Save every script you run AND its output into the round dir — your code is
   the audit trail, and good probes get reused next round.
