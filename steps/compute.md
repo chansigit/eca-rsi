@@ -32,12 +32,19 @@ Read this round's `explore.md` for the scope and goals.
 
 Recompute — never reuse a previous round's result — because removing cells
 changes what the feature space can see (docs/CONSTITUTION.md, preamble).
-One sanctioned exception: if the previous round removed fewer than 1% of
-cells, you may skip the *global* re-embedding and scope this round's compute
-to the subsets the plan targets — state the skip and its justification in
-`compute.md`. The four global UMAP figures are **not** part of that
-exception: they are for the human reviewer, cost seconds from the existing
-checkpoint, and are produced every round regardless.
+The context header states a **re-embed exemption threshold**. At its default
+of 0% there is **no exception**: whenever the cell count has changed since
+the global embedding was last built, rebuild it this round. Only if the
+threshold is positive AND the previous round removed fewer than that percent
+of cells may you skip the *global* re-embedding and scope this round's
+compute to the subsets the plan targets — and then you must state the skip,
+the threshold, and the removal count in `compute.md`. (This exemption was
+once chained round after round, so a dataset shipped its round-1 partition —
+leftover crumbs of partially-removed clusters, including a 1-cell cluster,
+survived to release. Skipping is the exception, never the routine.) The
+global UMAP figures are **not** part of any exemption: they are for the
+human reviewer, cost seconds from the existing checkpoint, and are produced
+every round regardless.
 
 - HVG selection → PCA → integration across the sample/batch key (harmonypy)
   → neighbors → leiden at 2–3 resolutions → UMAP.

@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # eca-rsi — iterative single-cell curation loop.
 #
-#   ./run.sh <h5ad-folder> <workdir> [max_rounds] [--force-reopen]
+#   ./run.sh <h5ad-folder> <workdir> [max_rounds] [--force-reopen] [--one-round]
+#
+# Env knobs: MODEL / MODEL_<STEP>, EXEMPT_PCT (re-embed exemption threshold,
+# %; default 0 = every round with any removal recomputes the global embedding).
+# --one-round: debug mode — run exactly one new round, then stop (no forced
+# release; resume-skipped rounds don't count).
 #
 # Each round = six steps; each step is one fresh `claude -p` with full tools,
 # working inside <workdir>. A step is done when it has written its report
@@ -15,9 +20,14 @@
 set -euo pipefail
 
 FORCE_REOPEN=0
+ONE_ROUND=0
 ARGS=()
 for a in "$@"; do
-  [[ $a == --force-reopen ]] && FORCE_REOPEN=1 || ARGS+=("$a")
+  case $a in
+    --force-reopen) FORCE_REOPEN=1 ;;
+    --one-round)    ONE_ROUND=1 ;;      # debug: stop after one newly-run round
+    *)              ARGS+=("$a") ;;
+  esac
 done
 DATA=$(readlink -f "${ARGS[0]}")
 WORK=$(readlink -f -m "${ARGS[1]}")
@@ -26,6 +36,10 @@ ECA=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PY=${PY:-/scratch/users/chensj16/venvs/dl2025/.venv/bin/python}
 STANHUE=${STANHUE:-/home/users/chensj16/.claude/skills/stanhue/scripts}
 MODEL=${MODEL:-claude-sonnet-5}   # default model; MODEL_<STEP> overrides per step
+# re-embed exemption: a round may skip the global re-embedding only if the
+# previous round removed fewer than EXEMPT_PCT% of cells. 0 (default) disables
+# the exemption entirely: any cell-count change mandates a full recompute.
+EXEMPT_PCT=${EXEMPT_PCT:-0}
 STEPS=(explore compute annotate qc apply stop)
 
 mkdir -p "$WORK" && cd "$WORK"
@@ -58,6 +72,8 @@ context() {  # facts every step gets; nothing here is advice
 - previous round: $prev
 - working data: $WORK/checkpoint.h5ad (created by round 1 compute)
 - python (scanpy/harmonypy/scrublet/anndata): $PY
+- re-embed exemption threshold: ${EXEMPT_PCT}%  (0 = disabled: recompute the
+  global embedding whenever the cell count changed since it was last built)
 - stanhue palette scripts (categorical colors for figures): $STANHUE
 - method docs: $ECA/docs/  (RULES_annotation.md, RULES_data_cleaning.md,
   CONSTITUTION.md — read the parts you need, when you need them)
@@ -132,6 +148,7 @@ Finish the step now and write that report." \
 for ((r = 1; r <= MAX; r++)); do
   RD=$(printf "rounds/round%02d" "$r")
   mkdir -p "$RD"
+  had_decision=0; [[ -f $RD/decision.txt ]] && had_decision=1   # pre-existing = resumed round
   for s in "${STEPS[@]}"; do
     run_step "$r" "$s" "$RD"
     # apply reports its counts in stats.txt; relay once into the progress log
@@ -153,6 +170,12 @@ for ((r = 1; r <= MAX; r++)); do
       plog "-" "-" release "round $r"
       echo "converged — see $WORK/release/"; exit 0
     fi
+  fi
+  # debug mode: stop after the first round this invocation actually ran
+  # (rounds whose decision pre-existed were merely skipped by resume)
+  if ((ONE_ROUND && !had_decision)); then
+    plog "$(printf round%02d "$r")" "-" oneround "stopping after this round (--one-round)"
+    echo "[one-round] stopping after round $r"; exit 0
   fi
 done
 plog "-" "-" exhausted "max_rounds=$MAX"

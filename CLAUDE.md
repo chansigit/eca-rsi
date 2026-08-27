@@ -32,6 +32,11 @@
 - **重开**:`--force-reopen` 可越过启动前已存在的 release 判决继续开新轮
   (本次运行新产生的 release 不受影响),事件记入 progress.log,再次收敛
   时原地更新 release/ 并在 summary 注明取代关系。
+- 全局重嵌入豁免默认**关闭**(`EXEMPT_PCT=0`:细胞数一变就必须重算);设为
+  正数 N 则"上轮删除 <N% 可跳过全局重算"。教训:Liu 数据集豁免连用三轮,
+  round 1 分区(含 1 细胞残渣 cluster)原样进了 release。
+- `--one-round` 调试模式:只跑一个新轮(resume 跳过的旧轮不算)即停,
+  不触发强制 release;事件记 progress.log(oneround)。
 - progress.log 每轮记 stats 事件(removed / label_l1_changed /
   label_l2_changed,由 apply 写 stats.txt、runner 中继);apply 另出
   `umap_removed.png`(本轮删除红/保留浅灰,零删除也出全灰图)。
