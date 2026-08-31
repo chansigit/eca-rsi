@@ -1,0 +1,27 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+
+# local data and run outputs — this repo ships the pipeline, not any one
+# project's data or results
+data/
+osp_liu_full/
+osp_smoke_test/
+osp_out/
+*.h5ad
+
+# ad hoc tools from earlier dataset review work, not part of the osp package
+h5ad_qc_review.py
+h5ad_qc_checklist.md
+mt_qc_viz.py
+
+.trash/
+diag/
+.claude/
+
+# Liu-2025-specific local driver scripts — see examples/ for the generic,
+# reusable versions that this repo actually publishes
+/run_osp_sample.py
+/run_osp_liu.sbatch

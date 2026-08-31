@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "osp"
+version = "0.1.0"
+description = "One-sample-pipeline: per-sample scRNA-seq QC, clustering, DEG and self-contained HTML report"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "chansigit" }]
+requires-python = ">=3.10"
+dependencies = [
+    "scanpy",
+    "igraph",
+    "pandas",
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "scikit-learn",
+    "pydecontx",
+]
+
+[project.optional-dependencies]
+agent = ["claude-agent-sdk"]
+
+[tool.setuptools]
+packages = ["osp"]
