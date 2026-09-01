@@ -102,6 +102,7 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
     import anndata as ad
 
     units_by_name = {u["name"]: u for u in units}
+    species_by_name = {p["name"]: p.get("species") for p in profiles}
     audit = _conservation_audit(units_by_name, plan)
     print(
         "[audit] cell conservation OK: "
@@ -142,8 +143,13 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
         merged.write_h5ad(tmp)  # never in place: tmp + rename
         tmp.rename(udir / "organized.h5ad")
 
+        # one species per analysis unit is a plan invariant; surface it here so
+        # downstream steps (persample --annotate context) need not climb back
+        # to the global manifest
+        sps = {species_by_name.get(src) for src in parts} - {None}
         unit_manifest = {
             "analysis_unit": au,
+            "species": sps.pop() if len(sps) == 1 else None,
             "n_cells": int(merged.n_obs),
             "n_vars": int(merged.n_vars),
             "sources": {k: int(v.n_obs) for k, v in parts.items()},

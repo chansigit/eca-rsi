@@ -175,6 +175,29 @@ def build_entries(h5ad: Path, col: str | None, counts: dict[str, int], out_root:
     return entries
 
 
+def _upstream_species(unit: Path) -> str | None:
+    """Species from the organize manifests: the unit's own manifest first,
+    else the global manifest's profiles (older organize outputs). A unit
+    holds one species by plan invariant; anything ambiguous returns None."""
+    um = unit / "input" / "manifest.json"
+    if um.is_file():
+        with open(um) as f:
+            sp = json.load(f).get("species")
+        if sp:
+            return sp
+    gm = unit.parent / "manifest.json"
+    if gm.is_file():
+        with open(gm) as f:
+            g = json.load(f)
+        profs = {p["name"]: p.get("species") for p in g.get("profiles", [])}
+        for au in g.get("plan", {}).get("analysis_units", []):
+            if au["name"] == unit.name:
+                sps = {profs.get(m["source"]) for m in au["members"]} - {None}
+                if len(sps) == 1:
+                    return sps.pop()
+    return None
+
+
 def _is_done(outdir: Path, annotate: bool = False) -> bool:
     files = CONTRACT + (("annotation_proposal.json",) if annotate else ())
     return all((outdir / f).is_file() for f in files)
@@ -234,17 +257,20 @@ def main(argv: list[str]) -> int:
             man = json.load(f)
         col = man["sample_column"]
         counts = {s["value"]: s["n_cells"] for s in man["samples"]}
-        print(f"[identify] reusing recorded sample column: {col!r}")
+        species = args.species or man.get("species")
+        print(f"[identify] reusing recorded sample column: {col!r} (species {species!r})")
     else:
         profile = profile_obs(h5ad)
         decision = identify_sample_column(profile)
         col = decision["sample_column"]
-        print(f"[identify] sample column: {col!r} — {decision['rationale']}")
+        species = args.species or (None if unit.suffix == ".h5ad" else _upstream_species(unit))
+        print(f"[identify] sample column: {col!r} (species {species!r}) — {decision['rationale']}")
         counts = list_samples(h5ad, col) if col is not None else {"all": profile["n_obs"]}
         man = {
             "h5ad": str(h5ad),
             "sample_column": col,
             "rationale": decision["rationale"],
+            "species": species,
             "annotate": bool(args.annotate),
             "samples": [{"value": v, "n_cells": n} for v, n in counts.items()],
         }
@@ -253,7 +279,7 @@ def main(argv: list[str]) -> int:
             json.dump(man, f, indent=2)
 
     entries = build_entries(h5ad, col, counts, out_root, py, bool(args.annotate), model,
-                            args.species, args.tissue)
+                            species, args.tissue)
     print(f"[samples] {len(entries)}: " + ", ".join(f"{e['value']}({e['n_cells']})" for e in entries))
 
     for attempt in (1, 2):
