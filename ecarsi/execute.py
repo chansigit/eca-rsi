@@ -15,17 +15,22 @@ import json
 from pathlib import Path
 
 
+def _keep_mask(obs, flt):
+    """Boolean mask an obs_filter selects (None → whole file). Single
+    definition shared by audit and executor so the two can never disagree
+    on which cells a filter means."""
+    if not flt:
+        return None
+    vals = [str(v) for v in flt["values"]]
+    return obs[flt["column"]].astype(str).isin(vals).values
+
+
 def _load_member(units_by_name: dict, member: dict):
     import anndata as ad
 
-    src = units_by_name[member["source"]]
-    a = ad.read_h5ad(src["h5ad"])
-    flt = member.get("obs_filter")
-    if flt:
-        col, values = flt["column"], [str(v) for v in flt["values"]]
-        keep = a.obs[col].astype(str).isin(values)
-        a = a[keep.values].copy()
-    return a
+    a = ad.read_h5ad(units_by_name[member["source"]]["h5ad"])
+    mask = _keep_mask(a.obs, member.get("obs_filter"))
+    return a[mask].copy() if mask is not None else a
 
 
 def _barcode_overlap_warnings(parts: dict) -> list[str]:
@@ -55,33 +60,29 @@ def _conservation_audit(units_by_name: dict, plan: dict) -> dict:
     runs BEFORE anything is written; any violation aborts the whole run."""
     import anndata as ad
 
-    taken: dict[str, list[tuple[str, set]]] = {n: [] for n in units_by_name}
-    for au in plan["analysis_units"]:
-        for m in au["members"]:
-            a = ad.read_h5ad(units_by_name[m["source"]]["h5ad"], backed="r")
-            flt = m.get("obs_filter")
-            if flt:
-                vals = [str(v) for v in flt["values"]]
-                keep = a.obs[flt["column"]].astype(str).isin(vals)
-                names = set(a.obs_names[keep.values])
-            else:
-                names = set(a.obs_names)
-            taken[m["source"]].append((au["name"], names))
-            a.file.close()
+    src_obs = {}  # obs is in-memory even in backed mode; one read per source
+    for src, u in units_by_name.items():
+        a = ad.read_h5ad(u["h5ad"], backed="r")
+        src_obs[src] = a.obs
+        a.file.close()
 
+    taken: dict[str, list[set]] = {src: [] for src in units_by_name}
     unit_expected: dict[str, int] = {}
     for au in plan["analysis_units"]:
-        unit_expected[au["name"]] = sum(
-            len(names) for src_grabs in taken.values() for uname, names in src_grabs if uname == au["name"]
-        )
+        n = 0
+        for m in au["members"]:
+            obs = src_obs[m["source"]]
+            mask = _keep_mask(obs, m.get("obs_filter"))
+            names = set(obs.index) if mask is None else set(obs.index[mask])
+            taken[m["source"]].append(names)
+            n += len(names)
+        unit_expected[au["name"]] = n
 
     audit, errors = {}, []
     for src, grabs in taken.items():
-        a = ad.read_h5ad(units_by_name[src]["h5ad"], backed="r")
-        total, all_names = a.n_obs, set(a.obs_names)
-        a.file.close()
-        union = set().union(*(g[1] for g in grabs)) if grabs else set()
-        n_assigned = sum(len(g[1]) for g in grabs)
+        total, all_names = len(src_obs[src]), set(src_obs[src].index)
+        union = set().union(*grabs) if grabs else set()
+        n_assigned = sum(map(len, grabs))
         audit[src] = {"total": total, "assigned": n_assigned, "unique_assigned": len(union)}
         if not grabs:
             errors.append(f"{src}: whole source file absent from the plan ({total} cells lost)")
