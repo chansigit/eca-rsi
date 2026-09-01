@@ -174,6 +174,7 @@ async def _propose(inventories: list[dict]) -> dict:
         model=model(),
         allowed_tools=["Read", "Glob", "Grep"],  # it must Read the figures
         max_turns=80,
+        max_buffer_size=50_000_000,  # figure Reads can exceed the 1MB default
         output_format={"type": "json_schema", "schema": INCLUSION_SCHEMA},
     )
     result = None
