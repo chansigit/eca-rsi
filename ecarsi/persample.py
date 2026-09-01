@@ -248,6 +248,9 @@ def main(argv: list[str]) -> int:
                          "skip; a resumed run reuses the recorded choice unless overridden)")
     ap.add_argument("--species", default=None, help="context passed to osp --annotate")
     ap.add_argument("--tissue", default=None, help="context passed to osp --annotate")
+    ap.add_argument("--plan-only", action="store_true",
+                    help="identify the sample column, write the manifest and print the "
+                         "per-sample commands, but do not drive any osp run")
     args = ap.parse_args(argv)
 
     unit = Path(args.unit).resolve()
@@ -275,6 +278,8 @@ def main(argv: list[str]) -> int:
         species = args.species or man.get("species")
         tissue = args.tissue or man.get("tissue")
         print(f"[identify] reusing recorded sample column: {col!r} (species {species!r})")
+        entries = build_entries(h5ad, col, counts, out_root, py, annotate, model,
+                                species, tissue)
     else:
         profile = profile_obs(h5ad)
         decision = identify_sample_column(profile)
@@ -284,6 +289,8 @@ def main(argv: list[str]) -> int:
         tissue = args.tissue
         print(f"[identify] sample column: {col!r} (species {species!r}) — {decision['rationale']}")
         counts = list_samples(h5ad, col) if col is not None else {"all": profile["n_obs"]}
+        entries = build_entries(h5ad, col, counts, out_root, py, annotate, model,
+                                species, tissue)
         man = {
             "h5ad": str(h5ad),
             "sample_column": col,
@@ -291,15 +298,19 @@ def main(argv: list[str]) -> int:
             "species": species,
             "tissue": tissue,
             "annotate": annotate,
-            "samples": [{"value": v, "n_cells": n} for v, n in counts.items()],
+            # dir recorded so downstream (crosssample) never re-derives names
+            "samples": [{"value": e["value"], "n_cells": e["n_cells"], "dir": e["outdir"]}
+                        for e in entries],
         }
         out_root.mkdir(parents=True, exist_ok=True)
         with open(mpath, "w") as f:
             json.dump(man, f, indent=2)
-
-    entries = build_entries(h5ad, col, counts, out_root, py, annotate, model,
-                            species, tissue)
     print(f"[samples] {len(entries)}: " + ", ".join(f"{e['value']}({e['n_cells']})" for e in entries))
+    if args.plan_only:
+        for e in entries:
+            print(f"[plan] {e['value']}: {e['command']}")
+        print("[plan-only] manifest written, nothing driven")
+        return 0
 
     # keep opening driver sessions while they make progress (a session may
     # exhaust its turns mid-checklist on long runs); allow one no-progress
