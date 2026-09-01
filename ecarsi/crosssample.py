@@ -252,6 +252,16 @@ def main(argv: list[str]) -> int:
     cmd = msp_command(py, inputs, batch_col, idir, species)
     print(f"[msp] {cmd}")
 
+    # msp's report reads sample_decisions.csv if present — write it before
+    # msp runs so its own generate_report() call at the end picks it up
+    idir.mkdir(parents=True, exist_ok=True)
+    with open(idir / "sample_decisions.csv", "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["sample", "decision", "n_cells", "reason"])
+        for e in decision["samples"]:
+            n = by_val[e["sample"]]["n_cells"]
+            w.writerow([e["sample"], "include" if e["include"] else "exclude", n, e["reason"]])
+
     if all((idir / f).is_file() for f in MSP_CONTRACT):
         print("[msp] contract already satisfied — skipping (resume)")
         return 0
