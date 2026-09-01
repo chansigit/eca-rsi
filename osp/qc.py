@@ -423,23 +423,29 @@ def qc_one_sample(
         import pydecontx
 
         dkw = dict(decontx_kwargs or {})
-        pydecontx.decontx(ad, seed=0, compute_umap=False, verbose=False, **dkw)
-        decontx_z_source = "user" if "z" in dkw else "internal"
-        if "z" not in dkw:
-            degen = _decontx_degenerate(ad.obs)
-            if degen is not None:
-                print(f"== decontX init degenerate ({degen}); re-running with explicit leiden z", flush=True)
-                z = _coarse_clusters_for_decontx(ad)
-                pydecontx.decontx(ad, z=z, seed=0, compute_umap=False, verbose=False, **dkw)
-                decontx_z_source = "leiden_fallback"
-                still = _decontx_degenerate(ad.obs, internal_init=False)
-                if still is not None:
-                    # contamination estimates are untrustworthy even with a good
-                    # z — leave a flag so downstream stages (PCA covariates)
-                    # can keep the column out of the model
-                    print(f"== decontX still degenerate after fallback ({still}); "
-                          "flagging uns['osp_decontx_degenerate']", flush=True)
-                    ad.uns["osp_decontx_degenerate"] = True
+        if "z" in dkw:
+            decontx_z_source = "user"
+            res = pydecontx.decontx(ad, seed=0, verbose=False, **dkw)
+        else:
+            # installed pydecontx (0.1.0) has no internal UMAP+DBSCAN init and
+            # requires z — the explicit-leiden path is the standard path now
+            decontx_z_source = "leiden_fallback"
+            z = _coarse_clusters_for_decontx(ad)
+            res = pydecontx.decontx(ad, z=z, seed=0, verbose=False, **dkw)
+        # pydecontx only writes into the AnnData with copy=True; fold the
+        # returned DecontXResult in ourselves (same fields as its copy branch)
+        ad.obs["decontX_contamination"] = res.contamination
+        ad.obs["decontX_clusters"] = pd.Categorical(res.z)
+        ad.layers["decontX_counts"] = res.decontx_counts.T.tocsr()
+        if decontx_z_source == "leiden_fallback":
+            still = _decontx_degenerate(ad.obs, internal_init=False)
+            if still is not None:
+                # contamination estimates are untrustworthy even with a good
+                # z — leave a flag so downstream stages (PCA covariates)
+                # can keep the column out of the model
+                print(f"== decontX degenerate with leiden z ({still}); "
+                      "flagging uns['osp_decontx_degenerate']", flush=True)
+                ad.uns["osp_decontx_degenerate"] = True
         ad.uns["decontx_top_genes"], ad.uns["decontx_top_genes_by_cluster"] = decontx_top_genes(
             ad, cluster_key="decontX_clusters"
         )
