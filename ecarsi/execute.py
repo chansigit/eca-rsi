@@ -48,15 +48,70 @@ def _barcode_overlap_warnings(parts: dict) -> list[str]:
     return warns
 
 
+def _conservation_audit(units_by_name: dict, plan: dict) -> dict:
+    """Every input cell must land in exactly one analysis unit — no cell
+    silently dropped by a filter gap, none double-counted by overlapping
+    filters, no source file omitted from the plan. Backed reads (obs only),
+    runs BEFORE anything is written; any violation aborts the whole run."""
+    import anndata as ad
+
+    taken: dict[str, list[tuple[str, set]]] = {n: [] for n in units_by_name}
+    for au in plan["analysis_units"]:
+        for m in au["members"]:
+            a = ad.read_h5ad(units_by_name[m["source"]]["h5ad"], backed="r")
+            flt = m.get("obs_filter")
+            if flt:
+                vals = [str(v) for v in flt["values"]]
+                keep = a.obs[flt["column"]].astype(str).isin(vals)
+                names = set(a.obs_names[keep.values])
+            else:
+                names = set(a.obs_names)
+            taken[m["source"]].append((au["name"], names))
+            a.file.close()
+
+    unit_expected: dict[str, int] = {}
+    for au in plan["analysis_units"]:
+        unit_expected[au["name"]] = sum(
+            len(names) for src_grabs in taken.values() for uname, names in src_grabs if uname == au["name"]
+        )
+
+    audit, errors = {}, []
+    for src, grabs in taken.items():
+        a = ad.read_h5ad(units_by_name[src]["h5ad"], backed="r")
+        total, all_names = a.n_obs, set(a.obs_names)
+        a.file.close()
+        union = set().union(*(g[1] for g in grabs)) if grabs else set()
+        n_assigned = sum(len(g[1]) for g in grabs)
+        audit[src] = {"total": total, "assigned": n_assigned, "unique_assigned": len(union)}
+        if not grabs:
+            errors.append(f"{src}: whole source file absent from the plan ({total} cells lost)")
+            continue
+        if n_assigned > len(union):
+            dupes = n_assigned - len(union)
+            errors.append(f"{src}: {dupes} cells assigned to more than one analysis unit")
+        missing = all_names - union
+        if missing:
+            errors.append(f"{src}: {len(missing)} cells covered by no analysis unit")
+    if errors:
+        raise ValueError("cell conservation violated:\n  " + "\n  ".join(errors))
+    return {"sources": audit, "unit_expected": unit_expected}
+
+
 def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: Path) -> None:
     import anndata as ad
 
     units_by_name = {u["name"]: u for u in units}
+    audit = _conservation_audit(units_by_name, plan)
+    print(
+        "[audit] cell conservation OK: "
+        + ", ".join(f"{k} {v['total']}" for k, v in audit["sources"].items())
+    )
     out_root.mkdir(parents=True, exist_ok=True)
     global_manifest = {
         "input_units": units,
         "profiles": profiles,
         "plan": plan,
+        "conservation_audit": audit,
         "units_written": [],
         "warnings": [],
     }
@@ -72,6 +127,12 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
         else:
             merged = ad.concat(
                 parts, join="outer", label="source_unit", index_unique="::", merge="first"
+            )
+
+        expected = audit["unit_expected"][name]
+        if int(merged.n_obs) != expected:
+            raise ValueError(
+                f"unit {name!r}: merged {merged.n_obs} cells but conservation audit expected {expected}"
             )
 
         udir = out_root / name / "input"
