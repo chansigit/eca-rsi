@@ -18,11 +18,10 @@ dependencies = [
     "scipy",
     "matplotlib",
     "scikit-learn",
-    "pydecontx",
 ]
 
 [project.optional-dependencies]
 agent = ["claude-agent-sdk"]
 
 [tool.setuptools]
-packages = ["osp"]
+packages = ["osp", "osp._decontx"]

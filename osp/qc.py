@@ -298,8 +298,8 @@ def qc_one_sample(
       4. With run_scrublet=True, Scrublet doublet detection (run within the
          single sample; no batch_key needed)
 
-    With run_decontx=True, DecontX (pydecontx, a scanpy port of DecontX) runs
-    additionally for ambient-RNA monitoring — monitoring/reporting only
+    With run_decontx=True, DecontX (osp._decontx, a vendored pure-Python port
+    of DecontX) runs additionally for ambient-RNA monitoring — monitoring/reporting only
     (writes obs["decontX_contamination"] / obs["decontX_clusters"] /
     layers["decontX_counts"] and median_contamination in the summary). It
     does NOT feed the low_quality call: contamination is continuous, and
@@ -418,21 +418,19 @@ def qc_one_sample(
 
     decontx_z_source = None
     if run_decontx:
-        # deferred so `import osp` works without pydecontx when run_decontx=False
-        # (same pattern as the optional claude-agent-sdk dependency)
-        import pydecontx
+        from . import _decontx
 
         dkw = dict(decontx_kwargs or {})
         if "z" in dkw:
             decontx_z_source = "user"
-            res = pydecontx.decontx(ad, seed=0, verbose=False, **dkw)
+            res = _decontx.decontx(ad, seed=0, verbose=False, **dkw)
         else:
-            # installed pydecontx (0.1.0) has no internal UMAP+DBSCAN init and
-            # requires z — the explicit-leiden path is the standard path now
+            # no internal UMAP+DBSCAN init here — the explicit-leiden path
+            # is the standard path
             decontx_z_source = "leiden_fallback"
             z = _coarse_clusters_for_decontx(ad)
-            res = pydecontx.decontx(ad, z=z, seed=0, verbose=False, **dkw)
-        # pydecontx only writes into the AnnData with copy=True; fold the
+            res = _decontx.decontx(ad, z=z, seed=0, verbose=False, **dkw)
+        # decontx() only writes into the AnnData with copy=True; fold the
         # returned DecontXResult in ourselves (same fields as its copy branch)
         ad.obs["decontX_contamination"] = res.contamination
         ad.obs["decontX_clusters"] = pd.Categorical(res.z)
