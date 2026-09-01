@@ -9,6 +9,15 @@ directory, and the exact command that processes it.
 - Work through the checklist ONE SAMPLE AT A TIME: spawn one Task
   subagent per sample, wait for it to finish, verify, move to the next.
   Do not run samples in parallel — each run is memory-heavy.
+- The subagent runs ASYNCHRONOUSLY. After launching it you MUST stay
+  alive until its completion notification arrives: if you have nothing
+  else to do, `sleep 60` (Bash) and check again — ending your turn while
+  a subagent is running kills it and the sample's process with it.
+- Each sample's command is executed EXACTLY ONCE, by its subagent. NEVER
+  run a sample's command yourself, and never launch a second copy while
+  one is running — two concurrent runs write the same output directory
+  and corrupt it. Your only jobs are: launch the subagent, wait, verify
+  files, cross off.
 - The subagent's job: run the given command EXACTLY as written (no edits,
   no alternative approaches) via Bash with run_in_background, wait for it
   to exit — checking progress every minute or two, never in a tight
