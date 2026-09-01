@@ -62,9 +62,20 @@ main core — "sibling" stresses that it belongs to the same parent cluster,
 not that it is some other small cluster elsewhere on the map.
 
 The `fragments` table keeps both identities per row (`subcluster` = the
-ranked name, `umap_label` = the UMAP side of the product). Ranked names are
-byte-compatible with standissect's (`c{cluster}_{rank}`, rank 0 = main core),
-so outputs interoperate.
+ranked name — THE headline identifier, rank 0 = main core, strictly
+descending by size within each parent; `_umap_partition` = the raw UMAP-side
+partition this fragment came from). Ranked names are byte-compatible with
+standissect's (`c{cluster}_{rank}`), so outputs interoperate.
+
+**Only use `subcluster`/`rank` for anything ranking-related.**
+`_umap_partition` (`u0`, `u1`, …) is ranked *globally* across the whole
+embedding, not within any one RNA cluster — `u0` is not generally each
+parent's largest fragment, and two different parents can share a
+`_umap_partition` id. It's underscore-prefixed and kept only for
+traceability (it's what the `overlap` crosstab's columns are); building a
+combined per-cell label from it directly (e.g. `f"{parent}_{u}"`) does *not*
+have the rank-0-is-largest property people expect from `c{parent}_{rank}`
+naming — that's exactly what `subcluster` already gives you for free.
 
 ## Usage
 
@@ -81,7 +92,7 @@ res = dissect_partition(adata, cluster_col="leiden", umap_Nx2_mat=my_umap)
 
 res.fragments[res.fragments.is_minor_sibling]   # minor siblings: parent, size, rank, ...
 res.overlap                             # RNA × UMAP cell-count crosstab
-res.labels                              # per-cell: umap_cluster / subcluster / rank
+res.labels                              # per-cell: subcluster / rank / is_main (+ _umap_partition, raw)
 res.info                                # UMAP-side resolution search diagnostics
 ```
 

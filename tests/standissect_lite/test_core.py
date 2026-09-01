@@ -76,7 +76,7 @@ def test_labels_align_and_agree_with_fragments():
     a = _planted_adata()
     res = dissect_partition(a, cluster_col="leiden")
     assert list(res.labels.index) == list(a.obs_names)
-    assert set(res.labels.columns) == {"umap_cluster", "subcluster", "rank", "is_main"}
+    assert set(res.labels.columns) == {"_umap_partition", "subcluster", "rank", "is_main"}
     # per-cell labels aggregate to exactly the fragment sizes
     agg = res.labels.groupby("subcluster").size()
     for _, r in res.fragments.iterrows():

@@ -165,21 +165,37 @@ class PartitionResult:
     """Return value of :func:`dissect_partition` — plain tables, no side effects.
 
     labels
-        DataFrame indexed by ``adata.obs_names``: ``umap_cluster`` (``u0`` …,
-        size-ranked globally), ``subcluster`` (``c{cluster}_{rank}``), ``rank``
-        (int, 0 = main core within its RNA cluster) and ``is_main`` (bool).
-        Write back with e.g. ``adata.obs["split"] = res.labels["subcluster"]``.
+        DataFrame indexed by ``adata.obs_names``: ``subcluster``
+        (``c{cluster}_{rank}`` — THE per-cell identifier; within each RNA
+        cluster, rank 0 is always its largest fragment, rank 1 the next, and
+        so on strictly descending by size), ``rank`` (int) and ``is_main``
+        (bool, ``rank == 0``). Write back with e.g.
+        ``adata.obs["split"] = res.labels["subcluster"]``.
+
+        Also carries ``_umap_partition`` (``u0`` …) — the RAW UMAP-side
+        clustering used to build the product, ranked by size GLOBALLY across
+        the whole embedding, not within any one RNA cluster. Two fragments
+        of *different* RNA clusters can share a ``_umap_partition`` id, and
+        ``u0`` is *not* generally each RNA cluster's largest fragment — do
+        not use it as a per-parent rank (that footgun is exactly why it's
+        underscore-prefixed and excluded from the headline API; use
+        ``subcluster``/``rank`` for anything ranking-related).
     overlap
         RNA-cluster × UMAP-cluster crosstab of cell counts — the "cartesian
-        product" the split is derived from.
+        product" the split is derived from. Columns are the raw
+        ``_umap_partition`` ids (see the caveat above — a crosstab needs a
+        shared column axis across all RNA clusters, which only the raw,
+        globally-ranked partition can provide).
     fragments
         One row per non-empty (RNA cluster, UMAP fragment) combination:
-        ``parent``, ``subcluster``, ``umap_label``, ``n_cells``,
-        ``frac_of_parent``, ``rank``, ``is_main``, ``is_minor_sibling``.
-        ``is_minor_sibling`` = rank > 0 **and** n_cells >= ``min_subcluster_size``
-        — a small fragment carrying the *same* RNA label as its main core
-        (hence sibling), the direct answer to "which tiny same-label
-        fragments hide in my clusters?".
+        ``parent``, ``subcluster``, ``umap_label`` (the raw
+        ``_umap_partition`` id this fragment came from — same global-rank
+        caveat as above), ``n_cells``, ``frac_of_parent``, ``rank``,
+        ``is_main``, ``is_minor_sibling``. ``is_minor_sibling`` = rank > 0
+        **and** n_cells >= ``min_subcluster_size`` — a small fragment
+        carrying the *same* RNA label as its main core (hence sibling), the
+        direct answer to "which tiny same-label fragments hide in my
+        clusters?".
     info
         UMAP-side clustering diagnostics: ``final_resolution``, ``n_clusters``
         and the (resolution, k) binary-search ``history``.
@@ -271,10 +287,14 @@ def dissect_partition(
         random_state=umap_random_state)
     umap_lab = np.array([f"u{int(x)}" for x in raw])
 
-    # 3 — the cartesian product: RNA-cluster × UMAP-cluster cell counts
+    # 3 — the cartesian product: RNA-cluster × UMAP-cluster cell counts.
+    # "_umap_partition": leading underscore flags it as the raw, globally
+    # size-ranked UMAP-side clustering — NOT ranked within any one RNA
+    # cluster, so it must never be mistaken for a per-parent rank (that mixup
+    # is exactly the footgun step 4 exists to route around).
     overlap = pd.crosstab(rna, umap_lab)
     overlap.index.name = cluster_col
-    overlap.columns.name = "umap_cluster"
+    overlap.columns.name = "_umap_partition"
 
     # 4 — within each RNA cluster, rank fragments by size (desc; ties broken
     #     by the crosstab's column order — deterministic) → c{parent}_{rank}
@@ -286,22 +306,25 @@ def dissect_partition(
             name_of[(parent, ulab)] = (f"c{parent}_{rank}", rank)
             frag_rows.append({
                 "parent": parent, "subcluster": f"c{parent}_{rank}",
-                "umap_label": ulab, "n_cells": int(n),
+                "_umap_partition": ulab, "n_cells": int(n),
                 "frac_of_parent": float(n) / total,
                 "rank": rank, "is_main": rank == 0,
                 "is_minor_sibling": rank > 0 and int(n) >= min_subcluster_size,
             })
     fragments = pd.DataFrame(frag_rows, columns=[
-        "parent", "subcluster", "umap_label", "n_cells", "frac_of_parent",
+        "parent", "subcluster", "_umap_partition", "n_cells", "frac_of_parent",
         "rank", "is_main", "is_minor_sibling"])
 
-    # 5 — per-cell labels, aligned to obs_names
+    # 5 — per-cell labels, aligned to obs_names. subcluster/rank/is_main are
+    # the headline API (rank strictly descends by size within each parent);
+    # _umap_partition trails last — raw, globally-ranked, kept for
+    # traceability only (see the PartitionResult docstring's footgun note).
     subs, ranks = zip(*(name_of[(p, u)] for p, u in zip(rna, umap_lab)))
     labels = pd.DataFrame({
-        "umap_cluster": umap_lab,
         "subcluster": list(subs),
         "rank": list(ranks),
         "is_main": [r == 0 for r in ranks],
+        "_umap_partition": umap_lab,
     }, index=adata.obs_names.copy())
 
     return PartitionResult(labels=labels, overlap=overlap,

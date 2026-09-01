@@ -21,5 +21,9 @@ granularity-matching behaviour of ``umap_target_k``.
 """
 from .core import PartitionResult, dissect_partition, umap_leiden_partition
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
+# 0.2.0: renamed the raw, globally-ranked UMAP-side partition column from
+# "umap_cluster" to "_umap_partition" (in both labels and fragments) to stop
+# it being mistaken for a per-parent rank — "subcluster"/"rank" (already
+# rank-0-is-largest within each RNA cluster) is the only headline identifier.
 __all__ = ["dissect_partition", "umap_leiden_partition", "PartitionResult"]
