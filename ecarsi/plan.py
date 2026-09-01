@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from pathlib import Path
 
 PLAN_SCHEMA = {
@@ -70,8 +69,10 @@ async def _propose(profiles: list[dict]) -> dict:
         + json.dumps(profiles, indent=1)
         + "\n```\n"
     )
+    from . import model
+
     options = ClaudeAgentOptions(
-        model=os.environ.get("MODEL", "claude-sonnet-5"),
+        model=model(),
         allowed_tools=["Read", "Grep", "Glob"],  # read-only probing, no writes
         max_turns=30,
         output_format={"type": "json_schema", "schema": PLAN_SCHEMA},

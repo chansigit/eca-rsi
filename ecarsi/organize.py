@@ -89,7 +89,9 @@ def profile_unit(unit: dict, max_levels: int = 30) -> dict:
         nuniq = s.nunique(dropna=True)
         entry: dict = {"dtype": str(s.dtype), "n_unique": int(nuniq)}
         if nuniq <= max_levels and (s.dtype == object or str(s.dtype) == "category"):
-            entry["value_counts"] = {str(k): int(v) for k, v in s.value_counts().items()}
+            # drop unused categorical levels — phantom zero counts would
+            # pollute the profile the agent reasons over
+            entry["value_counts"] = {str(k): int(v) for k, v in s.value_counts().items() if v}
         cols[str(c)] = entry
     prof["obs_columns"] = cols
     prof["n_obs"] = int(a.n_obs)

@@ -11,10 +11,11 @@ Runs after ecarsi.organize, once per analysis unit. Four stages:
   3. DRIVE (agent session): this step's own SDK session works through the
      sample checklist, one Task subagent per sample, each running the exact
      osp command it is handed. A sample is done when its contract files
-     (report.html + clustered.h5ad) exist; done samples are skipped on
-     resume — finish one, cross one off.
-  4. VERIFY (code): every sample's contract files must exist; one driver
-     retry for stragglers, then hard exit listing what is missing.
+     exist (report.html + clustered.h5ad, plus annotation_proposal.json
+     when annotating); done samples are skipped on resume — finish one,
+     cross one off.
+  4. VERIFY (code): sessions are relaunched while they make progress (one
+     no-progress retry), then hard exit listing whatever is missing.
 
 Env: MODEL (both agent calls, default claude-sonnet-5), OSP_PYTHON
 (interpreter that has osp installed; defaults to this interpreter).
@@ -56,7 +57,9 @@ def profile_obs(h5ad: Path, max_levels: int = 50) -> dict:
         nuniq = int(s.nunique(dropna=True))
         entry: dict = {"dtype": str(s.dtype), "n_unique": nuniq, "n_na": int(s.isna().sum())}
         if nuniq <= max_levels and (s.dtype == object or str(s.dtype) == "category"):
-            entry["value_counts"] = {str(k): int(v) for k, v in s.value_counts().items()}
+            # drop unused categorical levels — phantom zero counts would
+            # pollute the profile the agent reasons over
+            entry["value_counts"] = {str(k): int(v) for k, v in s.value_counts().items() if v}
         cols[str(c)] = entry
     prof = {"n_obs": int(a.n_obs), "obs_columns": cols}
     a.file.close()
@@ -91,8 +94,10 @@ async def _identify(profile: dict) -> dict:
 
     brief = (Path(__file__).parent / "prompts" / "sample_column.md").read_text()
     prompt = brief + "\n\n## obs profile\n\n```json\n" + json.dumps(profile, indent=1) + "\n```\n"
+    from . import model
+
     options = ClaudeAgentOptions(
-        model=os.environ.get("MODEL", "claude-sonnet-5"),
+        model=model(),
         allowed_tools=[],  # pure judgment over the profile, no tools
         max_turns=5,
         output_format={"type": "json_schema", "schema": SAMPLE_COL_SCHEMA},
@@ -161,11 +166,13 @@ def build_entries(h5ad: Path, col: str | None, counts: dict[str, int], out_root:
                   py: str, annotate: bool, model: str,
                   species: str | None = None, tissue: str | None = None) -> list[dict]:
     entries: list[dict] = []
-    used: dict[str, int] = {}
+    seen: set[str] = set()
     for value, n in counts.items():
         base = _safe_name(value)
-        name = base if base not in used else f"{base}_{used[base]}"
-        used[base] = used.get(base, 0) + 1
+        name, i = base, 1
+        while name in seen:  # dedup against names actually produced
+            name, i = f"{base}_{i}", i + 1
+        seen.add(name)
         outdir = out_root / name
         if col is None:
             command = _whole_file_command(py, h5ad, outdir, annotate, model, species, tissue)
@@ -216,12 +223,14 @@ async def _drive(pending: list[dict], out_root: Path) -> None:
         for p in pending
     )
     prompt = brief.replace("{{OUT_ROOT}}", str(out_root)).replace("{{CHECKLIST}}", checklist)
+    from . import model
+
     options = ClaudeAgentOptions(
-        model=os.environ.get("MODEL", "claude-sonnet-5"),
+        model=model(),
         allowed_tools=["Task", "Bash", "BashOutput", "Read", "Glob", "Grep", "Write"],
         permission_mode="bypassPermissions",
         cwd=str(out_root),
-        max_turns=200,
+        max_turns=500,  # long runs burn many sleep/check turns per sample
     )
     async for _ in query(prompt=prompt, options=options):
         pass
@@ -234,8 +243,9 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="ecarsi.persample", description=__doc__)
     ap.add_argument("unit", help="organize unit dir (with input/organized.h5ad) or an h5ad path")
     ap.add_argument("out", nargs="?", help="output root (default <unit>/persample)")
-    ap.add_argument("--annotate", action=argparse.BooleanOptionalAction, default=True,
-                    help="run osp's annotation agent per sample (default on; --no-annotate to skip)")
+    ap.add_argument("--annotate", action=argparse.BooleanOptionalAction, default=None,
+                    help="run osp's annotation agent per sample (default on; --no-annotate to "
+                         "skip; a resumed run reuses the recorded choice unless overridden)")
     ap.add_argument("--species", default=None, help="context passed to osp --annotate")
     ap.add_argument("--tissue", default=None, help="context passed to osp --annotate")
     args = ap.parse_args(argv)
@@ -248,22 +258,30 @@ def main(argv: list[str]) -> int:
     out_root = Path(args.out).resolve() if args.out else (
         h5ad.parent / "persample" if unit.suffix == ".h5ad" else unit / "persample"
     )
+    from . import model as _model
+
     py = os.environ.get("OSP_PYTHON", sys.executable)
-    model = os.environ.get("MODEL", "claude-sonnet-5")
+    model = _model()
 
     mpath = out_root / "manifest.json"
     if mpath.is_file():
+        # resume must reproduce the recorded run unless the CLI explicitly
+        # overrides — a bare re-invocation may not silently change behavior
         with open(mpath) as f:
             man = json.load(f)
         col = man["sample_column"]
         counts = {s["value"]: s["n_cells"] for s in man["samples"]}
+        annotate = man.get("annotate", True) if args.annotate is None else args.annotate
         species = args.species or man.get("species")
+        tissue = args.tissue or man.get("tissue")
         print(f"[identify] reusing recorded sample column: {col!r} (species {species!r})")
     else:
         profile = profile_obs(h5ad)
         decision = identify_sample_column(profile)
         col = decision["sample_column"]
+        annotate = True if args.annotate is None else args.annotate
         species = args.species or (None if unit.suffix == ".h5ad" else _upstream_species(unit))
+        tissue = args.tissue
         print(f"[identify] sample column: {col!r} (species {species!r}) — {decision['rationale']}")
         counts = list_samples(h5ad, col) if col is not None else {"all": profile["n_obs"]}
         man = {
@@ -271,26 +289,37 @@ def main(argv: list[str]) -> int:
             "sample_column": col,
             "rationale": decision["rationale"],
             "species": species,
-            "annotate": bool(args.annotate),
+            "tissue": tissue,
+            "annotate": annotate,
             "samples": [{"value": v, "n_cells": n} for v, n in counts.items()],
         }
         out_root.mkdir(parents=True, exist_ok=True)
         with open(mpath, "w") as f:
             json.dump(man, f, indent=2)
 
-    entries = build_entries(h5ad, col, counts, out_root, py, bool(args.annotate), model,
-                            species, args.tissue)
+    entries = build_entries(h5ad, col, counts, out_root, py, annotate, model,
+                            species, tissue)
     print(f"[samples] {len(entries)}: " + ", ".join(f"{e['value']}({e['n_cells']})" for e in entries))
 
-    for attempt in (1, 2):
-        pending = [e for e in entries if not _is_done(Path(e["outdir"]), bool(args.annotate))]
+    # keep opening driver sessions while they make progress (a session may
+    # exhaust its turns mid-checklist on long runs); allow one no-progress
+    # retry for transient deaths, then give up — per-sample retries already
+    # happened inside the sessions
+    grace, prev = 1, None
+    while True:
+        pending = [e for e in entries if not _is_done(Path(e["outdir"]), annotate)]
         if not pending:
             break
-        print(f"[drive] attempt {attempt}: {len(pending)} sample(s) pending: "
+        if prev is not None and len(pending) >= prev:
+            if grace == 0:
+                break
+            grace -= 1
+        prev = len(pending)
+        print(f"[drive] {len(pending)} sample(s) pending: "
               + ", ".join(e["value"] for e in pending))
         asyncio.run(_drive(pending, out_root))
 
-    missing = [e["value"] for e in entries if not _is_done(Path(e["outdir"]), bool(args.annotate))]
+    missing = [e["value"] for e in entries if not _is_done(Path(e["outdir"]), annotate)]
     if missing:
         print("[fail] samples still incomplete after retry: " + ", ".join(missing))
         return 1
