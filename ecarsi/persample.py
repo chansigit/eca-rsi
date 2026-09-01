@@ -128,15 +128,20 @@ def list_samples(h5ad: Path, col: str) -> dict[str, int]:
 
 
 def _osp_command(py: str, h5ad: Path, col: str, value: str, outdir: Path,
-                 annotate: bool, model: str) -> str:
+                 annotate: bool, model: str, species: str | None, tissue: str | None) -> str:
     cmd = [py, "-m", "osp", str(h5ad), "--sample-col", col, "--sample", value,
            "--outdir", str(outdir)]
     if annotate:
         cmd += ["--annotate", "--model", model]
+        if species:
+            cmd += ["--species", species]
+        if tissue:
+            cmd += ["--tissue", tissue]
     return " ".join(shlex.quote(c) for c in cmd)
 
 
-def _whole_file_command(py: str, h5ad: Path, outdir: Path, annotate: bool, model: str) -> str:
+def _whole_file_command(py: str, h5ad: Path, outdir: Path, annotate: bool, model: str,
+                        species: str | None, tissue: str | None) -> str:
     code = (
         "import scanpy as sc; from osp import run_one_sample_pipeline, generate_report; "
         f"a = sc.read_h5ad({str(h5ad)!r}); a.obs['sample'] = 'all'; "
@@ -146,13 +151,15 @@ def _whole_file_command(py: str, h5ad: Path, outdir: Path, annotate: bool, model
     if annotate:
         code += (
             "; from osp.annotate import propose_annotation; "
-            f"propose_annotation({str(outdir)!r}, model={model!r})"
+            f"propose_annotation({str(outdir)!r}, model={model!r}, "
+            f"species={species!r}, tissue={tissue!r})"
         )
     return " ".join(shlex.quote(c) for c in [py, "-c", code])
 
 
 def build_entries(h5ad: Path, col: str | None, counts: dict[str, int], out_root: Path,
-                  py: str, annotate: bool, model: str) -> list[dict]:
+                  py: str, annotate: bool, model: str,
+                  species: str | None = None, tissue: str | None = None) -> list[dict]:
     entries: list[dict] = []
     used: dict[str, int] = {}
     for value, n in counts.items():
@@ -161,15 +168,16 @@ def build_entries(h5ad: Path, col: str | None, counts: dict[str, int], out_root:
         used[base] = used.get(base, 0) + 1
         outdir = out_root / name
         if col is None:
-            command = _whole_file_command(py, h5ad, outdir, annotate, model)
+            command = _whole_file_command(py, h5ad, outdir, annotate, model, species, tissue)
         else:
-            command = _osp_command(py, h5ad, col, value, outdir, annotate, model)
+            command = _osp_command(py, h5ad, col, value, outdir, annotate, model, species, tissue)
         entries.append({"value": value, "n_cells": n, "outdir": str(outdir), "command": command})
     return entries
 
 
-def _is_done(outdir: Path) -> bool:
-    return all((outdir / f).is_file() for f in CONTRACT)
+def _is_done(outdir: Path, annotate: bool = False) -> bool:
+    files = CONTRACT + (("annotation_proposal.json",) if annotate else ())
+    return all((outdir / f).is_file() for f in files)
 
 
 # ---------------------------------------------------------- drive (agent)
@@ -203,7 +211,10 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="ecarsi.persample", description=__doc__)
     ap.add_argument("unit", help="organize unit dir (with input/organized.h5ad) or an h5ad path")
     ap.add_argument("out", nargs="?", help="output root (default <unit>/persample)")
-    ap.add_argument("--annotate", action="store_true", help="pass --annotate to each osp run")
+    ap.add_argument("--annotate", action=argparse.BooleanOptionalAction, default=True,
+                    help="run osp's annotation agent per sample (default on; --no-annotate to skip)")
+    ap.add_argument("--species", default=None, help="context passed to osp --annotate")
+    ap.add_argument("--tissue", default=None, help="context passed to osp --annotate")
     args = ap.parse_args(argv)
 
     unit = Path(args.unit).resolve()
@@ -241,18 +252,19 @@ def main(argv: list[str]) -> int:
         with open(mpath, "w") as f:
             json.dump(man, f, indent=2)
 
-    entries = build_entries(h5ad, col, counts, out_root, py, bool(args.annotate), model)
+    entries = build_entries(h5ad, col, counts, out_root, py, bool(args.annotate), model,
+                            args.species, args.tissue)
     print(f"[samples] {len(entries)}: " + ", ".join(f"{e['value']}({e['n_cells']})" for e in entries))
 
     for attempt in (1, 2):
-        pending = [e for e in entries if not _is_done(Path(e["outdir"]))]
+        pending = [e for e in entries if not _is_done(Path(e["outdir"]), bool(args.annotate))]
         if not pending:
             break
         print(f"[drive] attempt {attempt}: {len(pending)} sample(s) pending: "
               + ", ".join(e["value"] for e in pending))
         asyncio.run(_drive(pending, out_root))
 
-    missing = [e["value"] for e in entries if not _is_done(Path(e["outdir"]))]
+    missing = [e["value"] for e in entries if not _is_done(Path(e["outdir"]), bool(args.annotate))]
     if missing:
         print("[fail] samples still incomplete after retry: " + ", ".join(missing))
         return 1

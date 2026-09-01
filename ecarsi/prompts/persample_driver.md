@@ -24,9 +24,10 @@ directory, and the exact command that processes it.
   loop — then report the output tail and whether the contract files
   exist.
 - A sample is DONE when both files exist in its output directory:
-  `report.html` and `clustered.h5ad`. Verify this yourself on the file
-  system — the subagent's word is not the contract — before crossing the
-  sample off.
+  `report.html` and `clustered.h5ad` — and, if its command includes
+  `--annotate` (or an annotation call), also `annotation_proposal.json`.
+  Verify this yourself on the file system — the subagent's word is not
+  the contract — before crossing the sample off.
 - If a sample's command fails, retry it ONCE in a fresh Task subagent
   with the error output included in that subagent's prompt. If it fails
   again, append the sample name and the error tail to
