@@ -278,15 +278,38 @@ def write_index(unit: Path, rounds: list[Path], stats: list[dict], forced: bool)
                    f'<a href="{r.relative_to(unit)}/ledger/sankey_coarse.png">sankey</a></td></tr>'
                    for i, (r, s) in enumerate(zip(rounds, stats), 1))
     nr = _h.escape((rel / "needs_review.md").read_text())
+    # per-sample (osp) reports: every sample persample produced, with the
+    # round-1 inclusion decision next to it
+    ps_root = unit / "persample"
+    decisions = {}
+    dec = rounds[0] / "integrate" / "sample_decisions.csv"
+    if dec.is_file():
+        decisions = {r["sample"]: r for r in csv.DictReader(open(dec))}
+    man = json.load(open(ps_root / "manifest.json")) if (ps_root / "manifest.json").is_file() else {}
+    sample_dirs = [Path(x["dir"]) for x in man.get("samples", [])] or (
+        sorted(p for p in ps_root.iterdir() if p.is_dir() and (p / "report.html").is_file()) if ps_root.is_dir() else [])
+    ps_rows = ""
+    for d in sample_dirs:
+        if not (d / "report.html").is_file():
+            continue
+        r = decisions.get(d.name, {})
+        n = r.get("n_cells", "")
+        status = r.get("decision", "")
+        reason = _h.escape(r.get("reason", "")) if status == "exclude" else ""
+        ps_rows += (f"<tr><td>{_h.escape(d.name)}</td><td>{n}</td><td>{status}</td>"
+                    f'<td><a href="{_h.escape(str(d.relative_to(unit)))}/report.html">osp report</a></td>'
+                    f'<td class="reason">{reason}</td></tr>')
     doc = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>release — {_h.escape(unit.name)}</title>
 <style>body{{font-family:system-ui,sans-serif;max-width:1400px;margin:2rem auto;padding:0 1rem;color:#222}}
 table{{border-collapse:collapse}}td,th{{border:1px solid #ddd;padding:.3rem .6rem;text-align:right}}th{{background:#f4f4f4}}
-td:last-child{{text-align:left}}pre{{white-space:pre-wrap;background:#f7f7f7;padding:1rem;border-radius:6px;font-size:.85rem}}
+td:last-child,td.reason{{text-align:left}}td.reason{{max-width:60ch;font-size:.85rem}}pre{{white-space:pre-wrap;background:#f7f7f7;padding:1rem;border-radius:6px;font-size:.85rem}}
 img{{max-width:100%;border:1px solid #ddd}}</style></head><body>
 <h1>Release — {_h.escape(unit.name)}</h1>
 <p>{len(rounds)} round(s){" (FORCED at the safety cap)" if forced else " — " + _h.escape(str(stats[-1].get('reason', '')))} · final cells {stats[-1]['n_out']}
 · <code>release/final.h5ad</code> (<code>zmip_ann_coarse</code> / <code>zmip_ann_fine</code> = final labels)</p>
 <table><tr><th>round</th><th>cells in</th><th>cells out</th><th>removed</th><th>removed %</th><th>decision</th><th>reason</th><th>wall time</th><th>reports</th></tr>{rows}</table>
+<h2>Per-sample reports (osp, run once)</h2>
+<table><tr><th>sample</th><th>cells after QC</th><th>integration</th><th>report</th><th>exclusion reason</th></tr>{ps_rows}</table>
 <h2>Cell identity across steps and rounds</h2><img src="release/sankey_coarse.png">
 <p><a href="release/cell_ledger.csv">cell_ledger.csv</a> — one row per input cell, status + labels per stage · \
 <a href="release/summary.md">summary.md</a> · <a href="release/needs_review.md">needs_review.md</a></p>
