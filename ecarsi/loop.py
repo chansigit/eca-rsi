@@ -294,6 +294,12 @@ def main(argv: list[str]) -> int:
             _log(unit, f"round {n} already decided: {decision} (resume)")
             if decision == "release" and not (superseded and n == len(stats)):
                 break
+            if decision == "release":
+                # reopened past this release: the round is no longer the last one
+                st["decision"] = decision = "continue"
+                st_p.write_text(" ".join(f"{k}={v}" for k, v in st.items()) + "\n")
+                dec_p.write_text("continue\n")
+                _log(unit, f"round {n} decision rewritten release → continue (force-reopen)")
             continue
 
         _log(unit, f"round {n} start")
