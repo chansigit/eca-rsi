@@ -56,6 +56,29 @@ def _log(unit: Path, event: str) -> None:
         f.write(line + "\n")
 
 
+def _elapsed_from_log(unit: Path, n: int) -> float | None:
+    """Round wall time from progress.log ('round N start' → 'round N stats'),
+    for rounds whose stats.txt predates the elapsed_s field."""
+    log = unit / "progress.log"
+    if not log.is_file():
+        return None
+    start = end = None
+    for line in log.read_text().splitlines():
+        ts, _, ev = line.partition(" ")[0], None, line.partition(" ")[2]
+        if ev == f"round {n} start":
+            start = time.mktime(time.strptime(line[:19], "%Y-%m-%d %H:%M:%S"))
+        elif ev.startswith(f"round {n} stats") and start is not None:
+            end = time.mktime(time.strptime(line[:19], "%Y-%m-%d %H:%M:%S"))
+    return (end - start) if (start is not None and end is not None) else None
+
+
+def _fmt_elapsed(sec) -> str:
+    if sec is None or sec != sec:
+        return "n/a"
+    sec = int(sec)
+    return f"{sec // 3600}h{(sec % 3600) // 60:02d}m" if sec >= 3600 else f"{sec // 60}m{sec % 60:02d}s"
+
+
 def _n_obs(h5ad: Path) -> int:
     import h5py
 
@@ -174,14 +197,15 @@ def _release(unit: Path, rounds: list[Path], stats: list[dict], forced: bool, su
         if src.is_file():
             shutil.copy2(src, rel / name)
     (rel / "needs_review.md").write_text(_needs_review(rounds, forced, stats))
-    rows = "\n".join(f"| {i} | {s['n_in']} | {s['n_out']} | {s['removed']} | {100 * s['frac']:.2f}% | {s['decision']} |"
-                     for i, s in enumerate(stats, 1))
+    rows = "\n".join(f"| {i} | {s['n_in']} | {s['n_out']} | {s['removed']} | {100 * s['frac']:.2f}% | {s['decision']} "
+                     f"| {_fmt_elapsed(s.get('elapsed_s'))} |" for i, s in enumerate(stats, 1))
     summary = [f"# Release — {unit.name}", "",
                f"Rounds: {len(rounds)}" + (" (forced at --max-rounds)" if forced else " (converged)")
                + (" — supersedes an earlier release (--force-reopen)" if superseded else ""),
                f"Final cells: {stats[-1]['n_out']} → release/final.h5ad "
                f"(= {final_src.relative_to(unit)}; zmip_ann_coarse / zmip_ann_fine are the final labels)", "",
-               "| round | cells in | cells out | removed | removed % | decision |", "|---|---|---|---|---|---|", rows, "",
+               "| round | cells in | cells out | removed | removed % | decision | wall time |",
+               "|---|---|---|---|---|---|---|", rows, "",
                "Reports: " + ", ".join(f"round {i}: {r.relative_to(unit)}/integrate/report.html, "
                                        f"{r.relative_to(unit)}/zoomin/report.html" for i, r in enumerate(rounds, 1)),
                "", "Ledger + Sankey: release/cell_ledger.csv, release/sankey_coarse.png",
@@ -200,7 +224,7 @@ def write_index(unit: Path, rounds: list[Path], stats: list[dict], forced: bool)
 
     rel = unit / "release"
     rows = "".join(f"<tr><td>{i}</td><td>{s['n_in']}</td><td>{s['n_out']}</td><td>{s['removed']}</td>"
-                   f"<td>{100 * s['frac']:.2f}%</td><td>{s['decision']}</td>"
+                   f"<td>{100 * s['frac']:.2f}%</td><td>{s['decision']}</td><td>{_fmt_elapsed(s.get('elapsed_s'))}</td>"
                    f'<td><a href="{r.relative_to(unit)}/integrate/report.html">msp</a> · '
                    f'<a href="{r.relative_to(unit)}/zoomin/report.html">zmip</a> · '
                    f'<a href="{r.relative_to(unit)}/ledger/sankey_coarse.png">sankey</a></td></tr>'
@@ -214,7 +238,7 @@ img{{max-width:100%;border:1px solid #ddd}}</style></head><body>
 <h1>Release — {_h.escape(unit.name)}</h1>
 <p>{len(rounds)} round(s){" (forced at --max-rounds)" if forced else " (converged)"} · final cells {stats[-1]['n_out']}
 · <code>release/final.h5ad</code> (<code>zmip_ann_coarse</code> / <code>zmip_ann_fine</code> = final labels)</p>
-<table><tr><th>round</th><th>cells in</th><th>cells out</th><th>removed</th><th>removed %</th><th>decision</th><th>reports</th></tr>{rows}</table>
+<table><tr><th>round</th><th>cells in</th><th>cells out</th><th>removed</th><th>removed %</th><th>decision</th><th>wall time</th><th>reports</th></tr>{rows}</table>
 <h2>Cell identity across steps and rounds</h2><img src="release/sankey_coarse.png">
 <p><a href="release/cell_ledger.csv">cell_ledger.csv</a> — one row per input cell, status + labels per stage · \
 <a href="release/summary.md">summary.md</a> · <a href="release/needs_review.md">needs_review.md</a></p>
@@ -260,7 +284,9 @@ def main(argv: list[str]) -> int:
         dec_p, st_p = rdir / "decision.txt", rdir / "stats.txt"
         if dec_p.is_file() and st_p.is_file():
             st = dict(line.split("=", 1) for line in st_p.read_text().split())
-            st = {k: (float(v) if k == "frac" else v if k == "decision" else int(v)) for k, v in st.items()}
+            st = {k: (float(v) if k in ("frac", "elapsed_s") else v if k == "decision" else int(v))
+                  for k, v in st.items()}
+            st.setdefault("elapsed_s", _elapsed_from_log(unit, n))
             stats.append(st)
             decision = dec_p.read_text().strip()
             _log(unit, f"round {n} already decided: {decision} (resume)")
@@ -269,6 +295,7 @@ def main(argv: list[str]) -> int:
             continue
 
         _log(unit, f"round {n} start")
+        t0 = time.time()
         if n == 1:
             ret = crosssample.main([str(unit), str(rdir)])
             if ret != 0:
@@ -302,10 +329,12 @@ def main(argv: list[str]) -> int:
             decision = "release"
         else:
             decision = "continue"
-        st = {"n_in": n_in, "n_out": n_out, "removed": removed, "frac": frac, "decision": decision}
+        st = {"n_in": n_in, "n_out": n_out, "removed": removed, "frac": frac, "decision": decision,
+              "elapsed_s": round(time.time() - t0, 1)}
         stats.append(st)
         st_p.write_text(" ".join(f"{k}={v}" for k, v in st.items()) + "\n")
-        _log(unit, f"round {n} stats removed={removed}/{n_in} ({100 * frac:.2f}%) decision={decision}")
+        _log(unit, f"round {n} stats removed={removed}/{n_in} ({100 * frac:.2f}%) decision={decision} "
+                   f"elapsed={_fmt_elapsed(st['elapsed_s'])}")
         run_ledger(unit, rounds, rdir / "ledger")
         dec_p.write_text(decision + "\n")
         if decision == "release":
