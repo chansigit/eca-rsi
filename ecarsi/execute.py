@@ -1,10 +1,12 @@
 """Deterministic executor for the organize plan — the agent proposes, this runs.
 
-Output layout (one directory per analysis unit, ready to hand to the loop):
+Output layout (see ecarsi.layout — one directory per analysis unit, ready
+to hand to persample and the loop):
 
     <out_root>/
-      manifest.json                  # global: detection, profiles, plan, warnings
-      <unit_name>/input/
+      index.html                     # root landing page (ecarsi.index)
+      organize/manifest.json         # global: detection, profiles, plan, warnings
+      units/<unit_name>/input/
         organized.h5ad               # merged (+ filtered) cells, provenance in obs
         manifest.json                # this unit's slice of the plan
 """
@@ -14,6 +16,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from . import layout as L
 
 if TYPE_CHECKING:
     import anndata as ad
@@ -144,7 +148,8 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
                 f"unit {name!r}: merged {merged.n_obs} cells but conservation audit expected {expected}"
             )
 
-        udir = out_root / name / "input"
+        unit = L.unit_dir(out_root, name)
+        udir = unit / L.INPUT
         udir.mkdir(parents=True, exist_ok=True)
         tmp = udir / "organized.tmp.h5ad"
         merged.write_h5ad(tmp)  # never in place: tmp + rename
@@ -165,14 +170,20 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
             "sources": src_totals,
             "warnings": warns,
         }
-        with open(udir / "manifest.json", "w") as f:
+        with open(L.input_manifest(unit), "w") as f:
             json.dump(unit_manifest, f, indent=2)
         global_manifest["units_written"].append(
-            {"name": name, "dir": str(udir.parent), "n_cells": int(merged.n_obs)}
+            {"name": name, "dir": str(unit), "n_cells": int(merged.n_obs)}
         )
         global_manifest["warnings"].extend(warns)
+        L.log_event(unit, f"organize: {merged.n_obs} cells from {list(src_totals)}", echo=False)
         print(f"[write] {name}: {merged.n_obs} cells from {list(src_totals)} -> {udir / 'organized.h5ad'}")
 
-    with open(out_root / "manifest.json", "w") as f:
+    gm = L.organize_manifest(out_root)
+    gm.parent.mkdir(parents=True, exist_ok=True)
+    with open(gm, "w") as f:
         json.dump(global_manifest, f, indent=2)
-    print(f"[done] {len(plan['analysis_units'])} analysis unit(s); manifest at {out_root / 'manifest.json'}")
+    from .index import write_all
+
+    write_all(out_root)
+    print(f"[done] {len(plan['analysis_units'])} analysis unit(s); manifest at {gm}")

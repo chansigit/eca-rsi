@@ -13,9 +13,8 @@ per stage:
     rNN_msp_status  (kept | excluded-sample | removed:<source>)   rNN_msp_coarse, rNN_msp_fine
     rNN_zmip_status (kept | not-zoomed | removed:<source>)        rNN_zmip_lineage, rNN_zmip_coarse, rNN_zmip_fine
 
-for every round directory given (a round dir holds integrate/ and zoomin/,
-i.e. a crosssample out_root). Default rounds: <unit>/rounds/round* if that
-exists, else <unit>/crosssample.
+for every round directory given (a round dir holds crosssample/ and
+zoomin/). Default rounds: every <unit>/rounds/roundNN that has started.
 
 Sankey: one column per stage (osp, then msp/zmip per round); node = label,
 cells removed at a stage flow into a red sink in that column and stop there,
@@ -42,6 +41,8 @@ import pandas as pd
 from matplotlib.patches import PathPatch
 from matplotlib.path import Path as MPath
 
+from . import layout as L
+
 REMOVED_PREFIX = "removed:"
 OTHER_MIN_FRAC = 0.01  # labels below this share of a stage are pooled into "other"
 
@@ -60,11 +61,8 @@ def _obs(path: Path, cols: list[str]) -> pd.DataFrame:
 
 def _persample_frames(unit: Path) -> list[pd.DataFrame]:
     frames = []
-    ps_root = unit / "persample"
-    man = json.load(open(ps_root / "manifest.json")) if (ps_root / "manifest.json").is_file() else {}
-    sample_dirs = [Path(s["dir"]) for s in man.get("samples", [])] or sorted(
-        p for p in ps_root.iterdir() if p.is_dir() and (p / "clustered.h5ad").is_file())
-    for d in sample_dirs:
+    ps_root = L.persample_root(unit)
+    for d in L.sample_dirs(unit):
         if not (d / "clustered.h5ad").is_file():
             continue
         o = _obs(d / "clustered.h5ad", ["_ann_coarse", "_ann_fine"])
@@ -85,7 +83,7 @@ def _persample_frames(unit: Path) -> list[pd.DataFrame]:
 def _apply_round(ledger: pd.DataFrame, rdir: Path, prefix: str, alive_col: str) -> None:
     """Add one round's msp + zmip column groups in place. alive_col: the
     previous stage's status column (cells 'kept' there enter this round)."""
-    idir, zdir = rdir / "integrate", rdir / "zoomin"
+    idir, zdir = L.crosssample_dir(rdir), L.zoomin_dir(rdir)
     ms, zs = f"{prefix}msp_status", f"{prefix}zmip_status"
     ledger[ms] = np.where(ledger[alive_col] == "kept", "kept", "")
     dec = idir / "sample_decisions.csv"
@@ -274,7 +272,7 @@ def run_ledger(unit: Path, round_dirs: list[Path], out: Path) -> pd.DataFrame:
     print(f"[sankey] {out / 'sankey_coarse.png'}")
     last = round_dirs[-1]
     p = f"r{len(round_dirs):02d}_"
-    plan_p = last / "zoomin" / "zmip_plan.json"
+    plan_p = L.zoomin_dir(last) / "zmip_plan.json"
     if plan_p.is_file() and f"{p}msp_fine" in ledger:
         for ln in json.load(open(plan_p))["lineages"]:
             if not ln["zoom"]:
@@ -282,25 +280,26 @@ def run_ledger(unit: Path, round_dirs: list[Path], out: Path) -> pd.DataFrame:
             sub = ledger[(ledger[f"{p}msp_status"] == "kept") & ledger[f"{p}msp_coarse"].isin(ln["coarse_labels"])]
             draw_sankey(sub, [(f"round {len(round_dirs)} · msp", f"{p}msp_fine", f"{p}msp_status"),
                               (f"round {len(round_dirs)} · zmip", f"{p}zmip_fine", f"{p}zmip_status")],
-                        out / f"sankey_fine_{ln['name']}.png", f"{ln['name']}: fine labels msp → zmip",
+                        out / f"sankey_fine_{L.slug(ln['name'])}.png", f"{ln['name']}: fine labels msp → zmip",
                         min_label_frac=0.0)
     return ledger
 
 
 def default_rounds(unit: Path) -> list[Path]:
-    rounds = sorted(p for p in (unit / "rounds").glob("round*") if (p / "integrate").is_dir()) \
-        if (unit / "rounds").is_dir() else []
-    return rounds or [unit / "crosssample"]
+    rounds = [r for r in L.rounds(unit) if L.crosssample_dir(r).is_dir()]
+    if not rounds:
+        sys.exit(f"no started rounds under {L.rounds_root(unit)}")
+    return rounds
 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="ecarsi.ledger", description=__doc__)
     ap.add_argument("unit", help="organize unit dir")
-    ap.add_argument("rounds", nargs="*", help="round dirs in order (each holds integrate/ and zoomin/)")
+    ap.add_argument("rounds", nargs="*", help="round dirs in order (each holds crosssample/ and zoomin/)")
     args = ap.parse_args(argv)
     unit = Path(args.unit).resolve()
     round_dirs = [Path(r).resolve() for r in args.rounds] or default_rounds(unit)
-    run_ledger(unit, round_dirs, round_dirs[-1] / "ledger")
+    run_ledger(unit, round_dirs, L.ledger_dir(round_dirs[-1]))
     return 0
 
 

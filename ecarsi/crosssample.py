@@ -1,8 +1,9 @@
 """ecarsi-crosssample — msp wrapper: sample inclusion, then cross-sample integration.
 
-    python -m ecarsi.crosssample <unit_dir> [out_dir]
+    python -m ecarsi.crosssample <unit_dir> [round_dir]
 
-Runs after ecarsi.persample (which must have completed WITH annotation for
+Round 1 of the loop; standalone it writes <unit>/rounds/round01 (the loop
+passes the round dir explicitly). Runs after ecarsi.persample (which must have completed WITH annotation for
 every sample — hard prerequisite). Stages:
 
   1. RESOLVE (code): samples, batch key, species from persample's manifest.
@@ -23,7 +24,7 @@ every sample — hard prerequisite). Stages:
      proposals only) → annotate (cell-identity agent: coarse/fine labels,
      merges, REAL removal). msp resumes per step on its own, so re-running
      this command finishes whatever step was cut short. Contract:
-     <out>/integrate/{integrated.h5ad, report.html, inspection_proposal.json,
+     <round>/crosssample/{integrated.h5ad, report.html, inspection_proposal.json,
      annotation_proposal.json, annotated.h5ad}.
 
 Cells enter integration exactly as osp left them: QC-passed cells only,
@@ -49,6 +50,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from . import layout as L
+
 INCLUSION_SCHEMA = {
     "type": "object",
     "properties": {
@@ -72,10 +75,9 @@ INCLUSION_SCHEMA = {
 
 # what a completed persample sample dir must contain (annotation is a hard
 # prerequisite for crosssample: the inclusion agent judges by it)
-PS_CONTRACT = ("report.html", "clustered.h5ad", "annotation_proposal.json", "qc_summary.csv")
+PS_CONTRACT = L.PS_ANNOTATE_CONTRACT + ("qc_summary.csv",)
 
-MSP_CONTRACT = ("integrated.h5ad", "report.html", "inspection_proposal.json",
-                "annotation_proposal.json", "annotated.h5ad")
+MSP_CONTRACT = L.MSP_CONTRACT
 
 
 # ---------------------------------------------------------------- resolve
@@ -85,7 +87,7 @@ def load_persample(unit: Path) -> dict:
     """Persample manifest with per-sample dirs; hard-stop if any sample is
     missing its contract files — crosssample requires persample complete
     with annotation."""
-    mpath = unit / "persample" / "manifest.json"
+    mpath = L.persample_manifest(unit)
     if not mpath.is_file():
         raise SystemExit(f"no persample manifest at {mpath} — run ecarsi.persample first")
     with open(mpath) as f:
@@ -95,6 +97,8 @@ def load_persample(unit: Path) -> dict:
             "persample manifest predates the 'dir' field — re-run ecarsi.persample "
             "(--plan-only is enough) to refresh it"
         )
+    for s in man["samples"]:  # located under this unit, whatever the manifest recorded
+        s["dir"] = str(L.sample_dir(unit, s))
     incomplete = [s["value"] for s in man["samples"]
                   if not all((Path(s["dir"]) / f).is_file() for f in PS_CONTRACT)]
     if incomplete:
@@ -109,8 +113,11 @@ def ecapp_batch_designations(unit: Path) -> dict:
     """eca-pp identify_columns batch designations per source unit, from the
     organize global manifest — archived for the audit trail; persample's
     sample column wins any conflict."""
-    gm = unit.parent / "manifest.json"
+    root = L.root_of(unit)
     out: dict = {}
+    if root is None:
+        return out
+    gm = L.organize_manifest(root)
     if not gm.is_file():
         return out
     with open(gm) as f:
@@ -213,12 +220,12 @@ def msp_command(py: str, inputs: list[str], batch_col: str, outdir: Path,
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="ecarsi.crosssample", description=__doc__)
     ap.add_argument("unit", help="organize unit dir (persample/ completed inside)")
-    ap.add_argument("out", nargs="?", help="output root (default <unit>/crosssample)")
+    ap.add_argument("out", nargs="?", help="round dir (default <unit>/rounds/round01)")
     args = ap.parse_args(argv)
 
     unit = Path(args.unit).resolve()
     ps = load_persample(unit)
-    out_root = Path(args.out).resolve() if args.out else unit / "crosssample"
+    out_root = Path(args.out).resolve() if args.out else L.round_dir(unit, 1)
     batch_col = ps["sample_column"]
     species = ps.get("species")
 
@@ -260,7 +267,7 @@ def main(argv: list[str]) -> int:
 
     py = os.environ.get("MSP_PYTHON", sys.executable)
     inputs = [str(Path(by_val[s]["dir"]) / "clustered.h5ad") for s in included]
-    idir = out_root / "integrate"
+    idir = L.crosssample_dir(out_root)
     from . import model
 
     cmd = msp_command(py, inputs, batch_col, idir, species, model())

@@ -32,6 +32,8 @@ import shlex
 import sys
 from pathlib import Path
 
+from . import layout as L
+
 SAMPLE_COL_SCHEMA = {
     "type": "object",
     "properties": {
@@ -41,7 +43,7 @@ SAMPLE_COL_SCHEMA = {
     "required": ["sample_column", "rationale"],
 }
 
-CONTRACT = ("report.html", "clustered.h5ad")
+CONTRACT = L.PS_CONTRACT
 
 
 # ---------------------------------------------------------------- profiling
@@ -186,13 +188,14 @@ def _upstream_species(unit: Path) -> str | None:
     """Species from the organize manifests: the unit's own manifest first,
     else the global manifest's profiles (older organize outputs). A unit
     holds one species by plan invariant; anything ambiguous returns None."""
-    um = unit / "input" / "manifest.json"
+    um = L.input_manifest(unit)
     if um.is_file():
         with open(um) as f:
             sp = json.load(f).get("species")
         if sp:
             return sp
-    gm = unit.parent / "manifest.json"
+    root = L.root_of(unit)
+    gm = L.organize_manifest(root) if root else Path("/nonexistent")
     if gm.is_file():
         with open(gm) as f:
             g = json.load(f)
@@ -254,12 +257,13 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
 
     unit = Path(args.unit).resolve()
-    h5ad = unit if unit.suffix == ".h5ad" else unit / "input" / "organized.h5ad"
+    bare = unit.suffix == ".h5ad"
+    h5ad = unit if bare else L.input_h5ad(unit)
     if not h5ad.is_file():
         print(f"no input h5ad at {h5ad}")
         return 2
     out_root = Path(args.out).resolve() if args.out else (
-        h5ad.parent / "persample" if unit.suffix == ".h5ad" else unit / "persample"
+        h5ad.parent / L.PERSAMPLE if bare else L.persample_root(unit)
     )
     from . import model as _model
 
@@ -285,7 +289,7 @@ def main(argv: list[str]) -> int:
         decision = identify_sample_column(profile)
         col = decision["sample_column"]
         annotate = True if args.annotate is None else args.annotate
-        species = args.species or (None if unit.suffix == ".h5ad" else _upstream_species(unit))
+        species = args.species or (None if bare else _upstream_species(unit))
         tissue = args.tissue
         print(f"[identify] sample column: {col!r} (species {species!r}) — {decision['rationale']}")
         counts = list_samples(h5ad, col) if col is not None else {"all": profile["n_obs"]}
@@ -316,6 +320,9 @@ def main(argv: list[str]) -> int:
     # exhaust its turns mid-checklist on long runs); allow one no-progress
     # retry for transient deaths, then give up — per-sample retries already
     # happened inside the sessions
+    in_unit = not bare and L.is_unit(unit)
+    if in_unit:
+        L.log_event(unit, f"persample start: {len(entries)} sample(s), column {col!r}")
     grace, prev = 1, None
     while True:
         pending = [e for e in entries if not _is_done(Path(e["outdir"]), annotate)]
@@ -329,11 +336,22 @@ def main(argv: list[str]) -> int:
         print(f"[drive] {len(pending)} sample(s) pending: "
               + ", ".join(e["value"] for e in pending))
         asyncio.run(_drive(pending, out_root))
+        if in_unit:
+            from .index import write_all
+
+            write_all(unit)
 
     missing = [e["value"] for e in entries if not _is_done(Path(e["outdir"]), annotate)]
     if missing:
+        if in_unit:
+            L.log_event(unit, "persample failed: incomplete samples " + ", ".join(missing))
         print("[fail] samples still incomplete after retry: " + ", ".join(missing))
         return 1
+    if in_unit:
+        L.log_event(unit, f"persample done: {len(entries)} sample(s)")
+        from .index import write_all
+
+        write_all(unit)
     print(f"[done] {len(entries)} sample(s) complete under {out_root}")
     return 0
 

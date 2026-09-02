@@ -7,10 +7,10 @@ Everything after it is repeated on the survivors until the cell count stops
 moving:
 
     round 1   crosssample (sample inclusion agent + msp integrate/inspect/annotate)
-              → zoomin (zmip)                    rounds/round01/{integrate,zoomin,ledger}
+              → zoomin (zmip)                    rounds/round01/{crosssample,zoomin,ledger}
     round N   previous round's zoomin/annotated_zmip.h5ad, prior labels renamed
               r(N-1)_* → msp --from-h5ad (re-integrate from raw counts, inspect,
-              annotate) → zoomin                 rounds/roundNN/{input.h5ad,integrate,zoomin,ledger}
+              annotate) → zoomin                 rounds/roundNN/{input.h5ad,crosssample,zoomin,ledger}
 
 Stop rule — cell counts only (labels carry wording randomness and are
 deliberately NOT a criterion):
@@ -22,14 +22,16 @@ deliberately NOT a criterion):
                      a safety cap (--cap, default 10) forces a flagged
                      release so the loop cannot run forever.
 The loop never stops for a human: doubts accumulate as flags and are
-reported once, in release/needs_review.md. --force-reopen continues past
-an existing release (the superseded round's decision becomes 'continue').
+reported once, in release/needs_review.{md,json} (ecarsi.review).
+--force-reopen continues past an existing release (the superseded round's
+decision becomes 'continue').
 
 Per round: stats.txt (n_in, n_out, removed, frac, decision, reason, elapsed_s),
 decision.txt (continue | release), ledger/ (cell_ledger.csv + Sankeys across
-all rounds so far).
-progress.log records every event. Re-running resumes: finished rounds are
-skipped via their decision.txt, half-done rounds via the step contracts.
+all rounds so far); the landing pages (ecarsi.index) are rewritten after
+every round. progress.log records every event. Re-running resumes: finished
+rounds are skipped via their decision.txt, half-done rounds via the step
+contracts. Paths: ecarsi.layout.
 
 Env: MODEL, MSP_PYTHON / ZMIP_PYTHON (as in crosssample / zoomin).
 """
@@ -37,7 +39,6 @@ Env: MODEL, MSP_PYTHON / ZMIP_PYTHON (as in crosssample / zoomin).
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import os
 import shlex
@@ -47,7 +48,9 @@ import sys
 import time
 from pathlib import Path
 
-from . import crosssample, zoomin
+from . import crosssample, review, zoomin
+from . import layout as L
+from .index import fmt_elapsed, read_stats, write_all
 from .ledger import run_ledger
 
 RELEASE_FRAC = 0.01        # (1) this round removed < 1% of what entered it ...
@@ -81,45 +84,21 @@ PREV_COLS = ("msp_ann_cluster", "msp_ann_coarse", "msp_ann_fine", "msp_ann_actio
              "zmip_action", "_msp_action", "_msp_verdict")
 
 
-def _log(unit: Path, event: str) -> None:
-    line = f"{time.strftime('%Y-%m-%d %H:%M:%S')} {event}"
-    print(f"[loop] {line}", flush=True)
-    with open(unit / "progress.log", "a") as f:
-        f.write(line + "\n")
+_log = L.log_event
 
 
 def _elapsed_from_log(unit: Path, n: int) -> float | None:
     """Round wall time from progress.log ('round N start' → 'round N stats'),
     for rounds whose stats.txt predates the elapsed_s field."""
-    log = unit / "progress.log"
-    if not log.is_file():
-        return None
     start = end = None
-    for line in log.read_text().splitlines():
-        ev = line[20:]  # after "YYYY-MM-DD HH:MM:SS "
+    for ts, ev in L.read_log(unit):
         if ev == f"round {n} start":
-            start = time.mktime(time.strptime(line[:19], "%Y-%m-%d %H:%M:%S"))
+            start = time.mktime(time.strptime(ts, "%Y-%m-%d %H:%M:%S"))
         elif ev.startswith(f"round {n} stats") and start is not None:
-            end = time.mktime(time.strptime(line[:19], "%Y-%m-%d %H:%M:%S"))
+            end = time.mktime(time.strptime(ts, "%Y-%m-%d %H:%M:%S"))
     # a round resumed from finished outputs logs start and stats in the same
     # second — its real wall time is unknown, not zero
     return (end - start) if (start is not None and end is not None and end > start) else None
-
-
-def _fmt_elapsed(sec) -> str:
-    if sec is None or sec != sec:
-        return "n/a"
-    sec = int(sec)
-    return f"{sec // 3600}h{(sec % 3600) // 60:02d}m" if sec >= 3600 else f"{sec // 60}m{sec % 60:02d}s"
-
-
-def _read_stats(path: Path) -> dict:
-    """stats.txt: JSON (current) or the older 'k=v k=v' line."""
-    text = path.read_text().strip()
-    if text.startswith("{"):
-        return json.loads(text)
-    st = dict(tok.split("=", 1) for tok in text.split())
-    return {k: (float(v) if k in ("frac", "elapsed_s") else v if k == "decision" else int(v)) for k, v in st.items()}
 
 
 def _write_stats(path: Path, st: dict) -> None:
@@ -159,79 +138,26 @@ def _run_msp_from_h5ad(py: str, h5ad: Path, outdir: Path, batch_col: str, specie
         cmd += ["--species", species]
     cmd_s = " ".join(shlex.quote(c) for c in cmd)
     print(f"[msp] {cmd_s}", flush=True)
-    if all((outdir / f).is_file() for f in crosssample.MSP_CONTRACT):
+    if L.complete(outdir, L.MSP_CONTRACT):
         print("[msp] contract already satisfied — skipping (resume)")
         return 0
     ret = subprocess.run(cmd_s, shell=True).returncode
     if ret != 0:
         return ret
-    missing = [f for f in crosssample.MSP_CONTRACT if not (outdir / f).is_file()]
+    missing = [f for f in L.MSP_CONTRACT if not (outdir / f).is_file()]
     if missing:
         print(f"[fail] msp exited 0 but contract files missing: {missing}")
         return 1
     return 0
 
 
-# ---------------------------------------------------------------- flags → needs_review
-
-def _needs_review(rounds: list[Path], forced: bool, stats: list[dict]) -> str:
-    lines = ["# Needs review", "",
-             "Everything the agents were unsure about or the host overrode, collected once at release. "
-             "Nothing here stopped the loop.", ""]
-    if forced:
-        lines += ["## Forced release", f"- {stats[-1].get('reason')}; last round removed {100 * stats[-1]['frac']:.2f}% "
-                  "— the loop did not converge on its own", ""]
-    for i, (rdir, st) in enumerate(zip(rounds, stats), 1):
-        lines.append(f"## Round {i}")
-        if st["frac"] > 0.10:
-            lines.append(f"- removed {100 * st['frac']:.1f}% of its cells ({st['removed']}/{st['n_in']}) — above the "
-                         "~10% per-round budget")
-        dec = rdir / "integrate" / "sample_decisions.csv"
-        if dec.is_file():
-            for r in csv.DictReader(open(dec)):
-                if r["decision"] == "exclude":
-                    lines.append(f"- sample {r['sample']} excluded from integration ({r['n_cells']} cells): {r['reason']}")
-        insp = rdir / "integrate" / "inspection_proposal.json"
-        if insp.is_file():
-            for e in json.load(open(insp)).get("clusters", []):
-                if e.get("action") == "flag" or e.get("verdict") == "ambiguous" or e.get("confidence") == "low":
-                    lines.append(f"- inspect cluster {e['cluster']}: {e['verdict']} → {e['action']} "
-                                 f"[{e['confidence']}] — {e['rationale']}")
-        ann = rdir / "integrate" / "annotation_proposal.json"
-        if ann.is_file():
-            for e in json.load(open(ann)).get("clusters", []):
-                if e.get("confidence") == "low" or (e.get("action") == "remove" and e.get("confidence") != "high"):
-                    lines.append(f"- msp annotate cluster {e['cluster_id']}: {e['coarse_label']} / {e['fine_label']} "
-                                 f"[{e['action']}, {e['confidence']}] — {e['rationale']}")
-        zdir = rdir / "zoomin"
-        plan_p = zdir / "zmip_plan.json"
-        if plan_p.is_file():
-            for ln in json.load(open(plan_p))["lineages"]:
-                if "host:" in ln.get("reason", ""):
-                    lines.append(f"- zmip lineage {ln['name']} not zoomed: {ln['reason']}")
-                prop_p = zdir / ln["name"].replace("/", "_") / "annotation_proposal.json"
-                if not prop_p.is_file():
-                    continue
-                prop = json.load(open(prop_p))
-                if prop.get("budget_exceeded"):
-                    lines.append(f"- zmip {ln['name']}: agent removed {100 * prop['agent_removed_fraction']:.1f}% "
-                                 "of the lineage after a forced second look (budget_exceeded)")
-                for e in prop.get("clusters", []):
-                    if e.get("action") == "reassign":
-                        lines.append(f"- zmip {ln['name']} cluster {e['cluster_id']} reassigned → {e['reassign_to']} "
-                                     f"({e['fine_label']}) [{e['confidence']}]")
-                    elif e.get("confidence") == "low" or (e.get("action") == "remove" and e.get("confidence") != "high"):
-                        lines.append(f"- zmip {ln['name']} cluster {e['cluster_id']}: {e['fine_label']} "
-                                     f"[{e['action']}, {e['confidence']}] — {e['rationale']}")
-        lines.append("")
-    return "\n".join(lines)
-
+# ---------------------------------------------------------------- release
 
 def _release(unit: Path, rounds: list[Path], stats: list[dict], forced: bool, superseded: bool) -> None:
-    rel = unit / "release"
+    rel = L.release_dir(unit)
     rel.mkdir(exist_ok=True)
     last = rounds[-1]
-    final_src = last / "zoomin" / "annotated_zmip.h5ad"
+    final_src = L.zoomin_dir(last) / "annotated_zmip.h5ad"
     final = rel / "final.h5ad"
     if final.exists() or final.is_symlink():
         final.unlink()
@@ -240,85 +166,30 @@ def _release(unit: Path, rounds: list[Path], stats: list[dict], forced: bool, su
     except OSError:
         shutil.copy2(final_src, final)
     for name in ("sankey_coarse.png", "cell_ledger.csv"):
-        src = last / "ledger" / name
+        src = L.ledger_dir(last) / name
         if src.is_file():
             shutil.copy2(src, rel / name)
-    (rel / "needs_review.md").write_text(_needs_review(rounds, forced, stats))
+    items = review.collect(unit, rounds, stats, forced)
+    (rel / "needs_review.md").write_text(review.to_markdown(items, unit.name, len(rounds)))
+    (rel / "needs_review.json").write_text(review.to_json(items))
     rows = "\n".join(f"| {i} | {s['n_in']} | {s['n_out']} | {s['removed']} | {100 * s['frac']:.2f}% | {s['decision']} "
-                     f"| {s.get('reason', '')} | {_fmt_elapsed(s.get('elapsed_s'))} |" for i, s in enumerate(stats, 1))
+                     f"| {s.get('reason', '')} | {fmt_elapsed(s.get('elapsed_s'))} |" for i, s in enumerate(stats, 1))
     summary = [f"# Release — {unit.name}", "",
                f"Rounds: {len(rounds)}" + (" (FORCED at the safety cap)" if forced else f" ({stats[-1].get('reason', '')})")
                + (" — supersedes an earlier release (--force-reopen)" if superseded else ""),
-               f"Final cells: {stats[-1]['n_out']} → release/final.h5ad "
+               f"Final cells: {stats[-1]['n_out']} → {L.RELEASE}/final.h5ad "
                f"(= {final_src.relative_to(unit)}; zmip_ann_coarse / zmip_ann_fine are the final labels)", "",
                "| round | cells in | cells out | removed | removed % | decision | reason | wall time |",
                "|---|---|---|---|---|---|---|---|", rows, "",
-               "Reports: " + ", ".join(f"round {i}: {r.relative_to(unit)}/integrate/report.html, "
-                                       f"{r.relative_to(unit)}/zoomin/report.html" for i, r in enumerate(rounds, 1)),
-               "", "Ledger + Sankey: release/cell_ledger.csv, release/sankey_coarse.png",
-               "Flags: release/needs_review.md"]
+               "Reports: " + ", ".join(f"round {i}: {L.crosssample_dir(r).relative_to(unit)}/report.html, "
+                                       f"{L.zoomin_dir(r).relative_to(unit)}/report.html" for i, r in enumerate(rounds, 1)),
+               "", f"Ledger + Sankey: {L.RELEASE}/cell_ledger.csv, {L.RELEASE}/sankey_coarse.png",
+               f"Flags: {L.RELEASE}/needs_review.md ({len(items)} items: "
+               + ", ".join(f"{t} {n}" for _, t, n, _ in review.counts(items)) + ")",
+               "", f"Landing page: {L.INDEX} (ecarsi.index; serve with python -m ecarsi.serve)"]
     (rel / "summary.md").write_text("\n".join(summary) + "\n")
-    write_index(unit, rounds, stats, forced)
+    write_all(unit)
     _log(unit, f"release rounds={len(rounds)} final_cells={stats[-1]['n_out']} forced={forced}")
-
-
-def write_index(unit: Path, rounds: list[Path], stats: list[dict], forced: bool) -> None:
-    """unit/index.html — a landing page linking every report of every round,
-    the Sankey and the flags. Written at the UNIT root with unit-relative
-    links so `python -m http.server` in the unit dir lands here and every
-    asset resolves (a symlink into release/ would break relative paths)."""
-    import html as _h
-
-    rel = unit / "release"
-    rows = "".join(f"<tr><td>{i}</td><td>{s['n_in']}</td><td>{s['n_out']}</td><td>{s['removed']}</td>"
-                   f"<td>{100 * s['frac']:.2f}%</td><td>{s['decision']}</td><td>{_h.escape(str(s.get('reason', '')))}</td>"
-                   f"<td>{_fmt_elapsed(s.get('elapsed_s'))}</td>"
-                   f'<td><a href="{r.relative_to(unit)}/integrate/report.html">msp</a> · '
-                   f'<a href="{r.relative_to(unit)}/zoomin/report.html">zmip</a> · '
-                   f'<a href="{r.relative_to(unit)}/ledger/sankey_coarse.png">sankey</a></td></tr>'
-                   for i, (r, s) in enumerate(zip(rounds, stats), 1))
-    nr = _h.escape((rel / "needs_review.md").read_text())
-    # per-sample (osp) reports: every sample persample produced, with the
-    # round-1 inclusion decision next to it
-    ps_root = unit / "persample"
-    decisions = {}
-    dec = rounds[0] / "integrate" / "sample_decisions.csv"
-    if dec.is_file():
-        decisions = {r["sample"]: r for r in csv.DictReader(open(dec))}
-    man = json.load(open(ps_root / "manifest.json")) if (ps_root / "manifest.json").is_file() else {}
-    sample_dirs = [Path(x["dir"]) for x in man.get("samples", [])] or (
-        sorted(p for p in ps_root.iterdir() if p.is_dir() and (p / "report.html").is_file()) if ps_root.is_dir() else [])
-    ps_rows = ""
-    for d in sample_dirs:
-        if not (d / "report.html").is_file():
-            continue
-        r = decisions.get(d.name, {})
-        n = r.get("n_cells", "")
-        status = r.get("decision", "")
-        reason = _h.escape(r.get("reason", "")) if status == "exclude" else ""
-        ps_rows += (f"<tr><td>{_h.escape(d.name)}</td><td>{n}</td><td>{status}</td>"
-                    f'<td><a href="{_h.escape(str(d.relative_to(unit)))}/report.html">osp report</a></td>'
-                    f'<td class="reason">{reason}</td></tr>')
-    doc = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>release — {_h.escape(unit.name)}</title>
-<style>body{{font-family:system-ui,sans-serif;max-width:1400px;margin:2rem auto;padding:0 1rem;color:#222}}
-table{{border-collapse:collapse}}td,th{{border:1px solid #ddd;padding:.3rem .6rem;text-align:right}}th{{background:#f4f4f4}}
-td:last-child,td.reason{{text-align:left}}td.reason{{max-width:60ch;font-size:.85rem}}pre{{white-space:pre-wrap;background:#f7f7f7;padding:1rem;border-radius:6px;font-size:.85rem}}
-img{{max-width:100%;border:1px solid #ddd}}</style></head><body>
-<h1>Release — {_h.escape(unit.name)}</h1>
-<p>{len(rounds)} round(s){" (FORCED at the safety cap)" if forced else " — " + _h.escape(str(stats[-1].get('reason', '')))} · final cells {stats[-1]['n_out']}
-· <code>release/final.h5ad</code> (<code>zmip_ann_coarse</code> / <code>zmip_ann_fine</code> = final labels)</p>
-<table><tr><th>round</th><th>cells in</th><th>cells out</th><th>removed</th><th>removed %</th><th>decision</th><th>reason</th><th>wall time</th><th>reports</th></tr>{rows}</table>
-<h2>Per-sample reports (osp, run once)</h2>
-<table><tr><th>sample</th><th>cells after QC</th><th>integration</th><th>report</th><th>exclusion reason</th></tr>{ps_rows}</table>
-<h2>Cell identity across steps and rounds</h2><img src="release/sankey_coarse.png">
-<p><a href="release/cell_ledger.csv">cell_ledger.csv</a> — one row per input cell, status + labels per stage · \
-<a href="release/summary.md">summary.md</a> · <a href="release/needs_review.md">needs_review.md</a></p>
-<h2>Needs review</h2><pre>{nr}</pre>
-</body></html>"""
-    link = unit / "index.html"
-    if link.is_symlink():
-        link.unlink()
-    link.write_text(doc)
 
 
 # ---------------------------------------------------------------- main
@@ -333,13 +204,16 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--force-reopen", action="store_true", help="continue past an existing release")
     args = ap.parse_args(argv)
     unit = Path(args.unit).resolve()
-    rounds_root = unit / "rounds"
-    rounds_root.mkdir(exist_ok=True)
+    if not L.is_unit(unit):
+        print(f"[loop] {unit} is not a unit dir (no {L.INPUT}/organized.h5ad)")
+        return 2
+    L.rounds_root(unit).mkdir(exist_ok=True)
 
     superseded = False
-    if (unit / "release" / "summary.md").is_file():
+    summary = L.release_dir(unit) / "summary.md"
+    if summary.is_file():
         if not args.force_reopen:
-            print(f"[loop] already released: {unit / 'release' / 'summary.md'} (use --force-reopen to continue)")
+            print(f"[loop] already released: {summary} (use --force-reopen to continue)")
             return 0
         superseded = True
         _log(unit, "force-reopen: continuing past existing release")
@@ -351,12 +225,12 @@ def main(argv: list[str]) -> int:
     stats: list[dict] = []
     last_round = args.rounds if args.rounds is not None else args.cap
     for n in range(1, last_round + 1):
-        rdir = rounds_root / f"round{n:02d}"
+        rdir = L.round_dir(unit, n)
         rdir.mkdir(exist_ok=True)
         rounds.append(rdir)
-        dec_p, st_p = rdir / "decision.txt", rdir / "stats.txt"
+        dec_p, st_p = rdir / L.DECISION, rdir / L.STATS
         if dec_p.is_file() and st_p.is_file():
-            st = _read_stats(st_p)
+            st = read_stats(st_p)
             st.setdefault("elapsed_s", _elapsed_from_log(unit, n))
             stats.append(st)
             if "reason" not in st:  # stats.txt from before reasons were recorded
@@ -375,6 +249,7 @@ def main(argv: list[str]) -> int:
             continue
 
         _log(unit, f"round {n} start")
+        write_all(unit)
         t0 = time.time()
         if n == 1:
             ret = crosssample.main([str(unit), str(rdir)])
@@ -382,23 +257,24 @@ def main(argv: list[str]) -> int:
                 _log(unit, f"round 1 crosssample failed rc={ret}")
                 return ret
         else:
-            prev = rounds_root / f"round{n - 1:02d}"
-            man = json.load(open(rounds_root / "round01" / "manifest.json"))
-            inp = rdir / "input.h5ad"
+            prev = L.round_dir(unit, n - 1)
+            man = json.load(open(L.round_dir(unit, 1) / L.MANIFEST))
+            inp = rdir / L.ROUND_INPUT
             if not inp.is_file():
-                _prepare_input(prev / "zoomin" / "annotated_zmip.h5ad", inp, n - 1)
+                _prepare_input(L.zoomin_dir(prev) / "annotated_zmip.h5ad", inp, n - 1)
                 _log(unit, f"round {n} input prepared from round {n - 1} ({_n_obs(inp)} cells)")
-            ret = _run_msp_from_h5ad(py, inp, rdir / "integrate", man["batch_col"], man.get("species"), model())
+            ret = _run_msp_from_h5ad(py, inp, L.crosssample_dir(rdir), man["batch_col"], man.get("species"), model())
             if ret != 0:
                 _log(unit, f"round {n} msp failed rc={ret}")
                 return ret
+        write_all(unit)
         ret = zoomin.main([str(unit), str(rdir)])
         if ret != 0:
             _log(unit, f"round {n} zoomin failed rc={ret}")
             return ret
 
-        n_in = _n_obs(rdir / "integrate" / "integrated.h5ad")
-        n_out = _n_obs(rdir / "zoomin" / "annotated_zmip.h5ad")
+        n_in = _n_obs(L.crosssample_dir(rdir) / "integrated.h5ad")
+        n_out = _n_obs(L.zoomin_dir(rdir) / "annotated_zmip.h5ad")
         removed = n_in - n_out
         frac = removed / max(n_in, 1)
         st = {"n_in": n_in, "n_out": n_out, "removed": removed, "frac": frac,
@@ -408,15 +284,16 @@ def main(argv: list[str]) -> int:
         st["decision"], st["reason"] = decision, reason
         _write_stats(st_p, st)
         _log(unit, f"round {n} stats removed={removed}/{n_in} ({100 * frac:.2f}%) decision={decision} "
-                   f"[{reason}] elapsed={_fmt_elapsed(st['elapsed_s'])}")
-        run_ledger(unit, rounds, rdir / "ledger")
+                   f"[{reason}] elapsed={fmt_elapsed(st['elapsed_s'])}")
+        run_ledger(unit, rounds, L.ledger_dir(rdir))
         dec_p.write_text(decision + "\n")
+        write_all(unit)
         if decision == "release":
             break
 
     forced = str(stats[-1].get("reason", "")).startswith("FORCED")
     _release(unit, rounds, stats, forced, superseded)
-    print(f"[done] {unit / 'release' / 'summary.md'}")
+    print(f"[done] {summary}")
     return 0
 
 

@@ -89,14 +89,35 @@ silent bug 全部长在"规格与实现的接缝"上(记录了但没人执行、
 同级目录),agent 只做窄决策且被 host 校验;`ecarsi/` 是 wrapper + 驱动。
 
 ```
-python -m ecarsi.organize    <输入目录> <out_root>   # eca-pp 守门 + 分析单元规划(agent)+ 细胞守恒审计
+python -m ecarsi.organize    <输入目录> <root>       # eca-pp 守门 + 分析单元规划(agent)+ 细胞守恒审计
 python -m ecarsi.persample   <unit>                 # 样本列识别(agent)+ Task 子代理逐样本跑 osp(QC 只此一次,doublet 只在完整样本池算)
 python -m ecarsi.loop        <unit> [--rounds N] [--cap 10] [--force-reopen]
    round 1: ecarsi.crosssample(样本纳入 agent → msp integrate/inspect/annotate)→ ecarsi.zoomin(zmip)
    round N: 上轮 zoomin/annotated_zmip.h5ad,先验列改名 r(N-1)_* → msp --from-h5ad → zmip
-   每轮 rounds/roundNN/{integrate, zoomin, ledger, stats.txt, decision.txt};progress.log 记事件
 python -m ecarsi.ledger      <unit> [round dirs]    # 逐细胞台账 cell_ledger.csv + Sankey(每步删除流进红色 sink)
+python -m ecarsi.index       <root|unit>            # 从磁盘推导落地页(每步结束也自动写)
+python -m ecarsi.serve       <root|unit> [--port 8899] [--ngrok [--domain D] [--auth u:p]] [--detach|--stop]
 ```
+
+**目录结构只在 `ecarsi/layout.py` 一处定义**,各步不得自拼路径(2026-09-02 统一):
+
+```
+<root>/                     organize 的 out_root = 一个数据集一次运行;serve 投这一层
+  index.html  organize/manifest.json
+  units/<unit>/
+    index.html  progress.log  input/  persample/<sample>/
+    rounds/roundNN/{manifest.json, input.h5ad(N≥2), crosssample/, zoomin/, ledger/, stats.txt, decision.txt}
+    release/{final.h5ad, summary.md, needs_review.md, needs_review.json, cell_ledger.csv, sankey_coarse.png}
+```
+
+- 落地页(`ecarsi.index`)**纯从磁盘推导**(manifest / 契约文件 / stats / decision / progress.log),
+  跑到一半也能渲染(round 进行中显示到哪一步、persample 完成数);serve 每次请求根页/unit 页都现算,
+  各步结束再写一份静态页留档。内核(osp/msp/zmip)只写各自的 `report.html`,永不写 index.html。
+- needs_review(`ecarsi.review`)按**类别**分节而非按轮:convergence → removed(低于 high 的真删,不可逆)
+  → sample_excluded → reassigned(跨轮重复的标 recurs)→ inspect_flag → lineage_skipped → low_confidence;
+  每条带 round/step/scope/cluster/细胞数/report 链接;同一记录渲染 md / json / html。
+- persample manifest 记录的 `dir` 是绝对路径,但所有读取方一律用 `layout.sample_dir()` 按 basename
+  在本 unit 的 persample/ 下定位,目录搬家不坏。
 
 - **停机只看细胞数**,标签变动不作判据(agent 措辞有随机性):给了 `--rounds N` 就只看轮数,跑满 N 轮;
   没给则 (1) 本轮删除比 < 1% 或删除数 < 100,或 (2) 连续三轮删除比 < 2% 即 release;round 1 永不 release;
@@ -110,5 +131,7 @@ python -m ecarsi.ledger      <unit> [round dirs]    # 逐细胞台账 cell_ledge
 - zmip:lineage 由 UMAP 连通性决定(agent 必须看图;一个岛一个 lineage,状态并入所在岛),
   ≥800 细胞才下钻;每 lineage 单 agent,可 recluster、remove、reassign;删除超 10% 触发一次复核(软预算)。
 - 环境:`MODEL`(默认 claude-sonnet-5)、`MSP_PYTHON` / `ZMIP_PYTHON`、`ZMIP_MIN_CELLS`。
-- 测试单元:`$SCRATCH/eca-runs/_organize_test/fu2022/fu2022-meniscus`;报告直播:在最新报告目录起
-  `python -m http.server 8899`,ngrok → csj.ngrok.pizza。
+- 测试数据:`$SCRATCH/eca-runs/_organize_test/fu2022/fu2022-meniscus` 是旧结构的真实跑(不迁移);
+  `$SCRATCH/eca-runs/_layout_test/fu2022` 是它的 symlink 复刻(新结构,验证 index/serve 用),
+  `_layout_test/running` 是"round 3 跑到一半"的假象。直播:`python -m ecarsi.serve <root> --port 8899 --detach`,
+  用户自己的 ngrok 隧道 8899 → csj.ngrok.pizza(勿动;ngrok 账号并发 endpoint 有上限,`--ngrok` 会直接报它的错)。

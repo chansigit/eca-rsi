@@ -1,9 +1,10 @@
 """ecarsi-zoomin — zmip wrapper: per-lineage zoom-in after cross-sample integration.
 
-    python -m ecarsi.zoomin <unit_dir> [out_dir]
+    python -m ecarsi.zoomin <unit_dir> [round_dir]
 
-Runs after ecarsi.crosssample (whose msp contract must be complete —
-integrated + inspected + annotated). Stages, all inside zmip:
+Runs after ecarsi.crosssample in the same round dir (default: the latest
+<unit>/rounds/roundNN; its msp contract must be complete — integrated +
+inspected + annotated). Stages, all inside zmip:
 
   1. PLAN (agent): reads the coarse-annotation UMAP + kNN/PAGA connectivity
      and pools coarse labels into UMAP-connected lineages; zooms only those
@@ -16,7 +17,7 @@ integrated + inspected + annotated). Stages, all inside zmip:
      zmip_ann_fine / zmip_lineage / zmip_cluster), zmip_removed.csv,
      zmip_reassigned.csv, global report.html.
 
-Contract: <out>/zoomin/{zmip_plan.json, annotated_zmip.h5ad, report.html}.
+Contract: <round>/zoomin/{zmip_plan.json, annotated_zmip.h5ad, report.html}.
 zmip resumes per lineage, so re-running this command finishes a cut-short
 run. No global re-embedding here — that is the next round's job.
 
@@ -33,9 +34,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .crosssample import MSP_CONTRACT
+from . import layout as L
 
-ZMIP_CONTRACT = ("zmip_plan.json", "annotated_zmip.h5ad", "report.html")
+MSP_CONTRACT = L.MSP_CONTRACT
+ZMIP_CONTRACT = L.ZMIP_CONTRACT
 
 
 def zmip_command(py: str, h5ad: Path, outdir: Path, model: str, min_cells: str | None) -> str:
@@ -47,20 +49,24 @@ def zmip_command(py: str, h5ad: Path, outdir: Path, model: str, min_cells: str |
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="ecarsi.zoomin", description=__doc__)
-    ap.add_argument("unit", help="organize unit dir (crosssample/ completed inside)")
-    ap.add_argument("out", nargs="?", help="output root (default <unit>/crosssample)")
+    ap.add_argument("unit", help="organize unit dir (a round's crosssample/ completed inside)")
+    ap.add_argument("out", nargs="?", help="round dir (default: the latest <unit>/rounds/roundNN)")
     args = ap.parse_args(argv)
 
     unit = Path(args.unit).resolve()
-    out_root = Path(args.out).resolve() if args.out else unit / "crosssample"
-    idir = out_root / "integrate"
+    if args.out:
+        out_root = Path(args.out).resolve()
+    else:
+        existing = L.rounds(unit)
+        out_root = existing[-1] if existing else L.round_dir(unit, 1)
+    idir = L.crosssample_dir(out_root)
     missing = [f for f in MSP_CONTRACT if not (idir / f).is_file()]
     if missing:
         print(f"[fail] crosssample msp contract incomplete in {idir}: missing {missing} — "
               "run ecarsi.crosssample first")
         return 3
 
-    zdir = out_root / "zoomin"
+    zdir = L.zoomin_dir(out_root)
     py = os.environ.get("ZMIP_PYTHON") or os.environ.get("MSP_PYTHON") or sys.executable
     from . import model
 
