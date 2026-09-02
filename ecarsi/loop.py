@@ -177,7 +177,7 @@ def _release(unit: Path, rounds: list[Path], stats: list[dict], forced: bool, su
     summary = [f"# Release — {unit.name}", "",
                f"Rounds: {len(rounds)}" + (" (FORCED at the safety cap)" if forced else f" ({stats[-1].get('reason', '')})")
                + (" — supersedes an earlier release (--force-reopen)" if superseded else ""),
-               f"Final cells: {stats[-1]['n_out']} → {L.RELEASE}/final.h5ad "
+               f"Final cells: {stats[-1]['n_out']}", f"Output h5ad: {final}",
                f"(= {final_src.relative_to(unit)}; zmip_ann_coarse / zmip_ann_fine are the final labels)", "",
                "| round | cells in | cells out | removed | removed % | decision | reason | wall time |",
                "|---|---|---|---|---|---|---|---|", rows, "",

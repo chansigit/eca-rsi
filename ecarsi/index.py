@@ -149,6 +149,16 @@ def unit_state(unit: Path) -> dict:
     final_cells = None
     if rounds and rounds[-1]["stats"]:
         final_cells = rounds[-1]["stats"]["n_out"]
+    # the h5ad a reader should take: release/final.h5ad once released, else
+    # the latest finished round's survivors (still moving while the loop runs)
+    output_h5ad, output_note = None, ""
+    if released and (rel / "final.h5ad").is_file():
+        output_h5ad, output_note = rel / "final.h5ad", "final"
+    else:
+        done = [r for r in rounds if r["stats"] and (L.zoomin_dir(r["dir"]) / "annotated_zmip.h5ad").is_file()]
+        if done:
+            output_h5ad = L.zoomin_dir(done[-1]["dir"]) / "annotated_zmip.h5ad"
+            output_note = f"latest survivors, round {done[-1]['n']} — not final, the loop is still running"
     dec_rows = {}
     if rounds:
         dec = L.crosssample_dir(rounds[0]["dir"]) / "sample_decisions.csv"
@@ -158,6 +168,7 @@ def unit_state(unit: Path) -> dict:
     return {"name": unit.name, "dir": unit, "n_input": im.get("n_cells"), "species": im.get("species") or ps["species"],
             "persample": ps, "rounds": rounds, "released": released, "stage": stage, "stage_class": cls,
             "last_event": f"{last[0]} {last[1]}" if last else "", "final_cells": final_cells,
+            "output_h5ad": output_h5ad, "output_note": output_note,
             "sample_decisions": dec_rows, "forced": _forced(rounds)}
 
 
@@ -179,9 +190,13 @@ def render_unit(unit: Path) -> str:
             + f" · <span class=\"stage {s['stage_class']}\">{e(s['stage'])}</span>"
             + (f"<br><small>last event: {e(s['last_event'])}</small>" if s["last_event"] else "") + "</p>")
     parts = [head]
+    if s["output_h5ad"] is not None:
+        out = s["output_h5ad"]
+        parts.append(f'<p><b>Output h5ad</b> ({e(s["output_note"])}): <code>{e(str(out))}</code> '
+                     f'<a href="{e(str(out.relative_to(unit)))}">download</a> · '
+                     f"<code>zmip_ann_coarse</code> / <code>zmip_ann_fine</code> = labels</p>")
     if s["released"]:
-        parts.append(f'<p><b>Release:</b> <a href="{L.RELEASE}/final.h5ad">final.h5ad</a> '
-                     f'(<code>zmip_ann_coarse</code> / <code>zmip_ann_fine</code> = final labels) · '
+        parts.append(f'<p><b>Release:</b> <code>{e(str(L.release_dir(unit)))}</code> · '
                      f'<a href="{L.RELEASE}/summary.md">summary.md</a> · <a href="{L.RELEASE}/needs_review.md">needs_review.md</a> · '
                      f'<a href="{L.RELEASE}/cell_ledger.csv">cell_ledger.csv</a>'
                      + (" · <b>forced at the safety cap</b>" if s["forced"] else "") + "</p>")
