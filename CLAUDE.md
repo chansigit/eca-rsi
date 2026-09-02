@@ -1,5 +1,19 @@
 # eca-rsi — 循环改进单细胞数据质量与标注的全自动 pipeline
 
+**主线(2026-09-02 起)是 `ecarsi/` 包**:确定的计算内核(osp / msp / zmip)+ Agent SDK 窄决策 +
+自驱动循环,见下文"主线:ecarsi 包"一节。入口:
+
+```bash
+python -m ecarsi.organize  <输入目录> <root>     # 然后 persample → loop → serve,均以 <root>/units/<unit> 为单位
+```
+
+`run.sh` + `steps/*.md` 是上一代"六步 prompt 循环"(agent 自己写分析代码),完整封存在
+分支 **`primitive`**(原 main;树里的 run.sh / steps 仍在,但不再维护)。下面"上一代"一节是它的记录,
+其中的教训(特征空间每轮重算、双重计数、apply 必须执行、checkpoint 不原地覆写、release 数字锚、删除预算)
+在 ecarsi 里已从 prompt 降格为代码。
+
+## 上一代:run.sh 六步循环(分支 primitive;2026-08-25 推倒重做后;总共 ~300 行)
+
 一条命令处理一个装着 h5ad 的文件夹:
 
 ```bash
@@ -10,8 +24,6 @@
 → qc(质控判决)→ apply(执行)→ stop(判 continue/release)。收敛或到达
 轮数上限即 release,绝不中途停下等人;存疑事项以 flag 形式进最终报告的
 "needs review" 一节。
-
-## 架构(2026-08-25 推倒重做后;总共 ~300 行)
 
 - `run.sh` — 循环本体。每步 = 一次全新的 `claude -p`(全工具、
   `--dangerously-skip-permissions`、`--max-turns 200`),cwd 在工作目录。
@@ -83,10 +95,10 @@ silent bug 全部长在"规格与实现的接缝"上(记录了但没人执行、
 - **本目录是开发目录:运行产物一律放仓库外**(workdir 指到如
   `$SCRATCH/eca-runs/<数据集名>`),输入数据也不进本仓库。
 
-## agent-sdk 分支:ecarsi 包(2026-09-02)
+## 主线:ecarsi 包(2026-09-02 由 agent-sdk 分支升格为 main)
 
-`run.sh` 循环之外的另一条线:确定的计算进包(osp / msp / zmip,各自独立仓库,
-同级目录),agent 只做窄决策且被 host 校验;`ecarsi/` 是 wrapper + 驱动。
+确定的计算进包(osp / msp / zmip,各自独立仓库,同级目录),agent 只做窄决策
+且被 host 校验;`ecarsi/` 是 wrapper + 驱动。
 
 ```
 python -m ecarsi.organize    <输入目录> <root>       # eca-pp 守门 + 分析单元规划(agent)+ 细胞守恒审计
