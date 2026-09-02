@@ -1,5 +1,10 @@
 # eca-rsi
 
+> **Main line (2026-09):** the `ecarsi` package — organize → persample (osp) → self-driving rounds of
+> crosssample (msp) + zoomin (zmip) → release, with landing pages and `ecarsi.serve`. Install: [INSTALL.md](INSTALL.md);
+> architecture: [diagrams/architecture.html](diagrams/architecture.html); operating notes: [CLAUDE.md](CLAUDE.md).
+> The `run.sh` six-step prompt loop described below is the previous generation (branch `primitive`).
+
 **An autonomous, iterative curation loop for single-cell RNA-seq data.**
 Point it at a folder of `.h5ad` files; it cleans the cells and annotates the
 cell types over multiple rounds, then releases an annotated dataset — with

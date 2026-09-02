@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ecarsi"
+version = "0.1.0"
+description = "eca-rsi main line: organize → persample (osp) → self-driving rounds of crosssample (msp) + zoomin (zmip), ledger, landing pages and serving"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "chansigit", email = "chansigit@gmail.com" }]
+requires-python = ">=3.10"
+# The kernels (osp, msp, zmip) are separate packages driven through
+# `python -m osp|msp|zmip` subprocesses (OSP_PYTHON / MSP_PYTHON / ZMIP_PYTHON
+# may point at other interpreters), so they are not import-time dependencies
+# of ecarsi. Install them per INSTALL.md.
+dependencies = [
+    "claude-agent-sdk>=0.2.139",  # organize / persample / crosssample agents
+    "anndata",
+    "scanpy",
+    "h5py",
+    "numpy",
+    "pandas",
+    "matplotlib",                  # ledger Sankey PNG
+]
+
+[project.optional-dependencies]
+kernels = ["osp", "msp>=0.2.0", "zmip"]   # same-interpreter install (local checkouts, see INSTALL.md)
+
+[tool.setuptools]
+packages = ["ecarsi"]
+
+[tool.setuptools.package-data]
+ecarsi = ["prompts/*.md"]
