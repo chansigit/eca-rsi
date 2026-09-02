@@ -13,6 +13,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import anndata as ad
 
 
 def _keep_mask(obs, flt):
@@ -33,16 +37,15 @@ def _load_member(units_by_name: dict, member: dict):
     return a[mask].copy() if mask is not None else a
 
 
-def _barcode_overlap_warnings(parts: dict) -> list[str]:
+def _barcode_overlap_warnings(parts: list[tuple[str, "ad.AnnData"]]) -> list[str]:
     """Same barcodes appearing in two members may be the same cells counted
     twice (the double-count trap). Cheap set check; expression identity is
     left to the loop's explore step — the warning just makes it look."""
     warns = []
-    names = list(parts)
-    for i, n1 in enumerate(names):
-        b1 = set(parts[n1].obs_names)
-        for n2 in names[i + 1 :]:
-            b2 = set(parts[n2].obs_names)
+    for i, (n1, a1) in enumerate(parts):
+        b1 = set(a1.obs_names)
+        for n2, a2 in parts[i + 1 :]:
+            b2 = set(a2.obs_names)
             inter = len(b1 & b2)
             denom = min(len(b1), len(b2)) or 1
             if inter / denom > 0.3:
@@ -120,15 +123,19 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
 
     for au in plan["analysis_units"]:
         name = au["name"]
-        parts = {m["source"]: _load_member(units_by_name, m) for m in au["members"]}
+        # a list, not a dict keyed by source: two members of the same unit
+        # can share a source (different obs_filter slices of one file) — a
+        # dict would silently keep only the last and undercount cells
+        parts = [(m["source"], _load_member(units_by_name, m)) for m in au["members"]]
         warns = _barcode_overlap_warnings(parts)
 
         if len(parts) == 1:
-            merged = next(iter(parts.values()))
-            merged.obs["source_unit"] = next(iter(parts))
+            src, merged = parts[0]
+            merged.obs["source_unit"] = src
         else:
             merged = ad.concat(
-                parts, join="outer", label="source_unit", index_unique="::", merge="first"
+                [a for _, a in parts], join="outer", label="source_unit",
+                keys=[src for src, _ in parts], index_unique="::", merge="first",
             )
 
         expected = audit["unit_expected"][name]
@@ -146,13 +153,16 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
         # one species per analysis unit is a plan invariant; surface it here so
         # downstream steps (persample --annotate context) need not climb back
         # to the global manifest
-        sps = {species_by_name.get(src) for src in parts} - {None}
+        sps = {species_by_name.get(src) for src, _ in parts} - {None}
+        src_totals: dict[str, int] = {}
+        for src, a in parts:
+            src_totals[src] = src_totals.get(src, 0) + int(a.n_obs)
         unit_manifest = {
             "analysis_unit": au,
             "species": sps.pop() if len(sps) == 1 else None,
             "n_cells": int(merged.n_obs),
             "n_vars": int(merged.n_vars),
-            "sources": {k: int(v.n_obs) for k, v in parts.items()},
+            "sources": src_totals,
             "warnings": warns,
         }
         with open(udir / "manifest.json", "w") as f:
@@ -161,7 +171,7 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
             {"name": name, "dir": str(udir.parent), "n_cells": int(merged.n_obs)}
         )
         global_manifest["warnings"].extend(warns)
-        print(f"[write] {name}: {merged.n_obs} cells from {list(parts)} -> {udir / 'organized.h5ad'}")
+        print(f"[write] {name}: {merged.n_obs} cells from {list(src_totals)} -> {udir / 'organized.h5ad'}")
 
     with open(out_root / "manifest.json", "w") as f:
         json.dump(global_manifest, f, indent=2)

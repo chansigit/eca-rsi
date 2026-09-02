@@ -59,6 +59,19 @@ def find_ecapp_units(root: Path) -> tuple[list[dict], list[Path]]:
             claimed.add(h5)
 
     violations = [p for p in sorted(root.rglob("*.h5ad")) if p not in claimed]
+
+    # unit identity is name-only downstream (execute.py keys units_by_name by
+    # name) — two source dirs sharing a basename would silently collapse into
+    # one, dropping a whole source from the plan with no error raised
+    seen: dict[str, str] = {}
+    for u in units:
+        if u["name"] in seen:
+            raise SystemExit(
+                f"duplicate unit name {u['name']!r}: {seen[u['name']]} and {u['dir']} "
+                "both resolve to it — rename one of the source directories"
+            )
+        seen[u["name"]] = u["dir"]
+
     return units, violations
 
 
