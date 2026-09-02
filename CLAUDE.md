@@ -4,7 +4,8 @@
 自驱动循环,见下文"主线:ecarsi 包"一节。入口:
 
 ```bash
-python -m ecarsi.organize  <输入目录> <root>     # 然后 persample → loop → serve,均以 <root>/units/<unit> 为单位
+eca-rsi run <eca-pp 输出目录> <root> [--rounds N] [--serve 8899]   # = organize → 每 unit persample → loop → 落地页;./run-eca-rsi.sh 是薄壳
+eca-rsi organize|persample|loop|serve ...                          # 分步,等价 python -m ecarsi.<step>
 ```
 
 `run.sh` + `steps/*.md` 是上一代"六步 prompt 循环"(agent 自己写分析代码),完整封存在
@@ -109,6 +110,7 @@ python -m ecarsi.loop        <unit> [--rounds N] [--cap 10] [--force-reopen]
 python -m ecarsi.ledger      <unit> [round dirs]    # 逐细胞台账 cell_ledger.csv + Sankey(每步删除流进红色 sink)
 python -m ecarsi.index       <root|unit>            # 从磁盘推导落地页(每步结束也自动写)
 python -m ecarsi.serve       <root|unit> [--port 8899] [--ngrok [--domain D] [--auth u:p]] [--detach|--stop]
+eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__main__.py);run.sh 是 primitive 分支的旧入口
 ```
 
 **目录结构只在 `ecarsi/layout.py` 一处定义**,各步不得自拼路径(2026-09-02 统一):

@@ -1,7 +1,8 @@
 # eca-rsi
 
 > **Main line (2026-09):** the `ecarsi` package — organize → persample (osp) → self-driving rounds of
-> crosssample (msp) + zoomin (zmip) → release, with landing pages and `ecarsi.serve`. Install: [INSTALL.md](INSTALL.md);
+> crosssample (msp) + zoomin (zmip) → release, with landing pages and `ecarsi.serve`. Entry point: `eca-rsi run <eca-pp-dir> <root>`
+> (or `./run-eca-rsi.sh`). Install: [INSTALL.md](INSTALL.md);
 > architecture: [diagrams/architecture.html](diagrams/architecture.html); operating notes: [CLAUDE.md](CLAUDE.md).
 > The `run.sh` six-step prompt loop described below is the previous generation (branch `primitive`).
 

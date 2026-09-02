@@ -24,6 +24,9 @@ dependencies = [
     "matplotlib",                  # ledger Sankey PNG
 ]
 
+[project.scripts]
+eca-rsi = "ecarsi.__main__:main"
+
 [project.optional-dependencies]
 kernels = ["msp-sc>=0.2.0", "zmip>=0.1.0"]   # PyPI; osp from GitHub (see INSTALL.md)
 

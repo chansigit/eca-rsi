@@ -97,11 +97,17 @@ claude --version                                                     # SDK 靠�
 
 ## 6. 一条龙
 
+装好后有一个命令 `eca-rsi`(等价 `python -m ecarsi`;仓库里的 `run-eca-rsi.sh` 是只负责挑解释器的薄壳):
+
 ```bash
-python -m ecarsi.organize  <eca-pp 输出目录> <root>
-python -m ecarsi.persample <root>/units/<unit>
-python -m ecarsi.loop      <root>/units/<unit>            # 收敛即 release
-python -m ecarsi.serve     <root> --port 8899 --detach     # http://127.0.0.1:8899 ;加 --ngrok --domain … 公开
+eca-rsi run <eca-pp 输出目录> <root> [--rounds N] [--serve 8899 [--ngrok --domain …]]   # organize → 每个 unit persample → loop → 落地页
+./run-eca-rsi.sh <eca-pp 输出目录> <root>                                                # 同上,不用激活 venv
+
+# 或者分步(每步都可续跑):
+eca-rsi organize  <eca-pp 输出目录> <root>
+eca-rsi persample <root>/units/<unit>
+eca-rsi loop      <root>/units/<unit>            # 收敛即 release
+eca-rsi serve     <root> --port 8899 --detach     # http://127.0.0.1:8899 ;加 --ngrok --domain … 公开
 ```
 
 运行产物一律放仓库外(`$SCRATCH/eca-runs/...`),本机是 Slurm 计算节点直接跑,不要 sbatch。
