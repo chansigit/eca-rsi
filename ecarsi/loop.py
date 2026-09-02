@@ -187,7 +187,43 @@ def _release(unit: Path, rounds: list[Path], stats: list[dict], forced: bool, su
                "", "Ledger + Sankey: release/cell_ledger.csv, release/sankey_coarse.png",
                "Flags: release/needs_review.md"]
     (rel / "summary.md").write_text("\n".join(summary) + "\n")
+    write_index(unit, rounds, stats, forced)
     _log(unit, f"release rounds={len(rounds)} final_cells={stats[-1]['n_out']} forced={forced}")
+
+
+def write_index(unit: Path, rounds: list[Path], stats: list[dict], forced: bool) -> None:
+    """release/index.html — a landing page linking every report of every round
+    (relative links, served from the unit dir), the Sankey and the flags;
+    unit/index.html symlinks to it so `python -m http.server` in the unit dir
+    lands here."""
+    import html as _h
+
+    rel = unit / "release"
+    rows = "".join(f"<tr><td>{i}</td><td>{s['n_in']}</td><td>{s['n_out']}</td><td>{s['removed']}</td>"
+                   f"<td>{100 * s['frac']:.2f}%</td><td>{s['decision']}</td>"
+                   f'<td><a href="../{r.relative_to(unit)}/integrate/report.html">msp</a> · '
+                   f'<a href="../{r.relative_to(unit)}/zoomin/report.html">zmip</a> · '
+                   f'<a href="../{r.relative_to(unit)}/ledger/sankey_coarse.png">sankey</a></td></tr>'
+                   for i, (r, s) in enumerate(zip(rounds, stats), 1))
+    nr = _h.escape((rel / "needs_review.md").read_text())
+    doc = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>release — {_h.escape(unit.name)}</title>
+<style>body{{font-family:system-ui,sans-serif;max-width:1400px;margin:2rem auto;padding:0 1rem;color:#222}}
+table{{border-collapse:collapse}}td,th{{border:1px solid #ddd;padding:.3rem .6rem;text-align:right}}th{{background:#f4f4f4}}
+td:last-child{{text-align:left}}pre{{white-space:pre-wrap;background:#f7f7f7;padding:1rem;border-radius:6px;font-size:.85rem}}
+img{{max-width:100%;border:1px solid #ddd}}</style></head><body>
+<h1>Release — {_h.escape(unit.name)}</h1>
+<p>{len(rounds)} round(s){" (forced at --max-rounds)" if forced else " (converged)"} · final cells {stats[-1]['n_out']}
+· <code>release/final.h5ad</code> (<code>zmip_ann_coarse</code> / <code>zmip_ann_fine</code> = final labels)</p>
+<table><tr><th>round</th><th>cells in</th><th>cells out</th><th>removed</th><th>removed %</th><th>decision</th><th>reports</th></tr>{rows}</table>
+<h2>Cell identity across steps and rounds</h2><img src="sankey_coarse.png">
+<p><a href="cell_ledger.csv">cell_ledger.csv</a> — one row per input cell, status + labels per stage</p>
+<h2>Needs review</h2><pre>{nr}</pre>
+</body></html>"""
+    (rel / "index.html").write_text(doc)
+    link = unit / "index.html"
+    if link.is_symlink() or link.exists():
+        link.unlink()
+    link.symlink_to(Path("release") / "index.html")
 
 
 # ---------------------------------------------------------------- main
