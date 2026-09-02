@@ -3,3 +3,7 @@ attic-v01/
 runs/
 data/
 *.log
+*.egg-info/
+__pycache__/
+dist/
+build/
