@@ -606,6 +606,17 @@ def run_one_sample_pipeline(adata, sample_label=None, sample_col="sample", qc_kw
     if outdir:
         os.makedirs(outdir, exist_ok=True)
         pd.Series(qc_summary).to_csv(os.path.join(outdir, "qc_summary.csv"))
+        # per-cell ledger of everything this filter drops — the only place
+        # these cells leave a trace (clustered.h5ad holds survivors only);
+        # every later step (msp annotate, zmip) keeps the same kind of file
+        ledger_cols = [c for c in ("qc_reason", "qc_hard_fail", "qc_mad_outlier", "qc_mt_outlier",
+                                   "qc_doublet", "total_counts", "n_genes_by_counts", "pct_counts_mt",
+                                   "pct_counts_in_top_20_genes", "doublet_score", "decontX_contamination")
+                       if c in ad_qc.obs]
+        removed = ad_qc.obs.loc[ad_qc.obs["low_quality"].values, ledger_cols].copy()
+        removed.insert(0, "sample", sample_label)
+        removed.index.name = "cell"
+        removed.to_csv(os.path.join(outdir, "qc_removed.csv"))
 
     print(f"== after QC: {ad_pass.shape}", flush=True)
     print("== clustering + DEG", flush=True)
