@@ -125,6 +125,9 @@ python -m ecarsi.serve       <root|unit> [--port 8899] [--ngrok [--domain D] [--
 - 落地页(`ecarsi.index`)**纯从磁盘推导**(manifest / 契约文件 / stats / decision / progress.log),
   跑到一半也能渲染(round 进行中显示到哪一步、persample 完成数);serve 每次请求根页/unit 页都现算,
   各步结束再写一份静态页留档。内核(osp/msp/zmip)只写各自的 `report.html`,永不写 index.html。
+- release 时 `ecarsi.umapdata` 从 final.h5ad 抽 `release/umap.json`(坐标 16 位量化 + 标签索引;超过 `--max-points`=10 万时分层抽样,
+  <300 细胞的小簇全保留,图例计数仍是全量);unit 落地页用原生 JS canvas 画 coarse / fine 两个同步面板
+  (像素缓冲直写 + 基图缓存 + 网格找最近点 + 拖拽缩放时 LOD),不依赖外部库。
 - needs_review(`ecarsi.review`)按**类别**分节而非按轮:convergence → removed(低于 high 的真删,不可逆)
   → sample_excluded → reassigned(跨轮重复的标 recurs)→ inspect_flag → lineage_skipped → low_confidence;
   每条带 round/step/scope/cluster/细胞数/report 链接;同一记录渲染 md / json / html。

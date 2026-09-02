@@ -92,6 +92,18 @@ details summary{cursor:pointer;list-style:none}details summary::-webkit-details-
 details summary h2{display:inline-flex;margin:0}details summary h2::before{content:"▸";color:var(--muted);margin-right:.5rem;font-size:.9rem}
 details[open] summary h2::before{content:"▾"}details summary .hint{display:block;color:var(--muted);font-size:.85rem;margin:.2rem 0 0 1.4rem}
 details[open] summary .hint{display:none}.details-body{margin-top:.8rem}
+.umap-row{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap}
+.umap-panel{flex:1 1 360px;min-width:0}.umap-panel h3{margin:.2rem 0 .4rem}
+.umap-panel canvas{display:block;border:1px solid var(--line);border-radius:8px;cursor:crosshair;background:#fff;max-width:100%}
+.umap-legend{margin-top:.5rem;max-height:230px;overflow-y:auto;font-size:.8rem;border:1px solid var(--line);border-radius:8px;padding:.3rem .2rem;columns:2;column-gap:.4rem}
+.umap-leg{display:flex;align-items:center;gap:.4rem;padding:.1rem .45rem;cursor:pointer;border-radius:4px;break-inside:avoid}
+.umap-leg:hover{background:var(--gray-bg)}.umap-leg.on{background:var(--gray-bg);font-weight:600}.umap-leg.off{opacity:.45}
+.umap-leg i{display:inline-block;width:10px;height:10px;border-radius:3px;flex:none}.umap-leg .lab{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.umap-leg .n{color:var(--muted);font-variant-numeric:tabular-nums}.umap-status{color:var(--muted);font-size:.85rem;margin:0 0 .6rem}
+td.why-cell{position:relative;white-space:nowrap}details.why{display:inline-block;margin-left:.35rem;vertical-align:middle}
+details.why summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:1.15rem;height:1.15rem;border-radius:999px;background:var(--bad);color:#fff;font-size:.78rem;font-weight:700;line-height:1}
+details.why summary::-webkit-details-marker{display:none}details.why[open] summary{background:#8f1d1d}
+.why-body{position:absolute;left:0;top:100%;z-index:15;margin-top:.3rem;width:min(60ch,70vw);white-space:normal;background:#fff;border:1px solid var(--line);border-left:4px solid var(--bad);border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.12);padding:.6rem .8rem;font-size:.85rem;color:#3a3f45;text-align:left}
 .sk-alt{font-size:.82rem;color:var(--muted);margin-top:.4rem}
 @media (max-width:700px){.page{padding:1rem}section{padding:.9rem 1rem}}
 """
@@ -178,6 +190,133 @@ function render(){
 }
 function esc(s){ return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 render(); let t; window.addEventListener("resize", () => { clearTimeout(t); t = setTimeout(render, 150); });
+})();
+"""
+
+
+UMAP_JS = r"""
+(function(){
+const host = document.getElementById("umap-vis"); if (!host) return;
+const url = host.getAttribute("data-src"), status = host.querySelector(".umap-status"), row = host.querySelector(".umap-row");
+const tip = document.createElement("div"); tip.className = "sk-tip"; tip.style.display = "none"; document.body.appendChild(tip);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmt = n => n.toLocaleString();
+const GRID = 128, PAD = 12;
+let D = null, panels = [], view = {k: 1, tx: 0, ty: 0}, hoverIdx = -1, drag = null, S = 480;
+let X, Y, grid = null, raf = 0, lod = false, lodTimer = 0;
+fetch(url).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }).then(d => { D = d; init(); })
+  .catch(e => { status.textContent = "could not load " + url + " (" + e + ") — open this page through ecarsi.serve"; });
+
+function rgba(hex){ const h = hex.replace("#", ""); const v = parseInt(h.length === 3 ? h.split("").map(c => c + c).join("") : h, 16);
+  return [(v >> 16) & 255, (v >> 8) & 255, v & 255]; }
+function init(){
+  X = Float32Array.from(D.x, v => v / 65535); Y = Float32Array.from(D.y, v => 1 - v / 65535);
+  // spatial grid over data space for O(1) nearest-cell lookup on hover
+  const cells = new Array(GRID * GRID).fill(null);
+  for (let i = 0; i < D.n; i++) { const g = Math.min(GRID - 1, (X[i] * GRID) | 0) + GRID * Math.min(GRID - 1, (Y[i] * GRID) | 0); (cells[g] || (cells[g] = [])).push(i); }
+  grid = cells;
+  const shown = D.n_total && D.n_total > D.n ? `showing a stratified ${fmt(D.n)} of ${fmt(D.n_total)} cells (small labels kept whole; legend counts are complete)` : `${fmt(D.n)} cells`;
+  status.innerHTML = `${shown} · <span class="muted">wheel = zoom · drag = pan · double-click = reset · click a legend entry to isolate a label; panels stay in sync</span>`;
+  row.innerHTML = "";
+  for (const key of Object.keys(D.layers)) {
+    const L = D.layers[key], el = document.createElement("div"); el.className = "umap-panel";
+    el.innerHTML = `<h3>${esc(key)} <span class="count">${L.labels.length}</span> <small class="muted">${esc(L.column)}</small></h3><canvas></canvas><div class="umap-legend"></div>`;
+    row.appendChild(el);
+    const P = {key, L, cv: el.querySelector("canvas"), legend: el.querySelector(".umap-legend"), sel: null, hi: null,
+               idx: Int32Array.from(L.idx), rgb: L.colors.map(rgba), base: document.createElement("canvas"), baseKey: "", medians: null};
+    P.medians = medians(P);
+    panels.push(P); bind(P); buildLegend(P);
+  }
+  window.addEventListener("resize", () => { layout(); schedule(); });
+  layout(); schedule();
+}
+function medians(P){ // label anchor = median x/y in data space, computed once
+  const by = new Map();
+  for (let i = 0; i < D.n; i++) { const c = P.idx[i]; if (c < 0) continue; let a = by.get(c); if (!a) by.set(c, a = [[], []]); a[0].push(X[i]); a[1].push(Y[i]); }
+  const out = [];
+  for (const [c, [xs, ys]] of by) { xs.sort((a, b) => a - b); ys.sort((a, b) => a - b); out.push({c, n: xs.length, x: xs[xs.length >> 1], y: ys[ys.length >> 1]}); }
+  return out;
+}
+function layout(){ const n = panels.length || 1; S = Math.max(360, Math.min(600, Math.floor((host.clientWidth - 24 * (n - 1)) / n) - 2));
+  const dpr = window.devicePixelRatio || 1;
+  for (const P of panels) { P.cv.width = S * dpr; P.cv.height = S * dpr; P.cv.style.width = S + "px"; P.cv.style.height = S + "px"; P.baseKey = ""; } clamp(); }
+function clamp(){ view.tx = Math.min(0, Math.max(view.tx, S - S * view.k)); view.ty = Math.min(0, Math.max(view.ty, S - S * view.k)); }
+function sx(i){ return (PAD + X[i] * (S - 2 * PAD)) * view.k + view.tx; }
+function sy(i){ return (PAD + Y[i] * (S - 2 * PAD)) * view.k + view.ty; }
+function schedule(){ if (!raf) raf = requestAnimationFrame(() => { raf = 0; for (const P of panels) draw(P); }); }
+function interact(){ // coarse pass while the view is moving, full pass when it settles
+  lod = D.n > 40000; clearTimeout(lodTimer); lodTimer = setTimeout(() => { lod = false; for (const P of panels) P.baseKey = ""; schedule(); }, 140);
+  for (const P of panels) P.baseKey = ""; schedule();
+}
+function bind(P){ const cv = P.cv;
+  cv.addEventListener("wheel", ev => { ev.preventDefault(); const r = cv.getBoundingClientRect(), mx = ev.clientX - r.left, my = ev.clientY - r.top;
+    const f = ev.deltaY < 0 ? 1.2 : 1 / 1.2, k2 = Math.min(Math.max(view.k * f, 1), 60);
+    view.tx = mx - (mx - view.tx) * (k2 / view.k); view.ty = my - (my - view.ty) * (k2 / view.k); view.k = k2; clamp(); interact(); }, {passive: false});
+  cv.addEventListener("mousedown", ev => { drag = {x: ev.clientX, y: ev.clientY, tx: view.tx, ty: view.ty}; });
+  window.addEventListener("mousemove", ev => { if (!drag) return; view.tx = drag.tx + ev.clientX - drag.x; view.ty = drag.ty + ev.clientY - drag.y; clamp(); interact(); });
+  window.addEventListener("mouseup", () => { drag = null; });
+  cv.addEventListener("mousemove", ev => { if (drag) return; const r = cv.getBoundingClientRect(); hover(ev.clientX - r.left, ev.clientY - r.top, ev); });
+  cv.addEventListener("mouseleave", () => { if (hoverIdx >= 0) { hoverIdx = -1; schedule(); } tip.style.display = "none"; });
+  cv.addEventListener("dblclick", () => { view = {k: 1, tx: 0, ty: 0}; interact(); });
+}
+function buildLegend(P){
+  const L = P.L, order = L.labels.map((_, i) => i).sort((a, b) => L.counts[b] - L.counts[a]);
+  P.legend.innerHTML = order.map(i => `<div class="umap-leg${P.sel === i ? " on" : ""}${P.sel !== null && P.sel !== i ? " off" : ""}" data-i="${i}"><i style="background:${L.colors[i]}"></i><span class="lab" title="${esc(L.labels[i])}">${esc(L.labels[i])}</span><span class="n">${fmt(L.counts[i])}</span></div>`).join("");
+  P.legend.querySelectorAll(".umap-leg").forEach(el => { const i = +el.dataset.i;
+    el.addEventListener("click", () => { P.sel = P.sel === i ? null : i; buildLegend(P); P.baseKey = ""; schedule(); });
+    el.addEventListener("mouseenter", () => { P.hi = i; P.baseKey = ""; schedule(); }); el.addEventListener("mouseleave", () => { P.hi = null; P.baseKey = ""; schedule(); }); });
+}
+function renderBase(P){ // points → pixel buffer (no per-point canvas calls), cached until view/focus changes
+  const dpr = window.devicePixelRatio || 1, W = Math.round(S * dpr), focus = P.hi !== null ? P.hi : P.sel;
+  const key = [view.k.toFixed(3), view.tx.toFixed(1), view.ty.toFixed(1), focus, lod, W].join("|");
+  if (P.baseKey === key) return;
+  P.base.width = W; P.base.height = W;
+  const bctx = P.base.getContext("2d"), img = bctx.createImageData(W, W), buf = new Uint32Array(img.data.buffer);
+  buf.fill(0xffffffff);
+  const r = Math.max(1, Math.round(dpr * Math.max(1.0, Math.min(2.6, Math.sqrt(view.k))) * (D.n > 60000 ? 0.7 : 1)));
+  const stride = lod ? Math.max(1, Math.ceil(D.n / 30000)) : 1, idx = P.idx, rgb = P.rgb, dim = 0xffeae6e3; // ABGR little-endian: #e3e6ea
+  const pack = c => 0xff000000 | (c[2] << 16) | (c[1] << 8) | c[0];
+  const cols = rgb.map(pack);
+  const passes = focus === null ? [null] : [false, true];
+  for (const want of passes) {
+    for (let i = 0; i < D.n; i += stride) { const c = idx[i], isF = focus !== null && c === focus; if (want !== null && isF !== want) continue;
+      const x = Math.round(sx(i) * dpr), y = Math.round(sy(i) * dpr); if (x < 0 || y < 0 || x >= W || y >= W) continue;
+      const col = focus !== null && !isF ? dim : (c >= 0 ? cols[c] : 0xffbbbbbb);
+      const x0 = Math.max(0, x - r + 1), x1 = Math.min(W - 1, x + r - 1), y0 = Math.max(0, y - r + 1), y1 = Math.min(W - 1, y + r - 1);
+      for (let yy = y0; yy <= y1; yy++) { let o = yy * W + x0; for (let xx = x0; xx <= x1; xx++) buf[o++] = col; } }
+  }
+  bctx.putImageData(img, 0, 0); P.baseKey = key;
+}
+function draw(P){
+  renderBase(P);
+  const cv = P.cv, ctx = cv.getContext("2d"), dpr = window.devicePixelRatio || 1, L = P.L, focus = P.hi !== null ? P.hi : P.sel;
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(P.base, 0, 0); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.font = "600 11px system-ui, sans-serif"; ctx.textAlign = "center"; ctx.lineWidth = 3; ctx.strokeStyle = "rgba(255,255,255,.85)"; ctx.fillStyle = "#1f2328";
+  const minN = P.key === "coarse" ? 1 : Math.max(30, D.n * 0.004);
+  for (const m of P.medians) { if (m.n < minN || (focus !== null && m.c !== focus)) continue;
+    const mx = (PAD + m.x * (S - 2 * PAD)) * view.k + view.tx, my = (PAD + m.y * (S - 2 * PAD)) * view.k + view.ty;
+    if (mx < 0 || my < 0 || mx > S || my > S) continue; const t = L.labels[m.c]; ctx.strokeText(t, mx, my); ctx.fillText(t, mx, my); }
+  if (hoverIdx >= 0) { ctx.beginPath(); ctx.arc(sx(hoverIdx), sy(hoverIdx), 6, 0, 2 * Math.PI); ctx.strokeStyle = "#1f2328"; ctx.lineWidth = 1.5; ctx.stroke(); }
+}
+function nearest(mx, my){ // data-space grid lookup within ~8 screen px
+  const ux = ((mx - view.tx) / view.k - PAD) / (S - 2 * PAD), uy = ((my - view.ty) / view.k - PAD) / (S - 2 * PAD);
+  const rad = 8 / (view.k * (S - 2 * PAD)), g0 = Math.max(0, ((ux - rad) * GRID) | 0), g1 = Math.min(GRID - 1, ((ux + rad) * GRID) | 0);
+  const h0 = Math.max(0, ((uy - rad) * GRID) | 0), h1 = Math.min(GRID - 1, ((uy + rad) * GRID) | 0);
+  let best = -1, bd = 64;
+  for (let gy = h0; gy <= h1; gy++) for (let gx = g0; gx <= g1; gx++) { const cell = grid[gx + GRID * gy]; if (!cell) continue;
+    for (const i of cell) { const dx = sx(i) - mx, dy = sy(i) - my, d = dx * dx + dy * dy; if (d < bd) { bd = d; best = i; } } }
+  return best;
+}
+function hover(mx, my, ev){
+  const best = nearest(mx, my);
+  if (best !== hoverIdx) { hoverIdx = best; schedule(); }
+  if (best < 0) { tip.style.display = "none"; return; }
+  const rows = Object.entries(D.layers).map(([k, L]) => `<span class="m">${esc(k)}:</span> ${esc(L.idx[best] >= 0 ? L.labels[L.idx[best]] : "–")}`);
+  for (const [k, E] of Object.entries(D.extra)) rows.push(`<span class="m">${esc(k)}:</span> ${esc(E.idx[best] >= 0 ? E.labels[E.idx[best]] : "–")}`);
+  tip.innerHTML = rows.join("<br>"); tip.style.display = "block";
+  const pad = 14; let x = ev.pageX + pad, y = ev.pageY + pad; if (x + tip.offsetWidth > window.scrollX + window.innerWidth - 8) x = ev.pageX - tip.offsetWidth - pad;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+}
 })();
 """
 
@@ -378,7 +517,7 @@ def render_unit(unit: Path) -> str:
                      f'<a href="{L.RELEASE}/needs_review.json">needs_review.json</a> · <a href="{L.RELEASE}/cell_ledger.csv">cell_ledger.csv</a></div>')
 
     jumps = ['<a href="#rounds">Rounds</a>', '<a href="#samples">Samples</a>', '<a href="#sankey">Cell identity</a>',
-             '<a href="#review">Needs review</a>']
+             '<a href="#umap">Final UMAP</a>', '<a href="#review">Needs review</a>']
     parts.append('<nav class="jump">' + "".join(jumps) + "</nav>")
 
     # rounds
@@ -415,14 +554,16 @@ def render_unit(unit: Path) -> str:
                 else ('<span class="running-cell">running</span>' if not smp["done"] else ""))
         dec = d.get("decision", "")
         dpill = f'<span class="pill {dec}">{e(dec)}</span>' if dec else '<span class="muted">–</span>'
-        reason = e(d.get("reason", "")) if dec == "exclude" else ""
+        if dec == "exclude" and d.get("reason"):  # reason folded behind a red "?" — click opens, click again closes (CSS-only <details>)
+            dpill += (f'<details class="why"><summary title="why excluded?">?</summary>'
+                      f'<div class="why-body"><b>{e(smp["name"])} excluded:</b> {e(d["reason"])}</div></details>')
         prow.append(f'<tr><td>{e(smp["name"])}</td><td class="num">{_n(smp["n_cells"])}</td>'
                     f'<td class="l">{"<span class=\"pill released\">done</span>" if smp["done"] else "<span class=\"pill running\">pending</span>"}</td>'
-                    f'<td class="l">{dpill}</td><td class="l">{link}</td><td class="reason">{reason}</td></tr>')
+                    f'<td class="l why-cell">{dpill}</td><td class="l">{link}</td></tr>')
     parts.append(f'<section id="samples"><h2>Samples <small>osp runs once per sample · {ps["n_done"]}/{ps["n"]} done'
                  + (f' · sample column <code>{e(str(ps["sample_column"]))}</code>' if ps["sample_column"] else "") + "</small></h2>"
                  + ('<div class="wrap"><table><thead><tr><th>sample</th><th>input cells</th><th class="l">osp</th><th class="l">integration</th>'
-                    f'<th class="l">report</th><th class="l">exclusion reason</th></tr></thead><tbody>{"".join(prow)}</tbody></table></div>'
+                    f'<th class="l">report</th></tr></thead><tbody>{"".join(prow)}</tbody></table></div>'
                     if prow else '<p class="empty">persample has not started</p>') + "</section>")
 
     # sankey + ledger
@@ -441,6 +582,14 @@ def render_unit(unit: Path) -> str:
         parts.append(f'<section id="sankey"><h2>Cell identity across steps and rounds <small>coarse labels · through round {last_done[-1]["n"]}</small></h2>'
                      + fig + f'<figcaption>Every input cell flows left to right; cells removed at a stage end in that stage\'s red sink. '
                      f'<a href="{ld}/cell_ledger.csv">cell_ledger.csv</a> — one row per input cell, status + labels per stage.</figcaption></section>')
+
+    # final UMAP (interactive) — data extracted at release into release/umap.json
+    umap_p = L.release_dir(unit) / "umap.json"
+    if umap_p.is_file():
+        rel = e(str(umap_p.relative_to(unit)))
+        parts.append('<section id="umap"><h2>Final UMAP <small>every released cell · coarse / fine identity · hover for the cell, click a legend entry to isolate a label</small></h2>'
+                     f'<div id="umap-vis" data-src="{rel}"><p class="umap-status">loading {rel}…</p><div class="umap-row"></div></div>'
+                     f'<script>{UMAP_JS}</script></section>')
 
     # needs review — from disk, so it exists mid-run too
     items = review.collect(unit, [r["dir"] for r in done_rounds], [r["stats"] for r in done_rounds], s["forced"])

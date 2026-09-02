@@ -172,6 +172,9 @@ def _release(unit: Path, rounds: list[Path], stats: list[dict], forced: bool, su
         src = L.ledger_dir(last) / name
         if src.is_file():
             shutil.copy2(src, rel / name)
+    from .umapdata import write_umap_json
+
+    write_umap_json(final, rel / "umap.json")
     items = review.collect(unit, rounds, stats, forced)
     (rel / "needs_review.md").write_text(review.to_markdown(items, unit.name, len(rounds)))
     (rel / "needs_review.json").write_text(review.to_json(items))
