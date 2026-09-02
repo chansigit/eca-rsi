@@ -91,15 +91,16 @@ silent bug 全部长在"规格与实现的接缝"上(记录了但没人执行、
 ```
 python -m ecarsi.organize    <输入目录> <out_root>   # eca-pp 守门 + 分析单元规划(agent)+ 细胞守恒审计
 python -m ecarsi.persample   <unit>                 # 样本列识别(agent)+ Task 子代理逐样本跑 osp(QC 只此一次,doublet 只在完整样本池算)
-python -m ecarsi.loop        <unit> [--max-rounds 3] [--release-frac 0.01]
+python -m ecarsi.loop        <unit> [--rounds N] [--cap 10] [--force-reopen]
    round 1: ecarsi.crosssample(样本纳入 agent → msp integrate/inspect/annotate)→ ecarsi.zoomin(zmip)
    round N: 上轮 zoomin/annotated_zmip.h5ad,先验列改名 r(N-1)_* → msp --from-h5ad → zmip
    每轮 rounds/roundNN/{integrate, zoomin, ledger, stats.txt, decision.txt};progress.log 记事件
 python -m ecarsi.ledger      <unit> [round dirs]    # 逐细胞台账 cell_ledger.csv + Sankey(每步删除流进红色 sink)
 ```
 
-- **收敛只看一个数**:本轮删除 / 本轮进入 < `--release-frac`(1%)即 release;round 1 永不 release;
-  到 `--max-rounds` 强制 release 并标记。标签变动不作判据(agent 措辞有随机性)。
+- **停机只看细胞数**,标签变动不作判据(agent 措辞有随机性):给了 `--rounds N` 就只看轮数,跑满 N 轮;
+  没给则 (1) 本轮删除比 < 1% 或删除数 < 100,或 (2) 连续三轮删除比 < 2% 即 release;round 1 永不 release;
+  `--cap`(默认 10)是安全上限,触顶强制 release 并标记。`--force-reopen` 越过已有 release 继续开轮。
 - **绝不中途等人**:各步的疑点(低 confidence、zmip `budget_exceeded`、inspect flag、样本排除、reassign)
   只在 `release/needs_review.md` 一次汇总;`release/{final.h5ad, summary.md, cell_ledger.csv, sankey_coarse.png}`。
 - **每次删除都逐细胞记账**:osp `qc_removed.csv`、msp `annotation_removed.csv`、zmip `zmip_removed.csv`;

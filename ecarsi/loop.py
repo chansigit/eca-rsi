@@ -1,6 +1,6 @@
 """ecarsi-loop — the self-driving round loop over crosssample (msp) + zoomin (zmip).
 
-    python -m ecarsi.loop <unit_dir> [--max-rounds 3] [--release-frac 0.01] [--force-reopen]
+    python -m ecarsi.loop <unit_dir> [--rounds N] [--force-reopen]
 
 persample (osp) runs once — QC and doublet calls are per-sample by nature.
 Everything after it is repeated on the survivors until the cell count stops
@@ -12,18 +12,24 @@ moving:
               r(N-1)_* → msp --from-h5ad (re-integrate from raw counts, inspect,
               annotate) → zoomin                 rounds/roundNN/{input.h5ad,integrate,zoomin,ledger}
 
-Convergence is decided by ONE number: cells removed this round / cells that
-entered it. Below --release-frac (default 1%) → release. Round 1 never
-releases; the last allowed round always releases (forced, flagged). Labels
-are deliberately NOT a criterion — agent labels carry wording randomness.
+Stop rule — cell counts only (labels carry wording randomness and are
+deliberately NOT a criterion):
+  --rounds N given   run exactly N rounds, release after round N.
+  otherwise          release after a round when (1) it removed < 1% of the
+                     cells that entered it OR fewer than 100 cells, or
+                     (2) the last three rounds each removed < 2%.
+                     Round 1 never releases (it works on raw integration);
+                     a safety cap (--cap, default 10) forces a flagged
+                     release so the loop cannot run forever.
 The loop never stops for a human: doubts accumulate as flags and are
-reported once, in release/needs_review.md.
+reported once, in release/needs_review.md. --force-reopen continues past
+an existing release (the superseded round's decision becomes 'continue').
 
-Per round: stats.txt (n_in, n_out, removed, frac), decision.txt (continue |
-release), ledger/ (cell_ledger.csv + Sankeys across all rounds so far).
+Per round: stats.txt (n_in, n_out, removed, frac, decision, reason, elapsed_s),
+decision.txt (continue | release), ledger/ (cell_ledger.csv + Sankeys across
+all rounds so far).
 progress.log records every event. Re-running resumes: finished rounds are
 skipped via their decision.txt, half-done rounds via the step contracts.
---force-reopen continues past an existing release.
 
 Env: MODEL, MSP_PYTHON / ZMIP_PYTHON (as in crosssample / zoomin).
 """
@@ -43,6 +49,32 @@ from pathlib import Path
 
 from . import crosssample, zoomin
 from .ledger import run_ledger
+
+RELEASE_FRAC = 0.01        # (1) this round removed < 1% of what entered it ...
+RELEASE_MIN_REMOVED = 100  #     ... or fewer than 100 cells
+PLATEAU_FRAC = 0.02        # (2) three consecutive rounds each < 2%
+PLATEAU_ROUNDS = 3
+DEFAULT_CAP = 10           # safety ceiling in auto mode (forced, flagged release)
+
+
+def decide(n: int, stats: list[dict], rounds: int | None, cap: int) -> tuple[str, str]:
+    """(decision, reason) after round n; stats includes round n."""
+    st = stats[-1]
+    if rounds is not None:
+        return ("release", f"fixed --rounds {rounds}") if n >= rounds else ("continue", f"--rounds {rounds}")
+    if n == 1:
+        return "continue", "round 1 never releases"
+    if st["frac"] < RELEASE_FRAC or st["removed"] < RELEASE_MIN_REMOVED:
+        return "release", (f"removed {100 * st['frac']:.2f}% < {100 * RELEASE_FRAC:.0f}%" if st["frac"] < RELEASE_FRAC
+                           else f"removed {st['removed']} cells < {RELEASE_MIN_REMOVED}")
+    last = stats[-PLATEAU_ROUNDS:]
+    if len(last) == PLATEAU_ROUNDS and all(x["frac"] < PLATEAU_FRAC for x in last):
+        fracs = ", ".join(f"{100 * x['frac']:.2f}%" for x in last)
+        return "release", f"last {PLATEAU_ROUNDS} rounds each removed < {100 * PLATEAU_FRAC:.0f}% ({fracs})"
+    if n >= cap:
+        return "release", f"FORCED: safety cap {cap} rounds reached"
+    return "continue", f"removed {100 * st['frac']:.2f}% ({st['removed']} cells)"
+
 
 PREV_COLS = ("msp_ann_cluster", "msp_ann_coarse", "msp_ann_fine", "msp_ann_action",
              "zmip_lineage", "zmip_cluster", "zmip_ann_coarse", "zmip_ann_fine", "zmip_reassigned_from",
@@ -79,6 +111,19 @@ def _fmt_elapsed(sec) -> str:
         return "n/a"
     sec = int(sec)
     return f"{sec // 3600}h{(sec % 3600) // 60:02d}m" if sec >= 3600 else f"{sec // 60}m{sec % 60:02d}s"
+
+
+def _read_stats(path: Path) -> dict:
+    """stats.txt: JSON (current) or the older 'k=v k=v' line."""
+    text = path.read_text().strip()
+    if text.startswith("{"):
+        return json.loads(text)
+    st = dict(tok.split("=", 1) for tok in text.split())
+    return {k: (float(v) if k in ("frac", "elapsed_s") else v if k == "decision" else int(v)) for k, v in st.items()}
+
+
+def _write_stats(path: Path, st: dict) -> None:
+    path.write_text(json.dumps(st) + "\n")
 
 
 def _n_obs(h5ad: Path) -> int:
@@ -134,8 +179,8 @@ def _needs_review(rounds: list[Path], forced: bool, stats: list[dict]) -> str:
              "Everything the agents were unsure about or the host overrode, collected once at release. "
              "Nothing here stopped the loop.", ""]
     if forced:
-        lines += ["## Forced release", f"- reached --max-rounds without the removal fraction dropping below the "
-                  f"threshold; last round removed {100 * stats[-1]['frac']:.2f}%", ""]
+        lines += ["## Forced release", f"- {stats[-1].get('reason')}; last round removed {100 * stats[-1]['frac']:.2f}% "
+                  "— the loop did not converge on its own", ""]
     for i, (rdir, st) in enumerate(zip(rounds, stats), 1):
         lines.append(f"## Round {i}")
         if st["frac"] > 0.10:
@@ -200,14 +245,14 @@ def _release(unit: Path, rounds: list[Path], stats: list[dict], forced: bool, su
             shutil.copy2(src, rel / name)
     (rel / "needs_review.md").write_text(_needs_review(rounds, forced, stats))
     rows = "\n".join(f"| {i} | {s['n_in']} | {s['n_out']} | {s['removed']} | {100 * s['frac']:.2f}% | {s['decision']} "
-                     f"| {_fmt_elapsed(s.get('elapsed_s'))} |" for i, s in enumerate(stats, 1))
+                     f"| {s.get('reason', '')} | {_fmt_elapsed(s.get('elapsed_s'))} |" for i, s in enumerate(stats, 1))
     summary = [f"# Release — {unit.name}", "",
-               f"Rounds: {len(rounds)}" + (" (forced at --max-rounds)" if forced else " (converged)")
+               f"Rounds: {len(rounds)}" + (" (FORCED at the safety cap)" if forced else f" ({stats[-1].get('reason', '')})")
                + (" — supersedes an earlier release (--force-reopen)" if superseded else ""),
                f"Final cells: {stats[-1]['n_out']} → release/final.h5ad "
                f"(= {final_src.relative_to(unit)}; zmip_ann_coarse / zmip_ann_fine are the final labels)", "",
-               "| round | cells in | cells out | removed | removed % | decision | wall time |",
-               "|---|---|---|---|---|---|---|", rows, "",
+               "| round | cells in | cells out | removed | removed % | decision | reason | wall time |",
+               "|---|---|---|---|---|---|---|---|", rows, "",
                "Reports: " + ", ".join(f"round {i}: {r.relative_to(unit)}/integrate/report.html, "
                                        f"{r.relative_to(unit)}/zoomin/report.html" for i, r in enumerate(rounds, 1)),
                "", "Ledger + Sankey: release/cell_ledger.csv, release/sankey_coarse.png",
@@ -226,7 +271,8 @@ def write_index(unit: Path, rounds: list[Path], stats: list[dict], forced: bool)
 
     rel = unit / "release"
     rows = "".join(f"<tr><td>{i}</td><td>{s['n_in']}</td><td>{s['n_out']}</td><td>{s['removed']}</td>"
-                   f"<td>{100 * s['frac']:.2f}%</td><td>{s['decision']}</td><td>{_fmt_elapsed(s.get('elapsed_s'))}</td>"
+                   f"<td>{100 * s['frac']:.2f}%</td><td>{s['decision']}</td><td>{_h.escape(str(s.get('reason', '')))}</td>"
+                   f"<td>{_fmt_elapsed(s.get('elapsed_s'))}</td>"
                    f'<td><a href="{r.relative_to(unit)}/integrate/report.html">msp</a> · '
                    f'<a href="{r.relative_to(unit)}/zoomin/report.html">zmip</a> · '
                    f'<a href="{r.relative_to(unit)}/ledger/sankey_coarse.png">sankey</a></td></tr>'
@@ -238,9 +284,9 @@ table{{border-collapse:collapse}}td,th{{border:1px solid #ddd;padding:.3rem .6re
 td:last-child{{text-align:left}}pre{{white-space:pre-wrap;background:#f7f7f7;padding:1rem;border-radius:6px;font-size:.85rem}}
 img{{max-width:100%;border:1px solid #ddd}}</style></head><body>
 <h1>Release — {_h.escape(unit.name)}</h1>
-<p>{len(rounds)} round(s){" (forced at --max-rounds)" if forced else " (converged)"} · final cells {stats[-1]['n_out']}
+<p>{len(rounds)} round(s){" (FORCED at the safety cap)" if forced else " — " + _h.escape(str(stats[-1].get('reason', '')))} · final cells {stats[-1]['n_out']}
 · <code>release/final.h5ad</code> (<code>zmip_ann_coarse</code> / <code>zmip_ann_fine</code> = final labels)</p>
-<table><tr><th>round</th><th>cells in</th><th>cells out</th><th>removed</th><th>removed %</th><th>decision</th><th>wall time</th><th>reports</th></tr>{rows}</table>
+<table><tr><th>round</th><th>cells in</th><th>cells out</th><th>removed</th><th>removed %</th><th>decision</th><th>reason</th><th>wall time</th><th>reports</th></tr>{rows}</table>
 <h2>Cell identity across steps and rounds</h2><img src="release/sankey_coarse.png">
 <p><a href="release/cell_ledger.csv">cell_ledger.csv</a> — one row per input cell, status + labels per stage · \
 <a href="release/summary.md">summary.md</a> · <a href="release/needs_review.md">needs_review.md</a></p>
@@ -257,9 +303,10 @@ img{{max-width:100%;border:1px solid #ddd}}</style></head><body>
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="ecarsi.loop", description=__doc__)
     ap.add_argument("unit", help="organize unit dir (persample/ completed inside)")
-    ap.add_argument("--max-rounds", type=int, default=3)
-    ap.add_argument("--release-frac", type=float, default=0.01,
-                    help="release when removed/entered < this (default 0.01)")
+    ap.add_argument("--rounds", type=int, default=None,
+                    help="run exactly this many rounds (overrides the convergence rule)")
+    ap.add_argument("--cap", type=int, default=DEFAULT_CAP,
+                    help=f"auto mode safety ceiling (forced, flagged release; default {DEFAULT_CAP})")
     ap.add_argument("--force-reopen", action="store_true", help="continue past an existing release")
     args = ap.parse_args(argv)
     unit = Path(args.unit).resolve()
@@ -279,17 +326,18 @@ def main(argv: list[str]) -> int:
     py = os.environ.get("MSP_PYTHON", sys.executable)
     rounds: list[Path] = []
     stats: list[dict] = []
-    for n in range(1, args.max_rounds + 1):
+    last_round = args.rounds if args.rounds is not None else args.cap
+    for n in range(1, last_round + 1):
         rdir = rounds_root / f"round{n:02d}"
         rdir.mkdir(exist_ok=True)
         rounds.append(rdir)
         dec_p, st_p = rdir / "decision.txt", rdir / "stats.txt"
         if dec_p.is_file() and st_p.is_file():
-            st = dict(line.split("=", 1) for line in st_p.read_text().split())
-            st = {k: (float(v) if k in ("frac", "elapsed_s") else v if k == "decision" else int(v))
-                  for k, v in st.items()}
+            st = _read_stats(st_p)
             st.setdefault("elapsed_s", _elapsed_from_log(unit, n))
             stats.append(st)
+            if "reason" not in st:  # stats.txt from before reasons were recorded
+                st["reason"] = decide(n, stats, args.rounds, args.cap)[1]
             decision = dec_p.read_text().strip()
             _log(unit, f"round {n} already decided: {decision} (resume)")
             if decision == "release" and not (superseded and n == len(stats)):
@@ -297,7 +345,8 @@ def main(argv: list[str]) -> int:
             if decision == "release":
                 # reopened past this release: the round is no longer the last one
                 st["decision"] = decision = "continue"
-                st_p.write_text(" ".join(f"{k}={v}" for k, v in st.items()) + "\n")
+                st["reason"] = "reopened (--force-reopen)"
+                _write_stats(st_p, st)
                 dec_p.write_text("continue\n")
                 _log(unit, f"round {n} decision rewritten release → continue (force-reopen)")
             continue
@@ -329,26 +378,20 @@ def main(argv: list[str]) -> int:
         n_out = _n_obs(rdir / "zoomin" / "annotated_zmip.h5ad")
         removed = n_in - n_out
         frac = removed / max(n_in, 1)
-        if n == 1 and args.max_rounds > 1:
-            decision = "continue"  # round 1 never releases
-        elif frac < args.release_frac:
-            decision = "release"
-        elif n == args.max_rounds:
-            decision = "release"
-        else:
-            decision = "continue"
-        st = {"n_in": n_in, "n_out": n_out, "removed": removed, "frac": frac, "decision": decision,
+        st = {"n_in": n_in, "n_out": n_out, "removed": removed, "frac": frac,
               "elapsed_s": round(time.time() - t0, 1)}
         stats.append(st)
-        st_p.write_text(" ".join(f"{k}={v}" for k, v in st.items()) + "\n")
+        decision, reason = decide(n, stats, args.rounds, args.cap)
+        st["decision"], st["reason"] = decision, reason
+        _write_stats(st_p, st)
         _log(unit, f"round {n} stats removed={removed}/{n_in} ({100 * frac:.2f}%) decision={decision} "
-                   f"elapsed={_fmt_elapsed(st['elapsed_s'])}")
+                   f"[{reason}] elapsed={_fmt_elapsed(st['elapsed_s'])}")
         run_ledger(unit, rounds, rdir / "ledger")
         dec_p.write_text(decision + "\n")
         if decision == "release":
             break
 
-    forced = stats[-1]["frac"] >= args.release_frac
+    forced = str(stats[-1].get("reason", "")).startswith("FORCED")
     _release(unit, rounds, stats, forced, superseded)
     print(f"[done] {unit / 'release' / 'summary.md'}")
     return 0
