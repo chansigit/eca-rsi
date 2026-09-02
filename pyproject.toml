@@ -25,7 +25,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-kernels = ["osp", "msp>=0.2.0", "zmip"]   # same-interpreter install (local checkouts, see INSTALL.md)
+kernels = ["msp-sc>=0.2.0", "zmip>=0.1.0"]   # PyPI; osp from GitHub (see INSTALL.md)
 
 [tool.setuptools]
 packages = ["ecarsi"]

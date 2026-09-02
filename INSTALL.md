@@ -19,14 +19,14 @@ Claude Agent SDK (claude-agent-sdk) ── 四个包都用;需要 Claude Code CL
 |---|---|---|---|
 | ecarsi | `eca-rsi`(GitHub chansigit/eca-rsi,main) | 0.1.0 | claude-agent-sdk ≥0.2.139, anndata, scanpy, h5py, numpy, pandas, matplotlib |
 | osp | `osp`(GitHub chansigit/osp) | 0.1.0 | scanpy, igraph, pandas, numpy, scipy, matplotlib, scikit-learn;`[agent]` claude-agent-sdk |
-| msp | `msp`(本地,尚无远端) | 0.2.0 | scanpy, anndata, igraph, **harmonypy==0.2.0**, torch, **standissect-lite(GitHub)**, pandas, numpy, scipy, scikit-learn, matplotlib, seaborn, adjustText;`[agent]` claude-agent-sdk |
-| zmip | `zmip`(本地,尚无远端) | 0.1.0 | msp ≥0.2.0, claude-agent-sdk, scanpy, anndata, pandas, numpy, scipy, matplotlib |
-| standissect-lite | GitHub chansigit/standissect-lite | 0.2.0 | anndata, leidenalg, python-igraph, numpy, pandas, scikit-learn |
+| msp | GitHub chansigit/msp · **PyPI `msp-sc`**(`msp` 名已被占,import 名仍是 `msp`) | 0.2.0 | scanpy, anndata, igraph, **harmonypy==0.2.0**, torch, standissect-lite ≥0.2.0, pandas, numpy, scipy, scikit-learn, matplotlib, seaborn, adjustText;`[agent]` claude-agent-sdk |
+| zmip | GitHub chansigit/zmip · PyPI `zmip` | 0.1.0 | msp ≥0.2.0, claude-agent-sdk, scanpy, anndata, pandas, numpy, scipy, matplotlib |
+| standissect-lite | GitHub chansigit/standissect-lite · PyPI `standissect-lite` | 0.2.0 | anndata, leidenalg, python-igraph, numpy, pandas, scikit-learn |
 
 两个要点:
 
-- **standissect-lite 必须装 GitHub 版**:PyPI 上只有 0.1.0,msp 需要 0.2.0。msp 的 pyproject 已写成
-  `standissect-lite @ git+https://github.com/chansigit/standissect-lite.git`。
+- **msp 在 PyPI 上叫 `msp-sc`**(`msp` 被无关项目占用),`pip install msp-sc` 后照常 `import msp` / `python -m msp`;
+  zmip 的依赖写的就是 `msp-sc`。standissect-lite 0.2.0 也已在 PyPI(2026-09-02 起)。
 - **harmonypy 钉在 0.2.0**(torch 版,msp 校验过 Z_corr 方向)。PyPI 已有 2.0.0,未测试,不要顺手升级。
   torch 装 CPU 版即可;有 GPU 时 harmony 自动用(`MSP_DEVICE` 可强制)。
 
@@ -42,7 +42,15 @@ Claude Agent SDK (claude-agent-sdk) ── 四个包都用;需要 Claude Code CL
 | Node ≥18(可选) | 只有画架构图的 archify skill 用 | 24.13.0(`ml nodejs`) |
 | stanhue skill(可选) | `~/.claude/skills/stanhue`,有则 UMAP 配色按空间层次分配,没有回退到默认调色板 | 已装 |
 
-## 3. 安装顺序(全部 editable,改源码即生效)
+## 3. 安装
+
+**只想用**(PyPI,一行;osp 尚未上 PyPI):
+
+```bash
+pip install "msp-sc[agent]" zmip "osp[agent] @ git+https://github.com/chansigit/osp.git" "ecarsi @ git+https://github.com/chansigit/eca-rsi.git"
+```
+
+**开发**(全部 editable,改源码即生效):
 
 ```bash
 ml python/3.12.1
@@ -51,11 +59,9 @@ python -m venv $SCRATCH/venvs/eca && source $SCRATCH/venvs/eca/bin/activate
 pip install -U pip
 
 cd $SCRATCH/projects
-git clone https://github.com/chansigit/standissect-lite && pip install -e standissect-lite
-git clone https://github.com/chansigit/osp             && pip install -e "osp[agent]"
-pip install -e "msp[agent]"     # 本地目录(msp 会顺带拉 harmonypy==0.2.0、torch、standissect-lite@git)
-pip install -e zmip
-git clone https://github.com/chansigit/eca-rsi && pip install -e eca-rsi
+for r in standissect-lite osp msp zmip eca-rsi; do git clone https://github.com/chansigit/$r; done
+pip install -e standissect-lite && pip install -e "osp[agent]" && pip install -e "msp[agent]" && pip install -e zmip && pip install -e eca-rsi
+# msp 会顺带拉 harmonypy==0.2.0 和 torch;editable 的 msp 在 pip 里叫 msp-sc
 ```
 
 只想要 CPU torch(省几 GB):在装 msp 之前先
