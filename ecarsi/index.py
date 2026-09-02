@@ -451,7 +451,8 @@ def render_unit(unit: Path) -> str:
                  + '<span class="hint">' + ("everything the agents were unsure about or the host overrode; nothing here stopped the loop"
                                             if s["released"] else "so far — the loop is still running") + " · click to expand</span></summary>"
                  + '<div class="details-body">' + review.to_html(items) + "</div></details></section>")
-    return _page(s["name"], "".join(parts))
+    return _page(f"{s['name']} — unit of {root.name} · eca-rsi" if root else f"{s['name']} — eca-rsi unit",
+                 "".join(parts))
 
 
 # ---------------------------------------------------------------- root page
@@ -487,7 +488,7 @@ def render_root(root: Path) -> str:
                     f'<tbody>{"".join(rows)}</tbody></table></div>' if rows else '<p class="empty">no units yet</p>') + "</section>")
     if om:
         parts.append(f'<p class="muted">organize plan and cell-conservation audit: <a href="{L.ORGANIZE}/{L.MANIFEST}">{L.ORGANIZE}/{L.MANIFEST}</a></p>')
-    return _page(root.name, "".join(parts))
+    return _page(f"{root.name} — eca-rsi run", "".join(parts))
 
 
 def _page(title: str, body: str) -> str:

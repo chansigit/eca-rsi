@@ -175,6 +175,17 @@ def complete(d: Path, contract: tuple[str, ...]) -> bool:
     return all((d / f).is_file() for f in contract)
 
 
+def report_context(unit: Path, rdir: Path | None = None) -> str:
+    """Text the kernels put in their report titles (--report-context):
+    'round N · <unit>' inside a round, else '<unit>'."""
+    if rdir is not None:
+        try:
+            return f"round {round_number(rdir)} · {unit.name}"
+        except ValueError:
+            pass
+    return unit.name
+
+
 # ---------------------------------------------------------------- progress log
 
 def log_event(unit: Path, event: str, echo: bool = True) -> None:

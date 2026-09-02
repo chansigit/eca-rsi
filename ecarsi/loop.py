@@ -131,11 +131,14 @@ def _prepare_input(prev_h5ad: Path, out_h5ad: Path, prev_round: int) -> None:
     os.replace(tmp, out_h5ad)
 
 
-def _run_msp_from_h5ad(py: str, h5ad: Path, outdir: Path, batch_col: str, species: str | None, model: str) -> int:
+def _run_msp_from_h5ad(py: str, h5ad: Path, outdir: Path, batch_col: str, species: str | None, model: str,
+                       context: str | None = None) -> int:
     cmd = [py, "-m", "msp", "--from-h5ad", str(h5ad), "--batch-col", batch_col, "--outdir", str(outdir),
            "--annotate", "--model", model]
     if species:
         cmd += ["--species", species]
+    if context:
+        cmd += ["--report-context", context]
     cmd_s = " ".join(shlex.quote(c) for c in cmd)
     print(f"[msp] {cmd_s}", flush=True)
     if L.complete(outdir, L.MSP_CONTRACT):
@@ -263,7 +266,8 @@ def main(argv: list[str]) -> int:
             if not inp.is_file():
                 _prepare_input(L.zoomin_dir(prev) / "annotated_zmip.h5ad", inp, n - 1)
                 _log(unit, f"round {n} input prepared from round {n - 1} ({_n_obs(inp)} cells)")
-            ret = _run_msp_from_h5ad(py, inp, L.crosssample_dir(rdir), man["batch_col"], man.get("species"), model())
+            ret = _run_msp_from_h5ad(py, inp, L.crosssample_dir(rdir), man["batch_col"], man.get("species"), model(),
+                                     L.report_context(unit, rdir))
             if ret != 0:
                 _log(unit, f"round {n} msp failed rc={ret}")
                 return ret

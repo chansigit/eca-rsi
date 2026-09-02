@@ -135,9 +135,12 @@ def list_samples(h5ad: Path, col: str) -> dict[str, int]:
 
 
 def _osp_command(py: str, h5ad: Path, col: str, value: str, outdir: Path,
-                 annotate: bool, model: str, species: str | None, tissue: str | None) -> str:
+                 annotate: bool, model: str, species: str | None, tissue: str | None,
+                 context: str | None = None) -> str:
     cmd = [py, "-m", "osp", str(h5ad), "--sample-col", col, "--sample", value,
            "--outdir", str(outdir)]
+    if context:
+        cmd += ["--report-context", context]
     if annotate:
         cmd += ["--annotate", "--model", model]
         if species:
@@ -148,9 +151,11 @@ def _osp_command(py: str, h5ad: Path, col: str, value: str, outdir: Path,
 
 
 def _whole_file_command(py: str, h5ad: Path, outdir: Path, annotate: bool, model: str,
-                        species: str | None, tissue: str | None) -> str:
+                        species: str | None, tissue: str | None, context: str | None = None) -> str:
     code = (
         "import scanpy as sc; from osp import run_one_sample_pipeline, generate_report; "
+        "from osp.report import write_report_context; "
+        f"write_report_context({str(outdir)!r}, {context!r}); "
         f"a = sc.read_h5ad({str(h5ad)!r}); a.obs['sample'] = 'all'; "
         f"run_one_sample_pipeline(a, sample_label='all', outdir={str(outdir)!r}); "
         f"print(generate_report({str(outdir)!r}))"
@@ -166,7 +171,8 @@ def _whole_file_command(py: str, h5ad: Path, outdir: Path, annotate: bool, model
 
 def build_entries(h5ad: Path, col: str | None, counts: dict[str, int], out_root: Path,
                   py: str, annotate: bool, model: str,
-                  species: str | None = None, tissue: str | None = None) -> list[dict]:
+                  species: str | None = None, tissue: str | None = None,
+                  context: str | None = None) -> list[dict]:
     entries: list[dict] = []
     seen: set[str] = set()
     for value, n in counts.items():
@@ -177,9 +183,9 @@ def build_entries(h5ad: Path, col: str | None, counts: dict[str, int], out_root:
         seen.add(name)
         outdir = out_root / name
         if col is None:
-            command = _whole_file_command(py, h5ad, outdir, annotate, model, species, tissue)
+            command = _whole_file_command(py, h5ad, outdir, annotate, model, species, tissue, context)
         else:
-            command = _osp_command(py, h5ad, col, value, outdir, annotate, model, species, tissue)
+            command = _osp_command(py, h5ad, col, value, outdir, annotate, model, species, tissue, context)
         entries.append({"value": value, "n_cells": n, "outdir": str(outdir), "command": command})
     return entries
 
@@ -269,6 +275,7 @@ def main(argv: list[str]) -> int:
 
     py = os.environ.get("OSP_PYTHON", sys.executable)
     model = _model()
+    context = None if bare else L.report_context(unit)
 
     mpath = out_root / "manifest.json"
     if mpath.is_file():
@@ -283,7 +290,7 @@ def main(argv: list[str]) -> int:
         tissue = args.tissue or man.get("tissue")
         print(f"[identify] reusing recorded sample column: {col!r} (species {species!r})")
         entries = build_entries(h5ad, col, counts, out_root, py, annotate, model,
-                                species, tissue)
+                                species, tissue, context)
     else:
         profile = profile_obs(h5ad)
         decision = identify_sample_column(profile)
@@ -294,7 +301,7 @@ def main(argv: list[str]) -> int:
         print(f"[identify] sample column: {col!r} (species {species!r}) — {decision['rationale']}")
         counts = list_samples(h5ad, col) if col is not None else {"all": profile["n_obs"]}
         entries = build_entries(h5ad, col, counts, out_root, py, annotate, model,
-                                species, tissue)
+                                species, tissue, context)
         man = {
             "h5ad": str(h5ad),
             "sample_column": col,

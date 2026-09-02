@@ -40,10 +40,13 @@ MSP_CONTRACT = L.MSP_CONTRACT
 ZMIP_CONTRACT = L.ZMIP_CONTRACT
 
 
-def zmip_command(py: str, h5ad: Path, outdir: Path, model: str, min_cells: str | None) -> str:
+def zmip_command(py: str, h5ad: Path, outdir: Path, model: str, min_cells: str | None,
+                 context: str | None = None) -> str:
     cmd = [py, "-m", "zmip", str(h5ad), "--outdir", str(outdir), "--model", model]
     if min_cells:
         cmd += ["--min-cells", str(min_cells)]
+    if context:
+        cmd += ["--report-context", context]
     return " ".join(shlex.quote(c) for c in cmd)
 
 
@@ -70,7 +73,8 @@ def main(argv: list[str]) -> int:
     py = os.environ.get("ZMIP_PYTHON") or os.environ.get("MSP_PYTHON") or sys.executable
     from . import model
 
-    cmd = zmip_command(py, idir / "annotated.h5ad", zdir, model(), os.environ.get("ZMIP_MIN_CELLS"))
+    cmd = zmip_command(py, idir / "annotated.h5ad", zdir, model(), os.environ.get("ZMIP_MIN_CELLS"),
+                       L.report_context(unit, out_root))
     print(f"[zmip] {cmd}")
     if all((zdir / f).is_file() for f in ZMIP_CONTRACT):
         print("[zmip] contract already satisfied — skipping (resume)")

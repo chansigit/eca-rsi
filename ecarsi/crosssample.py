@@ -207,13 +207,15 @@ async def _propose(inventories: list[dict]) -> dict:
 
 
 def msp_command(py: str, inputs: list[str], batch_col: str, outdir: Path,
-                species: str | None, model: str) -> str:
+                species: str | None, model: str, context: str | None = None) -> str:
     """Full msp chain; --annotate implies --inspect. msp skips steps whose
     contract files exist, so this same command is also the resume command."""
     cmd = [py, "-m", "msp", *inputs, "--batch-col", batch_col, "--outdir", str(outdir),
            "--annotate", "--model", model]
     if species:
         cmd += ["--species", species]
+    if context:
+        cmd += ["--report-context", context]
     return " ".join(shlex.quote(c) for c in cmd)
 
 
@@ -270,7 +272,7 @@ def main(argv: list[str]) -> int:
     idir = L.crosssample_dir(out_root)
     from . import model
 
-    cmd = msp_command(py, inputs, batch_col, idir, species, model())
+    cmd = msp_command(py, inputs, batch_col, idir, species, model(), L.report_context(unit, out_root))
     print(f"[msp] {cmd}")
 
     # msp's report reads sample_decisions.csv if present — write it before
