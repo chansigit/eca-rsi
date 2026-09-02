@@ -1,26 +1,29 @@
-"""ecarsi-ledger — per-cell identity ledger across the steps, and its Sankey.
+"""ecarsi-ledger — per-cell identity ledger across the steps and rounds, and its Sankey.
 
-    python -m ecarsi.ledger <unit_dir> [out_dir]
+    python -m ecarsi.ledger <unit_dir> [round_dir ...]
 
-Every step of the chain leaves a per-cell record (osp qc_removed.csv +
-clustered.h5ad obs, crosssample sample_decisions.csv + annotation_removed.csv
-+ annotated.h5ad obs, zmip zmip_removed.csv + annotated_zmip.h5ad obs).
-This module joins them into ONE table, one row per input cell, one column
-group per stage:
+Every removal step leaves a per-cell record (osp qc_removed.csv, crosssample
+sample_decisions.csv + msp annotation_removed.csv, zmip zmip_removed.csv) and
+every annotation step leaves labels in an h5ad. This module joins them into
+ONE table — one row per cell that entered persample — with a column group
+per stage:
 
-    cell, sample,
-    osp_status  (kept | removed:<qc_reason>)       osp_coarse, osp_fine, osp_qc_action
-    msp_status  (kept | excluded-sample | removed:<source>)   msp_coarse, msp_fine
-    zmip_status (kept | not-zoomed | removed:<source>)        zmip_lineage, zmip_coarse, zmip_fine
+    cell, sample
+    osp_status  (kept | removed:<qc_reason>)                osp_coarse, osp_fine
+    rNN_msp_status  (kept | excluded-sample | removed:<source>)   rNN_msp_coarse, rNN_msp_fine
+    rNN_zmip_status (kept | not-zoomed | removed:<source>)        rNN_zmip_lineage, rNN_zmip_coarse, rNN_zmip_fine
 
-and draws the Sankey of coarse identity stage → stage → stage, with the cells
-removed at each stage flowing into a red sink so no cell disappears from the
-picture. Rounds of the loop add further stage column groups (round02_msp_*,
-round02_zmip_*) and further Sankey columns — the renderer is generic over an
-ordered list of (stage label, label column, status column).
+for every round directory given (a round dir holds integrate/ and zoomin/,
+i.e. a crosssample out_root). Default rounds: <unit>/rounds/round* if that
+exists, else <unit>/crosssample.
 
-Outputs: <out>/cell_ledger.csv, <out>/sankey_coarse.png (+ sankey_fine_<lineage>.png
-per zoomed lineage: fine labels within one lineage, msp → zmip).
+Sankey: one column per stage (osp, then msp/zmip per round); node = label,
+cells removed at a stage flow into a red sink in that column and stop there,
+so no cell ever disappears from the picture. Labels under 1% of a column are
+pooled into "other".
+
+Outputs (in the last round dir's ledger/): cell_ledger.csv, sankey_coarse.png,
+sankey_fine_<lineage>.png per zoomed lineage of the last round (msp → zmip).
 """
 
 from __future__ import annotations
@@ -55,10 +58,7 @@ def _obs(path: Path, cols: list[str]) -> pd.DataFrame:
     return df.astype(object)
 
 
-def build_ledger(unit: Path, cs_root: Path) -> pd.DataFrame:
-    """Join every stage's per-cell records into one table (one row per cell
-    that entered persample, i.e. every organized cell)."""
-    # persample: survivors' obs + the QC ledger of dropped cells
+def _persample_frames(unit: Path) -> list[pd.DataFrame]:
     frames = []
     ps_root = unit / "persample"
     man = json.load(open(ps_root / "manifest.json")) if (ps_root / "manifest.json").is_file() else {}
@@ -67,88 +67,112 @@ def build_ledger(unit: Path, cs_root: Path) -> pd.DataFrame:
     for d in sample_dirs:
         if not (d / "clustered.h5ad").is_file():
             continue
-        o = _obs(d / "clustered.h5ad", ["_ann_coarse", "_ann_fine", "_qc_action"])
-        o = o.rename(columns={"_ann_coarse": "osp_coarse", "_ann_fine": "osp_fine", "_qc_action": "osp_qc_action"})
+        o = _obs(d / "clustered.h5ad", ["_ann_coarse", "_ann_fine"])
+        o = o.rename(columns={"_ann_coarse": "osp_coarse", "_ann_fine": "osp_fine"})
         o.insert(0, "sample", d.name)
         o.insert(1, "osp_status", "kept")
         frames.append(o)
         rm = d / "qc_removed.csv"
         if rm.is_file():
             r = pd.read_csv(rm, index_col="cell")
-            frames.append(pd.DataFrame({
-                "sample": d.name,
-                "osp_status": REMOVED_PREFIX + r["qc_reason"].astype(str).fillna("low_quality"),
-            }, index=r.index))
+            frames.append(pd.DataFrame({"sample": d.name,
+                                        "osp_status": REMOVED_PREFIX + r["qc_reason"].astype(str)}, index=r.index))
     if not frames:
         sys.exit(f"no persample outputs under {ps_root}")
-    ledger = pd.concat(frames)
-    ledger = ledger[~ledger.index.duplicated(keep="first")]
+    return frames
 
-    # crosssample: excluded samples, msp removal ledger, msp labels
-    idir = cs_root / "integrate"
-    ledger["msp_status"] = np.where(ledger["osp_status"] == "kept", "kept", "")
+
+def _apply_round(ledger: pd.DataFrame, rdir: Path, prefix: str, alive_col: str) -> None:
+    """Add one round's msp + zmip column groups in place. alive_col: the
+    previous stage's status column (cells 'kept' there enter this round)."""
+    idir, zdir = rdir / "integrate", rdir / "zoomin"
+    ms, zs = f"{prefix}msp_status", f"{prefix}zmip_status"
+    ledger[ms] = np.where(ledger[alive_col] == "kept", "kept", "")
     dec = idir / "sample_decisions.csv"
     if dec.is_file():
         excluded = {r["sample"] for r in csv.DictReader(open(dec)) if r["decision"] == "exclude"}
-        m = ledger["sample"].isin(excluded) & (ledger["msp_status"] == "kept")
-        ledger.loc[m, "msp_status"] = "excluded-sample"
+        ledger.loc[ledger["sample"].isin(list(excluded)) & (ledger[ms] == "kept"), ms] = "excluded-sample"
     rm = idir / "annotation_removed.csv"
     if rm.is_file():
         r = pd.read_csv(rm, index_col="cell")
-        src = np.where(r.get("annotate_remove", False), "agent:" + r["remove_reason"].astype(str).fillna(""),
-                       np.where(r.get("inspect_drop", False), "inspect", "preannotation"))
-        ledger.loc[ledger.index.intersection(r.index), "msp_status"] = (
-            REMOVED_PREFIX + pd.Series(src, index=r.index)).reindex(ledger.index.intersection(r.index))
+        agent = r["annotate_remove"].astype(bool) if "annotate_remove" in r else pd.Series(False, index=r.index)
+        insp = r["inspect_drop"].astype(bool) if "inspect_drop" in r else pd.Series(False, index=r.index)
+        src = np.where(agent, "agent:" + r.get("remove_reason", pd.Series("", index=r.index)).astype(str),
+                       np.where(insp, "inspect", "preannotation"))
+        idx = ledger.index.intersection(r.index)
+        ledger.loc[idx, ms] = (REMOVED_PREFIX + pd.Series(src, index=r.index)).reindex(idx)
     ann = idir / "annotated.h5ad"
     if ann.is_file():
         o = _obs(ann, ["msp_ann_coarse", "msp_ann_fine"]).rename(
-            columns={"msp_ann_coarse": "msp_coarse", "msp_ann_fine": "msp_fine"})
-        ledger = ledger.join(o, how="left")
+            columns={"msp_ann_coarse": f"{prefix}msp_coarse", "msp_ann_fine": f"{prefix}msp_fine"})
+        for c in o.columns:
+            ledger[c] = o[c].reindex(ledger.index)
 
-    # zoomin: not-zoomed lineages, zmip removal ledger, zmip labels
-    zdir = cs_root / "zoomin"
-    ledger["zmip_status"] = np.where(ledger["msp_status"] == "kept", "kept", "")
+    ledger[zs] = np.where(ledger[ms] == "kept", "kept", "")
     plan_p = zdir / "zmip_plan.json"
-    if plan_p.is_file():
+    if plan_p.is_file() and f"{prefix}msp_coarse" in ledger:
         plan = json.load(open(plan_p))
-        not_zoomed = {lab for ln in plan["lineages"] if not ln["zoom"] for lab in ln["coarse_labels"]}
-        m = (ledger["zmip_status"] == "kept") & ledger.get("msp_coarse", pd.Series("", index=ledger.index)).isin(not_zoomed)
-        ledger.loc[m, "zmip_status"] = "not-zoomed"
+        not_zoomed = [lab for ln in plan["lineages"] if not ln["zoom"] for lab in ln["coarse_labels"]]
+        m = (ledger[zs] == "kept") & ledger[f"{prefix}msp_coarse"].isin(not_zoomed)
+        ledger.loc[m, zs] = "not-zoomed"
     rm = zdir / "zmip_removed.csv"
     if rm.is_file():
         r = pd.read_csv(rm, index_col="cell")
-        src = np.where(r["annotate_remove"], "agent:" + r["remove_reason"].astype(str).fillna(""), "preannotation")
+        src = np.where(r["annotate_remove"].astype(bool), "agent:" + r["remove_reason"].astype(str), "preannotation")
         idx = ledger.index.intersection(r.index)
-        ledger.loc[idx, "zmip_status"] = (REMOVED_PREFIX + pd.Series(src, index=r.index)).reindex(idx)
+        ledger.loc[idx, zs] = (REMOVED_PREFIX + pd.Series(src, index=r.index)).reindex(idx)
     ann = zdir / "annotated_zmip.h5ad"
     if ann.is_file():
         o = _obs(ann, ["zmip_lineage", "zmip_ann_coarse", "zmip_ann_fine"]).rename(
-            columns={"zmip_ann_coarse": "zmip_coarse", "zmip_ann_fine": "zmip_fine"})
-        ledger = ledger.join(o, how="left")
+            columns={"zmip_lineage": f"{prefix}zmip_lineage", "zmip_ann_coarse": f"{prefix}zmip_coarse",
+                     "zmip_ann_fine": f"{prefix}zmip_fine"})
+        for c in o.columns:
+            ledger[c] = o[c].reindex(ledger.index)
+
+
+def build_ledger(unit: Path, round_dirs: list[Path]) -> pd.DataFrame:
+    ledger = pd.concat(_persample_frames(unit))
+    ledger = ledger[~ledger.index.duplicated(keep="first")]
+    alive = "osp_status"
+    for i, rdir in enumerate(round_dirs, 1):
+        prefix = f"r{i:02d}_"
+        _apply_round(ledger, rdir, prefix, alive)
+        alive = f"{prefix}zmip_status"
     return ledger
+
+
+def stage_list(n_rounds: int) -> list[tuple[str, str, str]]:
+    """(stage title, label column, status column) for osp + every round."""
+    stages = [("per-sample (osp)", "osp_coarse", "osp_status")]
+    for i in range(1, n_rounds + 1):
+        p = f"r{i:02d}_"
+        stages += [(f"round {i} · msp", f"{p}msp_coarse", f"{p}msp_status"),
+                   (f"round {i} · zmip", f"{p}zmip_coarse", f"{p}zmip_status")]
+    return stages
 
 
 # ---------------------------------------------------------------- sankey
 
 def _stage_nodes(ledger: pd.DataFrame, label_col: str | None, status_col: str, keep_mask: np.ndarray):
     """Per-row node id for one stage: the label for cells still in play,
-    'removed (<source>)' for cells the stage removed, None for cells already
+    'removed: <source>' for cells the stage removed, None for cells already
     gone before this stage. Small labels pooled into 'other'."""
     status = ledger[status_col].astype(str) if status_col in ledger else pd.Series("kept", index=ledger.index)
-    node = pd.Series(None, index=ledger.index, dtype=object)
-    alive = keep_mask & ~status.str.startswith(REMOVED_PREFIX).values & (status != "excluded-sample").values
+    node = pd.Series([None] * len(ledger), index=ledger.index, dtype=object)
+    gone_here = status.str.startswith(REMOVED_PREFIX).values | (status == "excluded-sample").values
+    alive = keep_mask & ~gone_here
     if label_col and label_col in ledger:
-        lab = ledger[label_col].astype(str).where(ledger[label_col].notna(), "unlabelled")
+        lab = ledger[label_col].astype(object).where(ledger[label_col].notna(), "unlabelled").astype(str)
         node[alive] = lab[alive]
         vc = lab[alive].value_counts()
-        small = set(vc[vc < OTHER_MIN_FRAC * alive.sum()].index)
+        small = set(vc[vc < OTHER_MIN_FRAC * max(alive.sum(), 1)].index)
         if len(small) > 1:
             node[alive & lab.isin(small).values] = f"other ({len(small)} labels)"
     else:
         node[alive] = "cells"
-    gone = keep_mask & ~alive
-    src = status[gone].str.replace(REMOVED_PREFIX, "", regex=False)
-    node[gone] = "removed: " + src.str.replace(r"^agent:", "", regex=True)
+    gone = keep_mask & gone_here
+    src = status[gone].str.replace(REMOVED_PREFIX, "", regex=False).str.replace(r"^agent:", "", regex=True)
+    node[gone] = "removed: " + src
     return node, alive
 
 
@@ -162,17 +186,14 @@ def _bezier(ax, x0, y0a, y0b, x1, y1a, y1b, color, alpha=0.45):
 
 
 def draw_sankey(ledger: pd.DataFrame, stages: list[tuple[str, str | None, str]], out_png: Path,
-                title: str, min_label_frac: float = 0.01):
-    """stages: ordered [(stage title, label column or None, status column)].
-    Node = label (or removal sink) at that stage; flow = cells moving between
-    consecutive stages. Removed cells sit at the bottom of the stage that
-    removed them (red) and stop there."""
+                title: str, min_label_frac: float = 0.012):
+    """stages: ordered [(stage title, label column or None, status column)]."""
     keep = np.ones(len(ledger), dtype=bool)
     cols = []
     for _, label_col, status_col in stages:
         node, alive = _stage_nodes(ledger, label_col, status_col, keep)
         cols.append(node)
-        keep = alive.values if hasattr(alive, "values") else alive
+        keep = np.asarray(alive)
     total = len(ledger)
     palette = plt.get_cmap("tab20")
     color_of: dict[str, tuple] = {}
@@ -187,52 +208,46 @@ def draw_sankey(ledger: pd.DataFrame, stages: list[tuple[str, str | None, str]],
         return color_of[name]
 
     n_st = len(stages)
-    fig_h = 9
-    fig, ax = plt.subplots(figsize=(4.2 * n_st + 2, fig_h))
-    gap = 0.012
-    x_pos = [i * 1.0 for i in range(n_st)]
-    bar_w = 0.08
-    layout = []  # per stage: {node: (y_top, y_bottom)} in [0,1] top-down
+    fig, ax = plt.subplots(figsize=(4.2 * n_st + 2, 9))
+    gap, bar_w = 0.012, 0.08
+    x_pos = [float(i) for i in range(n_st)]
+    layout = []
     for i, node in enumerate(cols):
         vc = node.value_counts()
         kept_nodes = sorted([n for n in vc.index if not n.startswith("removed:")], key=lambda n: -vc[n])
         rm_nodes = sorted([n for n in vc.index if n.startswith("removed:")], key=lambda n: -vc[n])
-        order = kept_nodes + rm_nodes
-        y = 0.0
-        pos = {}
-        for n in order:
+        y, pos = 0.0, {}
+        for n in kept_nodes + rm_nodes:
             h = vc[n] / total
             pos[n] = (y, y + h)
             y += h + gap
         layout.append(pos)
         for n, (y0, y1) in pos.items():
             ax.add_patch(plt.Rectangle((x_pos[i], -y1), bar_w, y1 - y0, facecolor=color(n), edgecolor="white", lw=0.5))
-            frac = vc[n] / total
-            if frac >= min_label_frac:
-                label = f"{n} ({vc[n]})"
-                side_x = x_pos[i] + bar_w + 0.02 if i == n_st - 1 else x_pos[i] - 0.02
-                ha = "left" if i == n_st - 1 else "right"
-                ax.text(side_x, -(y0 + y1) / 2, label, va="center", ha=ha, fontsize=7,
+            if vc[n] / total >= min_label_frac:
+                right = i == n_st - 1
+                ax.text(x_pos[i] + bar_w + 0.02 if right else x_pos[i] - 0.02, -(y0 + y1) / 2,
+                        f"{n} ({vc[n]})", va="center", ha="left" if right else "right", fontsize=7,
                         color="#7a1f16" if n.startswith("removed:") else "black")
-    # flows
     for i in range(n_st - 1):
         a, b = cols[i], cols[i + 1]
         m = a.notna() & b.notna() & ~a.astype(str).str.startswith("removed:")
+        if not m.any():
+            continue
         ct = pd.crosstab(a[m], b[m])
         src_off = {n: layout[i][n][0] for n in ct.index}
         dst_off = {n: layout[i + 1][n][0] for n in ct.columns}
-        for s in ct.index:
+        for s_ in ct.index:
             for d in ct.columns:
-                v = ct.loc[s, d]
+                v = ct.loc[s_, d]
                 if v == 0:
                     continue
                 h = v / total
-                y0a, y0b = src_off[s], src_off[s] + h
-                y1a, y1b = dst_off[d], dst_off[d] + h
-                src_off[s] += h
+                y0a, y1a = src_off[s_], dst_off[d]
+                src_off[s_] += h
                 dst_off[d] += h
-                _bezier(ax, x_pos[i] + bar_w, -y0a, -y0b, x_pos[i + 1], -y1a, -y1b,
-                        color(d) if d.startswith("removed:") else color(s))
+                _bezier(ax, x_pos[i] + bar_w, -y0a, -(y0a + h), x_pos[i + 1], -y1a, -(y1a + h),
+                        color(d) if d.startswith("removed:") else color(s_))
     for i, (name, _, _) in enumerate(stages):
         ax.text(x_pos[i] + bar_w / 2, 0.03, name, ha="center", va="bottom", fontsize=11, fontweight="bold")
     ax.set_xlim(-0.9, x_pos[-1] + bar_w + 0.9)
@@ -244,41 +259,48 @@ def draw_sankey(ledger: pd.DataFrame, stages: list[tuple[str, str | None, str]],
     plt.close(fig)
 
 
+# ---------------------------------------------------------------- entry
+
+def run_ledger(unit: Path, round_dirs: list[Path], out: Path) -> pd.DataFrame:
+    out.mkdir(parents=True, exist_ok=True)
+    ledger = build_ledger(unit, round_dirs)
+    ledger.to_csv(out / "cell_ledger.csv")
+    print(f"[ledger] {len(ledger)} cells, {len(round_dirs)} round(s) → {out / 'cell_ledger.csv'}")
+    for col in [c for c in ledger.columns if c.endswith("_status")]:
+        vc = ledger[col].replace("", np.nan).dropna().value_counts()
+        print(f"  {col}: " + ", ".join(f"{k}={v}" for k, v in vc.items()))
+    stages = stage_list(len(round_dirs))
+    draw_sankey(ledger, stages, out / "sankey_coarse.png", "Cell identity across steps and rounds (coarse labels)")
+    print(f"[sankey] {out / 'sankey_coarse.png'}")
+    last = round_dirs[-1]
+    p = f"r{len(round_dirs):02d}_"
+    plan_p = last / "zoomin" / "zmip_plan.json"
+    if plan_p.is_file() and f"{p}msp_fine" in ledger:
+        for ln in json.load(open(plan_p))["lineages"]:
+            if not ln["zoom"]:
+                continue
+            sub = ledger[(ledger[f"{p}msp_status"] == "kept") & ledger[f"{p}msp_coarse"].isin(ln["coarse_labels"])]
+            draw_sankey(sub, [(f"round {len(round_dirs)} · msp", f"{p}msp_fine", f"{p}msp_status"),
+                              (f"round {len(round_dirs)} · zmip", f"{p}zmip_fine", f"{p}zmip_status")],
+                        out / f"sankey_fine_{ln['name']}.png", f"{ln['name']}: fine labels msp → zmip",
+                        min_label_frac=0.0)
+    return ledger
+
+
+def default_rounds(unit: Path) -> list[Path]:
+    rounds = sorted(p for p in (unit / "rounds").glob("round*") if (p / "integrate").is_dir()) \
+        if (unit / "rounds").is_dir() else []
+    return rounds or [unit / "crosssample"]
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="ecarsi.ledger", description=__doc__)
     ap.add_argument("unit", help="organize unit dir")
-    ap.add_argument("out", nargs="?", help="crosssample root (default <unit>/crosssample); outputs go to <root>/ledger")
+    ap.add_argument("rounds", nargs="*", help="round dirs in order (each holds integrate/ and zoomin/)")
     args = ap.parse_args(argv)
     unit = Path(args.unit).resolve()
-    cs_root = Path(args.out).resolve() if args.out else unit / "crosssample"
-    out = cs_root / "ledger"
-    out.mkdir(parents=True, exist_ok=True)
-
-    ledger = build_ledger(unit, cs_root)
-    ledger.to_csv(out / "cell_ledger.csv")
-    print(f"[ledger] {len(ledger)} cells → {out / 'cell_ledger.csv'}")
-    for col in ("osp_status", "msp_status", "zmip_status"):
-        if col in ledger:
-            vc = ledger[col].replace("", np.nan).dropna().value_counts()
-            print(f"  {col}: " + ", ".join(f"{k}={v}" for k, v in vc.items()))
-
-    stages = [("per-sample (osp)", "osp_coarse", "osp_status"),
-              ("cross-sample (msp)", "msp_coarse", "msp_status"),
-              ("zoom-in (zmip)", "zmip_coarse", "zmip_status")]
-    draw_sankey(ledger, stages, out / "sankey_coarse.png", "Cell identity across steps (coarse labels)")
-    print(f"[sankey] {out / 'sankey_coarse.png'}")
-    plan_p = cs_root / "zoomin" / "zmip_plan.json"
-    if plan_p.is_file() and "msp_fine" in ledger:
-        plan = json.load(open(plan_p))
-        for ln in plan["lineages"]:
-            if not ln["zoom"]:
-                continue
-            sub = ledger[(ledger["msp_status"] == "kept") & ledger["msp_coarse"].isin(ln["coarse_labels"])]
-            draw_sankey(sub, [("cross-sample (msp)", "msp_fine", "msp_status"),
-                              ("zoom-in (zmip)", "zmip_fine", "zmip_status")],
-                        out / f"sankey_fine_{ln['name']}.png", f"{ln['name']}: fine labels msp → zmip",
-                        min_label_frac=0.0)
-            print(f"[sankey] {out / f'sankey_fine_{ln['name']}.png'}")
+    round_dirs = [Path(r).resolve() for r in args.rounds] or default_rounds(unit)
+    run_ledger(unit, round_dirs, round_dirs[-1] / "ledger")
     return 0
 
 

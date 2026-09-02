@@ -82,3 +82,32 @@ silent bug 全部长在"规格与实现的接缝"上(记录了但没人执行、
   (scanpy/harmonypy/scrublet/anndata 齐)。
 - **本目录是开发目录:运行产物一律放仓库外**(workdir 指到如
   `$SCRATCH/eca-runs/<数据集名>`),输入数据也不进本仓库。
+
+## agent-sdk 分支:ecarsi 包(2026-09-02)
+
+`run.sh` 循环之外的另一条线:确定的计算进包(osp / msp / zmip,各自独立仓库,
+同级目录),agent 只做窄决策且被 host 校验;`ecarsi/` 是 wrapper + 驱动。
+
+```
+python -m ecarsi.organize    <输入目录> <out_root>   # eca-pp 守门 + 分析单元规划(agent)+ 细胞守恒审计
+python -m ecarsi.persample   <unit>                 # 样本列识别(agent)+ Task 子代理逐样本跑 osp(QC 只此一次,doublet 只在完整样本池算)
+python -m ecarsi.loop        <unit> [--max-rounds 3] [--release-frac 0.01]
+   round 1: ecarsi.crosssample(样本纳入 agent → msp integrate/inspect/annotate)→ ecarsi.zoomin(zmip)
+   round N: 上轮 zoomin/annotated_zmip.h5ad,先验列改名 r(N-1)_* → msp --from-h5ad → zmip
+   每轮 rounds/roundNN/{integrate, zoomin, ledger, stats.txt, decision.txt};progress.log 记事件
+python -m ecarsi.ledger      <unit> [round dirs]    # 逐细胞台账 cell_ledger.csv + Sankey(每步删除流进红色 sink)
+```
+
+- **收敛只看一个数**:本轮删除 / 本轮进入 < `--release-frac`(1%)即 release;round 1 永不 release;
+  到 `--max-rounds` 强制 release 并标记。标签变动不作判据(agent 措辞有随机性)。
+- **绝不中途等人**:各步的疑点(低 confidence、zmip `budget_exceeded`、inspect flag、样本排除、reassign)
+  只在 `release/needs_review.md` 一次汇总;`release/{final.h5ad, summary.md, cell_ledger.csv, sankey_coarse.png}`。
+- **每次删除都逐细胞记账**:osp `qc_removed.csv`、msp `annotation_removed.csv`、zmip `zmip_removed.csv`;
+  ledger 把它们对齐成一张表,数目必须严丝合缝。
+- 真删只发生在 msp annotate 和 zmip;integrate/inspect 只提议。`integrated.h5ad` 永不改,
+  幸存者在 `annotated.h5ad` / `annotated_zmip.h5ad`。
+- zmip:lineage 由 UMAP 连通性决定(agent 必须看图;一个岛一个 lineage,状态并入所在岛),
+  ≥800 细胞才下钻;每 lineage 单 agent,可 recluster、remove、reassign;删除超 10% 触发一次复核(软预算)。
+- 环境:`MODEL`(默认 claude-sonnet-5)、`MSP_PYTHON` / `ZMIP_PYTHON`、`ZMIP_MIN_CELLS`。
+- 测试单元:`$SCRATCH/eca-runs/_organize_test/fu2022/fu2022-meniscus`;报告直播:在最新报告目录起
+  `python -m http.server 8899`,ngrok → csj.ngrok.pizza。
