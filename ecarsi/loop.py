@@ -64,12 +64,14 @@ def _elapsed_from_log(unit: Path, n: int) -> float | None:
         return None
     start = end = None
     for line in log.read_text().splitlines():
-        ts, _, ev = line.partition(" ")[0], None, line.partition(" ")[2]
+        ev = line[20:]  # after "YYYY-MM-DD HH:MM:SS "
         if ev == f"round {n} start":
             start = time.mktime(time.strptime(line[:19], "%Y-%m-%d %H:%M:%S"))
         elif ev.startswith(f"round {n} stats") and start is not None:
             end = time.mktime(time.strptime(line[:19], "%Y-%m-%d %H:%M:%S"))
-    return (end - start) if (start is not None and end is not None) else None
+    # a round resumed from finished outputs logs start and stats in the same
+    # second — its real wall time is unknown, not zero
+    return (end - start) if (start is not None and end is not None and end > start) else None
 
 
 def _fmt_elapsed(sec) -> str:
