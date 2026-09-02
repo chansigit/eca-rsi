@@ -15,18 +15,26 @@ every sample — hard prerequisite). Stages:
      worse than peers, fragmented unexplainable structure); different
      biology is never a reason. The decision is archived in manifest.json
      and reused on resume. Excluded samples stay on disk untouched.
-  3. EXECUTE (code): runs msp (multi-sample pipeline package) on the
-     included samples' clustered.h5ad files — concat, normalize from raw
-     counts, HVG/PCA recomputed on the merged cells, harmony on the batch
-     key. Contract: <out>/integrate/integrated.h5ad + report.html.
+  3. EXECUTE (code): runs the full msp chain (multi-sample pipeline
+     package) on the included samples' clustered.h5ad files —
+     `python -m msp ... --annotate --model $MODEL`: integrate (concat,
+     normalize from raw counts, HVG/PCA recomputed on the merged cells,
+     harmony on the batch key) → inspect (per-cluster QC verdict agent,
+     proposals only) → annotate (cell-identity agent: coarse/fine labels,
+     merges, REAL removal). msp resumes per step on its own, so re-running
+     this command finishes whatever step was cut short. Contract:
+     <out>/integrate/{integrated.h5ad, report.html, inspection_proposal.json,
+     annotation_proposal.json, annotated.h5ad}.
 
 Cells enter integration exactly as osp left them: QC-passed cells only,
 including every keep/flag/drop cell from the annotation (suspicious cells
 may cluster with counterparts from other samples; cluster-level review
-happens after integration). Cell deletion is a later, separate step.
+happens after integration). The first actual deletion is msp.annotate's:
+integrated.h5ad keeps every cell, annotated.h5ad the survivors, and
+annotation_removed.csv lists each removed cell with its sources.
 
-Env: MODEL (agent call), MSP_PYTHON (interpreter with msp installed;
-defaults to this interpreter).
+Env: MODEL (every agent call, incl. msp's inspect/annotate), MSP_PYTHON
+(interpreter with msp[agent] installed; defaults to this interpreter).
 """
 
 from __future__ import annotations
@@ -64,9 +72,10 @@ INCLUSION_SCHEMA = {
 
 # what a completed persample sample dir must contain (annotation is a hard
 # prerequisite for crosssample: the inclusion agent judges by it)
-PS_CONTRACT = ("report.html", "clustered.h5ad", "annotation_proposal.json")
+PS_CONTRACT = ("report.html", "clustered.h5ad", "annotation_proposal.json", "qc_summary.csv")
 
-MSP_CONTRACT = ("integrated.h5ad", "report.html")
+MSP_CONTRACT = ("integrated.h5ad", "report.html", "inspection_proposal.json",
+                "annotation_proposal.json", "annotated.h5ad")
 
 
 # ---------------------------------------------------------------- resolve
@@ -111,7 +120,7 @@ def ecapp_batch_designations(unit: Path) -> dict:
         if icr and Path(icr).is_file():
             with open(icr) as f:
                 batch = (json.load(f).get("columns") or {}).get("batch")
-            if batch:
+            if isinstance(batch, dict):
                 out[u["name"]] = batch
     return out
 
@@ -191,8 +200,11 @@ async def _propose(inventories: list[dict]) -> dict:
 
 
 def msp_command(py: str, inputs: list[str], batch_col: str, outdir: Path,
-                species: str | None) -> str:
-    cmd = [py, "-m", "msp", *inputs, "--batch-col", batch_col, "--outdir", str(outdir)]
+                species: str | None, model: str) -> str:
+    """Full msp chain; --annotate implies --inspect. msp skips steps whose
+    contract files exist, so this same command is also the resume command."""
+    cmd = [py, "-m", "msp", *inputs, "--batch-col", batch_col, "--outdir", str(outdir),
+           "--annotate", "--model", model]
     if species:
         cmd += ["--species", species]
     return " ".join(shlex.quote(c) for c in cmd)
@@ -249,7 +261,9 @@ def main(argv: list[str]) -> int:
     py = os.environ.get("MSP_PYTHON", sys.executable)
     inputs = [str(Path(by_val[s]["dir"]) / "clustered.h5ad") for s in included]
     idir = out_root / "integrate"
-    cmd = msp_command(py, inputs, batch_col, idir, species)
+    from . import model
+
+    cmd = msp_command(py, inputs, batch_col, idir, species, model())
     print(f"[msp] {cmd}")
 
     # msp's report reads sample_decisions.csv if present — write it before
@@ -265,10 +279,13 @@ def main(argv: list[str]) -> int:
     if all((idir / f).is_file() for f in MSP_CONTRACT):
         print("[msp] contract already satisfied — skipping (resume)")
         return 0
-    probe = subprocess.run([py, "-c", "import msp"], capture_output=True)
+    done = [f for f in MSP_CONTRACT if (idir / f).is_file()]
+    if done:
+        print(f"[msp] partial contract {done} — msp resumes the remaining steps")
+    probe = subprocess.run([py, "-c", "import msp, msp.inspect, msp.annotate"], capture_output=True)
     if probe.returncode != 0:
-        print("[pending] msp package not installed yet — inclusion decision archived, "
-              "re-run once msp exists")
+        print("[pending] msp[agent] not importable in MSP_PYTHON (needs msp + claude-agent-sdk) — "
+              "inclusion decision archived, re-run once installed")
         return 4
 
     ret = subprocess.run(cmd, shell=True).returncode
@@ -279,7 +296,7 @@ def main(argv: list[str]) -> int:
     if missing:
         print(f"[fail] msp exited 0 but contract files missing: {missing}")
         return 1
-    print(f"[done] integration at {idir}")
+    print(f"[done] integration + inspection + annotation at {idir} (annotated.h5ad = survivors)")
     return 0
 
 
