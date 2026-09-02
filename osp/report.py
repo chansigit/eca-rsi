@@ -557,6 +557,26 @@ def _number_sections(section_htmls):
     return numbered_htmls, (f'<nav class="toc">{toc}</nav>' if toc else "")
 
 
+CONTEXT_FILE = "report_context.txt"
+
+
+def report_context(outdir):
+    """Where this sample sits (e.g. the analysis unit name), written by the
+    driver via --report-context into outdir; '' when absent."""
+    p = os.path.join(outdir, CONTEXT_FILE)
+    if os.path.isfile(p):
+        with open(p) as f:
+            return f.read().strip()
+    return ""
+
+
+def write_report_context(outdir, text):
+    if text:
+        os.makedirs(outdir, exist_ok=True)
+        with open(os.path.join(outdir, CONTEXT_FILE), "w") as f:
+            f.write(text.strip() + "\n")
+
+
 def generate_report(outdir, out_html=None, title=None, top_n_de_display=10):
     """Build a single self-contained HTML report from an OSP output directory
     (whatever cluster_and_deg / run_pipeline wrote with outdir=...).
@@ -570,7 +590,8 @@ def generate_report(outdir, out_html=None, title=None, top_n_de_display=10):
     cluster_tables = _find_cluster_tables(outdir)
 
     sample = (qc_summary or {}).get("sample") or (qc_stats or {}).get("sample") or os.path.basename(outdir.rstrip("/"))
-    title = title or f"OSP QC Report — {sample}"
+    ctx = report_context(outdir)
+    title = title or f"{sample} — per-sample QC & clustering (osp)" + (f" · {ctx}" if ctx else "")
 
     sections = [
         _section_qc(outdir, qc_summary, qc_stats),

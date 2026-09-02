@@ -10,7 +10,7 @@ import argparse
 import scanpy as sc
 
 from .cluster import run_one_sample_pipeline
-from .report import generate_report
+from .report import generate_report, write_report_context
 
 parser = argparse.ArgumentParser(prog="osp", description=__doc__)
 parser.add_argument("h5ad_path")
@@ -27,7 +27,10 @@ parser.add_argument("--language", default="English", help='annotation output lan
 parser.add_argument("--model", default=None, help='model for --annotate, e.g. "claude-fable-5" / "claude-sonnet-5"')
 parser.add_argument("--effort", default=None, choices=["low", "medium", "high", "xhigh", "max"],
                     help="reasoning effort for --annotate (models that support it)")
+parser.add_argument("--report-context", default=None, metavar="TEXT",
+                    help="where this sample sits, for the report title (e.g. the analysis unit name)")
 args = parser.parse_args()
+write_report_context(args.outdir, args.report_context)
 
 adata = sc.read_h5ad(args.h5ad_path)
 sub = adata[adata.obs[args.sample_col] == args.sample]
