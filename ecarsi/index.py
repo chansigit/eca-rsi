@@ -82,7 +82,103 @@ figcaption{color:var(--muted);font-size:.85rem;margin-top:.4rem}
 p.empty{color:var(--muted)}
 footer{color:var(--muted);font-size:.8rem;margin-top:2rem}
 ul.warn{margin:.3rem 0 0 1.2rem;padding:0}
+.sk-tip{position:absolute;z-index:20;background:#1f2328;color:#fff;font-size:.8rem;line-height:1.35;padding:.45rem .6rem;border-radius:6px;pointer-events:none;max-width:34ch;box-shadow:0 2px 8px rgba(0,0,0,.25)}
+.sk-tip .m{color:#b8c0c8}
+svg.sk{display:block;max-width:100%}svg.sk .sk-stage{font-size:12px;font-weight:600;fill:#1f2328}
+svg.sk .sk-label{font-size:10.5px;fill:#1f2328}svg.sk .sk-label.rm{fill:#7a1f16}
+svg.sk .sk-flow{opacity:.45;transition:opacity .12s}svg.sk .sk-node{stroke:#fff;stroke-width:.5;cursor:pointer}
+svg.sk.dim .sk-flow{opacity:.07}svg.sk.dim .sk-flow.hi{opacity:.85}
+details summary{cursor:pointer;list-style:none}details summary::-webkit-details-marker{display:none}
+details summary h2{display:inline-flex;margin:0}details summary h2::before{content:"▸";color:var(--muted);margin-right:.5rem;font-size:.9rem}
+details[open] summary h2::before{content:"▾"}details summary .hint{display:block;color:var(--muted);font-size:.85rem;margin:.2rem 0 0 1.4rem}
+details[open] summary .hint{display:none}.details-body{margin-top:.8rem}
+.sk-alt{font-size:.82rem;color:var(--muted);margin-top:.4rem}
 @media (max-width:700px){.page{padding:1rem}section{padding:.9rem 1rem}}
+"""
+
+
+SANKEY_JS = r"""
+(function(){
+const D = SANKEY_DATA, el = document.getElementById("sankey-vis");
+if (!D || !el) return;
+const PAL = ["#4e79a7","#f28e2b","#59a14f","#e15759","#76b7b2","#edc948","#b07aa1","#ff9da7","#9c755f","#bab0ac",
+             "#1f77b4","#aec7e8","#2ca02c","#98df8a","#9467bd","#c5b0d5","#8c564b","#c49c94","#e377c2","#17becf"];
+const RED = "#c0392b", GRAY = "#9aa0a6", colorOf = {}; let ci = 0;
+function color(n){ if (n.removed) return RED; if (n.name === "unlabelled") return GRAY;
+  if (!(n.name in colorOf)) colorOf[n.name] = PAL[ci++ % PAL.length]; return colorOf[n.name]; }
+const tip = document.createElement("div"); tip.className = "sk-tip"; tip.style.display = "none"; document.body.appendChild(tip);
+function fmt(n){ return n.toLocaleString(); }
+function pct(a, b){ return b ? (100 * a / b).toFixed(a / b < 0.01 ? 2 : 1) + "%" : ""; }
+function showTip(ev, html){ tip.innerHTML = html; tip.style.display = "block"; moveTip(ev); }
+function moveTip(ev){ const pad = 14; let x = ev.pageX + pad, y = ev.pageY + pad;
+  if (x + tip.offsetWidth > window.scrollX + window.innerWidth - 8) x = ev.pageX - tip.offsetWidth - pad;
+  tip.style.left = x + "px"; tip.style.top = y + "px"; }
+function hideTip(){ tip.style.display = "none"; }
+
+function render(){
+  el.innerHTML = "";
+  const nS = D.stages.length, W = Math.max(el.clientWidth, 700), H = 620, top = 34, bottom = 14;
+  const padL = 150, padR = 150, barW = 14, gap = 3;
+  const innerW = W - padL - padR, colX = i => padL + (nS === 1 ? 0 : i * (innerW - barW) / (nS - 1));
+  const byStage = D.stages.map(() => []);
+  D.nodes.forEach((n, i) => { n.id = i; byStage[n.stage].push(n); });
+  const maxNodes = Math.max(...byStage.map(a => a.length));
+  const scale = (H - top - bottom - gap * (maxNodes - 1)) / D.total;   // px per cell, column 0 is the tallest
+  byStage.forEach(nodes => { let y = top; nodes.forEach(n => { n.h = n.count * scale; n.y = y; y += n.h + gap; n.inOff = 0; n.outOff = 0; }); });
+  const ns = "http://www.w3.org/2000/svg", svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("width", W); svg.setAttribute("height", H); svg.setAttribute("class", "sk");
+  const mk = (t, a) => { const e = document.createElementNS(ns, t); for (const k in a) e.setAttribute(k, a[k]); return e; };
+  // stage titles
+  D.stages.forEach((t, i) => { const x = colX(i) + barW / 2;
+    const tx = mk("text", {x, y: 18, "text-anchor": "middle", class: "sk-stage"}); tx.textContent = t; svg.appendChild(tx); });
+  // flows (drawn first, under the bars)
+  const gFlows = mk("g", {}); svg.appendChild(gFlows);
+  const flowsBySrc = {}, flowsByDst = {};
+  D.flows.forEach(f => { (flowsBySrc[f.src] = flowsBySrc[f.src] || []).push(f); (flowsByDst[f.dst] = flowsByDst[f.dst] || []).push(f); });
+  // order flows so ribbons do not cross needlessly: by destination position at the source, by source position at the destination
+  D.nodes.forEach(n => { (flowsBySrc[n.id] || []).sort((a, b) => D.nodes[a.dst].y - D.nodes[b.dst].y);
+                         (flowsByDst[n.id] || []).sort((a, b) => D.nodes[a.src].y - D.nodes[b.src].y); });
+  const paths = [];
+  D.nodes.forEach(n => (flowsBySrc[n.id] || []).forEach(f => { f.y0 = n.y + n.outOff; n.outOff += f.count * scale; }));
+  D.nodes.forEach(n => (flowsByDst[n.id] || []).forEach(f => { f.y1 = n.y + n.inOff; n.inOff += f.count * scale; }));
+  D.flows.forEach(f => { const s = D.nodes[f.src], d = D.nodes[f.dst], h = f.count * scale;
+    const x0 = colX(s.stage) + barW, x1 = colX(d.stage), dx = (x1 - x0) / 2;
+    const p = `M${x0},${f.y0} C${x0 + dx},${f.y0} ${x1 - dx},${f.y1} ${x1},${f.y1} L${x1},${f.y1 + h} C${x1 - dx},${f.y1 + h} ${x0 + dx},${f.y0 + h} ${x0},${f.y0 + h} Z`;
+    const path = mk("path", {d: p, fill: color(d.removed ? d : s), class: "sk-flow", "data-src": f.src, "data-dst": f.dst});
+    path.addEventListener("mousemove", ev => { moveTip(ev); });
+    path.addEventListener("mouseenter", ev => { focus(f.src, f.dst);
+      showTip(ev, `<b>${esc(s.name)}</b> → <b>${esc(d.name)}</b><br>${fmt(f.count)} cells · ${pct(f.count, s.count)} of ${esc(s.name)}` +
+                  (d.removed ? "" : ` · ${pct(f.count, d.count)} of ${esc(d.name)}`)); });
+    path.addEventListener("mouseleave", () => { unfocus(); hideTip(); });
+    gFlows.appendChild(path); paths.push(path); f.el = path; });
+  // bars + labels
+  const gBars = mk("g", {}); svg.appendChild(gBars);
+  const minLabel = 0.012 * D.total, last = nS - 1;
+  D.nodes.forEach(n => { const x = colX(n.stage);
+    const r = mk("rect", {x, y: n.y, width: barW, height: Math.max(n.h, 0.8), fill: color(n), class: "sk-node"});
+    const stageTotal = byStage[n.stage].reduce((a, b) => a + b.count, 0);
+    r.addEventListener("mousemove", moveTip);
+    r.addEventListener("mouseenter", ev => { focusNode(n.id);
+      const ins = (flowsByDst[n.id] || []).slice().sort((a, b) => b.count - a.count).slice(0, 6)
+        .map(f => `${esc(D.nodes[f.src].name)} ${fmt(f.count)}`).join("<br>");
+      const outs = (flowsBySrc[n.id] || []).slice().sort((a, b) => b.count - a.count).slice(0, 6)
+        .map(f => `${esc(D.nodes[f.dst].name)} ${fmt(f.count)}`).join("<br>");
+      showTip(ev, `<b>${esc(n.name)}</b><br><span class="m">${esc(D.stages[n.stage])}</span><br>${fmt(n.count)} cells · ${pct(n.count, stageTotal)} of this stage · ${pct(n.count, D.total)} of input`
+        + (ins ? `<br><span class="m">from:</span><br>${ins}` : "") + (outs ? `<br><span class="m">to:</span><br>${outs}` : "")); });
+    r.addEventListener("mouseleave", () => { unfocus(); hideTip(); });
+    gBars.appendChild(r);
+    if (n.count >= minLabel) { const right = n.stage === last;
+      const t = mk("text", {x: right ? x + barW + 6 : x - 6, y: n.y + n.h / 2 + 4, "text-anchor": right ? "start" : "end",
+                            class: "sk-label" + (n.removed ? " rm" : "")});
+      t.textContent = `${n.name} (${fmt(n.count)})`; gBars.appendChild(t); } });
+  el.appendChild(svg);
+  function focus(src, dst){ svg.classList.add("dim"); D.flows.forEach(f => f.el.classList.toggle("hi", f.src === src && f.dst === dst)); }
+  function focusNode(id){ svg.classList.add("dim"); D.flows.forEach(f => f.el.classList.toggle("hi", f.src === id || f.dst === id)); }
+  function unfocus(){ svg.classList.remove("dim"); D.flows.forEach(f => f.el.classList.remove("hi")); }
+}
+function esc(s){ return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+render(); let t; window.addEventListener("resize", () => { clearTimeout(t); t = setTimeout(render, 150); });
+})();
 """
 
 
@@ -332,17 +428,29 @@ def render_unit(unit: Path) -> str:
     # sankey + ledger
     last_done = [r for r in s["rounds"] if r["sankey"]]
     if last_done:
-        ld = e(str(L.ledger_dir(last_done[-1]["dir"]).relative_to(unit)))
+        ldir = L.ledger_dir(last_done[-1]["dir"])
+        ld = e(str(ldir.relative_to(unit)))
+        data_p = ldir / "sankey_coarse.json"
+        if data_p.is_file():
+            data = data_p.read_text().replace("</", "<\\/")
+            fig = (f'<div id="sankey-vis"></div><script>const SANKEY_DATA = {data};{SANKEY_JS}</script>'
+                   f'<p class="sk-alt">Hover a bar or a ribbon for its identity and cell counts (every label shown, nothing pooled). '
+                   f'Static version: <a href="{ld}/sankey_coarse.png">sankey_coarse.png</a>.</p>')
+        else:
+            fig = f'<figure><a href="{ld}/sankey_coarse.png"><img src="{ld}/sankey_coarse.png" alt="Sankey"></a></figure>'
         parts.append(f'<section id="sankey"><h2>Cell identity across steps and rounds <small>coarse labels · through round {last_done[-1]["n"]}</small></h2>'
-                     f'<figure><a href="{ld}/sankey_coarse.png"><img src="{ld}/sankey_coarse.png" alt="Sankey"></a>'
-                     f'<figcaption>Every input cell flows left to right; cells removed at a stage end in that stage\'s red sink. '
-                     f'<a href="{ld}/cell_ledger.csv">cell_ledger.csv</a> — one row per input cell, status + labels per stage.</figcaption></figure></section>')
+                     + fig + f'<figcaption>Every input cell flows left to right; cells removed at a stage end in that stage\'s red sink. '
+                     f'<a href="{ld}/cell_ledger.csv">cell_ledger.csv</a> — one row per input cell, status + labels per stage.</figcaption></section>')
 
     # needs review — from disk, so it exists mid-run too
     items = review.collect(unit, [r["dir"] for r in done_rounds], [r["stats"] for r in done_rounds], s["forced"])
-    parts.append('<section id="review"><h2>Needs review <small>'
-                 + ("everything the agents were unsure about or the host overrode; nothing here stopped the loop"
-                    if s["released"] else "so far — the loop is still running") + "</small></h2>" + review.to_html(items) + "</section>")
+    cs = review.counts(items)
+    brief = (" · ".join(f"{n} {t.lower()}" for _, t, n, _ in cs) if cs else "nothing to review")
+    parts.append('<section id="review"><details><summary><h2>Needs review <small>'
+                 + f'{len(items)} items — {e(brief)}' + "</small></h2>"
+                 + '<span class="hint">' + ("everything the agents were unsure about or the host overrode; nothing here stopped the loop"
+                                            if s["released"] else "so far — the loop is still running") + " · click to expand</span></summary>"
+                 + '<div class="details-body">' + review.to_html(items) + "</div></details></section>")
     return _page(s["name"], "".join(parts))
 
 

@@ -151,10 +151,11 @@ def stage_list(n_rounds: int) -> list[tuple[str, str, str]]:
 
 # ---------------------------------------------------------------- sankey
 
-def _stage_nodes(ledger: pd.DataFrame, label_col: str | None, status_col: str, keep_mask: np.ndarray):
+def _stage_nodes(ledger: pd.DataFrame, label_col: str | None, status_col: str, keep_mask: np.ndarray,
+                 pool: bool = True):
     """Per-row node id for one stage: the label for cells still in play,
     'removed: <source>' for cells the stage removed, None for cells already
-    gone before this stage. Small labels pooled into 'other'."""
+    gone before this stage. Small labels pooled into 'other' when pool."""
     status = ledger[status_col].astype(str) if status_col in ledger else pd.Series("kept", index=ledger.index)
     node = pd.Series([None] * len(ledger), index=ledger.index, dtype=object)
     gone_here = status.str.startswith(REMOVED_PREFIX).values | (status == "excluded-sample").values
@@ -164,7 +165,7 @@ def _stage_nodes(ledger: pd.DataFrame, label_col: str | None, status_col: str, k
         node[alive] = lab[alive]
         vc = lab[alive].value_counts()
         small = set(vc[vc < OTHER_MIN_FRAC * max(alive.sum(), 1)].index)
-        if len(small) > 1:
+        if pool and len(small) > 1:
             node[alive & lab.isin(small).values] = f"other ({len(small)} labels)"
     else:
         node[alive] = "cells"
@@ -181,6 +182,40 @@ def _bezier(ax, x0, y0a, y0b, x1, y1a, y1b, color, alpha=0.45):
     codes = [MPath.MOVETO, MPath.CURVE4, MPath.CURVE4, MPath.CURVE4,
              MPath.LINETO, MPath.CURVE4, MPath.CURVE4, MPath.CURVE4, MPath.CLOSEPOLY]
     ax.add_patch(PathPatch(MPath(verts, codes), facecolor=color, edgecolor="none", alpha=alpha))
+
+
+def sankey_data(ledger: pd.DataFrame, stages: list[tuple[str, str | None, str]]) -> dict:
+    """The Sankey as data, every label kept (no 'other' pooling) so an
+    interactive renderer can show the tiny clusters on hover:
+    {stages: [title], nodes: [{stage, name, count, removed}], flows: [{src, dst, count}]}
+    (src/dst index into nodes)."""
+    keep = np.ones(len(ledger), dtype=bool)
+    cols = []
+    for _, label_col, status_col in stages:
+        node, alive = _stage_nodes(ledger, label_col, status_col, keep, pool=False)
+        cols.append(node)
+        keep = np.asarray(alive)
+    nodes, idx = [], {}
+    for i, node in enumerate(cols):
+        vc = node.value_counts()
+        kept = sorted([n for n in vc.index if not n.startswith("removed:")], key=lambda n: -vc[n])
+        rm = sorted([n for n in vc.index if n.startswith("removed:")], key=lambda n: -vc[n])
+        for n in kept + rm:
+            idx[(i, n)] = len(nodes)
+            nodes.append({"stage": i, "name": n, "count": int(vc[n]), "removed": n.startswith("removed:")})
+    flows = []
+    for i in range(len(cols) - 1):
+        a, b = cols[i], cols[i + 1]
+        m = a.notna() & b.notna() & ~a.astype(str).str.startswith("removed:")
+        if not m.any():
+            continue
+        ct = pd.crosstab(a[m], b[m])
+        for s_ in ct.index:
+            for d in ct.columns:
+                v = int(ct.loc[s_, d])
+                if v:
+                    flows.append({"src": idx[(i, s_)], "dst": idx[(i + 1, d)], "count": v})
+    return {"stages": [t for t, _, _ in stages], "total": int(len(ledger)), "nodes": nodes, "flows": flows}
 
 
 def draw_sankey(ledger: pd.DataFrame, stages: list[tuple[str, str | None, str]], out_png: Path,
@@ -269,6 +304,8 @@ def run_ledger(unit: Path, round_dirs: list[Path], out: Path) -> pd.DataFrame:
         print(f"  {col}: " + ", ".join(f"{k}={v}" for k, v in vc.items()))
     stages = stage_list(len(round_dirs))
     draw_sankey(ledger, stages, out / "sankey_coarse.png", "Cell identity across steps and rounds (coarse labels)")
+    with open(out / "sankey_coarse.json", "w") as f:
+        json.dump(sankey_data(ledger, stages), f)
     print(f"[sankey] {out / 'sankey_coarse.png'}")
     last = round_dirs[-1]
     p = f"r{len(round_dirs):02d}_"
