@@ -24,14 +24,66 @@ from pathlib import Path
 from . import layout as L
 from . import review
 
-CSS = """body{font-family:system-ui,sans-serif;max-width:1400px;margin:2rem auto;padding:0 1rem;color:#222}
-table{border-collapse:collapse;margin:.5rem 0}td,th{border:1px solid #ddd;padding:.3rem .6rem;text-align:right;vertical-align:top}
-th{background:#f4f4f4;text-align:center}td.l,td.note,td.reason{text-align:left}td.note{max-width:70ch;font-size:.85rem}
-td.reason{max-width:60ch;font-size:.85rem}table.review td,table.review-summary td{text-align:left}
-img{max-width:100%;border:1px solid #ddd}.stage{font-weight:600}.running{color:#b35c00}.released{color:#1a7f37}
-.failed{color:#b3261e}p.desc{color:#555;font-size:.9rem;margin:.2rem 0 .4rem}small{color:#777}
-code{background:#f4f4f4;padding:0 .2rem}pre{white-space:pre-wrap;background:#f7f7f7;padding:1rem;border-radius:6px;font-size:.85rem}
-.meta{color:#555;font-size:.9rem}"""
+CSS = """
+:root{--bg:#f4f5f7;--card:#fff;--ink:#1f2328;--muted:#656d76;--line:#e6e8eb;--accent:#3b5bdb;
+ --ok:#2f9e44;--ok-bg:#e9f7ec;--warn:#d9480f;--warn-bg:#fff1e6;--bad:#c92a2a;--bad-bg:#fdecec;--gray-bg:#f1f3f5}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+code{font:.88em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--gray-bg);padding:.1em .35em;border-radius:4px}
+.page{max-width:1380px;margin:0 auto;padding:1.5rem 1.5rem 4rem}
+header.top{display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:.8rem;margin:.5rem 0 1.2rem}
+header.top h1{margin:0;font-size:1.9rem;font-weight:650;letter-spacing:-.01em}
+.crumb{color:var(--muted);font-size:.9rem;margin-bottom:.35rem}.crumb a{color:var(--muted)}
+.event{color:var(--muted);font-size:.85rem}
+.pill{display:inline-block;padding:.22em .75em;border-radius:999px;font-size:.85rem;font-weight:600;white-space:nowrap;vertical-align:middle}
+.pill.running{background:var(--warn-bg);color:var(--warn)}.pill.released{background:var(--ok-bg);color:var(--ok)}
+.pill.failed{background:var(--bad-bg);color:var(--bad)}.pill.neutral{background:var(--gray-bg);color:var(--muted)}
+.pill.include{background:var(--ok-bg);color:var(--ok)}.pill.exclude{background:var(--bad-bg);color:var(--bad)}
+.cards{display:flex;flex-wrap:wrap;gap:.8rem;margin:0 0 1.2rem}
+.card{flex:1 1 150px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:.8rem 1rem;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.card .num{display:block;font-size:1.6rem;font-weight:650;line-height:1.15;letter-spacing:-.01em}
+.card .lbl{display:block;color:var(--muted);font-size:.82rem;margin-top:.15rem}
+.card .sub{display:block;color:var(--muted);font-size:.78rem}
+a.card{color:var(--ink)}a.card:hover{text-decoration:none;border-color:var(--accent)}
+.review-cards .card{flex:1 1 170px}
+.callout{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:.7rem 1rem;margin:0 0 1.2rem;font-size:.92rem}
+.callout .path{font:.86rem ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;word-break:break-all;background:none;padding:0}
+.callout.warn{border-left-color:var(--warn)}.callout.bad{border-left-color:var(--bad)}
+nav.jump{display:flex;gap:1.2rem;flex-wrap:wrap;font-size:.9rem;margin:0 0 1.2rem;padding:.55rem 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+section{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:1.1rem 1.4rem 1.3rem;margin:0 0 1.2rem;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+section h2{margin:0 0 .6rem;font-size:1.2rem;font-weight:650;display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap}
+section h2 small{font-weight:400;color:var(--muted);font-size:.85rem}
+h3{margin:1.6rem 0 .3rem;font-size:1.02rem;font-weight:650;display:flex;align-items:center;gap:.5rem}
+h3 .count{background:var(--gray-bg);color:var(--muted);border-radius:999px;padding:.05em .6em;font-size:.8rem;font-weight:600}
+h3.kind-convergence .count,h3.kind-removed .count{background:var(--bad-bg);color:var(--bad)}
+h3.kind-sample_excluded .count,h3.kind-reassigned .count{background:var(--warn-bg);color:var(--warn)}
+.card.kind-convergence .num,.card.kind-removed .num{color:var(--bad)}
+.card.kind-sample_excluded .num,.card.kind-reassigned .num{color:var(--warn)}
+p.desc{color:var(--muted);font-size:.88rem;margin:0 0 .5rem;max-width:90ch}
+.wrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.9rem}
+th,td{padding:.45rem .65rem;border-bottom:1px solid var(--line);text-align:right;vertical-align:top}
+th{color:var(--muted);font-weight:600;font-size:.78rem;text-transform:uppercase;letter-spacing:.03em;text-align:right;border-bottom:2px solid var(--line)}
+th:first-child,td:first-child,th.l,td.l,td.note,td.reason{text-align:left}
+tbody tr:hover{background:#fafbfc}
+td.num{font-variant-numeric:tabular-nums}
+td.note,td.reason{font-size:.85rem;color:#3a3f45;min-width:28ch;max-width:70ch}
+table.review th,table.review td{text-align:left}table.review td.c-cells{text-align:right;font-variant-numeric:tabular-nums}
+table.review td.c-label{max-width:34ch}
+.badge{display:inline-block;padding:.08em .55em;border-radius:999px;font-size:.78rem;font-weight:600}
+.conf-high{background:var(--ok-bg);color:var(--ok)}.conf-medium{background:var(--gray-bg);color:var(--muted)}.conf-low{background:var(--warn-bg);color:var(--warn)}
+.act-remove{color:var(--bad);font-weight:600}.act{color:var(--ink)}
+.bar{display:inline-block;vertical-align:middle;width:70px;height:7px;background:var(--gray-bg);border-radius:4px;margin-left:.5rem;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--bad);opacity:.75}
+.muted{color:var(--muted)}.running-cell{color:var(--warn);font-weight:600}
+figure{margin:0}figure img{max-width:100%;border:1px solid var(--line);border-radius:8px;background:#fff}
+figcaption{color:var(--muted);font-size:.85rem;margin-top:.4rem}
+p.empty{color:var(--muted)}
+footer{color:var(--muted);font-size:.8rem;margin-top:2rem}
+ul.warn{margin:.3rem 0 0 1.2rem;padding:0}
+@media (max-width:700px){.page{padding:1rem}section{padding:.9rem 1rem}}
+"""
 
 
 def _json(p: Path, default=None):
@@ -182,24 +234,56 @@ def _pct(x) -> str:
     return f"{100 * x:.2f}%"
 
 
+def _n(x) -> str:
+    return "" if x is None or x == "" else f"{int(x):,}"
+
+
+def _bar(frac: float) -> str:
+    return f'<span class="bar" title="{_pct(frac)}"><i style="width:{min(100, 100 * frac):.1f}%"></i></span>'
+
+
+def _card(num, label, sub="", cls="") -> str:
+    return (f'<div class="card {cls}"><span class="num">{num}</span><span class="lbl">{_h.escape(label)}</span>'
+            + (f'<span class="sub">{sub}</span>' if sub else "") + "</div>")
+
+
 def render_unit(unit: Path) -> str:
     s = unit_state(unit)
     e = _h.escape
-    head =(f"<h1>{e(s['name'])}</h1><p class=\"meta\">species {e(str(s['species']))} · input cells {s['n_input']}"
-            + (f" · final cells {s['final_cells']}" if s["final_cells"] is not None else "")
-            + f" · <span class=\"stage {s['stage_class']}\">{e(s['stage'])}</span>"
-            + (f"<br><small>last event: {e(s['last_event'])}</small>" if s["last_event"] else "") + "</p>")
-    parts = [head]
+    root = L.root_of(unit)
+    crumb = (f'<div class="crumb"><a href="../../{L.INDEX}">{e(root.name)}</a> / {L.UNITS} / {e(s["name"])}</div>'
+             if root else "")
+    header = (f'<header class="top"><div>{crumb}<h1>{e(s["name"])} <span class="pill {s["stage_class"]}">{e(s["stage"])}</span></h1></div>'
+              + (f'<div class="event">last event · {e(s["last_event"])}</div>' if s["last_event"] else "") + "</header>")
+
+    done_rounds = [r for r in s["rounds"] if r["stats"]]
+    total_s = sum((r["stats"].get("elapsed_s") or 0) for r in done_rounds)
+    removed_total = sum(r["stats"]["removed"] for r in done_rounds)
+    cards = [_card(_n(s["n_input"]), "input cells", e(str(s["species"] or ""))),
+             _card(_n(s["final_cells"]) or "–", "final cells" if s["released"] else "cells now",
+                   f"−{_n(removed_total)} removed in rounds" if done_rounds else ""),
+             _card(f'{s["persample"]["n_done"]}/{s["persample"]["n"]}' if s["persample"]["n"] else "–", "samples (osp)",
+                   f'{sum(1 for d in s["sample_decisions"].values() if d["decision"] == "exclude")} excluded'
+                   if s["sample_decisions"] else ""),
+             _card(str(len(done_rounds)) + ("" if s["released"] else " <small>+1 running</small>" if s["rounds"] and not s["rounds"][-1]["stats"] else ""),
+                   "rounds done", f"{fmt_elapsed(total_s)} wall time" if total_s else "")]
+    parts = [header, '<div class="cards">' + "".join(cards) + "</div>"]
+
     if s["output_h5ad"] is not None:
         out = s["output_h5ad"]
-        parts.append(f'<p><b>Output h5ad</b> ({e(s["output_note"])}): <code>{e(str(out))}</code> '
-                     f'<a href="{e(str(out.relative_to(unit)))}">download</a> · '
-                     f"<code>zmip_ann_coarse</code> / <code>zmip_ann_fine</code> = labels</p>")
+        cls = "" if s["released"] else "warn"
+        parts.append(f'<div class="callout {cls}"><b>Output h5ad</b> <span class="muted">({e(s["output_note"])})</span><br>'
+                     f'<code class="path">{e(str(out))}</code> &nbsp;<a href="{e(str(out.relative_to(unit)))}">download</a>'
+                     f'<br><span class="muted">labels: <code>zmip_ann_coarse</code> / <code>zmip_ann_fine</code></span></div>')
     if s["released"]:
-        parts.append(f'<p><b>Release:</b> <code>{e(str(L.release_dir(unit)))}</code> · '
+        parts.append('<div class="callout"><b>Release</b>' + (' <span class="pill failed">forced at the safety cap</span>' if s["forced"] else "")
+                     + f'<br><code class="path">{e(str(L.release_dir(unit)))}</code><br>'
                      f'<a href="{L.RELEASE}/summary.md">summary.md</a> · <a href="{L.RELEASE}/needs_review.md">needs_review.md</a> · '
-                     f'<a href="{L.RELEASE}/cell_ledger.csv">cell_ledger.csv</a>'
-                     + (" · <b>forced at the safety cap</b>" if s["forced"] else "") + "</p>")
+                     f'<a href="{L.RELEASE}/needs_review.json">needs_review.json</a> · <a href="{L.RELEASE}/cell_ledger.csv">cell_ledger.csv</a></div>')
+
+    jumps = ['<a href="#rounds">Rounds</a>', '<a href="#samples">Samples</a>', '<a href="#sankey">Cell identity</a>',
+             '<a href="#review">Needs review</a>']
+    parts.append('<nav class="jump">' + "".join(jumps) + "</nav>")
 
     # rounds
     rows = []
@@ -211,46 +295,55 @@ def render_unit(unit: Path) -> str:
             f'<a href="{rp}/{L.LEDGER}/sankey_coarse.png">sankey</a>' if r["sankey"] else ""] if x)
         st = r["stats"]
         if st:
-            rows.append(f"<tr><td>{r['n']}</td><td>{st['n_in']}</td><td>{st['n_out']}</td><td>{st['removed']}</td>"
-                        f"<td>{_pct(st['frac'])}</td><td>{e(str(r['decision']))}</td><td class=\"l\">{e(str(st.get('reason', '')))}</td>"
-                        f"<td>{fmt_elapsed(st.get('elapsed_s'))}</td><td class=\"l\">{links}</td></tr>")
+            dec = r["decision"]
+            pill = "failed" if str(st.get("reason", "")).startswith("FORCED") else "released" if dec == "release" else "neutral"
+            rows.append(f'<tr><td>{r["n"]}</td><td class="num">{_n(st["n_in"])}</td><td class="num">{_n(st["n_out"])}</td>'
+                        f'<td class="num">{_n(st["removed"])}</td><td class="num">{_pct(st["frac"])}{_bar(st["frac"])}</td>'
+                        f'<td class="l"><span class="pill {pill}">{e(str(dec))}</span></td><td class="reason">{e(str(st.get("reason", "")))}</td>'
+                        f'<td class="num">{fmt_elapsed(st.get("elapsed_s"))}</td><td class="l">{links}</td></tr>')
         else:
-            rows.append(f"<tr><td>{r['n']}</td><td>{r.get('n_in') or ''}</td><td></td><td></td><td></td>"
-                        f"<td class=\"running\">running</td><td class=\"l running\">{e(str(r['step']))}</td><td></td><td class=\"l\">{links}</td></tr>")
-    parts.append("<h2>Rounds</h2><table><tr><th>round</th><th>cells in</th><th>cells out</th><th>removed</th>"
-                 "<th>removed %</th><th>decision</th><th>reason</th><th>wall time</th><th>reports</th></tr>"
-                 + "".join(rows) + "</table>" if rows else "<h2>Rounds</h2><p>none started</p>")
+            rows.append(f'<tr><td>{r["n"]}</td><td class="num">{_n(r.get("n_in"))}</td><td></td><td></td><td></td>'
+                        f'<td class="l"><span class="pill running">running</span></td><td class="reason running-cell">{e(str(r["step"]))}</td>'
+                        f'<td></td><td class="l">{links}</td></tr>')
+    parts.append('<section id="rounds"><h2>Rounds <small>crosssample (msp) → zoomin (zmip), on the survivors each time</small></h2>'
+                 + ('<div class="wrap"><table><thead><tr><th>round</th><th>cells in</th><th>cells out</th><th>removed</th>'
+                    '<th>removed %</th><th class="l">decision</th><th class="l">reason</th><th>wall time</th><th class="l">reports</th></tr></thead>'
+                    f'<tbody>{"".join(rows)}</tbody></table></div>' if rows else '<p class="empty">no round started yet</p>') + "</section>")
 
     # per-sample
     ps = s["persample"]
-    if ps["samples"]:
-        prow = []
-        for smp in ps["samples"]:
-            d = s["sample_decisions"].get(smp["name"]) or s["sample_decisions"].get(smp["value"]) or {}
-            link = (f'<a href="{e(str(smp["dir"].relative_to(unit)))}/report.html">osp report</a>' if smp["report"]
-                    else ('<span class="running">running</span>' if not smp["done"] else ""))
-            reason = e(d.get("reason", "")) if d.get("decision") == "exclude" else ""
-            prow.append(f"<tr><td class=\"l\">{e(smp['name'])}</td><td>{smp['n_cells']}</td><td>{'done' if smp['done'] else 'pending'}</td>"
-                        f"<td>{e(d.get('decision', ''))}</td><td class=\"l\">{link}</td><td class=\"reason\">{reason}</td></tr>")
-        parts.append(f"<h2>Per-sample (osp, run once) — {ps['n_done']}/{ps['n']} done"
-                     f"{', sample column <code>' + e(str(ps['sample_column'])) + '</code>' if ps['sample_column'] else ''}</h2>"
-                     "<table><tr><th>sample</th><th>input cells</th><th>osp</th><th>integration</th><th>report</th><th>exclusion reason</th></tr>"
-                     + "".join(prow) + "</table>")
+    prow = []
+    for smp in ps["samples"]:
+        d = s["sample_decisions"].get(smp["name"]) or s["sample_decisions"].get(smp["value"]) or {}
+        link = (f'<a href="{e(str(smp["dir"].relative_to(unit)))}/report.html">osp report</a>' if smp["report"]
+                else ('<span class="running-cell">running</span>' if not smp["done"] else ""))
+        dec = d.get("decision", "")
+        dpill = f'<span class="pill {dec}">{e(dec)}</span>' if dec else '<span class="muted">–</span>'
+        reason = e(d.get("reason", "")) if dec == "exclude" else ""
+        prow.append(f'<tr><td>{e(smp["name"])}</td><td class="num">{_n(smp["n_cells"])}</td>'
+                    f'<td class="l">{"<span class=\"pill released\">done</span>" if smp["done"] else "<span class=\"pill running\">pending</span>"}</td>'
+                    f'<td class="l">{dpill}</td><td class="l">{link}</td><td class="reason">{reason}</td></tr>')
+    parts.append(f'<section id="samples"><h2>Samples <small>osp runs once per sample · {ps["n_done"]}/{ps["n"]} done'
+                 + (f' · sample column <code>{e(str(ps["sample_column"]))}</code>' if ps["sample_column"] else "") + "</small></h2>"
+                 + ('<div class="wrap"><table><thead><tr><th>sample</th><th>input cells</th><th class="l">osp</th><th class="l">integration</th>'
+                    f'<th class="l">report</th><th class="l">exclusion reason</th></tr></thead><tbody>{"".join(prow)}</tbody></table></div>'
+                    if prow else '<p class="empty">persample has not started</p>') + "</section>")
 
     # sankey + ledger
     last_done = [r for r in s["rounds"] if r["sankey"]]
     if last_done:
-        ld = L.ledger_dir(last_done[-1]["dir"])
-        parts.append(f"<h2>Cell identity across steps and rounds</h2><img src=\"{e(str(ld.relative_to(unit)))}/sankey_coarse.png\">"
-                     f'<p><a href="{e(str(ld.relative_to(unit)))}/cell_ledger.csv">cell_ledger.csv</a> — one row per input cell, '
-                     "status + labels per stage</p>")
+        ld = e(str(L.ledger_dir(last_done[-1]["dir"]).relative_to(unit)))
+        parts.append(f'<section id="sankey"><h2>Cell identity across steps and rounds <small>coarse labels · through round {last_done[-1]["n"]}</small></h2>'
+                     f'<figure><a href="{ld}/sankey_coarse.png"><img src="{ld}/sankey_coarse.png" alt="Sankey"></a>'
+                     f'<figcaption>Every input cell flows left to right; cells removed at a stage end in that stage\'s red sink. '
+                     f'<a href="{ld}/cell_ledger.csv">cell_ledger.csv</a> — one row per input cell, status + labels per stage.</figcaption></figure></section>')
 
     # needs review — from disk, so it exists mid-run too
-    done_rounds = [r for r in s["rounds"] if r["stats"]]
     items = review.collect(unit, [r["dir"] for r in done_rounds], [r["stats"] for r in done_rounds], s["forced"])
-    parts.append("<h2>Needs review" + ("" if s["released"] else " <small>(so far — the loop is still running)</small>") + "</h2>"
-                 + review.to_html(items))
-    return _page(s["name"], "".join(parts), up=("../../index.html" if L.root_of(unit) else None))
+    parts.append('<section id="review"><h2>Needs review <small>'
+                 + ("everything the agents were unsure about or the host overrode; nothing here stopped the loop"
+                    if s["released"] else "so far — the loop is still running") + "</small></h2>" + review.to_html(items) + "</section>")
+    return _page(s["name"], "".join(parts))
 
 
 # ---------------------------------------------------------------- root page
@@ -258,31 +351,44 @@ def render_unit(unit: Path) -> str:
 def render_root(root: Path) -> str:
     e = _h.escape
     om = _json(L.organize_manifest(root), {})
+    units = L.units(root)
+    states = [unit_state(u) for u in units]
     rows = []
-    for u in L.units(root):
-        s = unit_state(u)
-        rows.append(f'<tr><td class="l"><a href="{L.UNITS}/{e(u.name)}/index.html">{e(u.name)}</a></td>'
-                    f"<td>{e(str(s['species']))}</td><td>{s['n_input'] or ''}</td>"
-                    f"<td>{s['persample']['n_done']}/{s['persample']['n']}</td><td>{len(s['rounds'])}</td>"
-                    f"<td>{'' if s['final_cells'] is None else s['final_cells']}</td>"
-                    f"<td class=\"l stage {s['stage_class']}\">{e(s['stage'])}</td><td class=\"l\"><small>{e(s['last_event'])}</small></td></tr>")
-    parts = [f"<h1>{e(root.name)}</h1>"]
+    for u, s in zip(units, states):
+        rows.append(f'<tr><td><a href="{L.UNITS}/{e(u.name)}/{L.INDEX}"><b>{e(u.name)}</b></a></td>'
+                    f'<td class="l">{e(str(s["species"] or ""))}</td><td class="num">{_n(s["n_input"])}</td>'
+                    f'<td class="num">{s["persample"]["n_done"]}/{s["persample"]["n"]}</td><td class="num">{len(s["rounds"])}</td>'
+                    f'<td class="num">{_n(s["final_cells"])}</td>'
+                    f'<td class="l"><span class="pill {s["stage_class"]}">{e(s["stage"])}</span></td>'
+                    f'<td class="l muted">{e(s["last_event"])}</td></tr>')
+    n_rel = sum(1 for s in states if s["released"])
+    header = (f'<header class="top"><div><div class="crumb">ecarsi run</div><h1>{e(root.name)}</h1></div>'
+              f'<div class="event">{n_rel}/{len(units)} unit(s) released</div></header>')
+    cards = [_card(str(len(om.get("input_units", []))) if om else "–", "input units (eca-pp)",
+                   e(", ".join(u["name"] for u in om.get("input_units", []))) if om else ""),
+             _card(str(len(units)), "analysis units"),
+             _card(_n(sum(s["n_input"] or 0 for s in states)) or "–", "input cells"),
+             _card(_n(sum(s["final_cells"] or 0 for s in states if s["released"])) or "–", "released cells")]
+    parts = [header, '<div class="cards">' + "".join(cards) + "</div>"]
+    if om and om.get("warnings"):
+        parts.append('<div class="callout warn"><b>organize warnings</b><ul class="warn">'
+                     + "".join(f"<li>{e(w)}</li>" for w in om["warnings"]) + "</ul></div>")
+    parts.append('<section><h2>Units <small>one analysis unit = one merged dataset, run independently</small></h2>'
+                 + ('<div class="wrap"><table><thead><tr><th>unit</th><th class="l">species</th><th>input cells</th><th>samples</th>'
+                    '<th>rounds</th><th>final cells</th><th class="l">stage</th><th class="l">last event</th></tr></thead>'
+                    f'<tbody>{"".join(rows)}</tbody></table></div>' if rows else '<p class="empty">no units yet</p>') + "</section>")
     if om:
-        srcs = ", ".join(f"{e(u['name'])}" for u in om.get("input_units", []))
-        parts.append(f'<p class="meta">organize: {len(om.get("input_units", []))} input unit(s) [{srcs}] → '
-                     f"{len(om.get('units_written', []))} analysis unit(s) · <a href=\"{L.ORGANIZE}/{L.MANIFEST}\">manifest.json</a></p>")
-        if om.get("warnings"):
-            parts.append("<p class=\"failed\">organize warnings:</p><ul>" + "".join(f"<li>{e(w)}</li>" for w in om["warnings"]) + "</ul>")
-    parts.append("<table><tr><th>unit</th><th>species</th><th>input cells</th><th>persample</th><th>rounds</th>"
-                 "<th>final cells</th><th>stage</th><th>last event</th></tr>" + "".join(rows) + "</table>"
-                 if rows else "<p>no units yet</p>")
+        parts.append(f'<p class="muted">organize plan and cell-conservation audit: <a href="{L.ORGANIZE}/{L.MANIFEST}">{L.ORGANIZE}/{L.MANIFEST}</a></p>')
     return _page(root.name, "".join(parts))
 
 
-def _page(title: str, body: str, up: str | None = None) -> str:
-    nav = f'<p><a href="{up}">← all units</a></p>' if up else ""
-    return (f'<!DOCTYPE html><html><head><meta charset="utf-8"><title>{_h.escape(title)}</title>'
-            f"<style>{CSS}</style></head><body>{nav}{body}</body></html>")
+def _page(title: str, body: str) -> str:
+    import time
+
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    return (f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+            f"<title>{_h.escape(title)}</title><style>{CSS}</style></head><body><div class=\"page\">{body}"
+            f'<footer>rendered {stamp} from the run directory by ecarsi.index · reload for the current state</footer></div></body></html>')
 
 
 # ---------------------------------------------------------------- writers

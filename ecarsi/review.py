@@ -292,24 +292,39 @@ def to_html(items: list[Item], base: str = "") -> str:
     the unit-relative links (e.g. 'units/x/' on the root page)."""
     cs = counts(items)
     if not cs:
-        return "<p>Nothing to review.</p>"
-    out = ['<table class="review-summary"><tr><th>section</th><th>items</th><th>cells</th></tr>']
-    out += [f'<tr><td><a href="#review-{k}">{_h.escape(t)}</a></td><td>{n}</td><td>{c or ""}</td></tr>'
+        return '<p class="empty">Nothing to review.</p>'
+    e = _h.escape
+    out = ['<div class="cards review-cards">']
+    out += [f'<a class="card kind-{k}" href="#review-{k}"><span class="num">{n}</span>'
+            f'<span class="lbl">{e(t)}</span><span class="sub">{f"{c:,} cells" if c else "&nbsp;"}</span></a>'
             for k, t, n, c in cs]
-    out.append("</table>")
+    out.append("</div>")
     for kind, title, desc in KINDS:
         sel = [it for it in items if it.kind == kind]
         if not sel:
             continue
         rows = [_row(it) for it in sel]
         used = _used_cols(rows)
-        out.append(f'<h3 id="review-{kind}">{_h.escape(title)} <small>({len(sel)})</small></h3><p class="desc">{_h.escape(desc)}</p>')
-        out.append('<table class="review"><tr>' + "".join(f"<th>{_h.escape(_COLS[j])}</th>" for j in used) + "<th></th></tr>")
+        out.append(f'<h3 id="review-{kind}" class="kind-{kind}">{e(title)} <span class="count">{len(sel)}</span></h3>'
+                   f'<p class="desc">{e(desc)}</p><div class="wrap"><table class="review"><thead><tr>'
+                   + "".join(f"<th>{e(_COLS[j])}</th>" for j in used) + "<th></th></tr></thead><tbody>")
         for it, r in zip(sel, rows):
-            cells = "".join(f'<td class="{"note" if _COLS[j] == "note" else ""}">{_h.escape(r[j])}</td>' for j in used)
-            link = f'<a href="{_h.escape(base + it.link)}">report</a>' if it.link else ""
-            out.append(f"<tr>{cells}<td>{link}</td></tr>")
-        out.append("</table>")
+            cells = []
+            for j in used:
+                col, val = _COLS[j], r[j]
+                if col == "confidence" and val:
+                    cell = f'<span class="badge conf-{e(val)}">{e(val)}</span>'
+                elif col == "action" and val:
+                    cls = "act-remove" if val.startswith("remove") or val == "exclude" else "act"
+                    cell = f'<span class="{cls}">{e(val)}</span>'
+                elif col == "cells" and val:
+                    cell = f"{int(val):,}"
+                else:
+                    cell = e(val)
+                cells.append(f'<td class="c-{col.replace(" ", "-")}">{cell}</td>')
+            link = f'<a class="rep" href="{e(base + it.link)}">report ↗</a>' if it.link else ""
+            out.append(f"<tr>{''.join(cells)}<td>{link}</td></tr>")
+        out.append("</tbody></table></div>")
     return "\n".join(out)
 
 
