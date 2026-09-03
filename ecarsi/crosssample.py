@@ -180,24 +180,19 @@ def propose_inclusion(inventories: list[dict]) -> dict:
                 "notes": SINGLE_SAMPLE_NOTE}
     from .agent_retry import run_with_retry
 
-    # coverage validation lives inside the retried coroutine too: an agent
-    # reply that drops/duplicates a sample is the same kind of transient
-    # malformed output as a dropped connection, and is just as safe to retry
-    # (no partial state, side-effect-free proposal call).
-    async def _propose_validated() -> dict:
-        result = await _propose(inventories)
-        got = [e["sample"] for e in result["samples"]]
-        want = [i["sample"] for i in inventories]
-        if sorted(got) != sorted(want) or len(got) != len(set(got)):
-            raise ValueError(f"inclusion decision must cover every sample exactly once: got {got}, want {want}")
-        return result
+    # coverage validation now lives inside submit_inclusion's tool handler
+    # (see _propose) so a dropped/duplicated sample gets an in-session
+    # resubmit instead of a whole-session retry; run_with_retry here only
+    # catches genuine transient failures (dropped connection, agent never
+    # submitting at all).
+    async def _propose_retryable() -> dict:
+        return await _propose(inventories)
 
-    return run_with_retry(_propose_validated, label="sample inclusion")
+    return run_with_retry(_propose_retryable, label="sample inclusion")
 
 
 async def _propose(inventories: list[dict]) -> dict:
-    from claude_agent_sdk import ClaudeAgentOptions, query
-
+    from .harness import ToolSpec, run_agent
     from . import model
 
     brief = (Path(__file__).parent / "prompts" / "sample_inclusion.md").read_text()
@@ -206,22 +201,42 @@ async def _propose(inventories: list[dict]) -> dict:
         + "\n\n## Sample inventories\n\n```json\n"
         + json.dumps(inventories, indent=1)
         + "\n```\n"
+        + "\nFinish by calling submit_inclusion with a JSON string matching the schema above."
     )
-    options = ClaudeAgentOptions(
-        model=model(),
-        allowed_tools=["Read", "Glob", "Grep"],  # it must Read the figures
-        max_turns=80,
-        max_buffer_size=50_000_000,  # figure Reads can exceed the 1MB default
-        output_format={"type": "json_schema", "schema": INCLUSION_SCHEMA},
+
+    want = [i["sample"] for i in inventories]
+
+    async def submit_inclusion(args: dict) -> dict:
+        try:
+            decision = json.loads(args["decision_json"])
+        except json.JSONDecodeError as exc:
+            return {"content": [{"type": "text", "text": f"JSON parse error, fix and resubmit: {exc}"}],
+                    "is_error": True}
+        missing = [k for k in ("samples", "notes") if k not in decision]
+        if missing:
+            return {"content": [{"type": "text", "text": f"missing field(s) {missing}, fix and resubmit"}],
+                    "is_error": True}
+        got = [e["sample"] for e in decision["samples"]]
+        if sorted(got) != sorted(want) or len(got) != len(set(got)):
+            return {"content": [{"type": "text",
+                                 "text": f"must cover every sample exactly once: got {got}, want {want}"}],
+                    "is_error": True}
+        return {"content": [{"type": "text", "text": "recorded"}], "is_error": False, "_submitted": decision}
+
+    tool = ToolSpec(
+        name="submit_inclusion",
+        description="Submit the sample-inclusion decision. decision_json is a JSON string with this schema:\n"
+                    + json.dumps(INCLUSION_SCHEMA, indent=1),
+        input_schema={"decision_json": str},
+        handler=submit_inclusion,
     )
-    result = None
-    async for msg in query(prompt=prompt, options=options):
-        so = getattr(msg, "structured_output", None)
-        if so is not None:
-            result = so
-    if result is None:
-        raise RuntimeError("inclusion agent ended without structured output")
-    return result
+    result = await run_agent(
+        tools=[tool], submit_tool="submit_inclusion", prompt=prompt,
+        cwd=os.getcwd(), model=model(),
+        max_turns=80, max_buffer_size=50_000_000,  # figure Reads can exceed the 1MB default
+        allowed_builtin=("read", "glob", "grep"), label="sample inclusion",
+    )
+    return result.submitted
 
 
 # ---------------------------------------------------------------- execute

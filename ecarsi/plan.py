@@ -2,14 +2,20 @@
 
 The agent gets the unit profiles and the brief in `prompts/plan.md`, runs
 read-only (it may Read the result.json files for context, nothing else),
-and must return a plan conforming to PLAN_SCHEMA — the SDK enforces the
-schema, so the executor never parses prose.
+and must call submit_plan with a plan conforming to PLAN_SCHEMA — the tool
+handler validates it (both structurally and, via _validate, against the
+actual profiles) before accepting, so the executor never parses prose. This
+submit-tool shape (rather than a harness-native structured-output mode) is
+what makes this call portable across HARNESS backends — see ecarsi.harness.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+
+from .harness import ToolSpec, run_agent
 
 PLAN_SCHEMA = {
     "type": "object",
@@ -59,39 +65,48 @@ def propose_plan(profiles: list[dict]) -> dict:
     # with an unresolvable source reference is the same kind of transient
     # malformed output as a dropped connection — retry the whole proposal.
     async def _propose_validated() -> dict:
-        plan = await _propose(profiles)
-        _validate(plan, profiles)
-        return plan
+        return await _propose(profiles)
 
     return run_with_retry(_propose_validated, label="organize plan")
 
 
 async def _propose(profiles: list[dict]) -> dict:
-    from claude_agent_sdk import ClaudeAgentOptions, query
-
     brief = (Path(__file__).parent / "prompts" / "plan.md").read_text()
     prompt = (
         brief
         + "\n\n## Unit profiles\n\n```json\n"
         + json.dumps(profiles, indent=1)
         + "\n```\n"
+        + "\nFinish by calling submit_plan with a JSON string matching the schema above."
     )
     from . import model
 
-    options = ClaudeAgentOptions(
-        model=model(),
-        allowed_tools=["Read", "Grep", "Glob"],  # read-only probing, no writes
-        max_turns=30,
-        output_format={"type": "json_schema", "schema": PLAN_SCHEMA},
+    async def submit_plan(args: dict) -> dict:
+        try:
+            plan = json.loads(args["plan_json"])
+        except json.JSONDecodeError as exc:
+            return {"content": [{"type": "text", "text": f"JSON parse error, fix and resubmit: {exc}"}],
+                    "is_error": True}
+        try:
+            _validate(plan, profiles)
+        except ValueError as exc:
+            return {"content": [{"type": "text", "text": f"invalid, fix and resubmit: {exc}"}],
+                    "is_error": True}
+        return {"content": [{"type": "text", "text": "plan accepted"}], "is_error": False, "_submitted": plan}
+
+    tool = ToolSpec(
+        name="submit_plan",
+        description="Submit the analysis-unit plan. plan_json is a JSON string with this schema:\n"
+                    + json.dumps(PLAN_SCHEMA, indent=1),
+        input_schema={"plan_json": str},
+        handler=submit_plan,
     )
-    result = None
-    async for msg in query(prompt=prompt, options=options):
-        so = getattr(msg, "structured_output", None)
-        if so is not None:
-            result = so
-    if result is None:
-        raise RuntimeError("planner ended without structured output")
-    return result
+    result = await run_agent(
+        tools=[tool], submit_tool="submit_plan", prompt=prompt,
+        cwd=os.getcwd(), model=model(),
+        max_turns=30, allowed_builtin=("read", "glob", "grep"), label="organize plan",
+    )
+    return result.submitted
 
 
 def _validate(plan: dict, profiles: list[dict]) -> None:

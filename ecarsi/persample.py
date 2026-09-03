@@ -70,49 +70,67 @@ def profile_obs(h5ad: Path, max_levels: int = 50) -> dict:
 # ------------------------------------------------------- identify (agent)
 
 
+def _validate_sample_column(decision: dict, profile: dict) -> str | None:
+    """None if valid, else a problem description (fix-and-resubmit style)."""
+    col = decision.get("sample_column")
+    if col is None:
+        return None
+    info = profile["obs_columns"].get(col)
+    if info is None:
+        return f"picked obs column {col!r}, which does not exist"
+    if not 1 <= info["n_unique"] <= 200:
+        return f"sample column {col!r} has {info['n_unique']} levels — implausible for 10x runs"
+    if info.get("n_na", 0) > 0:
+        # a column that leaves cells unassigned is not a partition: those
+        # cells would become a bogus "nan" sample (the silent-garbage trap)
+        return f"sample column {col!r} leaves {info['n_na']} cells NA — not a valid partition"
+    return None
+
+
 def identify_sample_column(profile: dict) -> dict:
     from .agent_retry import run_with_retry
 
-    result = run_with_retry(lambda: _identify(profile), label="identify sample column")
-    col = result["sample_column"]
-    if col is not None:
-        info = profile["obs_columns"].get(col)
-        if info is None:
-            raise ValueError(f"agent picked obs column {col!r}, which does not exist")
-        if not 1 <= info["n_unique"] <= 200:
-            raise ValueError(
-                f"sample column {col!r} has {info['n_unique']} levels — implausible for 10x runs"
-            )
-        if info.get("n_na", 0) > 0:
-            # a column that leaves cells unassigned is not a partition: those
-            # cells would become a bogus "nan" sample (the silent-garbage trap)
-            raise ValueError(
-                f"sample column {col!r} leaves {info['n_na']} cells NA — not a valid partition"
-            )
-    return result
+    return run_with_retry(lambda: _identify(profile), label="identify sample column")
 
 
 async def _identify(profile: dict) -> dict:
-    from claude_agent_sdk import ClaudeAgentOptions, query
+    from .harness import ToolSpec, run_agent
 
     brief = (Path(__file__).parent / "prompts" / "sample_column.md").read_text()
-    prompt = brief + "\n\n## obs profile\n\n```json\n" + json.dumps(profile, indent=1) + "\n```\n"
+    prompt = (
+        brief + "\n\n## obs profile\n\n```json\n" + json.dumps(profile, indent=1) + "\n```\n"
+        + "\nFinish by calling submit_sample_column with a JSON string matching the schema above."
+    )
     from . import model
 
-    options = ClaudeAgentOptions(
-        model=model(),
-        allowed_tools=[],  # pure judgment over the profile, no tools
-        max_turns=5,
-        output_format={"type": "json_schema", "schema": SAMPLE_COL_SCHEMA},
+    async def submit_sample_column(args: dict) -> dict:
+        try:
+            decision = json.loads(args["decision_json"])
+        except json.JSONDecodeError as exc:
+            return {"content": [{"type": "text", "text": f"JSON parse error, fix and resubmit: {exc}"}],
+                    "is_error": True}
+        missing = [k for k in ("sample_column", "rationale") if k not in decision]
+        if missing:
+            return {"content": [{"type": "text", "text": f"missing field(s) {missing}, fix and resubmit"}],
+                    "is_error": True}
+        problem = _validate_sample_column(decision, profile)
+        if problem:
+            return {"content": [{"type": "text", "text": f"{problem} — fix and resubmit"}], "is_error": True}
+        return {"content": [{"type": "text", "text": "recorded"}], "is_error": False, "_submitted": decision}
+
+    tool = ToolSpec(
+        name="submit_sample_column",
+        description="Submit the sample-column decision. decision_json is a JSON string with this schema:\n"
+                    + json.dumps(SAMPLE_COL_SCHEMA, indent=1),
+        input_schema={"decision_json": str},
+        handler=submit_sample_column,
     )
-    result = None
-    async for msg in query(prompt=prompt, options=options):
-        so = getattr(msg, "structured_output", None)
-        if so is not None:
-            result = so
-    if result is None:
-        raise RuntimeError("sample-column agent ended without structured output")
-    return result
+    result = await run_agent(
+        tools=[tool], submit_tool="submit_sample_column", prompt=prompt,
+        cwd=os.getcwd(), model=model(),
+        max_turns=5, allowed_builtin=(), label="identify sample column",
+    )
+    return result.submitted
 
 
 # ------------------------------------------------------------ sample list
