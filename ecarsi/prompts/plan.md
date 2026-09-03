@@ -43,8 +43,10 @@ Return ONLY the structured plan (no prose outside it):
 
 - `analysis_units`: list of `{name, members, rationale, batch_key_hint}`;
   `name` short and filesystem-safe (lowercase, hyphens); each member is
-  `{source, obs_filter}` with `obs_filter` null (whole file) or
-  `{column, values}`; `rationale` states the obs evidence in one or two
-  sentences; `batch_key_hint` an obs column name or null.
+  `{source, obs_filter}` where `source` is the profile's `name` field
+  **verbatim** (never the `h5ad` path, never a path derived from it) with
+  `obs_filter` null (whole file) or `{column, values}`; `rationale` states
+  the obs evidence in one or two sentences; `batch_key_hint` an obs column
+  name or null.
 - `notes`: anything the loop should know (barcode overlap suspicions,
   columns that looked organ-like but were rejected as split evidence, etc.)

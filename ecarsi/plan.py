@@ -91,11 +91,35 @@ def _validate(plan: dict, profiles: list[dict]) -> None:
     """Executor-side sanity: every member references a real unit and a real
     obs column; unit names unique. Schema handled the shapes already."""
     known = {p["name"]: p for p in profiles}
+    by_h5ad = {p["h5ad"]: p["name"] for p in profiles}  # tolerate agent citing the h5ad path instead of the unit name
+    # tolerate whitespace/quoting noise and path variants (resolved symlinks,
+    # trailing slash, agent citing the unit dir instead of the h5ad file)
+    by_h5ad_stripped = {h5ad.strip().strip("'\""): name for h5ad, name in by_h5ad.items()}
+    by_resolved = {str(Path(h5ad).resolve()): name for h5ad, name in by_h5ad.items()}
     names = [au["name"] for au in plan["analysis_units"]]
     if len(names) != len(set(names)):
         raise ValueError(f"duplicate analysis unit names in plan: {names}")
     for au in plan["analysis_units"]:
         for m in au["members"]:
+            src = m["source"]
+            if src not in known:
+                cand = src.strip().strip("'\"")
+                if cand in known:
+                    m["source"] = cand
+                elif cand in by_h5ad_stripped:
+                    m["source"] = by_h5ad_stripped[cand]
+                elif cand in by_h5ad:
+                    m["source"] = by_h5ad[cand]
+                else:
+                    try:
+                        resolved = str(Path(cand).resolve())
+                    except OSError:
+                        resolved = None
+                    if resolved and resolved in by_resolved:
+                        m["source"] = by_resolved[resolved]
+                    elif len(known) == 1:
+                        # single-unit dataset: nothing else it could refer to
+                        (m["source"],) = known.keys()
             if m["source"] not in known:
                 raise ValueError(f"plan references unknown source unit {m['source']!r}")
             flt = m.get("obs_filter")
