@@ -10,7 +10,8 @@ every sample — hard prerequisite). Stages:
      The batch key is persample's sample column — when eca-pp's
      identify_columns designated a different batch column, persample wins
      and the eca-pp designation is archived alongside for the audit trail.
-  2. INCLUDE (agent, structured output): reads every sample's QC summary,
+  2. INCLUDE (agent, structured output; skipped when there is exactly one
+     sample — it is included as is): reads every sample's QC summary,
      annotation proposal AND its UMAP/QC figures; proposes which samples
      enter integration. Whole-sample exclusion is the rare exception (much
      worse than peers, fragmented unexplainable structure); different
@@ -26,6 +27,10 @@ every sample — hard prerequisite). Stages:
      this command finishes whatever step was cut short. Contract:
      <round>/crosssample/{integrated.h5ad, report.html, inspection_proposal.json,
      annotation_proposal.json, annotated.h5ad}.
+
+Single sample (persample found no run column, or the inclusion agent kept
+only one): the same chain runs, msp just skips harmony (X_pca_harmony =
+X_pca) and its agents are told that sample composition carries no evidence.
 
 Cells enter integration exactly as osp left them: QC-passed cells only,
 including every keep/flag/drop cell from the annotation (suspicious cells
@@ -165,7 +170,15 @@ def _sample_inventory(s: dict) -> dict:
     return inv
 
 
+SINGLE_SAMPLE_NOTE = "single sample — inclusion agent not consulted; harmony is skipped downstream"
+
+
 def propose_inclusion(inventories: list[dict]) -> dict:
+    """One sample: nothing to weigh against, include it without a session.
+    Two or more: the inclusion agent decides."""
+    if len(inventories) == 1:
+        return {"samples": [{"sample": inventories[0]["sample"], "include": True, "reason": SINGLE_SAMPLE_NOTE}],
+                "notes": SINGLE_SAMPLE_NOTE}
     result = asyncio.run(_propose(inventories))
     got = [e["sample"] for e in result["samples"]]
     want = [i["sample"] for i in inventories]
@@ -228,7 +241,9 @@ def main(argv: list[str]) -> int:
     unit = Path(args.unit).resolve()
     ps = load_persample(unit)
     out_root = Path(args.out).resolve() if args.out else L.round_dir(unit, 1)
-    batch_col = ps["sample_column"]
+    # a null sample column means persample ran the whole file as one sample;
+    # osp then labels every cell obs["sample"] = "all", which is the batch key
+    batch_col = ps["sample_column"] or "sample"
     species = ps.get("species")
 
     ecapp = ecapp_batch_designations(unit)
@@ -263,9 +278,11 @@ def main(argv: list[str]) -> int:
     for sample, reason in excluded:
         print(f"[exclude] {sample}: {reason}")
     print(f"[include] {len(included)}/{len(decision['samples'])} samples enter integration")
-    if len(included) < 2:
-        print("[fail] integration needs at least 2 included samples")
+    if not included:
+        print("[fail] no sample left to integrate")
         return 4
+    if len(included) == 1:
+        print("[include] single sample: msp runs the same chain without harmony (integrate → inspect → annotate)")
 
     py = os.environ.get("MSP_PYTHON", sys.executable)
     inputs = [str(Path(by_val[s]["dir"]) / "clustered.h5ad") for s in included]

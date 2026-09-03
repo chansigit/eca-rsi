@@ -147,6 +147,9 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
   幸存者在 `annotated.h5ad` / `annotated_zmip.h5ad`。
 - zmip:lineage 由 UMAP 连通性决定(agent 必须看图;一个岛一个 lineage,状态并入所在岛),
   ≥800 细胞才下钻;每 lineage 单 agent,可 recluster、remove、reassign;删除超 10% 触发一次复核(软预算)。
+- **单样本 / 单批次**(persample 判不出样本列 → 整文件一个样本 `all`,或纳入 agent 只留 1 个):走同一条链,
+  差别只有三处——纳入 agent 不开(直接纳入)、msp 跳过 harmony(`X_pca_harmony = X_pca`,uns 记 skipped)、
+  inspect / annotate 被告知样本组成不作证据;osp 的 drop 照旧只作证据、在 annotate 一次真删;zmip 不变。
 - 环境:`MODEL`(默认 claude-sonnet-5)、`MSP_PYTHON` / `ZMIP_PYTHON`、`ZMIP_MIN_CELLS`。
 - 测试数据:`$SCRATCH/eca-runs/_organize_test/fu2022/fu2022-meniscus` 是旧结构的真实跑(不迁移);
   `$SCRATCH/eca-runs/_layout_test/fu2022` 是它的 symlink 复刻(新结构,验证 index/serve 用),
