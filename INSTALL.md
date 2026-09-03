@@ -18,14 +18,14 @@ Claude Agent SDK (claude-agent-sdk) ── 四个包都用;需要 Claude Code CL
 | 包 | 仓库 | 版本 | 依赖(pyproject 声明) |
 |---|---|---|---|
 | ecarsi | `eca-rsi`(GitHub chansigit/eca-rsi,main) | 0.1.0 | claude-agent-sdk ≥0.2.139, anndata, scanpy, h5py, numpy, pandas, matplotlib |
-| osp | GitHub chansigit/osp · PyPI `osp` | 0.1.0 | scanpy, igraph, pandas, numpy, scipy, matplotlib, scikit-learn;`[agent]` claude-agent-sdk |
+| osp | GitHub chansigit/osp · **PyPI `osp-sc`**(`osp` 与已有 `OSP` 相似被拒,import 名仍是 `osp`) | 0.1.0 | scanpy, igraph, pandas, numpy, scipy, matplotlib, scikit-learn;`[agent]` claude-agent-sdk |
 | msp | GitHub chansigit/msp · **PyPI `msp-sc`**(`msp` 名已被占,import 名仍是 `msp`) | 0.2.0 | scanpy, anndata, igraph, **harmonypy==0.2.0**, torch, standissect-lite ≥0.2.0, pandas, numpy, scipy, scikit-learn, matplotlib, seaborn, adjustText;`[agent]` claude-agent-sdk |
 | zmip | GitHub chansigit/zmip · PyPI `zmip` | 0.1.0 | msp ≥0.2.0, claude-agent-sdk, scanpy, anndata, pandas, numpy, scipy, matplotlib |
 | standissect-lite | GitHub chansigit/standissect-lite · PyPI `standissect-lite` | 0.2.0 | anndata, leidenalg, python-igraph, numpy, pandas, scikit-learn |
 
 两个要点:
 
-- **msp 在 PyPI 上叫 `msp-sc`**(`msp` 被无关项目占用),`pip install msp-sc` 后照常 `import msp` / `python -m msp`;
+- **PyPI 发行名带 `-sc` 后缀:`osp-sc`、`msp-sc`**(`osp` 与已有 `OSP` 相似被拒,`msp` 被无关项目占用),装完照常 `import osp` / `import msp`、`python -m osp|msp`;
   zmip 的依赖写的就是 `msp-sc`。standissect-lite 0.2.0 也已在 PyPI(2026-09-02 起)。
 - **harmonypy 钉在 0.2.0**(torch 版,msp 校验过 Z_corr 方向)。PyPI 已有 2.0.0,未测试,不要顺手升级。
   torch 装 CPU 版即可;有 GPU 时 harmony 自动用(`MSP_DEVICE` 可强制)。
@@ -47,7 +47,7 @@ Claude Agent SDK (claude-agent-sdk) ── 四个包都用;需要 Claude Code CL
 **只想用**(内核全在 PyPI;ecarsi 本身尚未发 PyPI,从 GitHub 装):
 
 ```bash
-pip install "osp[agent]" "msp-sc[agent]" zmip "ecarsi @ git+https://github.com/chansigit/eca-rsi.git"
+pip install "osp-sc[agent]" "msp-sc[agent]" zmip "ecarsi @ git+https://github.com/chansigit/eca-rsi.git"
 ```
 
 **开发**(全部 editable,改源码即生效):
@@ -61,7 +61,7 @@ pip install -U pip
 cd $SCRATCH/projects
 for r in standissect-lite osp msp zmip eca-rsi; do git clone https://github.com/chansigit/$r; done
 pip install -e standissect-lite && pip install -e "osp[agent]" && pip install -e "msp[agent]" && pip install -e zmip && pip install -e eca-rsi
-# msp 会顺带拉 harmonypy==0.2.0 和 torch;editable 的 msp 在 pip 里叫 msp-sc
+# msp 会顺带拉 harmonypy==0.2.0 和 torch;editable 的 osp / msp 在 pip 里叫 osp-sc / msp-sc
 ```
 
 只想要 CPU torch(省几 GB):在装 msp 之前先
