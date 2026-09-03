@@ -349,52 +349,22 @@ contamination here" — the decontx tables and heatmap exist exactly for that.""
 
 
 async def _run_agent(ad, outdir, cluster_key, species, tissue, language, model, effort, max_turns):
-    from claude_agent_sdk import (
-        AssistantMessage,
-        ClaudeAgentOptions,
-        ResultMessage,
-        ToolUseBlock,
-        create_sdk_mcp_server,
-        query,
-        tool,
-    )
+    from .harness import ToolSpec, run_agent
 
     state = {"key": cluster_key, "n_sub": 0}
-    holder = {}
 
     def current_clusters():
         return cluster_order(ad.obs[state["key"]].astype(str))
 
-    @tool(
-        "check_genes",
-        "Per-cluster mean expression and expressing-cell fraction for the given genes "
-        "(case-insensitive match against var_names). Use it to verify cell-type markers.",
-        {"genes": list},
-    )
     async def check_genes(args):
         genes = args["genes"]
         if isinstance(genes, str):
             genes = [g for g in genes.replace(",", " ").split() if g]
         return {"content": [{"type": "text", "text": _gene_table(ad, genes, state["key"])}]}
 
-    @tool(
-        "check_qc_scores",
-        "Per-cluster QC overview (median|p90): counts/genes/mt%/doublet/contamination/Malat1/"
-        "dissociation stress. Use it to identify QC-driven clusters. No arguments.",
-        {},
-    )
     async def check_qc_scores(args):
         return {"content": [{"type": "text", "text": _qc_table(ad, state["key"])}]}
 
-    @tool(
-        "subcluster",
-        "Split one heterogeneous cluster with leiden restrict_to at the given resolution "
-        "(0.3-1.0 typical). On success the working clustering is refined in place: new ids look "
-        'like "5,0"/"5,1", all other clusters keep their ids, and check_genes / check_qc_scores / '
-        "submit_annotation operate on the refined clustering from then on. Returns subcluster "
-        "sizes and top distinguishing genes.",
-        {"cluster": str, "resolution": float},
-    )
     async def subcluster(args):
         c = str(args["cluster"])
         res = float(args["resolution"])
@@ -408,12 +378,6 @@ async def _run_agent(ad, outdir, cluster_key, species, tissue, language, model, 
             text += "\n(the working clustering is now refined; all tools and the final submission use the new ids)"
         return {"content": [{"type": "text", "text": text}]}
 
-    @tool(
-        "submit_annotation",
-        "Submit the final conclusions (mandatory; the run only completes after validation "
-        "passes). proposal_json is a JSON string with this schema:\n" + _PROPOSAL_SCHEMA_DOC,
-        {"proposal_json": str},
-    )
     async def submit_annotation(args):
         try:
             proposal = json.loads(args["proposal_json"])
@@ -423,54 +387,54 @@ async def _run_agent(ad, outdir, cluster_key, species, tissue, language, model, 
         if problems:
             return {"content": [{"type": "text", "text": "validation failed, fix and resubmit:\n- " + "\n- ".join(problems)}], "is_error": True}
         proposal["cluster_key"] = state["key"]
-        holder["proposal"] = proposal
         path = os.path.join(outdir, "annotation_proposal.json")
         with open(path, "w") as fh:
             json.dump(proposal, fh, ensure_ascii=False, indent=2)
-        return {"content": [{"type": "text", "text": f"saved to {path}"}]}
+        return {"content": [{"type": "text", "text": f"saved to {path}"}], "_submitted": proposal}
 
-    server = create_sdk_mcp_server(
-        name="osp", version="1.0.0",
-        tools=[check_genes, check_qc_scores, subcluster, submit_annotation],
-    )
-    options = ClaudeAgentOptions(
-        mcp_servers={"osp": server},
-        allowed_tools=[
-            "Read", "Glob", "Grep",
-            "mcp__osp__check_genes", "mcp__osp__check_qc_scores",
-            "mcp__osp__subcluster", "mcp__osp__submit_annotation",
-        ],
-        permission_mode="bypassPermissions",
-        system_prompt=_system_prompt(outdir, cluster_key, cluster_order(ad.obs[cluster_key].astype(str)), species, tissue, language),
-        cwd=os.path.abspath(outdir),
-        max_turns=max_turns,
-        **({"model": model} if model else {}),
-        **({"effort": effort} if effort else {}),
-    )
+    tools = [
+        ToolSpec(
+            name="check_genes",
+            description="Per-cluster mean expression and expressing-cell fraction for the given genes "
+                        "(case-insensitive match against var_names). Use it to verify cell-type markers.",
+            input_schema={"genes": list}, handler=check_genes,
+        ),
+        ToolSpec(
+            name="check_qc_scores",
+            description="Per-cluster QC overview (median|p90): counts/genes/mt%/doublet/contamination/Malat1/"
+                        "dissociation stress. Use it to identify QC-driven clusters. No arguments.",
+            input_schema={}, handler=check_qc_scores,
+        ),
+        ToolSpec(
+            name="subcluster",
+            description="Split one heterogeneous cluster with leiden restrict_to at the given resolution "
+                        "(0.3-1.0 typical). On success the working clustering is refined in place: new ids look "
+                        'like "5,0"/"5,1", all other clusters keep their ids, and check_genes / check_qc_scores / '
+                        "submit_annotation operate on the refined clustering from then on. Returns subcluster "
+                        "sizes and top distinguishing genes.",
+            input_schema={"cluster": str, "resolution": float}, handler=subcluster,
+        ),
+        ToolSpec(
+            name="submit_annotation",
+            description="Submit the final conclusions (mandatory; the run only completes after validation "
+                        "passes). proposal_json is a JSON string with this schema:\n" + _PROPOSAL_SCHEMA_DOC,
+            input_schema={"proposal_json": str}, handler=submit_annotation,
+        ),
+    ]
 
-    result_text = None
-    async for message in query(
+    result = await run_agent(
+        tools=tools, submit_tool="submit_annotation",
         prompt="Interpret this OSP output directory following the workflow in the system prompt "
                "exactly, and finish by submitting via submit_annotation.",
-        options=options,
-    ):
-        if isinstance(message, AssistantMessage):
-            for block in message.content:
-                if isinstance(block, ToolUseBlock):
-                    arg_hint = str(next(iter(block.input.values()), ""))[:80]
-                    print(f"== agent: {block.name}({arg_hint})", flush=True)
-        elif isinstance(message, ResultMessage):
-            result_text = message.result
-            if message.total_cost_usd:
-                print(f"== agent cost: ${message.total_cost_usd:.2f}", flush=True)
+        system_prompt=_system_prompt(outdir, cluster_key, cluster_order(ad.obs[cluster_key].astype(str)), species, tissue, language),
+        cwd=os.path.abspath(outdir), model=model, effort=effort, max_turns=max_turns,
+        allowed_builtin=("read", "glob", "grep"), label="osp annotate",
+    )
 
-    if "proposal" not in holder:
-        raise RuntimeError(f"agent finished without a successful submit_annotation call. Final reply:\n{result_text}")
-
-    if result_text:
+    if result.transcript_text:
         with open(os.path.join(outdir, "annotation_notes.md"), "w") as fh:
-            fh.write(result_text)
-    return holder["proposal"]
+            fh.write(result.transcript_text)
+    return result.submitted
 
 
 def propose_annotation(outdir, species=None, tissue=None, language="English", cluster_key=None, model=None, effort=None, max_turns=80):
@@ -494,9 +458,12 @@ def propose_annotation(outdir, species=None, tissue=None, language="English", cl
     model/effort: e.g. model="claude-fable-5", effort="high"; defaults follow
     the claude CLI configuration.
     """
+    from .harness import default_model
+
     cluster_key = cluster_key or _detect_primary_key(outdir)
     ad = sc.read_h5ad(os.path.join(outdir, "clustered.h5ad"))
-    proposal = asyncio.run(_run_agent(ad, outdir, cluster_key, species, tissue, language, model, effort, max_turns))
+    proposal = asyncio.run(_run_agent(ad, outdir, cluster_key, species, tissue, language,
+                                      model or default_model(), effort, max_turns))
 
     _apply_proposal(ad, proposal["cluster_key"], proposal)
     _plot_annotation(ad, os.path.join(outdir, "figures"))
