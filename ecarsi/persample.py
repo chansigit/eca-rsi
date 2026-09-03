@@ -24,7 +24,6 @@ Env: MODEL (both agent calls, default claude-sonnet-5), OSP_PYTHON
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 import os
 import re
@@ -72,7 +71,9 @@ def profile_obs(h5ad: Path, max_levels: int = 50) -> dict:
 
 
 def identify_sample_column(profile: dict) -> dict:
-    result = asyncio.run(_identify(profile))
+    from .agent_retry import run_with_retry
+
+    result = run_with_retry(lambda: _identify(profile), label="identify sample column")
     col = result["sample_column"]
     if col is not None:
         info = profile["obs_columns"].get(col)
@@ -342,7 +343,9 @@ def main(argv: list[str]) -> int:
         prev = len(pending)
         print(f"[drive] {len(pending)} sample(s) pending: "
               + ", ".join(e["value"] for e in pending))
-        asyncio.run(_drive(pending, out_root))
+        from .agent_retry import run_with_retry
+
+        run_with_retry(lambda: _drive(pending, out_root), label="persample drive")
         if in_unit:
             from .index import write_all
 

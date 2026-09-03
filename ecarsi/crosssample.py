@@ -46,7 +46,6 @@ Env: MODEL (every agent call, incl. msp's inspect/annotate), MSP_PYTHON
 from __future__ import annotations
 
 import argparse
-import asyncio
 import csv
 import json
 import os
@@ -179,12 +178,21 @@ def propose_inclusion(inventories: list[dict]) -> dict:
     if len(inventories) == 1:
         return {"samples": [{"sample": inventories[0]["sample"], "include": True, "reason": SINGLE_SAMPLE_NOTE}],
                 "notes": SINGLE_SAMPLE_NOTE}
-    result = asyncio.run(_propose(inventories))
-    got = [e["sample"] for e in result["samples"]]
-    want = [i["sample"] for i in inventories]
-    if sorted(got) != sorted(want) or len(got) != len(set(got)):
-        raise ValueError(f"inclusion decision must cover every sample exactly once: got {got}, want {want}")
-    return result
+    from .agent_retry import run_with_retry
+
+    # coverage validation lives inside the retried coroutine too: an agent
+    # reply that drops/duplicates a sample is the same kind of transient
+    # malformed output as a dropped connection, and is just as safe to retry
+    # (no partial state, side-effect-free proposal call).
+    async def _propose_validated() -> dict:
+        result = await _propose(inventories)
+        got = [e["sample"] for e in result["samples"]]
+        want = [i["sample"] for i in inventories]
+        if sorted(got) != sorted(want) or len(got) != len(set(got)):
+            raise ValueError(f"inclusion decision must cover every sample exactly once: got {got}, want {want}")
+        return result
+
+    return run_with_retry(_propose_validated, label="sample inclusion")
 
 
 async def _propose(inventories: list[dict]) -> dict:

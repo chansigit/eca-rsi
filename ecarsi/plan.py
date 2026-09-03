@@ -8,7 +8,6 @@ schema, so the executor never parses prose.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 
@@ -54,9 +53,17 @@ PLAN_SCHEMA = {
 
 
 def propose_plan(profiles: list[dict]) -> dict:
-    plan = asyncio.run(_propose(profiles))
-    _validate(plan, profiles)
-    return plan
+    from .agent_retry import run_with_retry
+
+    # validation lives inside the retried coroutine: a plan the agent produced
+    # with an unresolvable source reference is the same kind of transient
+    # malformed output as a dropped connection — retry the whole proposal.
+    async def _propose_validated() -> dict:
+        plan = await _propose(profiles)
+        _validate(plan, profiles)
+        return plan
+
+    return run_with_retry(_propose_validated, label="organize plan")
 
 
 async def _propose(profiles: list[dict]) -> dict:
