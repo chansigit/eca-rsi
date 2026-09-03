@@ -11,9 +11,9 @@ treat integration as a separate downstream step.
 ## Install
 
 ```bash
-pip install git+https://github.com/chansigit/osp.git
+pip install osp-sc                     # PyPI name; `import osp` / `python -m osp`
 # with the optional annotation agent (needs claude-agent-sdk + claude CLI credentials):
-pip install "osp[agent] @ git+https://github.com/chansigit/osp.git"
+pip install "osp-sc[agent]"            # + claude-agent-sdk for --annotate
 ```
 
 ## Quick usage
