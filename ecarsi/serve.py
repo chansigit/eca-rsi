@@ -123,9 +123,15 @@ def serve(root: Path, port: int, bind: str, ngrok: bool, domain: str | None, aut
     httpd = http.server.ThreadingHTTPServer((bind, port), partial(Handler, root=root, mode=mode))
     print(f"[serve] {mode} {root}\n[serve] local:  http://{bind}:{port}/", flush=True)
     tunnel = None
+    npf = _ngrok_pidfile(root)
     if ngrok:
         tunnel, url = start_ngrok(port, domain, auth)
         print(f"[serve] public: {url}/" + (f"  (basic auth {auth.split(':', 1)[0]})" if auth else ""), flush=True)
+        # recorded separately from the main pidfile so --stop can still reap
+        # this child if the parent ever dies without running this cleanup
+        # (crash, OOM-kill, kill -9) — otherwise it's an orphan forever
+        npf.parent.mkdir(exist_ok=True)
+        npf.write_text(str(tunnel.pid))
 
     def stop(*_):
         if tunnel and tunnel.poll() is None:
@@ -140,12 +146,17 @@ def serve(root: Path, port: int, bind: str, ngrok: bool, domain: str | None, aut
         httpd.server_close()
         if tunnel and tunnel.poll() is None:
             tunnel.terminate()
+        npf.unlink(missing_ok=True)
     print("[serve] stopped", flush=True)
     return 0
 
 
 def _pidfile(root: Path) -> Path:
     return root / SERVE_DIR / "pid"
+
+
+def _ngrok_pidfile(root: Path) -> Path:
+    return root / SERVE_DIR / "ngrok_pid"
 
 
 def detach(root: Path, argv: list[str]) -> int:
@@ -179,16 +190,28 @@ def _alive(pid: int) -> bool:
 
 def stop_detached(root: Path) -> int:
     pf = _pidfile(root)
-    if not pf.is_file():
+    npf = _ngrok_pidfile(root)
+    if not pf.is_file() and not npf.is_file():
         print("[serve] nothing detached here")
         return 1
-    pid = int(pf.read_text())
-    if _alive(pid):
-        os.killpg(os.getpgid(pid), signal.SIGTERM)  # server + its ngrok child
-        print(f"[serve] stopped pid {pid}")
-    else:
-        print(f"[serve] pid {pid} was not running")
-    pf.unlink()
+    if pf.is_file():
+        pid = int(pf.read_text())
+        if _alive(pid):
+            os.killpg(os.getpgid(pid), signal.SIGTERM)  # server + its ngrok child, normal case
+            print(f"[serve] stopped pid {pid}")
+        else:
+            print(f"[serve] pid {pid} was not running")
+        pf.unlink()
+    # independent reap: if the server died earlier without running its own
+    # cleanup (crash, OOM-kill, kill -9), its ngrok child is orphaned into a
+    # different process group and killpg above never touches it — kill it
+    # directly by its own recorded pid regardless of the server's state
+    if npf.is_file():
+        npid = int(npf.read_text())
+        if _alive(npid):
+            os.kill(npid, signal.SIGTERM)
+            print(f"[serve] stopped orphaned ngrok pid {npid}")
+        npf.unlink()
     return 0
 
 
