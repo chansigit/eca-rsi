@@ -58,7 +58,7 @@ LIMIT_PATTERN = re.compile(
 TRANSIENT_PATTERN = re.compile(
     r"control request timeout|broken pipe|connection reset|econnreset|epipe|"
     r"process exited unexpectedly|failed to start|connection closed|stdout closed|"
-    r"transportclosed",
+    r"transportclosed|initialize timed out|timed out waiting|returned an error result",
     re.IGNORECASE,
 )
 MAX_TRANSIENT_ATTEMPTS = 5
