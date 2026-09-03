@@ -1,29 +1,116 @@
-"""Pluggable agent execution backend for every model-facing call in ecarsi.
+"""Pluggable agent execution backend for every model-facing call in this
+package (ecarsi/osp/msp/zmip each carry an identical copy — no shared
+cross-repo import, per this project's independent-repos convention; zmip is
+the one exception, already depending on msp for other helpers, so it reuses
+msp's copy instead of a fourth one).
 
 Every call site builds a small, self-contained tool table (the "submit tool"
-pattern already used by osp/msp/zmip: one designated tool ends the run and
-its handler is the only place the actual answer is produced/validated — the
-model never needs filesystem write access to get its answer out) and hands
-it to `run_agent()`. Which SDK actually drives the model is an env-var
-choice, not a call-site choice:
+pattern: one designated tool ends the run and its handler is the only place
+the actual answer is produced/validated — the model never needs filesystem
+write access to get its answer out) and hands it to `run_agent()`. Which SDK
+actually drives the model is an env-var choice, not a call-site choice:
 
     HARNESS=claude     (default) claude_agent_sdk, in-process MCP tools
     HARNESS=deepseek    DeepSeek Harness (dsh) via its Python SDK, tools
-                         bridged over a real stdio MCP server subprocess
+                         bridged over an in-process streamable-http MCP
+                         server (dsh's mcp-client only attaches to an
+                         external server; the tool handlers are Python
+                         closures that can't cross a real subprocess
+                         boundary, so the "external" server is HTTP-local
+                         rather than a spawned stdio child)
 
 The tool `handler` return shape (`{"content": [{"type": "text", ...}],
 "is_error": bool}`) is already the real MCP `CallToolResult` wire shape —
 Claude Agent SDK's in-process server is itself an MCP server — so the same
 handler bodies serve both backends unchanged.
+
+Every run_agent() call is wrapped in `retry_transient` (ported from msp's
+agent_util.run_query, generalized to both backends — DeepSeek Harness is
+alpha-stage software and has shown the same kind of transient subprocess
+death Claude's CLI does).
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
+import re
+import time
 from dataclasses import dataclass
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, TypeVar
 
 ToolHandler = Callable[[dict], Awaitable[dict]]
+T = TypeVar("T")
+
+# Ported from msp/agent_util.py's run_query, generalized to wrap either
+# backend's whole run rather than just Claude's message-stream generator.
+# Concurrent Slurm job starts (a batch of jobs all launching agent sessions
+# around the same time) can blow a local control handshake or kill the
+# subprocess transport — nothing to do with the account's usage limit, just
+# local contention — and get a short, immediate retry. A genuine usage/rate
+# limit gets a long wait instead, bounded by a total wait budget, since a
+# self-driving loop must not stop for that.
+LIMIT_PATTERN = re.compile(
+    r"usage limit|rate[ _-]?limit|limit will reset|resets at|too many requests|overloaded|"
+    r"quota|429|capacity|out of extra usage|spend limit",
+    re.IGNORECASE,
+)
+TRANSIENT_PATTERN = re.compile(
+    r"control request timeout|broken pipe|connection reset|econnreset|epipe|"
+    r"process exited unexpectedly|failed to start|connection closed|stdout closed|"
+    r"transportclosed",
+    re.IGNORECASE,
+)
+MAX_TRANSIENT_ATTEMPTS = 5
+TRANSIENT_BACKOFF_SECONDS = 20  # linear: 20s, 40s, 60s, 80s
+
+
+class AgentLimitExhausted(RuntimeError):
+    pass
+
+
+async def retry_transient(coro_fn: Callable[[], Awaitable[T]], label: str) -> T:
+    """Run coro_fn(); on a transient-looking failure, retry a bounded number
+    of times with linear backoff; on a usage/rate-limit-looking failure,
+    wait and retry, bounded by a total wait budget (env AGENT_LIMIT_WAIT_MIN
+    minutes between tries, default 10; AGENT_LIMIT_WAIT_MAX_H total hours,
+    default 12). Any other failure raises immediately."""
+    wait_min = float(os.environ.get("AGENT_LIMIT_WAIT_MIN", "10"))
+    max_h = float(os.environ.get("AGENT_LIMIT_WAIT_MAX_H", "12"))
+    waited = 0.0
+    limit_attempt = 0
+    transient_attempts = 0
+    while True:
+        try:
+            return await coro_fn()
+        except Exception as e:
+            msg = str(e)
+            if TRANSIENT_PATTERN.search(msg):
+                transient_attempts += 1
+                if transient_attempts >= MAX_TRANSIENT_ATTEMPTS:
+                    raise RuntimeError(
+                        f"[{label}] transient agent-startup failure persisted after "
+                        f"{transient_attempts} attempts: {msg}"
+                    ) from None
+                wait = TRANSIENT_BACKOFF_SECONDS * transient_attempts
+                print(f"== [{label}] transient agent-startup failure (attempt {transient_attempts}/"
+                      f"{MAX_TRANSIENT_ATTEMPTS}): {msg[:160]!r} — retrying in {wait}s", flush=True)
+                await asyncio.sleep(wait)
+                continue
+            if LIMIT_PATTERN.search(msg):
+                limit_attempt += 1
+                if waited / 3600 >= max_h:
+                    raise AgentLimitExhausted(
+                        f"[{label}] usage limit still in force after {waited / 3600:.1f} h: {msg}"
+                    ) from None
+                print(f"== [{label}] usage/rate limit (attempt {limit_attempt}): {msg[:160]!r} — "
+                      f"waiting {wait_min:.0f} min, {max_h - waited / 3600:.1f} h of wait budget left",
+                      flush=True)
+                t0 = time.time()
+                await asyncio.sleep(wait_min * 60)
+                waited += time.time() - t0
+                continue
+            raise
 
 
 @dataclass(frozen=True)
@@ -78,8 +165,12 @@ async def run_agent(
         from ._harness_deepseek import run_agent as _run
     else:
         raise ValueError(f"unknown HARNESS backend {backend!r} (expected 'claude' or 'deepseek')")
-    return await _run(
-        tools=tools, submit_tool=submit_tool, prompt=prompt, system_prompt=system_prompt,
-        cwd=cwd, model=model, effort=effort, max_turns=max_turns,
-        allowed_builtin=allowed_builtin, label=label, max_buffer_size=max_buffer_size,
-    )
+
+    async def _attempt() -> AgentRunResult:
+        return await _run(
+            tools=tools, submit_tool=submit_tool, prompt=prompt, system_prompt=system_prompt,
+            cwd=cwd, model=model, effort=effort, max_turns=max_turns,
+            allowed_builtin=allowed_builtin, label=label, max_buffer_size=max_buffer_size,
+        )
+
+    return await retry_transient(_attempt, label)
