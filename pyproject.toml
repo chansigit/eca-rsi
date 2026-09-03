@@ -28,7 +28,7 @@ dependencies = [
 eca-rsi = "ecarsi.__main__:main"
 
 [project.optional-dependencies]
-kernels = ["msp-sc>=0.2.0", "zmip>=0.1.0"]   # PyPI; osp from GitHub (see INSTALL.md)
+kernels = ["osp[agent]>=0.1.0", "msp-sc[agent]>=0.2.0", "zmip>=0.1.0"]   # all on PyPI
 
 [tool.setuptools]
 packages = ["ecarsi"]

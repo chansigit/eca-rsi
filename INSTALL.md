@@ -18,7 +18,7 @@ Claude Agent SDK (claude-agent-sdk) ── 四个包都用;需要 Claude Code CL
 | 包 | 仓库 | 版本 | 依赖(pyproject 声明) |
 |---|---|---|---|
 | ecarsi | `eca-rsi`(GitHub chansigit/eca-rsi,main) | 0.1.0 | claude-agent-sdk ≥0.2.139, anndata, scanpy, h5py, numpy, pandas, matplotlib |
-| osp | `osp`(GitHub chansigit/osp) | 0.1.0 | scanpy, igraph, pandas, numpy, scipy, matplotlib, scikit-learn;`[agent]` claude-agent-sdk |
+| osp | GitHub chansigit/osp · PyPI `osp` | 0.1.0 | scanpy, igraph, pandas, numpy, scipy, matplotlib, scikit-learn;`[agent]` claude-agent-sdk |
 | msp | GitHub chansigit/msp · **PyPI `msp-sc`**(`msp` 名已被占,import 名仍是 `msp`) | 0.2.0 | scanpy, anndata, igraph, **harmonypy==0.2.0**, torch, standissect-lite ≥0.2.0, pandas, numpy, scipy, scikit-learn, matplotlib, seaborn, adjustText;`[agent]` claude-agent-sdk |
 | zmip | GitHub chansigit/zmip · PyPI `zmip` | 0.1.0 | msp ≥0.2.0, claude-agent-sdk, scanpy, anndata, pandas, numpy, scipy, matplotlib |
 | standissect-lite | GitHub chansigit/standissect-lite · PyPI `standissect-lite` | 0.2.0 | anndata, leidenalg, python-igraph, numpy, pandas, scikit-learn |
@@ -44,10 +44,10 @@ Claude Agent SDK (claude-agent-sdk) ── 四个包都用;需要 Claude Code CL
 
 ## 3. 安装
 
-**只想用**(PyPI,一行;osp 尚未上 PyPI):
+**只想用**(内核全在 PyPI;ecarsi 本身尚未发 PyPI,从 GitHub 装):
 
 ```bash
-pip install "msp-sc[agent]" zmip "osp[agent] @ git+https://github.com/chansigit/osp.git" "ecarsi @ git+https://github.com/chansigit/eca-rsi.git"
+pip install "osp[agent]" "msp-sc[agent]" zmip "ecarsi @ git+https://github.com/chansigit/eca-rsi.git"
 ```
 
 **开发**(全部 editable,改源码即生效):
