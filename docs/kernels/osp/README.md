@@ -41,23 +41,69 @@ to integrate reviewed samples and continue annotation across samples.
 
 ## How it works
 
-**1. Assess the sample's quality.**
-OSP checks sequencing depth, detected genes, mitochondrial RNA, and possible
-doublets (two cells captured together). It also estimates ambient RNA from
-other cells. Cells that fail QC are excluded from clustering, with their
-measurements and removal reasons recorded for review.
+### Quality control in context
 
-**2. Explore the retained cell populations.**
-OSP groups similar cells, builds a two-dimensional cell map (UMAP), and
-identifies marker genes that distinguish each cluster. Quality measurements
-are shown alongside the clusters to help you judge whether a population
-reflects biology or a technical problem.
+OSP measures several aspects of cell quality together:
 
-**3. Interpret the populations with AI.**
-The annotation assistant examines plots, checks marker genes and quality
-measurements, and proposes cell-type labels and QC actions. It can split
-heterogeneous clusters for a closer look. Review its evidence and
-uncertainties in the report before continuing to MSP.
+| Measurements | What they help assess |
+| --- | --- |
+| Total counts and number of detected genes | Library size and expression complexity |
+| Fraction of counts in the top 20 genes | Whether expression is dominated by a small number of genes |
+| Mitochondrial, ribosomal, and hemoglobin count fractions | Cell quality and expression composition in the context of the tissue |
+| Scrublet doublet score and prediction | Possible capture of two cells in one droplet |
+| DecontX contamination fraction and contaminating-gene rankings | How much ambient RNA is estimated, and which genes contribute to it |
+| MALAT1 count fraction and dissociation-stress score | Additional cell-integrity and stress signals, when the relevant genes are present |
+
+**Filtering combines fixed thresholds with sample-adaptive thresholds.**
+By default, fixed checks flag cells with fewer than 200 detected genes,
+fewer than 500 counts, or more than 15% mitochondrial counts. Adaptive
+checks flag observations more than five median absolute deviations (MADs)
+from the sample median for log1p counts, log1p gene counts, and the
+top-20-gene fraction. The additional mitochondrial flag requires a deviation
+of more than three MADs from the median and a mitochondrial fraction above
+8%. Scrublet-predicted doublets are also flagged.
+
+These checks combine baseline limits with the sample's own distribution.
+Their thresholds are configurable, and the report shows the resulting
+ranges and failure counts so you can assess whether they fit the biology.
+The full pipeline excludes cells flagged by these checks before cluster
+analysis and records the reasons. DecontX, ribosomal and hemoglobin
+fractions, MALAT1, and stress scores provide supporting evidence without
+directly triggering this filter.
+
+### Interpreting each cluster
+
+The AI assistant is instructed to build and verify an explanation for every
+cluster using several kinds of evidence:
+
+1. **Place the cluster in context.** Inspect the quality distributions and
+   PAGA graph, which summarizes connections between cell populations.
+   Connectivity provides context for interpreting related populations;
+   marker and QC evidence support the biological interpretation.
+2. **Read differential expression with its coverage.** OSP computes
+   Wilcoxon differential expression for each primary cluster against the
+   remaining cells, using the full normalized gene matrix. Marker tables
+   include log fold changes, adjusted p-values, and the fractions of cells
+   expressing each gene inside and outside the cluster (`pct1`/`pct2`).
+   These fractions help distinguish broadly expressed markers from signals
+   carried by a small subset of cells.
+3. **Actively verify the proposed identity.** The assistant queries
+   canonical and discriminating markers, including genes absent from the
+   top DEG list. It receives mean expression and the percentage of cells
+   expressing each queried gene across clusters.
+4. **Check whether quality explains the signal.** Per-cluster QC summaries
+   include medians and 90th percentiles. DecontX tables rank the estimated
+   ambient contribution of individual genes from the difference between raw
+   and corrected counts, helping assess whether apparent markers reflect
+   contamination.
+5. **Resolve mixed populations more locally.** When a cluster appears
+   heterogeneous, the assistant can split it. OSP then computes DEG between
+   the resulting subclusters within that parent population, giving a more
+   focused comparison than the initial sample-wide contrast.
+
+The assistant submits cell-type labels, supporting genes, confidence,
+unresolved questions, and QC proposals. OSP checks the submission's structure
+and cluster coverage before writing the results for review.
 
 ## Run your first sample
 
@@ -82,8 +128,26 @@ QC and plotting run in Python, including the bundled DecontX implementation.
 
 ### 2. Prepare your input
 
-You need an **H5AD file**, the AnnData format commonly used with Scanpy,
-containing:
+**We recommend preparing data with [ECA-PP](https://github.com/chansigit/eca-pp)
+and letting [ECA-RSI](https://github.com/chansigit/eca-rsi) coordinate the
+analysis.** ECA-PP locates and validates counts, standardizes gene names,
+and identifies suitable sample or batch metadata. ECA-RSI organizes the
+prepared data, resolves the per-sample grouping, and schedules OSP and the
+downstream analyses.
+
+**Starting with log-normalized data?** ECA-PP uses our
+[stancounts](https://github.com/chansigit/stancounts) method to recover
+integer counts from supported log1p-normalized matrices. It reverses the
+log transform and infers each cell's scaling factor from the discrete
+expression values, without requiring the original normalization target.
+Recovery depends on the retained count structure and precision; unsupported
+or ambiguous inputs are reported for review. See the
+[ECA-PP guide](https://github.com/chansigit/eca-pp#try-it) to prepare your
+data and the [ECA-RSI setup guide](https://github.com/chansigit/eca-rsi/blob/main/INSTALL.md)
+to run the wider workflow.
+
+If you prefer to prepare the input and run OSP yourself, provide an
+**H5AD file**, the AnnData format commonly used with Scanpy, containing:
 
 - **Raw expression counts** in `layers["counts"]`, or in `X` if that layer
   is absent. Already normalized expression alone is not a counts input.
@@ -117,7 +181,8 @@ Start with the QC summary to see how many cells were retained and why.
 Then review the proposed cell types alongside their marker genes, quality
 profiles, and the assistant's notes.
 
-The same directory also contains:
+<details>
+<summary>The same directory also contains</summary>
 
 | File | Contents |
 | --- | --- |
@@ -126,11 +191,14 @@ The same directory also contains:
 | `qc_removed.csv` | Cells removed during QC, with reasons and available quality measurements. |
 | `de_top_genes_*.csv` | Genes that distinguish each primary cluster from the remaining cells. |
 
+</details>
+
 Use a separate output directory for each sample. Large inputs are read in
 backed mode so only the selected sample's expression matrix is brought into
 memory; that sample and its analysis still need to fit in available RAM.
 
-## Review the annotation
+<details>
+<summary>Review the annotation</summary>
 
 The report brings proposed cell types together with their supporting genes,
 confidence, and open questions. Check whether the labels fit the marker
@@ -159,23 +227,36 @@ QC and clustering:
 python -m osp.annotate results/SAMPLE_A --species mouse --tissue "bone marrow"
 ```
 
-## A few choices to understand
+</details>
 
-- **The full pipeline removes cells that fail QC before clustering.**
-  Inspect the report and removed-cell table: default thresholds may need
-  adjustment for your sample or cell populations.
-- **Clustering includes quality measurements by default.** OSP adds available
-  QC measurements to gene expression when calculating principal components
-  (PCA), which can influence which cells group together. Python users can
-  select expression-only PCA with
-  `cluster_kwargs={"qc_pca_covariates": None}` in
-  `run_one_sample_pipeline`.
-- **Ambient RNA estimates support interpretation.** DecontX estimates do
-  not directly remove cells, and its corrected counts do not replace raw
-  counts as the starting point for clustering.
-- **Rerunning replaces results in the same directory.** Keep separate
-  directories for analyses you want to compare, and check that a run
-  finished successfully before relying on its output.
+## FAQ
+
+**Does OSP remove cells?**
+
+The full pipeline filters cells that fail its initial QC checks and records
+them in `qc_removed.csv`. Your input H5AD remains unchanged. The AI
+annotation stage only records proposed actions, so cells marked `drop` by
+the assistant remain in OSP's `clustered.h5ad` for downstream processing.
+
+**Why do QC measurements affect clustering?**
+
+OSP includes available QC measurements alongside gene expression in its
+principal component analysis (PCA), making quality differences part of the
+similarity calculation. Python users can select expression-only PCA with
+`cluster_kwargs={"qc_pca_covariates": None}` in `run_one_sample_pipeline`.
+
+**Does DecontX change the expression matrix used for analysis?**
+
+OSP preserves raw counts and uses them as the starting point for
+normalization and clustering. DecontX stores corrected counts separately
+and provides contamination estimates for interpretation. Its contamination
+score does not directly trigger the initial QC filter.
+
+**Can I rerun an analysis?**
+
+Yes. Rerunning replaces results in the same output directory. Use a new
+directory to compare settings or preserve an earlier analysis, and check
+that a run finished successfully before relying on its output.
 
 ## Part of the ECA-RSI ecosystem
 
@@ -185,6 +266,7 @@ stage in the wider workflow.
 
 | Project | Role |
 | --- | --- |
+| [ECA-PP](https://github.com/chansigit/eca-pp) | Prepare counts, gene identifiers, and metadata evidence for the analysis workflow. |
 | [OSP: One-Sample Pipeline](https://github.com/chansigit/osp) | Review quality and cell populations within each sample before integration. |
 | [MSP: Multi-Sample Pipeline](https://github.com/chansigit/msp) | Integrate reviewed samples, inspect populations across samples, and annotate cell types. |
 | [ZMIP: Zoom-In Pipeline](https://github.com/chansigit/zmip) | Refine retained cells within individual lineages after MSP, reviewing labels and remaining quality concerns. |
