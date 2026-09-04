@@ -108,8 +108,8 @@ eca-rsi run <eca-pp 输出目录> <root> [--rounds N] [--serve 8899 [--ngrok --d
 eca-rsi organize  <eca-pp 输出目录> <root>
 eca-rsi persample <root>/units/<unit>
 eca-rsi loop      <root>/units/<unit>            # 收敛即 release
-eca-rsi serve start <root> [--port 8899] [--ngrok --domain …] [--auth u:p]   # 常驻 daemon(tmux 里),http://127.0.0.1:8899/<root 名>/;--auth 给整站加密码,默认不设
-eca-rsi serve bind <另一个 root> | list | unbind <名> | stop   # 同一个 daemon/隧道下增删数据集,不用重启
+eca-rsi serve scan-add <root 或 glob>...                       # 写进 registry 文件(~/.config/ecarsi/registry.json);remove/list/dump/reload 同理
+eca-rsi serve [--port 8899] [--ngrok --domain …] [--auth u:p]   # 前台 server,http://127.0.0.1:8899/<名>/;registry 改了自动重读;--auth 整站密码,默认不设
 ```
 
 运行产物一律放仓库外(`$SCRATCH/eca-runs/...`),本机是 Slurm 计算节点直接跑,不要 sbatch。

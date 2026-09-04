@@ -1,65 +1,65 @@
-"""ecarsi.serve — a persistent navigator server for eca-rsi run reports.
+"""ecarsi.serve — a stateless navigator server for eca-rsi run reports.
 
-    ecarsi serve start [dir] [--name NAME] [--port 8899] [--bind 127.0.0.1]
-                       [--ngrok [--domain csj.example.app] [--auth user:pass]]
-                       [--session ecarsi-serve] [--state DIR] [--attach]
-    ecarsi serve attach [--session ecarsi-serve]
-    ecarsi serve stop   [--session ecarsi-serve] [--state DIR]
-    ecarsi serve status [--session ecarsi-serve] [--state DIR]
-    ecarsi serve bind   <dir> [--name NAME] [--state DIR]
-    ecarsi serve unbind <name> [--state DIR]
-    ecarsi serve list   [--state DIR]
-    ecarsi serve dump   [path] [--state DIR]
-    ecarsi serve reload [path] [--state DIR]
+    ecarsi serve [dir...] [--registry FILE] [--port 8899] [--bind 127.0.0.1]
+                 [--ngrok [--domain csj.example.app]] [--auth user:pass]
+    ecarsi serve scan-add <dir-or-glob>... [--name N] [--dry-run] [--registry FILE]
+    ecarsi serve remove   <name>... [--registry FILE]
+    ecarsi serve list     [--json] [--registry FILE]
+    ecarsi serve dump     [path] [--registry FILE]
+    ecarsi serve reload   <path> [--replace] [--registry FILE]
 
-One long-running daemon serves every bound dataset (an organize root or a
-single unit — see ecarsi.layout) under its own name: `/<name>/...`. The
-landing pages are re-rendered from disk on every request (ecarsi.index), so
-a run that is still going shows its current stage; `/` is a navigator page
-listing everything currently bound. Datasets can be bound and unbound at
-runtime without restarting the daemon or its ngrok tunnel — `bind`/`unbind`
-talk to the running daemon over a local admin socket
-(<state>/admin.sock, not reachable through the public tunnel).
+The server runs in the foreground (Ctrl-C stops it and its ngrok tunnel);
+put it in nohup / tmux / an sbatch yourself if you want it in the
+background — nothing here manages processes. Every dataset (an organize
+root or a single unit, see ecarsi.layout) is served under its own name,
+`/<name>/...`; `/` is a navigator page listing them all. Landing pages are
+rendered from the run directory on every request (ecarsi.index), so a run
+that is still going shows its current stage; the server never writes into
+a dataset directory.
 
-The daemon always runs inside a tmux session (default name `ecarsi-serve`,
-on a dedicated tmux server `tmux -L ecarsi-serve` so it survives the user's
-own `tmux kill-server`)
-so it can be watched and detached like any other tmux session: `attach`
-drops you into its live output, the ordinary tmux prefix+d detaches you
-back to your shell (no custom code — it's just tmux), and the daemon keeps
-running. `stop` tears the whole thing down (daemon, its ngrok tunnel, the
-tmux session).
+The single source of truth for what is served is the REGISTRY FILE
+(default $XDG_CONFIG_HOME/ecarsi/registry.json, i.e. ~/.config/ecarsi/
+registry.json), a JSON object {name: path}. The server re-reads it whenever
+its mtime changes, so `scan-add` / `remove` — and the navigator's Bind /
+Unbind buttons, which edit the same file — take effect within a request,
+without talking to the running process. Kill and restart the server on any
+host and the same list comes back. Directories given on the `serve`
+command line are served in addition, for this process only.
 
-The bound-dataset list is in-memory only — a daemon restart forgets it.
-`dump`/`reload` are explicit snapshot/restore commands, not automatic.
+`dump` copies the registry file elsewhere (or prints it); `reload` merges
+another such file into it (`--replace` to swap the whole list) — handy for
+keeping several lists, e.g. one per project.
 
 Default: local only (http://127.0.0.1:PORT). --ngrok additionally opens ONE
-ngrok tunnel covering every bound dataset (ngrok binary + authtoken are the
-user's responsibility; so are account limits such as one agent session per
-free account). --domain uses a reserved domain instead of a random URL;
+ngrok tunnel covering everything (ngrok binary + authtoken are the user's
+responsibility; so are account limits such as one agent session per free
+account). --domain uses a reserved domain instead of a random URL;
 --auth USER:PASS puts a password on the whole site (HTTP basic auth,
 checked by this server on every request — local, LAN or tunnel; ngrok is
 not involved). Default: no password, so day-to-day debugging is prompt-free.
-The navigator page has Bind / Unbind buttons (POST /_bind, /_unbind);
-requests arriving through the tunnel (ngrok stamps X-Forwarded-For) are
-refused with 403 unless a password is set — local requests always may. The
-CLI bind/unbind go over the admin socket regardless.
+The navigator's Bind / Unbind buttons (POST /_bind, /_unbind) are refused
+for requests arriving through the tunnel (ngrok stamps X-Forwarded-For)
+unless a password is set; local requests always may.
+
+The navigator also shows each dataset's Slurm job (last job= in
+<root>/jobs.log, see the convention above _root_job_id; status.txt is read
+as a fallback), asked of squeue/sacct with a short cache — purely a
+display; nothing here submits anything.
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import glob as _glob
 import hmac
 import html as _h
 import http.server
 import json
 import os
-import shlex
+import re
 import shutil
 import signal
-import socket
-import socketserver
 import subprocess
 import sys
 import threading
@@ -70,89 +70,183 @@ from pathlib import Path
 from . import index
 from . import layout as L
 
-DEFAULT_SESSION = "ecarsi-serve"
-TMUX_SERVER = "ecarsi-serve"  # our own tmux server (tmux -L), so the user's `tmux kill-server` can't take the daemon down
+SUBCOMMANDS = ("scan-add", "remove", "list", "dump", "reload")
 
 
-def _tmux(*args: str) -> list[str]:
-    return ["tmux", "-L", TMUX_SERVER, *args]
-
-
-def _exec_tmux_attach(session: str) -> None:
-    os.environ.pop("TMUX", None)  # we may be called from inside the user's own tmux; nesting across servers is fine
-    os.execvp("tmux", _tmux("attach", "-t", session))
+def default_registry() -> Path:
+    base = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+    return base / "ecarsi" / "registry.json"
 
 
 # ---------------------------------------------------------------- registry
 
-class Registry:
-    """The live name -> dataset-dir mapping. In-memory only; see dump/reload."""
+def _check_dataset(path: Path) -> Path:
+    path = Path(path)
+    if not (L.is_root(path) or L.is_unit(path)):
+        raise ValueError(f"{path} is neither an organize root nor a unit dir (see ecarsi.layout)")
+    return path
 
-    def __init__(self) -> None:
-        self._d: dict[str, Path] = {}
+
+class Registry:
+    """name -> dataset dir. The registry FILE is the truth; this object is a
+    cache of it that re-reads on mtime change and writes through on
+    bind/unbind. `extra` are per-process additions (serve's positional
+    dirs) that are never written to the file."""
+
+    def __init__(self, path: Path, extra: dict[str, Path] | None = None) -> None:
+        self.path = Path(path)
+        self._extra = dict(extra or {})
+        self._file: dict[str, Path] = {}
+        self._stamp: tuple | None = None
         self._lock = threading.Lock()
 
-    def bind(self, name: str, path: Path, force: bool = False) -> None:
-        path = Path(path)
-        if not (L.is_root(path) or L.is_unit(path)):
-            raise ValueError(f"{path} is neither an organize root nor a unit dir (see ecarsi.layout)")
-        with self._lock:
-            existing = self._d.get(name)
-            if not force and existing is not None and existing != path:
-                raise ValueError(f"name {name!r} already bound to {existing} — use --name to disambiguate or unbind it first")
-            self._d[name] = path
+    # -- file I/O --
+    @staticmethod
+    def read_file(path: Path) -> dict[str, Path]:
+        if not path.is_file():
+            return {}
+        data = json.loads(path.read_text() or "{}")
+        if not isinstance(data, dict):
+            raise ValueError(f"{path}: expected a JSON object {{name: path}}")
+        return {str(k): Path(v) for k, v in data.items()}
 
-    def unbind(self, name: str) -> None:
-        with self._lock:
-            if name not in self._d:
-                raise ValueError(f"nothing bound as {name!r}")
-            del self._d[name]
+    @staticmethod
+    def write_file(path: Path, items: dict[str, Path]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps({k: str(v) for k, v in sorted(items.items())}, indent=2) + "\n")
+        os.replace(tmp, path)  # atomic: a concurrent server never sees a half-written file
 
-    def get(self, name: str) -> Path | None:
-        with self._lock:
-            return self._d.get(name)
+    def _load_if_changed(self) -> None:
+        try:
+            st = self.path.stat()
+            stamp = (st.st_mtime_ns, st.st_size)
+        except FileNotFoundError:
+            stamp = None
+        if stamp == self._stamp:
+            return
+        try:
+            self._file = self.read_file(self.path) if stamp else {}
+        except (ValueError, OSError) as e:
+            sys.stderr.write(f"[serve] registry {self.path} unreadable, keeping last good list: {e}\n")
+            return
+        self._stamp = stamp
 
+    # -- reads --
     def snapshot(self) -> dict[str, Path]:
         with self._lock:
-            return dict(self._d)
+            self._load_if_changed()
+            return {**self._file, **self._extra}  # this process's own dirs win on a name clash
 
-    def dump(self, path: Path) -> None:
-        data = {k: str(v) for k, v in self.snapshot().items()}
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data, indent=2, sort_keys=True))
+    def get(self, name: str) -> Path | None:
+        return self.snapshot().get(name)
 
-    def reload(self, path: Path) -> int:
-        if not path.is_file():
-            raise ValueError(f"{path} does not exist")
-        data = json.loads(path.read_text())
-        for name, p in data.items():
-            self.bind(name, Path(p), force=True)
-        return len(data)
+    # -- writes (through to the file) --
+    def bind(self, name: str, path: Path, force: bool = False) -> None:
+        path = _check_dataset(path)
+        if not name or "/" in name:
+            raise ValueError("name must be non-empty and contain no '/'")
+        with self._lock:
+            self._load_if_changed()
+            existing = self._file.get(name) or self._extra.get(name)
+            if not force and existing is not None and existing != path:
+                raise ValueError(f"name {name!r} already bound to {existing} — use --name to disambiguate or remove it first")
+            new = dict(self._file)
+            new[name] = path
+            self.write_file(self.path, new)
+            self._file = new
+            self._stamp = None  # re-stat next time; our own write changed the mtime
+
+    def unbind(self, names: list[str]) -> None:
+        """All-or-nothing, so a typo in one name doesn't half-apply the batch."""
+        with self._lock:
+            self._load_if_changed()
+            missing = [n for n in names if n not in self._file]
+            if missing:
+                raise ValueError("nothing bound as " + ", ".join(repr(m) for m in missing)
+                                 + ("" if not any(n in self._extra for n in missing)
+                                    else " (given on the serve command line, not in the registry file)"))
+            new = {k: v for k, v in self._file.items() if k not in names}
+            self.write_file(self.path, new)
+            self._file = new
+            self._stamp = None
 
 
-# ---------------------------------------------------------------- handler
+# ---------------------------------------------------------------- slurm jobs (display only)
+#
+# Convention: whatever submits a run appends to <root>/jobs.log, one line per
+# event, space-separated key=value tokens, every line carrying job=<slurm id>:
+#     job=41888484 node=sh04-13n32 start=2026-09-03T12:00:05-0700
+#     job=41888484 end=2026-09-03T15:24:36-0700 exit=0
+# The navigator takes the LAST job id in the file as the run's current job and
+# asks Slurm about it (squeue for queued/running, sacct for finished). The
+# older per-run status.txt (same tokens, job= only on its first line) is read
+# as a fallback so existing runs show up too. No squeue on PATH -> no column.
 
-def _refresh_index(root: Path, mode: str, sub: str) -> None:
-    """Re-render index.html on disk before serving it, so it reflects the
-    current run state (ecarsi.index). Mirrors the old single-tenant logic,
-    just parameterized over which bound dataset this request landed on."""
-    parts = [p for p in sub.split("/") if p]
-    is_index = not parts or parts[-1] == L.INDEX
-    if not is_index:
-        return
+JOBS_LOG = "jobs.log"
+_JOB_RE = re.compile(r"\bjob=(\d+)\b")
+_slurm_cache: dict = {"at": 0.0, "ids": (), "states": {}}
+_SLURM_TTL = 20.0  # s; one squeue + one sacct per page load at most this often
+
+
+def _root_job_id(root: Path) -> str | None:
+    for fname in (JOBS_LOG, "status.txt"):
+        f = root / fname
+        if f.is_file():
+            ids = _JOB_RE.findall(f.read_text())
+            if ids:
+                return ids[-1]
+    return None
+
+
+def _slurm_states(ids: list[str]) -> dict[str, dict]:
+    """{job id: {state, elapsed, node, reason}} via one squeue + one sacct, cached."""
+    ids = sorted(set(ids))
+    if not ids or not shutil.which("squeue"):
+        return {}
+    now = time.time()
+    if tuple(ids) == _slurm_cache["ids"] and now - _slurm_cache["at"] < _SLURM_TTL:
+        return _slurm_cache["states"]
+    out: dict[str, dict] = {}
     try:
-        if mode == "unit":
-            if len(parts) <= 1:
-                index.write_unit_index(root)
-        elif len(parts) <= 1:
-            index.write_root_index(root)
-        elif len(parts) == 3 and parts[0] == L.UNITS:
-            unit = root / L.UNITS / parts[1]
-            if L.is_unit(unit):
-                index.write_unit_index(unit)
-    except Exception as e:  # a broken page must not take the server down
-        sys.stderr.write(f"[serve] index refresh failed for {sub}: {e}\n")
+        q = subprocess.run(["squeue", "-j", ",".join(ids), "-h", "-o", "%i|%T|%M|%N|%r"],
+                           capture_output=True, text=True, timeout=15)
+        for line in q.stdout.splitlines():
+            jid, state, elapsed, node, reason = (line.split("|") + [""] * 5)[:5]
+            out[jid] = {"state": state, "elapsed": elapsed, "node": node, "reason": reason}
+        rest = [i for i in ids if i not in out]
+        if rest and shutil.which("sacct"):
+            a = subprocess.run(["sacct", "-j", ",".join(rest), "-X", "-n", "-P", "-o", "JobID,State,Elapsed,NodeList,ExitCode"],
+                               capture_output=True, text=True, timeout=20)
+            for line in a.stdout.splitlines():
+                jid, state, elapsed, node, exitcode = (line.split("|") + [""] * 5)[:5]
+                out[jid] = {"state": state.split()[0] if state else "", "elapsed": elapsed, "node": node, "reason": f"exit {exitcode}"}
+    except (subprocess.TimeoutExpired, OSError) as e:
+        sys.stderr.write(f"[serve] slurm lookup failed: {e}\n")
+    _slurm_cache.update(at=now, ids=tuple(ids), states=out)
+    return out
 
+
+_JOB_CLS = {"RUNNING": "running", "PENDING": "running", "COMPLETING": "running", "CONFIGURING": "running",
+            "COMPLETED": "released"}
+
+
+def _job_cell(jid: str | None, st: dict | None) -> tuple[str, str]:
+    """(html, search text) for the navigator's job column."""
+    if not jid:
+        return '<span class="muted">–</span>', ""
+    if not st:
+        return f'<span class="pill neutral" title="job {jid}: not known to squeue/sacct">{jid} ?</span>', jid
+    state = st["state"] or "?"
+    cls = _JOB_CLS.get(state, "failed")
+    detail = " · ".join(x for x in (st["elapsed"], st["node"], st["reason"] if state == "PENDING" or cls == "failed" else "") if x and x != "None")
+    e = _h.escape
+    return (f'<span class="pill {cls}" title="job {jid}{" · " + e(detail) if detail else ""}">{e(state.lower())}</span>'
+            + (f' <small class="muted">{e(st["elapsed"])}</small>' if st["elapsed"] else ""),
+            f"{jid} {state.lower()} {st['node']}")
+
+
+# ---------------------------------------------------------------- navigator
 
 NAV_JS = r"""
 (function(){
@@ -166,7 +260,7 @@ NAV_JS = r"""
   async function post(url, body){
     const r = await fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
     let j; try { j = await r.json(); } catch (e) { j = {ok: false, error: r.status + " " + r.statusText}; }
-    if (r.status === 403) j.error = j.error || "admin actions are refused through the public tunnel unless the daemon was started with --auth";
+    if (r.status === 403) j.error = j.error || "admin actions are refused through the public tunnel unless the server was started with --auth";
     return j; }
   const form = $("bind-form");
   $("bind-open").addEventListener("click", () => { form.style.display = form.style.display === "none" ? "" : "none"; if (form.style.display === "") $("bind-path").focus(); });
@@ -186,7 +280,7 @@ NAV_JS = r"""
   ub.addEventListener("click", async () => {
     const names = boxes.filter(b => b.checked).map(b => b.value);
     if (!names.length) return;
-    if (!confirm("Unbind " + names.length + " dataset(s) from this server?\n\n" + names.join("\n") + "\n\n(Only the binding is removed; nothing on disk is touched.)")) return;
+    if (!confirm("Unbind " + names.length + " dataset(s)?\n\n" + names.join("\n") + "\n\n(Only the registry entry is removed; nothing in the run directories is touched.)")) return;
     ub.disabled = true;
     const j = await post("/_unbind", {names});
     if (j.ok) location.reload(); else { ub.disabled = false; say("unbind failed: " + j.error, true); } });
@@ -196,7 +290,9 @@ NAV_JS = r"""
 
 
 def _dataset_state(root: Path) -> dict:
-    """Per-bound-dataset summary read from disk (ecarsi.index), for the navigator."""
+    """Per-dataset summary read from disk (ecarsi.index), for the navigator / list."""
+    if not root.is_dir():
+        return {"units": 0, "released": 0, "n_input": None, "final_cells": None, "stage": "missing on disk", "cls": "failed"}
     try:
         units = [root] if L.is_unit(root) else L.units(root)
         states = [index.unit_state(u) for u in units]
@@ -217,19 +313,23 @@ def _dataset_state(root: Path) -> dict:
             "final_cells": sum(final) if final else None, "stage": stage, "cls": cls}
 
 
-def _navigator_html(items: dict[str, Path]) -> str:
+def _navigator_html(items: dict[str, Path], registry_path: Path) -> str:
     e = _h.escape
     rows = []
+    jids = {name: _root_job_id(p) for name, p in items.items()}
+    jstates = _slurm_states([j for j in jids.values() if j])
     for name, p in sorted(items.items()):
         st = _dataset_state(p)
         cells = index._n(st["final_cells"]) or "–"
-        rows.append(f'<tr data-text="{e((name + " " + str(p) + " " + st["stage"]).lower())}">'
+        job_html, job_text = _job_cell(jids[name], jstates.get(jids[name] or ""))
+        rows.append(f'<tr data-text="{e((name + " " + str(p) + " " + st["stage"] + " " + job_text).lower())}">'
                     f'<td class="l"><input class="sel" type="checkbox" value="{e(name)}"></td>'
                     f'<td><a href="/{e(name)}/"><b>{e(name)}</b></a></td>'
                     f'<td class="num">{index._n(st["n_input"]) or "–"}</td>'
                     f'<td class="num"><b>{cells}</b>{"" if st["cls"] == "released" else " <small class=\"muted\">so far</small>" if st["final_cells"] else ""}</td>'
                     f'<td class="num">{st["released"]}/{st["units"]}</td>'
                     f'<td class="l"><span class="pill {st["cls"]}">{e(st["stage"])}</span></td>'
+                    f'<td class="l">{job_html}</td>'
                     f'<td class="l muted"><code class="path">{e(str(p))}</code></td></tr>')
     hint = ("A bindable directory is an eca-rsi <b>organize root</b> (contains <code>organize/manifest.json</code> or a "
             "<code>units/</code> dir — e.g. <code>&lt;dataset&gt;/rsi</code>, the <code>&lt;root&gt;</code> you gave "
@@ -240,7 +340,7 @@ def _navigator_html(items: dict[str, Path]) -> str:
         '<div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin:0 0 .8rem">'
         '<button id="bind-open" class="btn">+ Bind dataset…</button>'
         '<button id="unbind-go" class="btn danger" disabled>Unbind selected</button>'
-        '<span class="muted" style="font-size:.85rem">bind/unbind only change what this server shows; nothing on disk is touched</span></div>'
+        f'<span class="muted" style="font-size:.85rem">bind/unbind edit <code class="path">{e(str(registry_path))}</code>; nothing in the run directories is touched</span></div>'
         '<div id="bind-form" class="callout" style="display:none">'
         '<label style="display:block;font-weight:600;margin-bottom:.3rem">Directory to bind</label>'
         '<input id="bind-path" type="text" placeholder="/oak/…/<dataset>/rsi" autocomplete="off" spellcheck="false" '
@@ -253,13 +353,13 @@ def _navigator_html(items: dict[str, Path]) -> str:
         '<div id="nav-msg" class="callout" style="display:none"></div>'
     )
     table = (
-        '<input id="nav-q" type="search" placeholder="search name / path / stage…" autocomplete="off" '
+        '<input id="nav-q" type="search" placeholder="search name / path / stage / job state…" autocomplete="off" '
         'style="width:100%;font:inherit;padding:.5rem .8rem;border:1px solid var(--line);border-radius:8px;margin:0 0 .8rem">'
         '<div class="wrap"><table><thead><tr><th class="l" style="width:1.5rem"><input id="sel-all" type="checkbox" title="select all visible"></th>'
         '<th class="l">dataset</th><th>input cells</th><th>final cells</th>'
-        '<th>units released</th><th class="l">stage</th><th class="l">path</th></tr></thead>'
+        '<th>units released</th><th class="l">stage</th><th class="l" title="last job in <root>/jobs.log (or status.txt), asked of squeue/sacct">slurm job</th><th class="l">path</th></tr></thead>'
         f'<tbody>{"".join(rows)}</tbody></table></div>'
-        if items else '<p class="empty">nothing bound yet — use <b>+ Bind dataset…</b> above or <code>eca-rsi serve bind &lt;dir&gt;</code></p>'
+        if items else '<p class="empty">nothing bound yet — use <b>+ Bind dataset…</b> above or <code>eca-rsi serve scan-add &lt;dir-or-glob&gt;</code></p>'
     )
     body = (
         '<header class="top"><div><div class="crumb">ecarsi serve</div><h1>Datasets</h1></div>'
@@ -276,12 +376,31 @@ def _navigator_html(items: dict[str, Path]) -> str:
     )
 
 
+# ---------------------------------------------------------------- handler
+
+def _render_index(root: Path, sub: str) -> str | None:
+    """HTML for a landing page rendered from disk right now, or None if the
+    request isn't for one. Never writes into the dataset directory (the
+    pipeline steps write their own static index.html for offline use)."""
+    parts = [p for p in sub.split("/") if p]
+    if parts and parts[-1] == L.INDEX:
+        parts = parts[:-1]
+    elif parts and not sub.endswith("/"):
+        return None  # a file, not a directory landing page
+    if L.is_unit(root):
+        return index.render_unit(root) if not parts else None
+    if not parts:
+        return index.render_root(root)
+    if len(parts) == 2 and parts[0] == L.UNITS and L.is_unit(root / L.UNITS / parts[1]):
+        return index.render_unit(root / L.UNITS / parts[1])
+    return None
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
-    """Multi-tenant static files: first path segment selects a bound
-    dataset from the registry, the rest is served exactly like the old
-    single-tenant handler did (self.directory/self.path are recomputed per
-    request, which is safe — they're read fresh by translate_path on every
-    call, not cached from __init__)."""
+    """Multi-tenant static files: first path segment selects a dataset from
+    the registry, the rest is served from that directory (self.directory /
+    self.path are recomputed per request, which is safe — translate_path
+    reads them fresh on every call, not cached from __init__)."""
 
     def __init__(self, *a, registry: Registry, auth: str | None = None, **kw):
         self._registry = registry
@@ -313,18 +432,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     # ngrok forwards from 127.0.0.1 too, so the client address can't tell a
     # local request from one arriving through the public tunnel — but ngrok
     # stamps X-Forwarded-For on everything it forwards. Forwarded requests
-    # may only administer if the daemon has a password (--auth; the request
+    # may only administer if the server has a password (--auth; the request
     # has already passed it by the time we get here); local requests always may.
     def _admin_allowed(self) -> bool:
         return bool(self._auth) or not self.headers.get("X-Forwarded-For")
 
-    def _json(self, code: int, obj: dict) -> None:
-        enc = json.dumps(obj).encode()
+    def _send(self, code: int, body: bytes, ctype: str) -> None:
         self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(enc)))
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(enc)
+        self.wfile.write(body)
+
+    def _json(self, code: int, obj: dict) -> None:
+        self._send(code, json.dumps(obj).encode(), "application/json")
+
+    def _html(self, text: str) -> None:
+        self._send(200, text.encode("utf-8"), "text/html; charset=utf-8")
 
     def do_POST(self):
         if not self._authorized():
@@ -333,7 +457,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path not in ("/_bind", "/_unbind"):
             return self.send_error(404)
         if not self._admin_allowed():
-            return self._json(403, {"ok": False, "error": "admin actions are refused through the public tunnel unless the daemon was started with --auth"})
+            return self._json(403, {"ok": False, "error": "admin actions are refused through the public tunnel unless the server was started with --auth"})
         try:
             n = int(self.headers.get("Content-Length") or 0)
             req = json.loads(self.rfile.read(n) or b"{}")
@@ -348,23 +472,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 if not d.is_dir():
                     raise ValueError(f"{d} is not a directory on the server host")
                 name = (req.get("name") or d.name).strip()
-                if not name or "/" in name:
-                    raise ValueError("name must be non-empty and contain no '/'")
                 self._registry.bind(name, d)
-                self.log_message("admin bind %s -> %s", name, d)
+                self.log_message("bind %s -> %s", name, d)
                 return self._json(200, {"ok": True, "name": name})
             names = [str(x) for x in (req.get("names") or [])]
             if not names:
                 raise ValueError("names is required")
-            bound = self._registry.snapshot()
-            missing = [nm for nm in names if nm not in bound]
-            if missing:  # all-or-nothing, so a typo in one name doesn't half-apply the batch
-                raise ValueError("nothing bound as " + ", ".join(repr(m) for m in missing))
-            for nm in names:
-                self._registry.unbind(nm)
-            self.log_message("admin unbind %s", ", ".join(names))
+            self._registry.unbind(names)
+            self.log_message("unbind %s", ", ".join(names))
             return self._json(200, {"ok": True, "removed": names})
-        except ValueError as e:
+        except (ValueError, OSError) as e:
             return self._json(400, {"ok": False, "error": str(e)})
 
     def do_GET(self):
@@ -373,7 +490,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         raw = self.path.split("?", 1)[0]
         parts = [p for p in raw.split("/") if p]
         if not parts:
-            return self._navigator()
+            return self._html(_navigator_html(self._registry.snapshot(), self._registry.path))
         name = parts[0]
         root = self._registry.get(name)
         if root is None:
@@ -382,22 +499,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # `explain` (the body) instead, or send_error raises and the
             # connection dies with an empty reply, no 404 at all
             return self.send_error(404, "unknown dataset", explain=f"no dataset bound as {name!r}; see the navigator at /")
-        if len(parts) == 1 and not raw.endswith("/"):
-            return self._redirect(raw + "/")
-        sub = "/" + "/".join(parts[1:])
-        mode = "unit" if L.is_unit(root) else "root"
-        _refresh_index(root, mode, sub)
+        if not root.is_dir():
+            return self.send_error(404, "dataset missing", explain=f"{root} (bound as {name!r}) is not on disk any more")
+        sub = "/" + "/".join(parts[1:]) + ("/" if raw.endswith("/") and len(parts) > 1 else "")
+        if not raw.endswith("/") and (len(parts) == 1 or (root / sub.lstrip("/")).is_dir()):
+            return self._redirect(raw + "/")  # ourselves, not SimpleHTTPRequestHandler: its redirect would drop the /<name> prefix
+        try:
+            page = _render_index(root, sub)
+        except Exception as e:  # a broken page must not take the server down; fall back to the static file
+            sys.stderr.write(f"[serve] live render failed for {name}{sub}: {e}\n")
+            page = None
+        if page is not None:
+            return self._html(page)
         self.directory = str(root)
         self.path = sub
         http.server.SimpleHTTPRequestHandler.do_GET(self)
-
-    def _navigator(self) -> None:
-        enc = _navigator_html(self._registry.snapshot()).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(enc)))
-        self.end_headers()
-        self.wfile.write(enc)
 
     def _redirect(self, location: str) -> None:
         self.send_response(301)
@@ -442,116 +558,39 @@ def start_ngrok(port: int, domain: str | None) -> tuple[subprocess.Popen, str]:
     return proc, url
 
 
-# ---------------------------------------------------------------- admin socket
+# ---------------------------------------------------------------- serve (foreground)
 
-class _AdminHandler(socketserver.StreamRequestHandler):
-    def handle(self) -> None:
-        line = self.rfile.readline()
-        if not line:
-            return
+def cmd_serve(args: argparse.Namespace) -> int:
+    reg_path = Path(args.registry).expanduser().resolve()
+    extra: dict[str, Path] = {}
+    for d in args.dir:
+        p = Path(d).expanduser().resolve()
         try:
-            req = json.loads(line.decode())
-            op = req["op"]
-        except Exception:
-            return self._reply({"ok": False, "error": "bad request"})
-        reg: Registry = self.server.registry  # type: ignore[attr-defined]
-        try:
-            if op == "ping":
-                self._reply({"ok": True})
-            elif op == "bind":
-                reg.bind(req["name"], Path(req["path"]))
-                self._reply({"ok": True})
-            elif op == "unbind":
-                reg.unbind(req["name"])
-                self._reply({"ok": True})
-            elif op == "list":
-                self._reply({"ok": True, "items": {k: str(v) for k, v in reg.snapshot().items()}})
-            elif op == "dump":
-                p = Path(req["path"])
-                reg.dump(p)
-                self._reply({"ok": True, "path": str(p)})
-            elif op == "reload":
-                n = reg.reload(Path(req["path"]))
-                self._reply({"ok": True, "added": n})
-            else:
-                self._reply({"ok": False, "error": f"unknown op {op!r}"})
-        except Exception as e:
-            self._reply({"ok": False, "error": str(e)})
-
-    def _reply(self, obj: dict) -> None:
-        self.wfile.write((json.dumps(obj) + "\n").encode())
-
-
-class _AdminServer(socketserver.ThreadingUnixStreamServer):
-    daemon_threads = True
-
-    def __init__(self, sock_path: Path, registry: Registry):
-        if sock_path.exists():
-            sock_path.unlink()
-        super().__init__(str(sock_path), _AdminHandler)
-        self.registry = registry
-        os.chmod(str(sock_path), 0o600)  # local-user-only; this is the control plane, not the public port
-
-
-def _admin_call(state: Path, op: str, timeout: float = 5.0, **kw) -> dict:
-    sock_path = state / "admin.sock"
-    if not sock_path.exists():
-        return {"ok": False, "error": "daemon not running (no admin socket) — `ecarsi serve start` first"}
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.settimeout(timeout)
-    try:
-        s.connect(str(sock_path))
-        s.sendall((json.dumps({"op": op, **kw}) + "\n").encode())
-        buf = b""
-        while not buf.endswith(b"\n"):
-            chunk = s.recv(4096)
-            if not chunk:
-                break
-            buf += chunk
-        return json.loads(buf.decode()) if buf else {"ok": False, "error": "no response from daemon"}
-    except OSError as e:
-        return {"ok": False, "error": f"could not reach daemon: {e}"}
-    finally:
-        s.close()
-
-
-# ---------------------------------------------------------------- daemon (runs inside tmux)
-
-def _alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
-
-
-def _daemon_main(args: argparse.Namespace) -> int:
-    state = Path(args.state)
-    state.mkdir(parents=True, exist_ok=True)
-    registry = Registry()
+            _check_dataset(p)
+        except ValueError as e:
+            print(f"[serve] {e}")
+            return 2
+        if p.name in extra and extra[p.name] != p:
+            print(f"[serve] two command-line dirs both named {p.name!r}: {extra[p.name]} and {p} — put one in the registry under another name")
+            return 2
+        extra[p.name] = p
+    registry = Registry(reg_path, extra)
+    items = registry.snapshot()
     httpd = http.server.ThreadingHTTPServer((args.bind, args.port),
                                           partial(Handler, registry=registry, auth=args.auth))
-    admin = _AdminServer(state / "admin.sock", registry)
-    threading.Thread(target=admin.serve_forever, daemon=True).start()
-    (state / "pid").write_text(str(os.getpid()))
-    print(f"[serve] navigator on http://{args.bind}:{args.port}/  (state {state})"
+    print(f"[serve] navigator on http://{args.bind}:{args.port}/  ({len(items)} dataset(s); registry {reg_path}"
+          + (f", {len(extra)} from the command line)" if extra else ")")
           + (f"  [password-protected, user {args.auth.split(':', 1)[0]!r}]" if args.auth else "  [no password]"), flush=True)
+    for name, p in sorted(items.items()):
+        print(f"  /{name}/  {p}", flush=True)
 
     tunnel = None
-    npf = state / "ngrok_pid"
-    if args.ngrok:
+    if args.ngrok or args.domain:
         tunnel, url = start_ngrok(args.port, args.domain)
         print(f"[serve] public: {url}/", flush=True)
-        # recorded separately from the main pidfile so `stop` can still reap
-        # this child if the daemon ever dies without running its own cleanup
-        # (crash, OOM-kill, kill -9) — otherwise it's an orphan forever
-        npf.write_text(str(tunnel.pid))
 
     def shutdown(*_):
-        if tunnel and tunnel.poll() is None:
-            tunnel.terminate()
         threading.Thread(target=httpd.shutdown, daemon=True).start()
-        threading.Thread(target=admin.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
@@ -559,260 +598,206 @@ def _daemon_main(args: argparse.Namespace) -> int:
         httpd.serve_forever()
     finally:
         httpd.server_close()
-        admin.server_close()
         if tunnel and tunnel.poll() is None:
             tunnel.terminate()
-        npf.unlink(missing_ok=True)
-        (state / "pid").unlink(missing_ok=True)
-        (state / "admin.sock").unlink(missing_ok=True)
+            try:
+                tunnel.wait(5)
+            except subprocess.TimeoutExpired:
+                tunnel.kill()
     print("[serve] stopped", flush=True)
     return 0
 
 
-# ---------------------------------------------------------------- tmux process lifecycle
+# ---------------------------------------------------------------- registry commands
 
-def _tmux_has_session(session: str) -> bool:
-    return subprocess.run(_tmux("has-session", "-t", session),
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+GENERIC_DIR_NAMES = {"rsi", "root", "run", "runs", "out", "output", "results", "eca-rsi", "ecarsi", "eca-pp", "units", "data", "sc"}
 
 
-def _state_dir(args: argparse.Namespace) -> Path:
-    if getattr(args, "state", None):
-        return Path(args.state).resolve()
-    base = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state")))
-    return base / "ecarsi" / "serve"
+def _scan_names(dirs: list[Path], taken: dict[str, Path]) -> dict[Path, str]:
+    """Names for a batch of scanned dirs. Path components that carry no
+    information (rsi, eca-pp, units, ...) are dropped; each dir starts with
+    its last informative component and every dir whose name collides —
+    within the batch or with an existing entry for another path — is
+    qualified by one more component, symmetrically (Brain across three
+    collections becomes mca1.1-Brain / mca2.0-Brain / mca3.0-Brain, not
+    Brain / Brain-rsi / eca-pp-Brain)."""
+    comps = {d: [c for c in d.parts[1:] if c not in GENERIC_DIR_NAMES] or [d.name] for d in dirs}
+    depth = {d: 1 for d in dirs}
+    name = lambda d: "-".join(comps[d][-depth[d]:])
+    while True:
+        by: dict[str, list[Path]] = {}
+        for d in dirs:
+            by.setdefault(name(d), []).append(d)
+        clash = [d for n, ds in by.items() for d in ds
+                 if len(ds) > 1 or (n in taken and taken[n] != d)]
+        clash = [d for d in clash if depth[d] < len(comps[d])]  # can't qualify further
+        if not clash:
+            return {d: name(d) for d in dirs}
+        for d in clash:
+            depth[d] += 1
 
 
-def cmd_start(args: argparse.Namespace) -> int:
-    state = _state_dir(args)
-    state.mkdir(parents=True, exist_ok=True)
-    if _tmux_has_session(args.session):
-        print(f"[serve] already running (tmux session {args.session!r}) — `ecarsi serve attach` or `ecarsi serve stop` first")
+def cmd_scan_add(args: argparse.Namespace) -> int:
+    reg = Registry(Path(args.registry).expanduser().resolve())
+    matches = sorted({Path(m).resolve() for pat in args.glob for m in _glob.glob(os.path.expandvars(os.path.expanduser(pat)))})
+    if not matches:
+        print("[serve] nothing matched")
         return 1
-    cmd = [sys.executable, "-m", "ecarsi.serve", "_daemon", "--port", str(args.port),
-           "--bind", args.bind, "--state", str(state)]
-    if args.ngrok or args.domain:
-        cmd.append("--ngrok")
-    if args.domain:
-        cmd += ["--domain", args.domain]
-    if args.auth:
-        cmd += ["--auth", args.auth]
-    subprocess.run(_tmux("new-session", "-d", "-s", args.session, shlex.join(cmd)), check=True,
-                   cwd=str(Path(__file__).resolve().parent.parent))
-    deadline = time.time() + 15
-    up = False
-    while time.time() < deadline:
-        if (state / "admin.sock").exists() and _admin_call(state, "ping", timeout=2).get("ok"):
-            up = True
-            break
-        time.sleep(0.3)
-    if not up:
-        print(f"[serve] daemon did not come up in time; check `tmux -L {TMUX_SERVER} attach -t {args.session}`")
-        return 1
-    print(f"[serve] started (tmux session {args.session!r}); attach with `ecarsi serve attach`")
-    if args.dir:
-        name = args.name or Path(args.dir).resolve().name
-        r = _admin_call(state, "bind", name=name, path=str(Path(args.dir).resolve()))
-        print(f"[serve] bound {name!r} -> {args.dir}" if r.get("ok") else f"[serve] bind failed: {r.get('error')}")
-    if args.attach:
-        _exec_tmux_attach(args.session)
-    return 0
-
-
-def cmd_stop(args: argparse.Namespace) -> int:
-    state = _state_dir(args)
-    pf = state / "pid"
-    if pf.is_file():
-        pid = int(pf.read_text())
-        if _alive(pid):
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except OSError:
-                pass
-            print(f"[serve] stopped pid {pid}")
-            for _ in range(20):
-                if not _alive(pid):
-                    break
-                time.sleep(0.2)
-        else:
-            print(f"[serve] pid {pid} was not running")
-        pf.unlink(missing_ok=True)
+    taken = reg.snapshot()
+    new, skipped = [], []
+    for d in matches:
+        if not d.is_dir():
+            continue
+        if not (L.is_root(d) or L.is_unit(d)):
+            skipped.append(d)
+        elif d not in taken.values():  # already in under some name -> leave it
+            new.append(d)
+    if args.name:
+        if len(new) != 1:
+            print(f"[serve] --name needs exactly one new dataset, got {len(new)}")
+            return 2
+        names = {new[0]: args.name}
     else:
-        print("[serve] no pidfile — daemon may not be running")
-    # independent reap: if the daemon died earlier without running its own
-    # cleanup (crash, OOM-kill, kill -9), its ngrok child is orphaned and the
-    # SIGTERM above never reaches it — kill it directly by its own pid
-    npf = state / "ngrok_pid"
-    if npf.is_file():
-        npid = int(npf.read_text())
-        if _alive(npid):
-            try:
-                os.kill(npid, signal.SIGTERM)
-            except OSError:
-                pass
-            print(f"[serve] stopped orphaned ngrok pid {npid}")
-        npf.unlink(missing_ok=True)
-    if _tmux_has_session(args.session):
-        subprocess.run(_tmux("kill-session", "-t", args.session))
-    return 0
+        names = _scan_names(new, taken)
+    plan = [(names[d], d) for d in new]
+    for d in skipped:
+        print(f"  skip   {d}  (not an organize root / unit)")
+    if not plan:
+        print(f"[serve] nothing new to add ({len(matches)} matched, {len(skipped)} skipped, {len(matches) - len(skipped)} already in)")
+        return 0
+    n_ok = 0
+    for name, d in plan:
+        if args.dry_run:
+            print(f"  would  {name:24s} {d}")
+            continue
+        try:
+            reg.bind(name, d)
+            n_ok += 1
+            print(f"  added  {name:24s} {d}")
+        except (ValueError, OSError) as e:
+            print(f"  FAILED {name:24s} {d}  ({e})")
+    if args.dry_run:
+        print(f"[serve] dry run: {len(plan)} to add, {len(skipped)} skipped")
+        return 0
+    print(f"[serve] added {n_ok}/{len(plan)}, {len(skipped)} skipped -> {reg.path}")
+    return 0 if n_ok == len(plan) else 1
 
 
-def cmd_attach(args: argparse.Namespace) -> int:
-    if not _tmux_has_session(args.session):
-        print(f"[serve] no tmux session {args.session!r} — `ecarsi serve start` first")
+def cmd_remove(args: argparse.Namespace) -> int:
+    reg = Registry(Path(args.registry).expanduser().resolve())
+    try:
+        reg.unbind(args.name)
+    except (ValueError, OSError) as e:
+        print(f"[serve] remove failed: {e}")
         return 1
-    _exec_tmux_attach(args.session)
-
-
-def cmd_status(args: argparse.Namespace) -> int:
-    alive = _tmux_has_session(args.session)
-    print(f"[serve] session {args.session!r}: {'running' if alive else 'not running'}")
-    if not alive:
-        return 0
-    r = _admin_call(_state_dir(args), "list")
-    if not r.get("ok"):
-        print(f"  (could not query admin socket: {r.get('error')})")
-        return 0
-    items = r["items"]
-    if not items:
-        print("  (nothing bound)")
-    for name, path in sorted(items.items()):
-        print(f"  {name:20s} {path}")
+    print(f"[serve] removed {', '.join(args.name)} from {reg.path}")
     return 0
-
-
-def cmd_bind(args: argparse.Namespace) -> int:
-    d = Path(args.dir).resolve()
-    name = args.name or d.name
-    r = _admin_call(_state_dir(args), "bind", name=name, path=str(d))
-    if r.get("ok"):
-        print(f"[serve] bound {name!r} -> {d}")
-        return 0
-    print(f"[serve] bind failed: {r.get('error')}")
-    return 1
-
-
-def cmd_unbind(args: argparse.Namespace) -> int:
-    r = _admin_call(_state_dir(args), "unbind", name=args.name)
-    if r.get("ok"):
-        print(f"[serve] unbound {args.name!r}")
-        return 0
-    print(f"[serve] unbind failed: {r.get('error')}")
-    return 1
 
 
 def cmd_list(args: argparse.Namespace) -> int:
-    r = _admin_call(_state_dir(args), "list")
-    if not r.get("ok"):
-        print(f"[serve] {r.get('error')}")
-        return 1
-    items = r["items"]
-    if not items:
-        print("(nothing bound)")
-    for name, path in sorted(items.items()):
-        print(f"{name:20s} {path}")
+    reg = Registry(Path(args.registry).expanduser().resolve())
+    items = reg.snapshot()
+    if args.json:
+        out = {}
+        for name, p in sorted(items.items()):
+            st = _dataset_state(p)
+            out[name] = {"path": str(p), **st}
+        print(json.dumps({"registry": str(reg.path), "datasets": out}, indent=2))
+        return 0
+    print(f"registry {reg.path}" + ("" if items else "  (empty)"))
+    for name, p in sorted(items.items()):
+        st = _dataset_state(p)
+        cells = index._n(st["final_cells"]) or "-"
+        print(f"  {name:24s} {st['stage']:18s} {cells:>10s}  {p}")
     return 0
 
 
 def cmd_dump(args: argparse.Namespace) -> int:
-    state = _state_dir(args)
-    path = Path(args.path) if args.path else state / "registry.json"
-    r = _admin_call(state, "dump", path=str(path))
-    if r.get("ok"):
-        print(f"[serve] dumped registry -> {r['path']}")
+    reg_path = Path(args.registry).expanduser().resolve()
+    items = Registry.read_file(reg_path)
+    if not args.path:
+        print(json.dumps({k: str(v) for k, v in sorted(items.items())}, indent=2))
         return 0
-    print(f"[serve] dump failed: {r.get('error')}")
-    return 1
+    out = Path(args.path).expanduser().resolve()
+    Registry.write_file(out, items)
+    print(f"[serve] wrote {len(items)} entr{'y' if len(items) == 1 else 'ies'} -> {out}")
+    return 0
 
 
 def cmd_reload(args: argparse.Namespace) -> int:
-    state = _state_dir(args)
-    path = Path(args.path) if args.path else state / "registry.json"
-    r = _admin_call(state, "reload", path=str(path))
-    if r.get("ok"):
-        print(f"[serve] reloaded {r.get('added', '?')} binding(s) from {path}")
-        return 0
-    print(f"[serve] reload failed: {r.get('error')}")
-    return 1
+    reg_path = Path(args.registry).expanduser().resolve()
+    src = Path(args.path).expanduser().resolve()
+    if not src.is_file():
+        print(f"[serve] {src} does not exist")
+        return 1
+    try:
+        incoming = Registry.read_file(src)
+    except ValueError as e:
+        print(f"[serve] {e}")
+        return 1
+    current = {} if args.replace else Registry.read_file(reg_path)
+    merged = {**current, **incoming}  # entries from the file win on a name clash
+    Registry.write_file(reg_path, merged)
+    print(f"[serve] {'replaced with' if args.replace else 'merged'} {len(incoming)} entr{'y' if len(incoming) == 1 else 'ies'} from {src} -> {reg_path} ({len(merged)} total)")
+    return 0
 
 
 # ---------------------------------------------------------------- cli
 
 def main(argv: list[str]) -> int:
+    def registry_arg(p):
+        p.add_argument("--registry", default=str(default_registry()), metavar="FILE",
+                       help="registry file, JSON {name: path} (default $XDG_CONFIG_HOME/ecarsi/registry.json)")
+
+    if argv and argv[0] in SUBCOMMANDS:
+        ap = argparse.ArgumentParser(prog="ecarsi.serve", description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+        sub = ap.add_subparsers(dest="cmd", required=True)
+
+        p = sub.add_parser("scan-add", help="add every organize root / unit matching the globs to the registry")
+        p.add_argument("glob", nargs="+", help="dirs or globs, e.g. '$OAK/data/sc/*/eca-pp/*/rsi' (quote it)")
+        p.add_argument("--name", default=None, help="name for the (single) dataset instead of the derived one")
+        p.add_argument("--dry-run", action="store_true", help="show what would be added, add nothing")
+        registry_arg(p)
+        p.set_defaults(func=cmd_scan_add)
+
+        p = sub.add_parser("remove", help="remove datasets from the registry by name")
+        p.add_argument("name", nargs="+")
+        registry_arg(p)
+        p.set_defaults(func=cmd_remove)
+
+        p = sub.add_parser("list", help="list the registry, with each dataset's stage and final cells")
+        p.add_argument("--json", action="store_true")
+        registry_arg(p)
+        p.set_defaults(func=cmd_list)
+
+        p = sub.add_parser("dump", help="copy the registry file to PATH (no PATH: print it)")
+        p.add_argument("path", nargs="?", default=None)
+        registry_arg(p)
+        p.set_defaults(func=cmd_dump)
+
+        p = sub.add_parser("reload", help="merge another registry file into the registry")
+        p.add_argument("path")
+        p.add_argument("--replace", action="store_true", help="replace the whole list instead of merging")
+        registry_arg(p)
+        p.set_defaults(func=cmd_reload)
+
+        args = ap.parse_args(argv)
+        return args.func(args)
+
     ap = argparse.ArgumentParser(prog="ecarsi.serve", description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    sub = ap.add_subparsers(dest="cmd", required=True)
-
-    def state_arg(p):
-        p.add_argument("--state", default=None,
-                       help="state dir (default $XDG_STATE_HOME/ecarsi/serve or ~/.local/state/ecarsi/serve)")
-
-    def session_arg(p):
-        p.add_argument("--session", default=DEFAULT_SESSION, help=f"tmux session name (default {DEFAULT_SESSION})")
-
-    p = sub.add_parser("start", help="start the daemon inside a tmux session; optionally bind one dir immediately")
-    p.add_argument("dir", nargs="?", default=None, help="optional: bind this dir right away")
-    p.add_argument("--name", default=None, help="bind name for dir (default: its basename)")
-    p.add_argument("--port", type=int, default=8899)
-    p.add_argument("--bind", default="127.0.0.1", help="default local only; 0.0.0.0 to expose on the LAN")
-    p.add_argument("--ngrok", action="store_true", help="also open an ngrok tunnel to this port")
-    p.add_argument("--domain", default=None, help="reserved ngrok domain (implies --ngrok)")
-    p.add_argument("--auth", default=None, metavar="USER:PASS", help="web-level password (HTTP basic auth, enforced by the server on every request, local or tunnel); default none")
-    p.add_argument("--attach", action="store_true", help="attach to the tmux session after starting")
-    session_arg(p)
-    state_arg(p)
-    p.set_defaults(func=cmd_start)
-
-    p = sub.add_parser("stop", help="stop the daemon, its ngrok tunnel, and the tmux session")
-    session_arg(p)
-    state_arg(p)
-    p.set_defaults(func=cmd_stop)
-
-    p = sub.add_parser("attach", help="attach to the running daemon's tmux session (tmux prefix+d to detach)")
-    session_arg(p)
-    p.set_defaults(func=cmd_attach)
-
-    p = sub.add_parser("status", help="is the daemon running, and what's bound")
-    session_arg(p)
-    state_arg(p)
-    p.set_defaults(func=cmd_status)
-
-    p = sub.add_parser("bind", help="bind a dataset dir into the running daemon")
-    p.add_argument("dir")
-    p.add_argument("--name", default=None)
-    state_arg(p)
-    p.set_defaults(func=cmd_bind)
-
-    p = sub.add_parser("unbind", help="unbind a dataset by name")
-    p.add_argument("name")
-    state_arg(p)
-    p.set_defaults(func=cmd_unbind)
-
-    p = sub.add_parser("list", help="list bound datasets")
-    state_arg(p)
-    p.set_defaults(func=cmd_list)
-
-    p = sub.add_parser("dump", help="write the current bindings to a JSON file (explicit snapshot, not automatic)")
-    p.add_argument("path", nargs="?", default=None)
-    state_arg(p)
-    p.set_defaults(func=cmd_dump)
-
-    p = sub.add_parser("reload", help="merge bindings from a JSON file into the running daemon")
-    p.add_argument("path", nargs="?", default=None)
-    state_arg(p)
-    p.set_defaults(func=cmd_reload)
-
-    p = sub.add_parser("_daemon", help=argparse.SUPPRESS)  # internal: launched by `start` inside tmux
-    p.add_argument("--port", type=int, required=True)
-    p.add_argument("--bind", default="127.0.0.1")
-    p.add_argument("--ngrok", action="store_true")
-    p.add_argument("--domain", default=None)
-    p.add_argument("--auth", default=None)
-    p.add_argument("--state", required=True)
-    p.set_defaults(func=_daemon_main)
-
+                                 formatter_class=argparse.RawDescriptionHelpFormatter,
+                                 epilog="registry subcommands: " + " | ".join(SUBCOMMANDS) + "  (ecarsi serve <sub> --help)")
+    ap.add_argument("dir", nargs="*", help="extra dataset dirs to serve for this process only (name = basename)")
+    ap.add_argument("--port", type=int, default=8899)
+    ap.add_argument("--bind", default="127.0.0.1", help="default local only; 0.0.0.0 to expose on the LAN")
+    ap.add_argument("--ngrok", action="store_true", help="also open an ngrok tunnel to this port")
+    ap.add_argument("--domain", default=None, help="reserved ngrok domain (implies --ngrok)")
+    ap.add_argument("--auth", default=None, metavar="USER:PASS",
+                    help="web-level password (HTTP basic auth, enforced by the server on every request, local or tunnel); default none")
+    registry_arg(ap)
     args = ap.parse_args(argv)
-    return args.func(args)
+    return cmd_serve(args)
 
 
 if __name__ == "__main__":

@@ -5,14 +5,16 @@
     eca-rsi persample <unit> [...]           eca-rsi loop   <unit> [...]
     eca-rsi crosssample <unit> [round_dir]   eca-rsi zoomin <unit> [round_dir]
     eca-rsi ledger    <unit> [round dirs]    eca-rsi index  <root|unit>
-    eca-rsi serve     start|stop|attach|status|bind|unbind|list|dump|reload ...
+    eca-rsi serve     [dir...] [--registry F] [--port] [--ngrok --domain D] [--auth U:P]
+    eca-rsi serve     scan-add|remove|list|dump|reload ...   (edit the registry file)
     eca-rsi umapdata  <h5ad> <out.json>
 
 `run` chains everything for one dataset: organize the eca-pp products into
 <root>, then for every analysis unit persample (osp) → loop (msp + zmip
 rounds until the cell count converges) → release; with --serve it finally
-binds <root> into the persistent serve daemon at http://127.0.0.1:PORT/<root-name>/
-(starting the daemon if none is running; add --ngrok to publish).
+adds <root> to the serve registry and serves it (and everything else in the
+registry) in the foreground at http://127.0.0.1:PORT/<root-name>/ (add
+--ngrok to publish; Ctrl-C to stop).
 Every step resumes, so re-running the same command after an interruption
 continues where it stopped. `python -m ecarsi ...` is the same thing.
 """
@@ -42,10 +44,10 @@ def run(argv: list[str]) -> int:
     ap.add_argument("--cap", type=int, default=None, help="loop safety cap (default 10)")
     ap.add_argument("--force-reopen", action="store_true", help="continue past an existing release")
     ap.add_argument("--serve", nargs="?", const=8899, type=int, default=None, metavar="PORT",
-                    help="after the run, bind <root> into the serve daemon on this port (starting it if needed; default 8899)")
+                    help="after the run, add <root> to the serve registry and serve (foreground) on this port (default 8899)")
     ap.add_argument("--ngrok", action="store_true", help="with --serve: also open an ngrok tunnel")
     ap.add_argument("--domain", default=None, help="with --serve: reserved ngrok domain")
-    ap.add_argument("--auth", default=None, help="with --serve: basic auth USER:PASS on the tunnel")
+    ap.add_argument("--auth", default=None, help="with --serve: web-level password USER:PASS")
     a = ap.parse_args(argv)
     root = Path(a.root).resolve()
 
@@ -82,24 +84,25 @@ def run(argv: list[str]) -> int:
     for name, step, rc in failed:
         print(f"[eca-rsi] FAILED {name} at {step} (rc={rc}) — re-run the same command to resume")
     if a.serve is not None:
-        # the serve daemon is persistent and multi-tenant: if one is already
-        # up, just bind this root into it; otherwise start one (in tmux) with
-        # this root bound. Either way we return — nothing runs in the foreground
+        # record this root in the registry file (so any later `eca-rsi serve`
+        # shows it too), then serve everything in the registry in the
+        # foreground until Ctrl-C — the server itself keeps no state
         serve = _module("serve")
-        if serve.cmd_bind(argparse.Namespace(dir=str(root), name=root.name, state=None)) != 0:
-            serve_args = ["start", str(root), "--name", root.name, "--port", str(a.serve)]
-            if a.ngrok:
-                serve_args.append("--ngrok")
-            if a.domain:
-                serve_args += ["--domain", a.domain]
-            if a.auth:
-                serve_args += ["--auth", a.auth]
-            rc = serve.main(serve_args)
-            if rc:
-                return rc
-        print(f"[eca-rsi] serving {root.name} at http://127.0.0.1:{a.serve}/{root.name}/  (eca-rsi serve status)")
-        return 1 if failed else 0
-    print(f"\n[eca-rsi] done — landing page: {root / L.INDEX}  (eca-rsi serve start {root})")
+        try:
+            serve.Registry(serve.default_registry()).bind(root.name, root)
+        except ValueError as e:
+            print(f"[eca-rsi] not added to the registry ({e}); serving it for this process only")
+        serve_args = [str(root), "--port", str(a.serve)]
+        if a.ngrok:
+            serve_args.append("--ngrok")
+        if a.domain:
+            serve_args += ["--domain", a.domain]
+        if a.auth:
+            serve_args += ["--auth", a.auth]
+        print(f"[eca-rsi] serving {root.name} at http://127.0.0.1:{a.serve}/{root.name}/", flush=True)
+        rc = serve.main(serve_args)
+        return rc or (1 if failed else 0)
+    print(f"\n[eca-rsi] done — landing page: {root / L.INDEX}  (eca-rsi serve scan-add {root}; eca-rsi serve)")
     return 1 if failed else 0
 
 
