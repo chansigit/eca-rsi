@@ -15,17 +15,18 @@ ephemeral localhost port for the lifetime of one run_agent() call; dsh
 connects to it as any other MCP client would.
 
 Read-only exploration is served by this process as cwd-confined MCP
-Read/Glob/Grep tools.  The sdk-minimal profile's bash and editor are always
+Read/Glob/Grep tools (shared with the OpenAI adapter, see
+_harness_host_tools).  The sdk-minimal profile's bash and editor are always
 disabled: its editor is backed by fs-local and therefore is not made
 read-only by sandbox-policy, while the profile has no native Read/Glob/Grep
 tools.  Keeping the compatibility allowlist in Python makes the DeepSeek and
 Claude backends expose the same capabilities instead of treating a non-empty
 allowlist as permission for every sdk-minimal coding tool.
 
-Read also returns PNG/JPEG/WebP/GIF files as MCP image content.  The patch
-mounts dsh's durable attachment store and declares the hand-configured Doubao
-route image-capable, so mcp-client can admit the image and pi-ai can send it
-with the next model request. This supports applications that require visual
+Read returns PNG/JPEG/WebP/GIF files as MCP image content.  The patch mounts
+dsh's durable attachment store and declares the hand-configured Doubao route
+image-capable, so mcp-client can admit the image and pi-ai can send it with
+the next model request. This supports applications that require visual
 evidence before submission.
 
 Model provider: dsh's built-in `deepseek-official` route only ever reaches
@@ -63,14 +64,11 @@ Env:
 from __future__ import annotations
 
 import asyncio
-import base64
 import glob as globlib
 import inspect
 import logging
 import os
 import shutil
-import socket
-import subprocess
 import tempfile
 import threading
 from pathlib import Path
@@ -83,7 +81,8 @@ for _name in ("mcp", "mcp.server", "mcp.server.streamable_http", "mcp.server.str
 # (uvicorn's own loggers are configured at server start, so they are quieted
 # through uvicorn.Config(log_level=...) in run_agent, not here)
 
-from .harness import AgentIncompleteError, AgentRunResult, AgentTimeout, ToolSpec
+from ._harness_host_tools import served_tools, with_runtime_instructions
+from .harness import BUILTIN_CAPABILITIES, AgentIncompleteError, AgentRunResult, AgentTimeout, ToolSpec
 
 # sse-starlette (the SSE layer under mcp's streamable-http transport) keeps a
 # PROCESS-GLOBAL `AppStatus.should_exit`; its per-loop watcher copies uvicorn's
@@ -103,12 +102,6 @@ except Exception:  # pragma: no cover - older/newer sse-starlette without the kn
 
 _BUILTIN_DISABLE_IDS = ("persistent-bash", "terminal-bash", "persistent-pwsh",
                          "terminal-pwsh", "str-replace-editor")
-
-_ALLOWED_CAPABILITIES = frozenset(("read", "glob", "grep", "tasks"))
-_READ_MAX_BYTES = 512 * 1024
-_IMAGE_MAX_BYTES = 20 * 1024 * 1024
-_SEARCH_MAX_BYTES = 256 * 1024
-_SEARCH_MAX_RESULTS = 500
 
 DOUBAO_BASE_URL_DEFAULT = "https://ark.cn-beijing.volces.com/api/v3"
 
@@ -288,22 +281,13 @@ def _keep_session_log(dsh_home: str, cwd: str, label: str) -> None:
     out of the disposable dsh home into cwd, for post-mortems of runs that
     ended without a submit — the transcript is the only record of what the
     model actually did in dsh (our trace only sees our own tools)."""
-    import glob
-    import shutil
-
-    for src in glob.glob(os.path.join(dsh_home, "sessions", "*", "*", "session.jsonl")):
+    for src in globlib.glob(os.path.join(dsh_home, "sessions", "*", "*", "session.jsonl")):
         dst = os.path.join(cwd, f"dsh_session_{label.replace(' ', '_').replace('/', '_')}.jsonl")
         try:
             shutil.copy(src, dst)
             print(f"== [{label}] dsh session transcript kept at {dst}", flush=True)
         except OSError as e:
             print(f"== [{label}] could not keep dsh session transcript: {e}", flush=True)
-
-
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 def _tool_fn(spec: ToolSpec, submitted_holder: dict, is_submit: bool, label: str):
@@ -315,7 +299,14 @@ def _tool_fn(spec: ToolSpec, submitted_holder: dict, is_submit: bool, label: str
     async def fn(**kwargs):
         arg_hint = str(next(iter(kwargs.values()), ""))[:80]  # same trace line as the Claude backend
         print(f"== [{label}] agent: {spec.name}({arg_hint})", flush=True)
-        result = await spec.handler(kwargs)
+        try:
+            result = await spec.handler(kwargs)
+        except Exception as exc:
+            # FastMCP turns this into an isError result the model can read;
+            # log it here so the host trace shows it like the other backends
+            print(f"== [{label}] tool exception in {spec.name}: {type(exc).__name__}: {str(exc)[:200]!r}",
+                  flush=True)
+            raise
         if result.get("is_error"):
             text = " ".join(str(c.get("text", "")) for c in result.get("content", []))
             print(f"== [{label}] tool error in {spec.name}: {text[:200]!r}", flush=True)
@@ -336,234 +327,9 @@ def _tool_fn(spec: ToolSpec, submitted_holder: dict, is_submit: bool, label: str
     return fn
 
 
-def _readonly_tools(cwd: str, allowed_builtin: tuple[str, ...]) -> list[ToolSpec]:
-    """Build the exact cwd-confined exploration surface requested by a call.
-
-    These tools deliberately live on the host side of the MCP boundary.  dsh's
-    sdk-minimal profile does not contain Read/Glob/Grep, and its fs-local editor
-    remains write-capable even when sandbox-policy says read-only.
-    """
-    unknown = sorted(set(allowed_builtin) - _ALLOWED_CAPABILITIES)
-    if unknown:
-        raise ValueError(f"unsupported allowed_builtin capabilities for HARNESS=deepseek: {unknown}")
-
-    root = Path(cwd).resolve(strict=True)
-    if not root.is_dir():
-        raise ValueError(f"agent cwd is not a directory: {root}")
-
-    def _text(value: str):
-        return {"content": [{"type": "text", "text": value}]}
-
-    def _err(value: str):
-        return {"content": [{"type": "text", "text": value}], "is_error": True}
-
-    def _within_root(path: Path) -> bool:
-        try:
-            return os.path.commonpath((str(root), str(path))) == str(root)
-        except ValueError:
-            return False
-
-    def _resolve(raw: object) -> Path:
-        value = str(raw or "").strip()
-        if not value:
-            raise ValueError("path must be non-empty")
-        candidate = Path(value)
-        if not candidate.is_absolute():
-            candidate = root / candidate
-        resolved = candidate.resolve(strict=True)
-        if not _within_root(resolved):
-            raise ValueError(f"path is outside the working directory {root}: {value}")
-        return resolved
-
-    def _display(path: Path) -> str:
-        return "." if path == root else path.relative_to(root).as_posix()
-
-    def _image_type(data: bytes) -> str | None:
-        if data.startswith(b"\x89PNG\r\n\x1a\n"):
-            return "image/png"
-        if data.startswith(b"\xff\xd8\xff"):
-            return "image/jpeg"
-        if data.startswith((b"GIF87a", b"GIF89a")):
-            return "image/gif"
-        if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-            return "image/webp"
-        return None
-
-    async def read(args):
-        try:
-            path = _resolve(args.get("file_path"))
-            if not path.is_file():
-                return _err(f"not a regular file: {_display(path)}")
-            size = path.stat().st_size
-            with path.open("rb") as fh:
-                prefix = fh.read(16)
-                media_type = _image_type(prefix)
-                if media_type is not None:
-                    if size > _IMAGE_MAX_BYTES:
-                        return _err(f"image is {size} bytes; maximum is {_IMAGE_MAX_BYTES}: {_display(path)}")
-                    fh.seek(0)
-                    data = fh.read()
-                    return {"content": [
-                        {"type": "text", "text": f"Image file: {_display(path)} ({media_type}, {size} bytes)"},
-                        {"type": "image", "data": base64.b64encode(data).decode("ascii"),
-                         "mimeType": media_type},
-                    ]}
-                fh.seek(0)
-                data = fh.read(_READ_MAX_BYTES + 1)
-            truncated = len(data) > _READ_MAX_BYTES
-            data = data[:_READ_MAX_BYTES]
-            if b"\x00" in data:
-                return _err(f"binary file is not a supported raster image: {_display(path)}")
-            body = data.decode("utf-8", errors="replace")
-            suffix = (f"\n\n[truncated after {_READ_MAX_BYTES} bytes; narrow the source file before reading]"
-                      if truncated else "")
-            return _text(f"<path>{_display(path)}</path>\n<content>\n{body}{suffix}\n</content>")
-        except (OSError, ValueError) as exc:
-            return _err(str(exc))
-
-    async def glob(args):
-        pattern = str(args.get("pattern") or "").strip()
-        if not pattern:
-            return _err("pattern must be non-empty")
-        parts = Path(pattern).parts
-        if Path(pattern).is_absolute() or ".." in parts:
-            return _err("glob pattern must be relative to the working directory and cannot contain '..'")
-        matches: list[str] = []
-        try:
-            for raw in globlib.iglob(str(root / pattern), recursive=True):
-                path = Path(raw).resolve(strict=True)
-                if not _within_root(path):
-                    continue
-                matches.append(_display(path) + ("/" if path.is_dir() else ""))
-                if len(matches) >= _SEARCH_MAX_RESULTS:
-                    break
-        except (OSError, ValueError) as exc:
-            return _err(str(exc))
-        matches = sorted(set(matches))
-        suffix = f"\n[limited to {_SEARCH_MAX_RESULTS} results]" if len(matches) >= _SEARCH_MAX_RESULTS else ""
-        return _text("\n".join(matches) + suffix if matches else "no matches")
-
-    async def grep(args):
-        pattern = str(args.get("pattern") or "")
-        if not pattern:
-            return _err("pattern must be non-empty")
-        try:
-            target = _resolve(args.get("path") or ".")
-        except (OSError, ValueError) as exc:
-            return _err(str(exc))
-        rg = shutil.which("rg")
-        if rg is None:
-            return _err("rg is unavailable on the host")
-        command = [rg, "--line-number", "--no-heading", "--color", "never",
-                   "--max-count", str(_SEARCH_MAX_RESULTS), "--", pattern, str(target)]
-        try:
-            proc = await asyncio.to_thread(
-                subprocess.run, command, cwd=root, capture_output=True, timeout=30, check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            return _err(f"grep failed: {exc}")
-        if proc.returncode not in (0, 1):
-            return _err(proc.stderr.decode("utf-8", errors="replace")[:4000] or
-                        f"rg exited with status {proc.returncode}")
-        data = proc.stdout
-        truncated = len(data) > _SEARCH_MAX_BYTES
-        body = data[:_SEARCH_MAX_BYTES].decode("utf-8", errors="replace")
-        if not body:
-            return _text("no matches")
-        if target.is_dir():
-            prefix = str(root) + os.sep
-            body = body.replace(prefix, "")
-        if truncated:
-            body += f"\n[truncated after {_SEARCH_MAX_BYTES} bytes]"
-        return _text(body.rstrip())
-
-    tools: list[ToolSpec] = []
-    if "read" in allowed_builtin:
-        tools.append(ToolSpec(
-            "Read",
-            f"Read a UTF-8 text file or inspect a PNG/JPEG/WebP/GIF image. Relative paths resolve from "
-            f"the working directory {root}; paths outside it are rejected.",
-            {"file_path": str}, read,
-        ))
-    if "glob" in allowed_builtin:
-        tools.append(ToolSpec(
-            "Glob",
-            f"List files matching a recursive glob relative to the working directory {root}.",
-            {"pattern": str}, glob,
-        ))
-    if "grep" in allowed_builtin:
-        tools.append(ToolSpec(
-            "Grep",
-            f"Search text with ripgrep inside the working directory {root}. path may be a relative file or "
-            "directory (use '.' for the whole working directory).",
-            {"pattern": str, "path": str}, grep,
-        ))
-    return tools
-
-
-def _task_tools() -> list[ToolSpec]:
-    """Host-side stand-in for Claude Code's session task list (allowed_builtin
-    "tasks"): same tool names and the same create/update/list/get shape, kept
-    in memory for one run_agent() call. Purely the model's own progress
-    checklist — coverage is enforced by each call site's finalize/submit
-    validation, never by this list."""
-    tasks: dict[str, dict] = {}
-    statuses = ("pending", "in_progress", "completed")
-
-    def _text(s):
-        return {"content": [{"type": "text", "text": s}]}
-
-    def _err(s):
-        return {"content": [{"type": "text", "text": s}], "is_error": True}
-
-    def _render(t):
-        return f"#{t['id']} [{t['status']}] {t['subject']}" + (f" — {t['description']}" if t["description"] else "")
-
-    async def task_create(args):
-        tid = str(len(tasks) + 1)
-        tasks[tid] = {"id": tid, "subject": str(args.get("subject") or "").strip(),
-                      "description": str(args.get("description") or "").strip(), "status": "pending"}
-        if not tasks[tid]["subject"]:
-            del tasks[tid]
-            return _err("subject is required")
-        return _text(f"created task #{tid}: {tasks[tid]['subject']}")
-
-    async def task_update(args):
-        tid = str(args.get("taskId") or "").lstrip("#")
-        if tid not in tasks:
-            return _err(f"no task #{tid}; existing: {sorted(tasks, key=int)}")
-        status = str(args.get("status") or "").strip()
-        if status not in statuses:
-            return _err(f"status must be one of {statuses}")
-        tasks[tid]["status"] = status
-        return _text(f"updated {_render(tasks[tid])}")
-
-    async def task_list(args):
-        if not tasks:
-            return _text("no tasks yet")
-        done = sum(t["status"] == "completed" for t in tasks.values())
-        return _text("\n".join(_render(tasks[k]) for k in sorted(tasks, key=int))
-                     + f"\n({done}/{len(tasks)} completed)")
-
-    async def task_get(args):
-        tid = str(args.get("taskId") or "").lstrip("#")
-        if tid not in tasks:
-            return _err(f"no task #{tid}; existing: {sorted(tasks, key=int)}")
-        return _text(_render(tasks[tid]))
-
-    return [
-        ToolSpec("TaskCreate", "Create a task on your session task list (a progress checklist). "
-                 "Returns its id.", {"subject": str, "description": str}, task_create),
-        ToolSpec("TaskUpdate", "Set a task's status: pending | in_progress | completed.",
-                 {"taskId": str, "status": str}, task_update),
-        ToolSpec("TaskList", "List every task on your session task list with its status.", {}, task_list),
-        ToolSpec("TaskGet", "Show one task by id.", {"taskId": str}, task_get),
-    ]
-
-
 def _render_patch(mcp_url: str, allowed_builtin: tuple[str, ...], provider: str, model: str | None,
                   attachment_plugin_url: str) -> str:
-    unknown = sorted(set(allowed_builtin) - _ALLOWED_CAPABILITIES)
+    unknown = sorted(set(allowed_builtin) - BUILTIN_CAPABILITIES)
     if unknown:
         raise ValueError(f"unsupported allowed_builtin capabilities for HARNESS=deepseek: {unknown}")
     insert: list[dict] = [
@@ -618,6 +384,7 @@ class _TurnsExceeded(RuntimeError):
     pass
 
 
+MCP_SERVER_START_SECONDS = 10.0  # uvicorn must be listening before dsh is pointed at it
 MCP_LIST_GRACE_SECONDS = 90.0  # dsh must have asked our server for tools/list by then
 
 
@@ -654,12 +421,6 @@ def _run_sync(*, dsh_bin: str, cwd: str, dsh_home: str, provider: str, model: st
             if turns > max_turns:
                 raise _TurnsExceeded(f"[{label}] HARNESS=deepseek run exceeded max_turns={max_turns}")
 
-    runtime_context = (f"Harness runtime: the working directory is {cwd!r}. Relative paths in the task "
-                       "resolve from that directory. Use the provided Read, Glob, and Grep tools; do not "
-                       "guess alternate workspace roots.")
-    effective_system_prompt = (f"{system_prompt.rstrip()}\n\n{runtime_context}"
-                               if system_prompt else runtime_context)
-
     with DeepSeekHarness(
         provider=provider,
         model=model,
@@ -669,7 +430,7 @@ def _run_sync(*, dsh_bin: str, cwd: str, dsh_home: str, provider: str, model: st
         profile="sdk-minimal",
         patches=(patch_path,),
         dsh_bin=dsh_bin,
-        env={"DSH_SYSTEM_PROMPT": effective_system_prompt,
+        env={"DSH_SYSTEM_PROMPT": with_runtime_instructions(system_prompt, cwd, submit_tool),
              "DSH_ATTACHMENT_MODULE_URL": attachment_api_url},
         # default 30s has flaked on the composed profile (mcp-client + pi-ai
         # insert on top of sdk-minimal has more to boot than the bare
@@ -772,16 +533,10 @@ async def run_agent(
 
     provider = os.environ.get("DSH_PROVIDER", "doubao")
     submitted_holder: dict = {}
-    port = _free_port()
-    mcp_server = FastMCP(
-        name=f"harness-bridge-{label}", host="127.0.0.1", port=port, stateless_http=True
-    )
-    served = (list(tools) + _readonly_tools(cwd, allowed_builtin)
-              + (_task_tools() if "tasks" in allowed_builtin else []))
-    for spec in served:
+    mcp_server = FastMCP(name=f"harness-bridge-{label}", stateless_http=True)
+    for spec in served_tools(tools, cwd, allowed_builtin):
         mcp_server.add_tool(_tool_fn(spec, submitted_holder, spec.name == submit_tool, label),
                             name=spec.name, description=spec.description)
-    mcp_url = f"http://127.0.0.1:{port}{mcp_server.settings.streamable_http_path}"
 
     listed = threading.Event()  # set once dsh's mcp-client asks for tools/list
     _orig_list_tools = mcp_server._tool_manager.list_tools
@@ -809,19 +564,27 @@ async def run_agent(
 
     # run uvicorn ourselves instead of FastMCP.run_streamable_http_async() so
     # teardown is a graceful should_exit (no lifespan CancelledError traceback
-    # on every call) and its log level is ours to set
+    # on every call) and its log level is ours to set. Port 0 lets the kernel
+    # hand out a free port atomically: a batch of Slurm jobs starting on one
+    # node cannot race for the same one, and dsh is only pointed at the port
+    # once the listener is actually bound.
     import uvicorn
 
     if _SseAppStatus is not None:
         _SseAppStatus.should_exit = False
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="on"))
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", lifespan="on"))
     server_task = asyncio.create_task(server.serve())
     try:
-        for _ in range(50):  # wait for uvicorn to actually bind before dsh tries to connect
+        for _ in range(int(MCP_SERVER_START_SECONDS / 0.05)):
+            if server.started or server_task.done():
+                break
             await asyncio.sleep(0.05)
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-                if probe.connect_ex(("127.0.0.1", port)) == 0:
-                    break
+        if server_task.done():
+            server_task.result()  # re-raises a startup failure with its own message
+        if not server.started:
+            raise RuntimeError(f"[{label}] MCP server failed to start within {MCP_SERVER_START_SECONDS:g} s")
+        port = server.servers[0].sockets[0].getsockname()[1]
+        mcp_url = f"http://127.0.0.1:{port}{mcp_server.settings.streamable_http_path}"
 
         root = os.environ.get("DSH_HOME_ROOT") or os.environ.get("SCRATCH") or tempfile.gettempdir()
         with tempfile.TemporaryDirectory(prefix="dsh-home-", dir=root) as dsh_home:
@@ -856,7 +619,10 @@ async def run_agent(
         server.should_exit = True
         try:
             await asyncio.wait_for(server_task, timeout=10)
-        except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+        except asyncio.CancelledError:
+            server_task.cancel()  # the caller is cancelling us; do not swallow that
+            raise
+        except Exception:  # graceful drain timed out or the server itself failed: hard stop
             server_task.cancel()
 
     if result.finish_reason == "error":

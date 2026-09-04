@@ -1,4 +1,4 @@
-"""Contract tests for dsh's cwd-confined exploration and image bridge."""
+"""Contract tests for the dsh adapter's MCP bridge, patch and attachment plugin."""
 
 from __future__ import annotations
 
@@ -19,41 +19,6 @@ PNG_1X1 = base64.b64decode(
 )
 
 
-def _run(tool: ToolSpec, **kwargs):
-    return asyncio.run(tool.handler(kwargs))
-
-
-def test_readonly_tools_are_exact_and_cwd_confined(tmp_path: Path):
-    outside = tmp_path.parent / f"{tmp_path.name}-outside.txt"
-    outside.write_text("secret\n")
-    (tmp_path / "report.txt").write_text("alpha\nbeta\n")
-    (tmp_path / "figure.png").write_bytes(PNG_1X1)
-
-    tools = {tool.name: tool for tool in H._readonly_tools(
-        str(tmp_path), ("read", "glob", "grep"),
-    )}
-    assert set(tools) == {"Read", "Glob", "Grep"}
-
-    text = _run(tools["Read"], file_path="report.txt")
-    assert "alpha\nbeta" in text["content"][0]["text"]
-
-    image = _run(tools["Read"], file_path="figure.png")
-    assert [block["type"] for block in image["content"]] == ["text", "image"]
-    assert image["content"][1]["mimeType"] == "image/png"
-
-    denied = _run(tools["Read"], file_path=str(outside))
-    assert denied["is_error"] is True
-    assert "outside the working directory" in denied["content"][0]["text"]
-
-    globbed = _run(tools["Glob"], pattern="**/*.txt")
-    assert globbed["content"][0]["text"] == "report.txt"
-    assert _run(tools["Glob"], pattern="../*")["is_error"] is True
-
-    grepped = _run(tools["Grep"], pattern="beta", path=".")
-    assert "report.txt:2:beta" in grepped["content"][0]["text"]
-    assert _run(tools["Grep"], pattern="secret", path=str(outside))["is_error"] is True
-
-
 def test_mcp_bridge_preserves_image_content():
     async def image(_args):
         return {"content": [
@@ -68,18 +33,59 @@ def test_mcp_bridge_preserves_image_content():
     assert result.content[1].mimeType == "image/png"
 
 
+def test_mcp_bridge_captures_submit_and_marks_errors():
+    async def submit(args):
+        if args["answer"] == "bad":
+            return {"content": [{"type": "text", "text": "rejected"}], "is_error": True}
+        return {"content": [{"type": "text", "text": "ok"}], "_submitted": {"answer": args["answer"]}}
+
+    holder: dict = {}
+    fn = H._tool_fn(ToolSpec("submit", "submit", {"answer": str}, submit), holder, True, "test")
+    rejected = asyncio.run(fn(answer="bad"))
+    assert rejected.isError is True and holder == {}
+    accepted = asyncio.run(fn(answer="good"))
+    assert accepted.isError is False
+    assert accepted.content[0].text == "ok"  # the private _submitted key never crosses the wire
+    assert holder == {"value": {"answer": "good"}}
+
+
+def test_mcp_bridge_lets_handler_exceptions_reach_fastmcp():
+    async def broken(_args):
+        raise KeyError("cluster")
+
+    fn = H._tool_fn(ToolSpec("broken", "broken", {}, broken), {}, False, "test")
+    with pytest.raises(KeyError):  # FastMCP converts this into an isError result for the model
+        asyncio.run(fn())
+
+
 def test_patch_enables_images_and_disables_all_sdk_coding_tools():
     patch = yaml.safe_load(H._render_patch(
         "http://127.0.0.1:1234/mcp", ("read", "glob", "grep"), "doubao", "vision-model",
         "file:///tmp/raw-attachment.mjs",
     ))
     inserted = {row["id"]: row for row in patch[0]["insert"]}
+    assert inserted["harness-bridge-tools"]["config"]["failOnStartupError"] is True
     assert inserted["harness-bridge-attachments"]["name"] == "file:///tmp/raw-attachment.mjs"
     model = inserted["harness-bridge-llm-provider"]["config"]["providers"]["doubao"]["models"][0]
     assert model == {"id": "vision-model", "input": ["text", "image"]}
 
     rows = {row["id"]: row for row in patch[1:]}
+    assert rows["sandbox-policy"]["config"] == {"mode": "read-only"}
     assert all(rows[tool_id]["disabled"] is True for tool_id in H._BUILTIN_DISABLE_IDS)
+
+
+def test_patch_for_deepseek_official_declares_no_custom_route():
+    patch = yaml.safe_load(H._render_patch(
+        "http://127.0.0.1:1/mcp", (), "deepseek-official", None, "file:///tmp/raw.mjs",
+    ))
+    assert [row["id"] for row in patch[0]["insert"]] == ["harness-bridge-tools", "harness-bridge-attachments"]
+
+
+def test_patch_fails_closed_on_unknown_capability_or_missing_model():
+    with pytest.raises(ValueError, match="unsupported allowed_builtin"):
+        H._render_patch("http://127.0.0.1:1/mcp", ("write",), "doubao", "m", "file:///tmp/raw.mjs")
+    with pytest.raises(ValueError, match="needs a model id"):
+        H._render_patch("http://127.0.0.1:1/mcp", (), "doubao", None, "file:///tmp/raw.mjs")
 
 
 def test_raw_attachment_plugin_is_valid_javascript(tmp_path: Path):
@@ -95,10 +101,3 @@ def test_raw_attachment_plugin_is_valid_javascript(tmp_path: Path):
     plugin = Path(urlparse(plugin_url).path)
     assert api_url == attachment_api.as_uri()
     subprocess.run(["node", "--check", str(plugin)], check=True, capture_output=True, text=True)
-
-
-def test_unknown_capability_fails_closed(tmp_path: Path):
-    with pytest.raises(ValueError, match="unsupported allowed_builtin"):
-        H._readonly_tools(str(tmp_path), ("read", "write"))
-    with pytest.raises(ValueError, match="unsupported allowed_builtin"):
-        H._render_patch("http://127.0.0.1:1/mcp", ("write",), "doubao", "m", "file:///tmp/raw.mjs")

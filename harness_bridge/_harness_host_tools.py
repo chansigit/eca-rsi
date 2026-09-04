@@ -1,9 +1,15 @@
 """Backend-neutral, read-only host tools for agent harnesses.
 
 The model gets only cwd-confined Read/Glob/Grep plus an optional in-memory
-task checklist.  Tool handlers keep the MCP-shaped content contract used by
+task checklist. Tool handlers keep the MCP-shaped content contract used by
 ``ToolSpec``; individual backends translate those blocks to their SDK's
 native tool-result representation.
+
+HARNESS=claude does not use this module: Claude Code ships its own
+Read/Glob/Grep and task list under the same names, and its permission
+system confines them. The OpenAI and DeepSeek adapters have no such
+builtins (dsh's sdk-minimal editor is write-capable even under a read-only
+sandbox policy), so the exact requested surface is served from here.
 """
 
 from __future__ import annotations
@@ -12,154 +18,230 @@ import asyncio
 import base64
 import glob as globlib
 import os
-import shutil
-import subprocess
+import re
+import time
 from pathlib import Path
+from typing import Iterator
 
-from .harness import ToolSpec
+from .harness import BUILTIN_CAPABILITIES, ToolSpec
 
-ALLOWED_CAPABILITIES = frozenset(("read", "glob", "grep", "tasks"))
 READ_MAX_BYTES = 512 * 1024
 IMAGE_MAX_BYTES = 20 * 1024 * 1024
 SEARCH_MAX_BYTES = 256 * 1024
 SEARCH_MAX_RESULTS = 500
+GREP_TIMEOUT_SECONDS = 30.0
+GREP_LINE_MAX_CHARS = 2000
+BINARY_PROBE_BYTES = 8192
+
+
+def _text(value: str) -> dict:
+    return {"content": [{"type": "text", "text": value}]}
+
+
+def _err(value: str) -> dict:
+    return {"content": [{"type": "text", "text": value}], "is_error": True}
+
+
+# --------------------------------------------------------------------------
+# Path confinement
+# --------------------------------------------------------------------------
+
+
+def _within(root: Path, path: Path) -> bool:
+    try:
+        return os.path.commonpath((str(root), str(path))) == str(root)
+    except ValueError:
+        return False
+
+
+def _resolve(root: Path, raw: object) -> Path:
+    """Resolve a model-supplied path (symlinks included) and confine it to root."""
+    value = str(raw or "").strip()
+    if not value:
+        raise ValueError("path must be non-empty")
+    candidate = Path(value)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    resolved = candidate.resolve(strict=True)
+    if not _within(root, resolved):
+        raise ValueError(f"path is outside the working directory {root}: {value}")
+    return resolved
+
+
+def _display(root: Path, path: Path) -> str:
+    return "." if path == root else path.relative_to(root).as_posix()
+
+
+def _image_type(prefix: bytes) -> str | None:
+    if prefix.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if prefix.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if prefix.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(prefix) >= 12 and prefix[:4] == b"RIFF" and prefix[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+# --------------------------------------------------------------------------
+# Read / Glob / Grep
+# --------------------------------------------------------------------------
+
+
+def _read(root: Path, args: dict) -> dict:
+    try:
+        path = _resolve(root, args.get("file_path"))
+        if not path.is_file():
+            return _err(f"not a regular file: {_display(root, path)}")
+        size = path.stat().st_size
+        with path.open("rb") as fh:
+            media_type = _image_type(fh.read(16))
+            if media_type is not None:
+                if size > IMAGE_MAX_BYTES:
+                    return _err(f"image is {size} bytes; maximum is {IMAGE_MAX_BYTES}: {_display(root, path)}")
+                fh.seek(0)
+                data = fh.read()
+                return {"content": [
+                    {"type": "text", "text": f"Image file: {_display(root, path)} ({media_type}, {size} bytes)"},
+                    {"type": "image", "data": base64.b64encode(data).decode("ascii"),
+                     "mimeType": media_type},
+                ]}
+            fh.seek(0)
+            data = fh.read(READ_MAX_BYTES + 1)
+        truncated = len(data) > READ_MAX_BYTES
+        data = data[:READ_MAX_BYTES]
+        if b"\x00" in data:
+            return _err(f"binary file is not a supported raster image: {_display(root, path)}")
+        body = data.decode("utf-8", errors="replace")
+        suffix = (f"\n\n[truncated after {READ_MAX_BYTES} bytes; narrow the source file before reading]"
+                  if truncated else "")
+        return _text(f"<path>{_display(root, path)}</path>\n<content>\n{body}{suffix}\n</content>")
+    except (OSError, ValueError) as exc:
+        return _err(str(exc))
+
+
+def _glob(root: Path, args: dict) -> dict:
+    pattern = str(args.get("pattern") or "").strip()
+    if not pattern:
+        return _err("pattern must be non-empty")
+    if Path(pattern).is_absolute() or ".." in Path(pattern).parts:
+        return _err("glob pattern must be relative to the working directory and cannot contain '..'")
+    matches: set[str] = set()
+    try:
+        for raw in globlib.iglob(str(root / pattern), recursive=True):
+            path = Path(raw).resolve(strict=True)
+            if not _within(root, path):  # a symlink pointing out of the tree
+                continue
+            matches.add(_display(root, path) + ("/" if path.is_dir() else ""))
+            if len(matches) >= SEARCH_MAX_RESULTS:
+                break
+    except (OSError, ValueError) as exc:
+        return _err(str(exc))
+    if not matches:
+        return _text("no matches")
+    suffix = f"\n[limited to {SEARCH_MAX_RESULTS} results]" if len(matches) >= SEARCH_MAX_RESULTS else ""
+    return _text("\n".join(sorted(matches)) + suffix)
+
+
+def _walk_files(target: Path) -> Iterator[Path]:
+    """Regular files under target in a stable order, skipping dot-entries the
+    way ripgrep does. Symlinked directories are not followed."""
+    if target.is_file():
+        yield target
+        return
+    for dirpath, dirnames, filenames in os.walk(target):
+        dirnames[:] = sorted(name for name in dirnames if not name.startswith("."))
+        for name in sorted(filenames):
+            if not name.startswith("."):
+                yield Path(dirpath, name)
+
+
+def _grep_sync(root: Path, regex: re.Pattern[str], target: Path) -> dict:
+    """Line-oriented regex search with ripgrep-style ``path:line:text`` output.
+
+    Implemented in Python rather than by shelling out to ``rg``: the cluster
+    images this runs on ship no ripgrep, and a Grep tool that always answers
+    "unavailable" silently degrades every run. Binary files are skipped and
+    the search stops at whichever bound is exhausted first (matches, output
+    bytes, or wall time) with an explicit note for the model.
+    """
+    deadline = time.monotonic() + GREP_TIMEOUT_SECONDS
+    lines: list[str] = []
+    output_bytes = 0
+    note: str | None = None
+    for path in _walk_files(target):
+        if time.monotonic() > deadline:
+            note = f"[stopped after {GREP_TIMEOUT_SECONDS:g} s; narrow the path or pattern]"
+            break
+        try:
+            resolved = path.resolve(strict=True)
+            if not resolved.is_file() or not _within(root, resolved):
+                continue
+            with path.open("rb") as fh:
+                if b"\x00" in fh.read(BINARY_PROBE_BYTES):
+                    continue
+                fh.seek(0)
+                shown = _display(root, path)
+                for lineno, raw in enumerate(fh, 1):
+                    if lineno % 10000 == 0 and time.monotonic() > deadline:
+                        note = f"[stopped after {GREP_TIMEOUT_SECONDS:g} s; narrow the path or pattern]"
+                        break
+                    text = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                    if not regex.search(text):
+                        continue
+                    if len(text) > GREP_LINE_MAX_CHARS:
+                        text = text[:GREP_LINE_MAX_CHARS] + " [line truncated]"
+                    line = f"{shown}:{lineno}:{text}"
+                    lines.append(line)
+                    output_bytes += len(line) + 1
+                    if len(lines) >= SEARCH_MAX_RESULTS:
+                        note = f"[limited to {SEARCH_MAX_RESULTS} matches]"
+                        break
+                    if output_bytes >= SEARCH_MAX_BYTES:
+                        note = f"[truncated after {SEARCH_MAX_BYTES} bytes]"
+                        break
+        except OSError:
+            continue  # vanished or unreadable file: skip it, like rg does
+        if note:
+            break
+    if not lines:
+        return _text("no matches")
+    return _text("\n".join(lines) + (f"\n{note}" if note else ""))
+
+
+async def _grep(root: Path, args: dict) -> dict:
+    pattern = str(args.get("pattern") or "")
+    if not pattern:
+        return _err("pattern must be non-empty")
+    try:
+        regex = re.compile(pattern)
+    except re.error as exc:
+        return _err(f"invalid regular expression: {exc}")
+    try:
+        target = _resolve(root, args.get("path") or ".")
+    except (OSError, ValueError) as exc:
+        return _err(str(exc))
+    return await asyncio.to_thread(_grep_sync, root, regex, target)
 
 
 def readonly_tools(cwd: str, allowed_builtin: tuple[str, ...]) -> list[ToolSpec]:
     """Build the exact cwd-confined exploration surface requested by a call."""
-    unknown = sorted(set(allowed_builtin) - ALLOWED_CAPABILITIES)
+    unknown = sorted(set(allowed_builtin) - BUILTIN_CAPABILITIES)
     if unknown:
         raise ValueError(f"unsupported allowed_builtin capabilities: {unknown}")
-
     root = Path(cwd).resolve(strict=True)
     if not root.is_dir():
         raise ValueError(f"agent cwd is not a directory: {root}")
 
-    def _text(value: str):
-        return {"content": [{"type": "text", "text": value}]}
-
-    def _err(value: str):
-        return {"content": [{"type": "text", "text": value}], "is_error": True}
-
-    def _within_root(path: Path) -> bool:
-        try:
-            return os.path.commonpath((str(root), str(path))) == str(root)
-        except ValueError:
-            return False
-
-    def _resolve(raw: object) -> Path:
-        value = str(raw or "").strip()
-        if not value:
-            raise ValueError("path must be non-empty")
-        candidate = Path(value)
-        if not candidate.is_absolute():
-            candidate = root / candidate
-        resolved = candidate.resolve(strict=True)
-        if not _within_root(resolved):
-            raise ValueError(f"path is outside the working directory {root}: {value}")
-        return resolved
-
-    def _display(path: Path) -> str:
-        return "." if path == root else path.relative_to(root).as_posix()
-
-    def _image_type(data: bytes) -> str | None:
-        if data.startswith(b"\x89PNG\r\n\x1a\n"):
-            return "image/png"
-        if data.startswith(b"\xff\xd8\xff"):
-            return "image/jpeg"
-        if data.startswith((b"GIF87a", b"GIF89a")):
-            return "image/gif"
-        if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-            return "image/webp"
-        return None
-
     async def read(args):
-        try:
-            path = _resolve(args.get("file_path"))
-            if not path.is_file():
-                return _err(f"not a regular file: {_display(path)}")
-            size = path.stat().st_size
-            with path.open("rb") as fh:
-                prefix = fh.read(16)
-                media_type = _image_type(prefix)
-                if media_type is not None:
-                    if size > IMAGE_MAX_BYTES:
-                        return _err(f"image is {size} bytes; maximum is {IMAGE_MAX_BYTES}: {_display(path)}")
-                    fh.seek(0)
-                    data = fh.read()
-                    return {"content": [
-                        {"type": "text", "text": f"Image file: {_display(path)} ({media_type}, {size} bytes)"},
-                        {"type": "image", "data": base64.b64encode(data).decode("ascii"),
-                         "mimeType": media_type},
-                    ]}
-                fh.seek(0)
-                data = fh.read(READ_MAX_BYTES + 1)
-            truncated = len(data) > READ_MAX_BYTES
-            data = data[:READ_MAX_BYTES]
-            if b"\x00" in data:
-                return _err(f"binary file is not a supported raster image: {_display(path)}")
-            body = data.decode("utf-8", errors="replace")
-            suffix = (f"\n\n[truncated after {READ_MAX_BYTES} bytes; narrow the source file before reading]"
-                      if truncated else "")
-            return _text(f"<path>{_display(path)}</path>\n<content>\n{body}{suffix}\n</content>")
-        except (OSError, ValueError) as exc:
-            return _err(str(exc))
+        return _read(root, args)
 
     async def glob(args):
-        pattern = str(args.get("pattern") or "").strip()
-        if not pattern:
-            return _err("pattern must be non-empty")
-        parts = Path(pattern).parts
-        if Path(pattern).is_absolute() or ".." in parts:
-            return _err("glob pattern must be relative to the working directory and cannot contain '..'")
-        matches: list[str] = []
-        try:
-            for raw in globlib.iglob(str(root / pattern), recursive=True):
-                path = Path(raw).resolve(strict=True)
-                if not _within_root(path):
-                    continue
-                matches.append(_display(path) + ("/" if path.is_dir() else ""))
-                if len(matches) >= SEARCH_MAX_RESULTS:
-                    break
-        except (OSError, ValueError) as exc:
-            return _err(str(exc))
-        matches = sorted(set(matches))
-        suffix = f"\n[limited to {SEARCH_MAX_RESULTS} results]" if len(matches) >= SEARCH_MAX_RESULTS else ""
-        return _text("\n".join(matches) + suffix if matches else "no matches")
+        return _glob(root, args)
 
     async def grep(args):
-        pattern = str(args.get("pattern") or "")
-        if not pattern:
-            return _err("pattern must be non-empty")
-        try:
-            target = _resolve(args.get("path") or ".")
-        except (OSError, ValueError) as exc:
-            return _err(str(exc))
-        rg = shutil.which("rg")
-        if rg is None:
-            return _err("rg is unavailable on the host")
-        command = [rg, "--line-number", "--no-heading", "--color", "never",
-                   "--max-count", str(SEARCH_MAX_RESULTS), "--", pattern, str(target)]
-        try:
-            proc = await asyncio.to_thread(
-                subprocess.run, command, cwd=root, capture_output=True, timeout=30, check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            return _err(f"grep failed: {exc}")
-        if proc.returncode not in (0, 1):
-            return _err(proc.stderr.decode("utf-8", errors="replace")[:4000] or
-                        f"rg exited with status {proc.returncode}")
-        data = proc.stdout
-        truncated = len(data) > SEARCH_MAX_BYTES
-        body = data[:SEARCH_MAX_BYTES].decode("utf-8", errors="replace")
-        if not body:
-            return _text("no matches")
-        if target.is_dir():
-            prefix = str(root) + os.sep
-            body = body.replace(prefix, "")
-        if truncated:
-            body += f"\n[truncated after {SEARCH_MAX_BYTES} bytes]"
-        return _text(body.rstrip())
+        return await _grep(root, args)
 
     tools: list[ToolSpec] = []
     if "read" in allowed_builtin:
@@ -177,45 +259,50 @@ def readonly_tools(cwd: str, allowed_builtin: tuple[str, ...]) -> list[ToolSpec]
     if "grep" in allowed_builtin:
         tools.append(ToolSpec(
             "Grep",
-            f"Search text with ripgrep inside the working directory {root}. path may be a relative file or "
-            "directory (use '.' for the whole working directory).",
+            f"Search text files inside the working directory {root} with a regular expression; each match "
+            "is reported as path:line:text. path may be a relative file or directory (use '.' for the "
+            "whole working directory).",
             {"pattern": str, "path": str}, grep,
         ))
     return tools
 
 
+# --------------------------------------------------------------------------
+# Session task list
+# --------------------------------------------------------------------------
+
+
 def task_tools() -> list[ToolSpec]:
-    """In-memory progress checklist for one ``run_agent`` call."""
+    """Host-side stand-in for Claude Code's session task list: same tool names
+    and the same create/update/list/get shape, kept in memory for one
+    ``run_agent`` call. Purely the model's own progress checklist — coverage
+    is enforced by each call site's submit validation, never by this list."""
     tasks: dict[str, dict] = {}
     statuses = ("pending", "in_progress", "completed")
-
-    def _text(value: str):
-        return {"content": [{"type": "text", "text": value}]}
-
-    def _err(value: str):
-        return {"content": [{"type": "text", "text": value}], "is_error": True}
 
     def _render(task):
         return (f"#{task['id']} [{task['status']}] {task['subject']}"
                 + (f" — {task['description']}" if task["description"] else ""))
 
+    def _lookup(args) -> tuple[str, dict | None]:
+        task_id = str(args.get("taskId") or "").strip().lstrip("#")
+        if task_id not in tasks:
+            return task_id, _err(f"no task #{task_id}; existing: {sorted(tasks, key=int)}")
+        return task_id, None
+
     async def task_create(args):
-        task_id = str(len(tasks) + 1)
-        tasks[task_id] = {
-            "id": task_id,
-            "subject": str(args.get("subject") or "").strip(),
-            "description": str(args.get("description") or "").strip(),
-            "status": "pending",
-        }
-        if not tasks[task_id]["subject"]:
-            del tasks[task_id]
+        subject = str(args.get("subject") or "").strip()
+        if not subject:
             return _err("subject is required")
-        return _text(f"created task #{task_id}: {tasks[task_id]['subject']}")
+        task_id = str(len(tasks) + 1)
+        tasks[task_id] = {"id": task_id, "subject": subject,
+                          "description": str(args.get("description") or "").strip(), "status": "pending"}
+        return _text(f"created task #{task_id}: {subject}")
 
     async def task_update(args):
-        task_id = str(args.get("taskId") or "").lstrip("#")
-        if task_id not in tasks:
-            return _err(f"no task #{task_id}; existing: {sorted(tasks, key=int)}")
+        task_id, error = _lookup(args)
+        if error:
+            return error
         status = str(args.get("status") or "").strip()
         if status not in statuses:
             return _err(f"status must be one of {statuses}")
@@ -230,10 +317,8 @@ def task_tools() -> list[ToolSpec]:
                      + f"\n({done}/{len(tasks)} completed)")
 
     async def task_get(args):
-        task_id = str(args.get("taskId") or "").lstrip("#")
-        if task_id not in tasks:
-            return _err(f"no task #{task_id}; existing: {sorted(tasks, key=int)}")
-        return _text(_render(tasks[task_id]))
+        task_id, error = _lookup(args)
+        return error or _text(_render(tasks[task_id]))
 
     return [
         ToolSpec("TaskCreate", "Create a task on your session task list (a progress checklist). Returns its id.",
@@ -243,3 +328,28 @@ def task_tools() -> list[ToolSpec]:
         ToolSpec("TaskList", "List every task on your session task list with its status.", {}, task_list),
         ToolSpec("TaskGet", "Show one task by id.", {"taskId": str}, task_get),
     ]
+
+
+# --------------------------------------------------------------------------
+# Shared assembly for the host-served backends
+# --------------------------------------------------------------------------
+
+
+def served_tools(tools: list[ToolSpec], cwd: str, allowed_builtin: tuple[str, ...]) -> list[ToolSpec]:
+    """The application's tools plus the requested host builtins, as the one
+    flat table a host-served backend registers with its SDK."""
+    served = list(tools) + readonly_tools(cwd, allowed_builtin)
+    if "tasks" in allowed_builtin:
+        served += task_tools()
+    return served
+
+
+def with_runtime_instructions(system_prompt: str | None, cwd: str, submit_tool: str) -> str:
+    """Append the runtime facts Claude Code would state on its own (working
+    directory, completion condition) to the application's system prompt."""
+    runtime = (
+        f"Harness runtime: the working directory is {cwd!r}. Relative paths in the task resolve from "
+        "that directory. Use only the provided tools; do not guess alternate workspace roots. "
+        f"The run is complete only after a successful {submit_tool} call."
+    )
+    return f"{system_prompt.rstrip()}\n\n{runtime}" if system_prompt else runtime

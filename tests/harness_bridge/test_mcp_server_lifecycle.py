@@ -13,7 +13,7 @@ stream — the situation in which sse-starlette's watcher flips the latch.
 Asserted: the latch stays False after every teardown, and uvicorn never
 logs "ASGI callable returned without completing response".
 
-    python -m tests.test_mcp_server_lifecycle    # from this repository root
+    python tests/test_mcp_server_lifecycle.py    # from this repository root
     pytest tests/test_mcp_server_lifecycle.py
 """
 
@@ -30,7 +30,7 @@ from types import SimpleNamespace
 GENERATIONS = 3
 
 
-def _run(hold_seconds: float = 0.0) -> list[tuple[int, str, bool]]:
+def _run(hold_seconds: float = 0.0, monkeypatch=None) -> list[tuple[int, str, bool]]:
     import yaml
     from mcp import ClientSession
     from mcp.client.streamable_http import streamablehttp_client
@@ -94,11 +94,17 @@ def _run(hold_seconds: float = 0.0) -> list[tuple[int, str, bool]]:
         time.sleep(0.3)  # let the GET stream be established before the run "ends"
         return SimpleNamespace(finish_reason="stop", final_response="", events=[])
 
-    H._run_sync = fake_run_sync
-    H._write_raw_attachment_plugin = lambda _home, _bin: (
-        "file:///tmp/test-attachment.mjs", "file:///tmp/test-attachment-api.js"
-    )
-    os.environ.setdefault("DSH_BIN", "/bin/true")
+    def fake_plugin(_home, _bin):
+        return "file:///tmp/test-attachment.mjs", "file:///tmp/test-attachment-api.js"
+
+    if monkeypatch is not None:  # pytest: undo the patches so other test modules see the real adapter
+        monkeypatch.setattr(H, "_run_sync", fake_run_sync)
+        monkeypatch.setattr(H, "_write_raw_attachment_plugin", fake_plugin)
+        monkeypatch.setenv("DSH_BIN", "/bin/true")
+    else:  # standalone `python -m tests.test_mcp_server_lifecycle`
+        H._run_sync = fake_run_sync
+        H._write_raw_attachment_plugin = fake_plugin
+        os.environ.setdefault("DSH_BIN", "/bin/true")
 
     class _Catch(logging.Handler):
         hits: list[str] = []
@@ -119,8 +125,8 @@ def _run(hold_seconds: float = 0.0) -> list[tuple[int, str, bool]]:
     return outcomes
 
 
-def test_consecutive_mcp_servers_in_one_process():
-    outcomes = _run(hold_seconds=3.0)
+def test_consecutive_mcp_servers_in_one_process(monkeypatch):
+    outcomes = _run(hold_seconds=3.0, monkeypatch=monkeypatch)
     assert all(ok for _, _, ok in outcomes), outcomes
     # add + submit_answer + the cwd-confined Read capability requested above
     assert all("3 tools" in msg for _, msg, _ in outcomes), outcomes

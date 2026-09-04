@@ -11,8 +11,9 @@ actually drives the model is an env-var choice, not a call-site choice:
                          function tools
     HARNESS=deepseek    DeepSeek Harness (dsh) via its Python SDK, driving
                          Doubao by default, tools bridged over an in-process
-                         streamable-http MCP server (see below)
+                         streamable-http MCP server
     HARNESS=claude      claude_agent_sdk, in-process MCP tools
+
 The tool `handler` return shape (`{"content": [{"type": "text", ...}],
 "is_error": bool}`) is already the real MCP `CallToolResult` wire shape —
 Claude Agent SDK's in-process server is itself an MCP server — so the same
@@ -25,6 +26,7 @@ session, transport and recovery behavior remains inside its adapter.
 from __future__ import annotations
 
 import asyncio
+import importlib
 import os
 import re
 import time
@@ -35,6 +37,28 @@ ToolHandler = Callable[[dict], Awaitable[dict]]
 T = TypeVar("T")
 HarnessName = Literal["openai", "deepseek", "claude"]
 BuiltinCapability = Literal["read", "glob", "grep", "tasks"]
+
+
+# --------------------------------------------------------------------------
+# Failure classes
+# --------------------------------------------------------------------------
+
+
+class AgentTimeout(RuntimeError):
+    """The run exceeded its wall-clock budget (AGENT_WALL_MIN) and was killed."""
+
+
+class AgentLimitExhausted(RuntimeError):
+    """A usage/rate limit outlasted the total wait budget (AGENT_LIMIT_WAIT_MAX_H)."""
+
+
+class AgentIncompleteError(RuntimeError):
+    """The run ended without the submit tool ever firing."""
+
+
+# --------------------------------------------------------------------------
+# Retry policy
+# --------------------------------------------------------------------------
 
 # Concurrent Slurm job starts (a batch of jobs all launching agent sessions
 # around the same time) can blow a local control handshake or kill the
@@ -61,28 +85,29 @@ MAX_TRANSIENT_ATTEMPTS = 5
 TRANSIENT_BACKOFF_SECONDS = 20  # linear: 20s, 40s, 60s, 80s
 MAX_TIMEOUT_ATTEMPTS = 2  # a run that blew its wall-clock budget gets exactly one fresh start
 DEFAULT_WALL_MINUTES = 180.0
+DEFAULT_LIMIT_WAIT_MINUTES = 10.0
+DEFAULT_LIMIT_WAIT_MAX_HOURS = 12.0
 
 
-class AgentTimeout(RuntimeError):
-    """The run exceeded its wall-clock budget (AGENT_WALL_MIN) and was killed."""
+def _env_float(name: str, default: float) -> float:
+    """Float env knob. A blank or unparsable value falls back to the default
+    rather than crashing (or silently unbounding) a multi-hour job on a typo."""
+    raw = os.environ.get(name, "").strip()
+    try:
+        return float(raw) if raw else default
+    except ValueError:
+        print(f"== ignoring non-numeric {name}={raw!r}; using {default:g}", flush=True)
+        return default
 
 
 def wall_seconds() -> float | None:
     """Per-run wall-clock budget in seconds: AGENT_WALL_MIN minutes (default
-    180; 0 or a non-number = unlimited). Enforced by every backend — Claude's
+    180; 0 or negative = unlimited). Enforced by every backend — Claude's
     max_turns bounds turns but not a turn that hangs, and dsh has neither a
     turn cap nor a run-level timeout, so a model stuck in a loop would
     otherwise burn until the provider hangs up."""
-    raw = os.environ.get("AGENT_WALL_MIN", "")
-    try:
-        minutes = float(raw) if raw.strip() else DEFAULT_WALL_MINUTES
-    except ValueError:
-        return None
+    minutes = _env_float("AGENT_WALL_MIN", DEFAULT_WALL_MINUTES)
     return minutes * 60 if minutes > 0 else None
-
-
-class AgentLimitExhausted(RuntimeError):
-    pass
 
 
 async def retry_transient(coro_fn: Callable[[], Awaitable[T]], label: str) -> T:
@@ -91,8 +116,8 @@ async def retry_transient(coro_fn: Callable[[], Awaitable[T]], label: str) -> T:
     wait and retry, bounded by a total wait budget (env AGENT_LIMIT_WAIT_MIN
     minutes between tries, default 10; AGENT_LIMIT_WAIT_MAX_H total hours,
     default 12). Any other failure raises immediately."""
-    wait_min = float(os.environ.get("AGENT_LIMIT_WAIT_MIN", "10"))
-    max_h = float(os.environ.get("AGENT_LIMIT_WAIT_MAX_H", "12"))
+    wait_min = _env_float("AGENT_LIMIT_WAIT_MIN", DEFAULT_LIMIT_WAIT_MINUTES)
+    max_h = _env_float("AGENT_LIMIT_WAIT_MAX_H", DEFAULT_LIMIT_WAIT_MAX_HOURS)
     waited = 0.0
     limit_attempt = 0
     transient_attempts = 0
@@ -100,6 +125,13 @@ async def retry_transient(coro_fn: Callable[[], Awaitable[T]], label: str) -> T:
     while True:
         try:
             return await coro_fn()
+        except AgentIncompleteError:
+            # The run completed and the model simply never submitted. Its
+            # message quotes the model's final reply, so it must never reach
+            # the classifiers below: a biology answer mentioning "capacity"
+            # would otherwise read as a usage limit and park the job for up
+            # to AGENT_LIMIT_WAIT_MAX_H, re-running the whole session each time.
+            raise
         except AgentTimeout as e:
             timeout_attempts += 1
             if timeout_attempts >= MAX_TIMEOUT_ATTEMPTS:
@@ -136,13 +168,18 @@ async def retry_transient(coro_fn: Callable[[], Awaitable[T]], label: str) -> T:
             raise
 
 
+# --------------------------------------------------------------------------
+# Tool table contract
+# --------------------------------------------------------------------------
+
+
 @dataclass(frozen=True)
 class ToolSpec:
     name: str
     description: str
     # {param_name: python_type} — the same flat shape claude_agent_sdk's
     # @tool() takes as its third argument; translated to real JSON Schema
-    # for the DeepSeek backend's MCP server.
+    # for the OpenAI and DeepSeek backends.
     input_schema: dict[str, type]
     handler: ToolHandler
 
@@ -154,22 +191,55 @@ class AgentRunResult:
     cost_usd: float | None  # best-effort; None where the backend doesn't report it
 
 
-class AgentIncompleteError(RuntimeError):
-    """The run ended without the submit tool ever firing."""
+# Tool names each read-only capability exposes to the model. HARNESS=claude
+# allows Claude Code's own tools under these names; the OpenAI and DeepSeek
+# adapters serve same-named host-side tools so application prompts stay
+# portable across backends.
+BUILTIN_TOOL_NAMES: dict[BuiltinCapability, tuple[str, ...]] = {
+    "read": ("Read",),
+    "glob": ("Glob",),
+    "grep": ("Grep",),
+    "tasks": ("TaskCreate", "TaskUpdate", "TaskList", "TaskGet"),
+}
+BUILTIN_CAPABILITIES = frozenset(BUILTIN_TOOL_NAMES)
 
 
-DEFAULT_BACKEND = "openai"
-KNOWN_BACKENDS = frozenset(("openai", "deepseek", "claude"))
+def _validate_tool_table(tools: list[ToolSpec], submit_tool: str, allowed_builtin: tuple[str, ...]) -> None:
+    """Reject a malformed call before any SDK is imported. A misspelled
+    submit tool can never fire, so without this the mistake would surface
+    only as AgentIncompleteError after a complete (paid) run."""
+    names = [spec.name for spec in tools]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        raise ValueError(f"duplicate tool names in the tool table: {duplicates}")
+    if submit_tool not in names:
+        raise ValueError(f"submit tool {submit_tool!r} is not in the tool table {names}")
+    unknown = sorted(set(allowed_builtin) - BUILTIN_CAPABILITIES)
+    if unknown:
+        raise ValueError(f"unsupported allowed_builtin capabilities: {unknown}")
+    reserved = {name for cap in allowed_builtin for name in BUILTIN_TOOL_NAMES[cast(BuiltinCapability, cap)]}
+    clashes = sorted(set(names) & reserved)
+    if clashes:
+        raise ValueError(f"tool names collide with requested builtin tools: {clashes}")
 
 
-_DEFAULT_MODEL = {
-    "claude": "claude-sonnet-5",
-    "openai": "doubao-seed-2-1-turbo-260628",
+# --------------------------------------------------------------------------
+# Backend selection
+# --------------------------------------------------------------------------
+
+# One row per backend: the adapter module (imported lazily, so an application
+# needs only the SDK it selected) and the model used when MODEL is unset.
+# Model ids stay open strings by design — no catalog to keep current.
+_BACKENDS: dict[HarnessName, tuple[str, str]] = {
+    "openai": ("._harness_openai", "doubao-seed-2-1-turbo-260628"),
     # HARNESS=deepseek's default provider is Doubao via dsh's pi-ai adapter
     # (see _harness_deepseek); DSH_PROVIDER=deepseek-official switches to a
     # real DeepSeek model, in which case override MODEL too.
-    "deepseek": "doubao-seed-2-1-turbo-260628",
+    "deepseek": ("._harness_deepseek", "doubao-seed-2-1-turbo-260628"),
+    "claude": ("._harness_claude", "claude-sonnet-5"),
 }
+DEFAULT_BACKEND = "openai"
+KNOWN_BACKENDS = frozenset(_BACKENDS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,14 +274,15 @@ def resolve_agent_config(
     """Resolve explicit values before environment values before defaults."""
     env = os.environ if environ is None else environ
     selected = (harness or env.get("HARNESS") or DEFAULT_BACKEND).strip().lower()
-    if selected not in KNOWN_BACKENDS:
+    if selected not in _BACKENDS:
         raise ValueError(
-            f"unknown HARNESS backend {selected!r} (expected 'claude', 'openai', or 'deepseek')"
+            f"unknown HARNESS backend {selected!r} (expected one of {sorted(_BACKENDS)})"
         )
-    selected_model = (model or env.get("MODEL") or _DEFAULT_MODEL[selected]).strip()
+    backend = cast(HarnessName, selected)
+    selected_model = (model or env.get("MODEL") or _BACKENDS[backend][1]).strip()
     if not selected_model:
         raise ValueError(f"HARNESS={selected} needs a non-empty model id")
-    return AgentConfig(harness=cast(HarnessName, selected), model=selected_model)
+    return AgentConfig(harness=backend, model=selected_model)
 
 
 def backend_name() -> str:
@@ -237,7 +308,6 @@ def backend_capabilities(
     """
     env = os.environ if environ is None else environ
     resolved = config or resolve_agent_config(environ=env)
-    builtins: frozenset[BuiltinCapability] = frozenset(("read", "glob", "grep", "tasks"))
     if resolved.harness == "openai":
         mode = (openai_api or env.get("OPENAI_AGENTS_API") or "responses").strip().lower()
         if mode not in {"responses", "chat_completions"}:
@@ -246,7 +316,7 @@ def backend_capabilities(
             )
         responses = mode == "responses"
         return HarnessCapabilities(
-            builtins=builtins,
+            builtins=BUILTIN_CAPABILITIES,
             image_tool_outputs=responses,
             response_chaining=responses,
             same_session_nudge=True,
@@ -255,7 +325,7 @@ def backend_capabilities(
         )
     if resolved.harness == "deepseek":
         return HarnessCapabilities(
-            builtins=builtins,
+            builtins=BUILTIN_CAPABILITIES,
             image_tool_outputs=True,
             response_chaining=False,
             same_session_nudge=True,
@@ -263,13 +333,18 @@ def backend_capabilities(
             context_reset=False,
         )
     return HarnessCapabilities(
-        builtins=builtins,
+        builtins=BUILTIN_CAPABILITIES,
         image_tool_outputs=True,
         response_chaining=False,
         same_session_nudge=False,
         mcp_transport=True,
         context_reset=False,
     )
+
+
+# --------------------------------------------------------------------------
+# Entry point
+# --------------------------------------------------------------------------
 
 
 async def run_agent(
@@ -294,23 +369,14 @@ async def run_agent(
     serve same-named in-memory tools so prompts stay identical). The model
     never gets write access under any backend."""
     config = resolve_agent_config(model=model)
-    backend = config.harness
-    model = config.model
-    if backend == "claude":
-        from ._harness_claude import run_agent as _run
-    elif backend == "openai":
-        from ._harness_openai import run_agent as _run
-    elif backend == "deepseek":
-        from ._harness_deepseek import run_agent as _run
-    else:  # pragma: no cover - resolve_agent_config validates the registry
-        raise AssertionError(f"unregistered harness backend: {backend}")
-
+    _validate_tool_table(tools, submit_tool, allowed_builtin)
+    adapter = importlib.import_module(_BACKENDS[config.harness][0], __package__)
     wall = wall_seconds()
 
     async def _attempt() -> AgentRunResult:
-        coro = _run(
+        coro = adapter.run_agent(
             tools=tools, submit_tool=submit_tool, prompt=prompt, system_prompt=system_prompt,
-            cwd=cwd, model=model, effort=effort, max_turns=max_turns,
+            cwd=cwd, model=config.model, effort=effort, max_turns=max_turns,
             allowed_builtin=allowed_builtin, label=label, max_buffer_size=max_buffer_size,
             wall_seconds=wall,
         )

@@ -30,7 +30,7 @@ import json
 import os
 from typing import Any
 
-from ._harness_host_tools import readonly_tools, task_tools
+from ._harness_host_tools import served_tools, with_runtime_instructions
 from .harness import AgentIncompleteError, AgentRunResult, AgentTimeout, ToolSpec
 
 DOUBAO_BASE_URL_DEFAULT = "https://ark.cn-beijing.volces.com/api/v3"
@@ -67,18 +67,22 @@ def _tool(spec: ToolSpec, submitted_holder: dict, is_submit: bool, label: str, a
     from agents import FunctionTool, ToolOutputImage, ToolOutputText
 
     async def invoke(_context, arguments_json: str):
-        arguments = json.loads(arguments_json)
-        arg_hint = str(next(iter(arguments.values()), ""))[:80]
-        print(f"== [{label}] agent: {spec.name}({arg_hint})", flush=True)
+        # Everything between the model's raw JSON and the handler's result is
+        # the model's problem to fix, never a reason to abort the run: bad
+        # JSON, a non-object payload, or a handler that validates a JSON
+        # string nested inside otherwise schema-valid arguments all come
+        # back as an ERROR text the model can act on.  This matches what the
+        # Claude SDK's in-process server and FastMCP do with handler errors.
         try:
+            arguments = json.loads(arguments_json)
+            if not isinstance(arguments, dict):
+                raise TypeError(f"tool arguments must be a JSON object, got {type(arguments).__name__}")
+            arg_hint = str(next(iter(arguments.values()), ""))[:80]
+            print(f"== [{label}] agent: {spec.name}({arg_hint})", flush=True)
             result = await spec.handler(arguments)
-        except (KeyError, TypeError, ValueError) as exc:
-            # Hand-written ToolSpec handlers sometimes validate a JSON string
-            # nested inside otherwise schema-valid tool arguments.  Bad model
-            # data there must be returned to the model for correction, not
-            # escape FunctionTool and abort the entire agent run.
+        except Exception as exc:
             message = f"{type(exc).__name__}: {exc}"
-            print(f"== [{label}] tool exception in {spec.name}: {message!r}", flush=True)
+            print(f"== [{label}] tool exception in {spec.name}: {message[:200]!r}", flush=True)
             return ToolOutputText(
                 text=f"ERROR: {spec.name} rejected the input ({message}). Fix it and call the tool again."
             )
@@ -118,18 +122,24 @@ def _tool(spec: ToolSpec, submitted_holder: dict, is_submit: bool, label: str, a
     )
 
 
-def _model(model: str, api_mode: str):
-    from agents import OpenAIChatCompletionsModel, OpenAIResponsesModel
+def _client():
+    """One Ark client per run_agent call; the caller closes it so hundreds of
+    runs in one Slurm job do not each leave an httpx connection pool behind."""
     from openai import AsyncOpenAI
 
     key = os.environ.get("ARK_API_KEY")
     if not key:
         raise RuntimeError("HARNESS=openai needs ARK_API_KEY")
-    client = AsyncOpenAI(
+    return AsyncOpenAI(
         api_key=key,
         base_url=os.environ.get("DOUBAO_BASE_URL", DOUBAO_BASE_URL_DEFAULT),
         max_retries=0,
     )
+
+
+def _model(model: str, api_mode: str, client):
+    from agents import OpenAIChatCompletionsModel, OpenAIResponsesModel
+
     if api_mode == "responses":
         return OpenAIResponsesModel(model=model, openai_client=client)
     if api_mode == "chat_completions":
@@ -146,6 +156,13 @@ def _is_context_limit_error(exc: Exception) -> bool:
         or "maximum context length" in text
         or "context length exceeded" in text
     )
+
+
+def _env_int(name: str, default: int) -> int:
+    value = int(os.environ.get(name, str(default)))
+    if value < 0:
+        raise ValueError(f"{name} must be >= 0")
+    return value
 
 
 async def run_agent(
@@ -169,42 +186,23 @@ async def run_agent(
     if not model:
         raise ValueError("HARNESS=openai needs a model id (MODEL env or caller model)")
     api_mode = os.environ.get("OPENAI_AGENTS_API", DEFAULT_API_MODE).strip().lower()
-    max_nudges = int(os.environ.get("OPENAI_AGENTS_MAX_NUDGES", str(DEFAULT_MAX_NUDGES)))
-    if max_nudges < 0:
-        raise ValueError("OPENAI_AGENTS_MAX_NUDGES must be >= 0")
-    max_context_resets = int(os.environ.get(
-        "OPENAI_AGENTS_MAX_CONTEXT_RESETS", str(DEFAULT_MAX_CONTEXT_RESETS)
-    ))
-    if max_context_resets < 0:
-        raise ValueError("OPENAI_AGENTS_MAX_CONTEXT_RESETS must be >= 0")
+    max_nudges = _env_int("OPENAI_AGENTS_MAX_NUDGES", DEFAULT_MAX_NUDGES)
+    max_context_resets = _env_int("OPENAI_AGENTS_MAX_CONTEXT_RESETS", DEFAULT_MAX_CONTEXT_RESETS)
     server_state = (
         api_mode == "responses"
         and os.environ.get("OPENAI_AGENTS_SERVER_STATE", "1").strip().lower()
         not in {"0", "false", "no", "off"}
     )
+    _ = max_buffer_size  # OpenAI Agents SDK does not pipe image bytes through a CLI buffer.
 
     submitted_holder: dict = {}
-    served = list(tools) + readonly_tools(cwd, allowed_builtin)
-    if "tasks" in allowed_builtin:
-        served += task_tools()
-    if submit_tool not in {spec.name for spec in served}:
-        raise ValueError(f"submit tool {submit_tool!r} is not present in the tool table")
     wrapped = [
         _tool(spec, submitted_holder, spec.name == submit_tool, label, api_mode)
-        for spec in served
+        for spec in served_tools(tools, cwd, allowed_builtin)
     ]
-
-    runtime_context = (
-        f"Harness runtime: the working directory is {cwd!r}. Relative paths in the task resolve from "
-        "that directory. Use only the provided tools; do not guess alternate workspace roots. "
-        f"The run is complete only after a successful {submit_tool} call."
-    )
-    instructions = (f"{system_prompt.rstrip()}\n\n{runtime_context}"
-                    if system_prompt else runtime_context)
-    reasoning = {"effort": effort} if effort else None
     settings = ModelSettings(
         parallel_tool_calls=True,
-        reasoning=reasoning,
+        reasoning={"effort": effort} if effort else None,
         # Response chaining prevents every earlier image/tool result from
         # being uploaded again on each turn. Ark has been verified to support
         # this Responses API contract. Setting SERVER_STATE=0 restores a
@@ -218,11 +216,12 @@ async def run_agent(
             final_output=submitted_holder.get("value"),
         )
 
+    client = _client()
     agent = Agent(
         name=label,
-        instructions=instructions,
+        instructions=with_runtime_instructions(system_prompt, cwd, submit_tool),
         tools=wrapped,
-        model=_model(model, api_mode),
+        model=_model(model, api_mode, client),
         model_settings=settings,
         tool_use_behavior=finish_after_valid_submit,
     )
@@ -231,7 +230,6 @@ async def run_agent(
         tracing_disabled=True,
         workflow_name=f"{workflow_name} {label}".strip(),
     )
-    _ = max_buffer_size  # OpenAI Agents SDK does not pipe image bytes through a CLI buffer.
 
     async def run_loop() -> AgentRunResult:
         run_input: str | list = prompt
@@ -283,14 +281,11 @@ async def run_agent(
                 continue
 
             usage = result.context_wrapper.usage
-            used = max(1, int(usage.requests))
-            turns_used += used
+            turns_used += max(1, int(usage.requests))
             usage_totals["requests"] += int(usage.requests)
             usage_totals["input"] += int(usage.input_tokens)
             usage_totals["output"] += int(usage.output_tokens)
-            usage_totals["reasoning"] += int(
-                usage.output_tokens_details.reasoning_tokens or 0
-            )
+            usage_totals["reasoning"] += int(usage.output_tokens_details.reasoning_tokens or 0)
             text = ItemHelpers.text_message_outputs(result.new_items).strip()
             if text:
                 transcript_parts.append(text)
@@ -316,6 +311,10 @@ async def run_agent(
                     f"[{label}] agent finished without a successful {submit_tool} call after "
                     f"{turns_used} model request(s) and {nudges} nudge(s). Final reply:\n{final_text}"
                 )
+            # Doubao sometimes ends a turn on a bare reasoning block with no
+            # tool call; the session is still alive, so carry it on instead
+            # of paying for a fresh run.  Bounded so a model that truly
+            # refuses still surfaces as AgentIncompleteError.
             nudges += 1
             print(
                 f"== [{label}] turn ended without {submit_tool} after {turns_used} model request(s) — "
@@ -336,12 +335,15 @@ async def run_agent(
                 run_input = result.to_input_list()
                 run_input.append(nudge_input)
 
-    if wall_seconds is None:
-        return await run_loop()
     try:
-        return await asyncio.wait_for(run_loop(), timeout=wall_seconds)
-    except asyncio.TimeoutError:
-        raise AgentTimeout(
-            f"[{label}] agent run exceeded the wall-clock budget of {wall_seconds / 60:g} min "
-            "(AGENT_WALL_MIN)"
-        ) from None
+        if wall_seconds is None:
+            return await run_loop()
+        try:
+            return await asyncio.wait_for(run_loop(), timeout=wall_seconds)
+        except asyncio.TimeoutError:
+            raise AgentTimeout(
+                f"[{label}] agent run exceeded the wall-clock budget of {wall_seconds / 60:g} min "
+                "(AGENT_WALL_MIN)"
+            ) from None
+    finally:
+        await client.close()

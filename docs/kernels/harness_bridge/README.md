@@ -68,7 +68,18 @@ result = await run_agent(
 
 Tool handlers return an MCP-shaped result containing text or image content,
 an optional `is_error`, and an optional private `_submitted` value captured by
-the host after successful validation.
+the host after successful validation. A handler that raises is reported to
+the model as an error result under every backend; it never aborts the run.
+
+`run_agent()` validates the tool table before importing any SDK: the submit
+tool must be present, tool names must be unique, `allowed_builtin` must be a
+subset of `read`, `glob`, `grep`, `tasks`, and application tools may not
+reuse the name of a requested builtin.
+
+`allowed_builtin` selects Claude Code's own Read/Glob/Grep/Task tools under
+`HARNESS=claude`. The OpenAI and dsh adapters serve same-named, cwd-confined
+host tools implemented in pure Python (Grep needs no `rg` on the host), so
+prompts stay portable across backends.
 
 `backend_capabilities()` exposes runtime facts that callers can check before a
 run. Unsupported built-in capabilities fail closed.

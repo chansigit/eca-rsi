@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 
-from .harness import AgentIncompleteError, AgentRunResult, AgentTimeout, ToolSpec
+from .harness import BUILTIN_TOOL_NAMES, AgentIncompleteError, AgentRunResult, AgentTimeout, ToolSpec
 
 # Oldest claude-agent-sdk this backend accepts. 0.2.139 bundles Claude Code
 # 2.1.233, which rejects the default model on any image Read ("API Error: 400
@@ -47,14 +47,6 @@ def check_claude_agent_sdk_version() -> str:
             f"pip install -U 'claude-agent-sdk>={floor}'"
         )
     return installed
-
-
-_BUILTIN = {
-    "read": ["Read"], "glob": ["Glob"], "grep": ["Grep"],
-    # Claude Code's session task list. Other adapters serve same-named
-    # host-side tools so application prompts stay portable.
-    "tasks": ["TaskCreate", "TaskUpdate", "TaskList", "TaskGet"],
-}
 
 
 async def _bounded(stream, deadline, label, wall_seconds):
@@ -108,7 +100,15 @@ async def run_agent(
 
         @tool(spec.name, spec.description, spec.input_schema)
         async def _handler(args):
-            result = await spec.handler(args)
+            try:
+                result = await spec.handler(args)
+            except Exception as exc:
+                # the SDK's in-process server reports this to the model as an
+                # is_error result; log it so the host trace matches the
+                # other backends
+                print(f"== [{label}] tool exception in {spec.name}: {type(exc).__name__}: {str(exc)[:200]!r}",
+                      flush=True)
+                raise
             if is_submit and not result.get("is_error"):
                 submitted_holder["value"] = result.get("_submitted", args)
             return {k: v for k, v in result.items() if k != "_submitted"}
@@ -118,7 +118,9 @@ async def run_agent(
     wrapped = [_wrap(t) for t in tools]
     server = create_sdk_mcp_server(name=server_name, version="1.0.0", tools=wrapped)
 
-    allowed_tools = [name for b in allowed_builtin for name in _BUILTIN[b]] + [
+    # Claude Code's own tools under the capability names every backend
+    # shares (harness.BUILTIN_TOOL_NAMES), plus our MCP-served tool table.
+    allowed_tools = [name for cap in allowed_builtin for name in BUILTIN_TOOL_NAMES[cap]] + [
         f"mcp__{server_name}__{t.name}" for t in tools
     ]
     options = ClaudeAgentOptions(
