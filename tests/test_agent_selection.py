@@ -53,7 +53,7 @@ def test_run_agent_resolves_backend_default_when_model_is_omitted(monkeypatch, t
 
     monkeypatch.setenv("HARNESS", "openai")
     monkeypatch.setenv("MODEL", "doubao-seed-2-1-pro-260628")
-    monkeypatch.setattr("ecarsi._harness_openai.run_agent", fake_backend)
+    monkeypatch.setattr("harness_bridge._harness_openai.run_agent", fake_backend)
     result = asyncio.run(harness.run_agent(
         tools=[ToolSpec("submit", "submit", {}, submit)],
         submit_tool="submit",

@@ -162,7 +162,7 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
   `AGENT_WALL_MIN`(每次 agent 调用的墙钟预算,默认 180 分钟,所有后端都强制,超时重开一次);
   并发池:`PERSAMPLE_PARALLEL` / `PERSAMPLE_MEM_PER_CELL_MB`(persample)、`ZMIP_PARALLEL` / `ZMIP_MEM_PER_CELL_MB`(zoomin),
   默认从 affinity CPU + cgroup 内存自动定(`ecarsi.resources`,与 msp.resources 同一份拷贝)。
-- `tests/test_harness_sync.py`:harness 三份拷贝(msp 为准 → osp/ecarsi)+ resources.py 两份必须逐字节相同;改 msp 的再 cp,跑它确认。
+- agent runtime 实现在独立 `agent-harness-bridge` 包;`ecarsi.harness` / `msp.harness` / `osp.harness` 只是保持旧导入路径的 identity-preserving shim。adapter 回归测试在共享包,本仓库 `tests/test_harness_sync.py` 验证 shim 身份;`resources.py` 两份仍需逐字节相同。
 - persample(2026-09-03 起)不再开 agent 驱动:host 读一次 organized.h5ad 写出每样本 `subset.h5ad`,
   子进程池并行跑 `python -m osp`(大样本先跑),失败重试一次后记 `persample/failures.md` 继续;12 样本 Fu2022 约 5 分钟。
 - zmip plan 有 host 连通性校验:`lineage_islands.csv`(UMAP 2D kNN 连通分量)——把分开的岛并成一个 lineage 直接打回;

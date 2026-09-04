@@ -1,6 +1,6 @@
 # 安装与依赖(eca-rsi 主线)
 
-整套系统 = 一个驱动包 + 三个内核包 + 一个共享库,外加 Claude 与几个外部工具。
+整套系统 = 一个驱动包 + 三个内核包 + 两个共享库,外加三个可选 agent runtime 与几个外部工具。
 所有 Python 包装进**同一个 venv**;内核以子进程 `python -m osp|msp|zmip` 被调用,
 所以也可以指到别的解释器(`OSP_PYTHON` / `MSP_PYTHON` / `ZMIP_PYTHON`),默认就是当前解释器。
 
@@ -12,15 +12,17 @@ eca-rsi (ecarsi)  ── 驱动:organize / persample / loop / ledger / index / s
    ├── osp     每样本 QC · doublet(scanpy 内置 scrublet)· DecontX(内置)· leiden · 注释 agent
    ├── msp     跨样本 harmony 整合 · inspect / annotate agent · 报告        ── 依赖 standissect-lite, harmonypy, torch
    └── zmip    逐 lineage 下钻                                              ── 依赖 msp
-agent 后端 ── deepseek(dsh) / openai(OpenAI Agents SDK + Ark) / claude(Claude Agent SDK)
+agent-harness-bridge ── 统一 ToolSpec/run_agent 契约与三套 adapter
+   └── deepseek(dsh) / openai(OpenAI Agents SDK + Ark) / claude(Claude Agent SDK)
 ```
 
 | 包 | 仓库 | 版本 | 依赖(pyproject 声明) |
 |---|---|---|---|
-| ecarsi | `eca-rsi`(GitHub chansigit/eca-rsi,main) | 0.1.0 | claude-agent-sdk ≥0.2.139, openai-agents 0.22.0, mcp 1.x, anndata, scanpy, h5py, numpy, pandas, matplotlib |
-| osp | GitHub chansigit/osp · **PyPI `osp-sc`**(`osp` 与已有 `OSP` 相似被拒,import 名仍是 `osp`) | 0.1.0 | scanpy, igraph, pandas, numpy, scipy, matplotlib, scikit-learn;`[agent]` claude-agent-sdk + openai-agents 0.22.0 + mcp 1.x |
-| msp | GitHub chansigit/msp · **PyPI `msp-sc`**(`msp` 名已被占,import 名仍是 `msp`) | 0.2.0 | scanpy, anndata, igraph, **harmonypy==0.2.0**, torch, standissect-lite ≥0.2.0, pandas, numpy, scipy, scikit-learn, matplotlib, seaborn, adjustText;`[agent]` claude-agent-sdk + openai-agents 0.22.0 + mcp 1.x |
-| zmip | GitHub chansigit/zmip · PyPI `zmip` | 0.1.0 | msp ≥0.2.0, claude-agent-sdk, scanpy, anndata, pandas, numpy, scipy, matplotlib |
+| agent-harness-bridge | 独立共享仓库,import 名 `harness_bridge` | 0.1.0 | core 无依赖;extras:`openai` / `claude` / `deepseek` / `all` |
+| ecarsi | `eca-rsi`(GitHub chansigit/eca-rsi,main) | 0.1.0 | agent-harness-bridge[all] 0.1.0,anndata,scanpy,h5py,numpy,pandas,matplotlib |
+| osp | GitHub chansigit/osp · **PyPI `osp-sc`**(`osp` 与已有 `OSP` 相似被拒,import 名仍是 `osp`) | 0.1.0 | agent-harness-bridge core,scanpy,igraph,pandas,numpy,scipy,matplotlib,scikit-learn;`[agent]` 安装 bridge 的 runtime extras |
+| msp | GitHub chansigit/msp · **PyPI `msp-sc`**(`msp` 名已被占,import 名仍是 `msp`) | 0.2.0 | agent-harness-bridge core,scanpy,anndata,igraph,**harmonypy==0.2.0**,torch,standissect-lite ≥0.2.0 等;`[agent]` 安装 bridge 的 runtime extras |
+| zmip | GitHub chansigit/zmip · PyPI `zmip` | 0.1.0 | msp ≥0.2.0,agent-harness-bridge[all] 0.1.0,scanpy,anndata,pandas,numpy,scipy,matplotlib |
 | standissect-lite | GitHub chansigit/standissect-lite · PyPI `standissect-lite` | 0.2.0 | anndata, leidenalg, python-igraph, numpy, pandas, scikit-learn |
 
 两个要点:
@@ -36,7 +38,7 @@ agent 后端 ── deepseek(dsh) / openai(OpenAI Agents SDK + Ark) / claude(Cla
 |---|---|---|
 | Python ≥3.10 | Sherlock:`ml python/3.12.1` | 3.12.1,venv 在 `/scratch/users/chensj16/venvs/dl2025/.venv` |
 | Claude Code CLI + 登录 | `npm i -g @anthropic-ai/claude-code`,`claude login`(OAuth,Max 订阅;不设 `ANTHROPIC_API_KEY` 就不走 API 计费) | 2.1.257,凭据在 `~/.claude/.credentials.json` |
-| claude-agent-sdk | Python 包,内部调用上面的 CLI | 0.2.139 |
+| claude-agent-sdk | Python 包,内部调用上面的 CLI | ≥0.2.152(当前 0.2.152) |
 | openai-agents | `HARNESS=openai` 的 Python agent loop;本项目固定版本 | 0.22.0 |
 | Ark API key | `HARNESS=openai` / 豆包鉴权,通过 `ARK_API_KEY` 提供 | shell 环境变量 |
 | eca-pp | **上游**:输入必须是 eca-pp 产物(`<样本>/standardize/standardized.h5ad` + `result.json`),organize 守门会拒绝裸 h5ad | 另一个项目 |
@@ -61,7 +63,8 @@ python -m venv $SCRATCH/venvs/eca && source $SCRATCH/venvs/eca/bin/activate
 pip install -U pip
 
 cd $SCRATCH/projects
-for r in standissect-lite osp msp zmip eca-rsi; do git clone https://github.com/chansigit/$r; done
+for r in agent-harness-bridge standissect-lite osp msp zmip eca-rsi; do git clone https://github.com/chansigit/$r; done
+pip install -e "agent-harness-bridge[all]"
 pip install -e standissect-lite && pip install -e "osp[agent]" && pip install -e "msp[agent]" && pip install -e zmip && pip install -e eca-rsi
 # msp 会顺带拉 harmonypy==0.2.0 和 torch;editable 的 osp / msp 在 pip 里叫 osp-sc / msp-sc
 ```
@@ -74,7 +77,7 @@ pip install -e standissect-lite && pip install -e "osp[agent]" && pip install -e
 ```bash
 python - <<'EOF'
 import importlib
-for m in ["osp", "msp", "zmip", "standissect_lite", "claude_agent_sdk", "agents", "ecarsi"]:
+for m in ["harness_bridge", "osp", "msp", "zmip", "standissect_lite", "claude_agent_sdk", "agents", "ecarsi"]:
     x = importlib.import_module(m); print(f"{m:18s} {x.__file__}")
 EOF
 python -m osp --help | grep -q report-context && echo osp-ok      # 旧副本没有这个参数
@@ -82,6 +85,10 @@ python -m msp --help >/dev/null && python -m zmip --help >/dev/null && echo msp-
 python -m ecarsi.serve --help >/dev/null && echo ecarsi-ok
 claude --version                                                     # SDK 靠它
 ```
+
+dsh 的官方 runtime wheel 目前针对较新的 glibc。Sherlock 上先
+`module load polyfill-glibc/0.1`,或继续把 `DSH_BIN` 指向已经验证的源码构建;
+bridge 不会在默认安装时强拉不兼容的 runtime wheel。
 
 `__file__` 必须指向源码树。曾经踩过的坑:venv 里留着一份非 editable 的 osp 旧副本,
 源码改了不生效(缺 `qc_removed.csv`),`pip install -e` 会覆盖掉它。

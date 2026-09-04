@@ -121,7 +121,7 @@ no provenance at all.
 
 ## Requirements
 
-- One configured agent backend: DeepSeek Harness, OpenAI Agents SDK + an Ark
+- `agent-harness-bridge` plus one configured backend: DeepSeek Harness, OpenAI Agents SDK + an Ark
   API key, or an authenticated Claude Code CLI
 - Python with `scanpy`, `anndata`, `harmonypy`, `scrublet`
   (path configurable via `PY=...`)
@@ -132,6 +132,8 @@ no provenance at all.
   `--harness` and `--model`. For example, the quality-oriented, higher-cost
   candidate is
   `eca-rsi --harness openai --model doubao-seed-2-1-pro-260628 run ...`.
+  The shared bridge owns runtime adapters and failure recovery; this repository
+  owns the biological workflow, prompts, tools and submit validation.
 
 ## Caveats
 
