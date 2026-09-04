@@ -251,11 +251,33 @@ def _job_cell(jid: str | None, st: dict | None) -> tuple[str, str]:
 NAV_JS = r"""
 (function(){
   const $ = id => document.getElementById(id);
-  const q = $("nav-q"), rows = [...document.querySelectorAll("tbody tr")], n = $("nav-n"), msg = $("nav-msg");
-  function apply(){ const t = q ? q.value.trim().toLowerCase() : ""; let k = 0;
-    for (const r of rows) { const hit = !t || r.dataset.text.includes(t); r.style.display = hit ? "" : "none"; k += hit; }
-    if (n) n.textContent = t ? `${k} / ${rows.length}` : `${rows.length}`; }
-  if (q) { q.addEventListener("input", apply); q.focus(); apply(); }
+  const items = [...document.querySelectorAll(".item")], frame = $("frame"), crumb = $("crumb"), open = $("open"),
+        q = $("nav-q"), n = $("nav-n"), msg = $("nav-msg"), empty = $("empty");
+  const names = new Set(items.map(i => i.dataset.name));
+  // -- sidebar <-> main pane --
+  function mark(name){ items.forEach(i => i.classList.toggle("active", i.dataset.name === name)); }
+  function show(path){ if (empty) empty.style.display = "none"; frame.style.display = ""; if (frameUrl() !== path) frame.src = path; }
+  function frameUrl(){ try { return frame.contentWindow.location.pathname; } catch (e) { return null; } }
+  function fromHash(){ const m = location.hash.replace(/^#/, "").match(/^\/([^/]+)\/(.*)$/); return m && names.has(m[1]) ? "/" + m[1] + "/" + m[2] : null; }
+  frame.addEventListener("load", () => {
+    const p = frameUrl(); if (!p) return;
+    const m = p.match(/^\/([^/]+)\//); if (!m) return;
+    if (location.hash !== "#" + p) history.replaceState(null, "", "#" + p);
+    try { localStorage.setItem("ecarsi.serve.last", p); } catch (e) {}
+    mark(m[1]); crumb.textContent = decodeURIComponent(p); open.href = p;
+    try { document.title = frame.contentDocument.title || "ecarsi serve"; } catch (e) {}
+  });
+  window.addEventListener("hashchange", () => { const p = fromHash(); if (p) show(p); });
+  items.forEach(i => i.addEventListener("click", ev => { if (ev.target.closest("input.sel")) return; ev.preventDefault(); show("/" + i.dataset.name + "/"); }));
+  $("sb-toggle").addEventListener("click", () => document.body.classList.toggle("sb-hidden"));
+  $("sb-show").addEventListener("click", () => document.body.classList.remove("sb-hidden"));
+  $("reload").addEventListener("click", () => { try { frame.contentWindow.location.reload(); } catch (e) { frame.src = frame.src; } });
+  // -- search --
+  function apply(){ const t = q.value.trim().toLowerCase(); let k = 0;
+    for (const i of items) { const hit = !t || i.dataset.text.includes(t); i.style.display = hit ? "" : "none"; k += hit; }
+    n.textContent = t ? `${k} / ${items.length}` : `${items.length}`; }
+  q.addEventListener("input", apply); apply();
+  // -- bind / unbind (edit the registry file through the server) --
   function say(text, bad){ msg.textContent = text; msg.className = "callout" + (bad ? " bad" : ""); msg.style.display = "block"; }
   async function post(url, body){
     const r = await fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
@@ -271,20 +293,25 @@ NAV_JS = r"""
     $("bind-go").disabled = true;
     const j = await post("/_bind", {path, name: name || null});
     $("bind-go").disabled = false;
-    if (j.ok) location.reload(); else say("bind failed: " + j.error, true); });
+    if (j.ok) { location.hash = "#/" + j.name + "/"; location.reload(); } else say("bind failed: " + j.error, true); });
   $("bind-path").addEventListener("keydown", ev => { if (ev.key === "Enter") $("bind-go").click(); });
-  const boxes = [...document.querySelectorAll("input.sel")], ub = $("unbind-go"), all = $("sel-all");
-  function sync(){ const k = boxes.filter(b => b.checked).length; ub.disabled = !k; ub.textContent = k ? `Unbind selected (${k})` : "Unbind selected"; }
+  const boxes = [...document.querySelectorAll("input.sel")], ub = $("unbind-go"), sb = $("sb");
+  function sync(){ const k = boxes.filter(b => b.checked).length; ub.disabled = !k; ub.textContent = k ? `Unbind (${k})` : "Unbind…"; sb.classList.toggle("selecting", k > 0); }
   boxes.forEach(b => b.addEventListener("change", sync));
-  if (all) all.addEventListener("change", () => { boxes.forEach(b => { if (b.closest("tr").style.display !== "none") b.checked = all.checked; }); sync(); });
   ub.addEventListener("click", async () => {
-    const names = boxes.filter(b => b.checked).map(b => b.value);
-    if (!names.length) return;
-    if (!confirm("Unbind " + names.length + " dataset(s)?\n\n" + names.join("\n") + "\n\n(Only the registry entry is removed; nothing in the run directories is touched.)")) return;
+    const sel = boxes.filter(b => b.checked).map(b => b.value);
+    if (!sel.length) return;
+    if (!confirm("Unbind " + sel.length + " dataset(s)?\n\n" + sel.join("\n") + "\n\n(Only the registry entry is removed; nothing in the run directories is touched.)")) return;
     ub.disabled = true;
-    const j = await post("/_unbind", {names});
-    if (j.ok) location.reload(); else { ub.disabled = false; say("unbind failed: " + j.error, true); } });
+    const j = await post("/_unbind", {names: sel});
+    if (j.ok) { const cur = fromHash(); if (cur && sel.includes(cur.split("/")[1])) location.hash = ""; location.reload(); }
+    else { ub.disabled = false; say("unbind failed: " + j.error, true); } });
   sync();
+  // -- initial pane --
+  let first = fromHash();
+  if (!first) { try { const l = localStorage.getItem("ecarsi.serve.last"); if (l && names.has(l.split("/")[1])) first = l; } catch (e) {} }
+  if (!first && items.length) first = "/" + items[0].dataset.name + "/";
+  if (first) show(first); else { frame.style.display = "none"; if (empty) empty.style.display = ""; }
 })();
 """
 
@@ -313,66 +340,100 @@ def _dataset_state(root: Path) -> dict:
             "final_cells": sum(final) if final else None, "stage": stage, "cls": cls}
 
 
+NAV_CSS = """
+html,body{height:100%}body{display:flex;overflow:hidden}
+aside.sb{width:300px;flex:0 0 300px;background:#f9fafb;border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0}
+.sb-head{padding:.8rem .8rem .4rem;display:flex;flex-direction:column;gap:.5rem}
+.sb-head .ttl{display:flex;align-items:center;justify-content:space-between;font-weight:650;font-size:.95rem}
+.sb-head .ttl small{color:var(--muted);font-weight:400;font-size:.8rem}
+.sb-head input{width:100%;font:inherit;font-size:.9rem;padding:.4rem .7rem;border:1px solid var(--line);border-radius:8px;background:#fff}
+.sb-list{flex:1;overflow-y:auto;padding:.2rem .5rem .5rem}
+.item{display:flex;align-items:center;gap:.45rem;padding:.45rem .55rem;border-radius:8px;cursor:pointer;color:var(--ink);text-decoration:none}
+.item:hover{background:#eef0f3;text-decoration:none}.item.active{background:#e3e7ff}
+.item .body{min-width:0;flex:1}
+.item .nm{font-weight:600;font-size:.92rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item .meta{font-size:.76rem;color:var(--muted);display:flex;gap:.35rem;align-items:center;flex-wrap:wrap;margin-top:.1rem}
+.item .meta .pill{font-size:.72rem;padding:.1em .55em}
+.item input.sel{margin:0;flex:0 0 auto;opacity:0;transition:opacity .1s}
+.item:hover input.sel,aside.selecting input.sel,.item input.sel:checked{opacity:1}
+.sb-foot{padding:.6rem .8rem;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:.5rem}
+.sb-foot .row{display:flex;gap:.5rem}
+.sb-foot .reg{font:.72rem ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--muted);word-break:break-all}
+main{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg)}
+.mbar{display:flex;align-items:center;gap:.6rem;padding:.4rem .8rem;border-bottom:1px solid var(--line);background:#fff;font-size:.85rem;color:var(--muted);min-height:2.4rem}
+.mbar #crumb{flex:1;font:.82rem ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+iframe{flex:1;border:0;width:100%;background:var(--bg)}
+#empty{padding:2rem;max-width:70ch}
+.btn{font:inherit;font-weight:600;padding:.4rem .9rem;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
+.btn:disabled{opacity:.45;cursor:default}.btn.danger{background:var(--bad);border-color:var(--bad)}
+.btn.plain{background:var(--card);color:var(--ink);border-color:var(--line)}.btn.sm{padding:.25rem .6rem;font-size:.82rem}
+.icon{background:none;border:0;cursor:pointer;color:var(--muted);font-size:1.1rem;padding:.1rem .35rem;border-radius:6px}.icon:hover{background:#eef0f3}
+#sb-show{display:none}body.sb-hidden aside.sb{display:none}body.sb-hidden #sb-show{display:inline-block}
+#bind-form{margin:0;font-size:.85rem}#bind-form input{width:100%;font:.85em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:.4rem .6rem;border:1px solid var(--line);border-radius:6px;margin:.2rem 0}
+#nav-msg{margin:0;font-size:.82rem}
+@media (max-width:760px){aside.sb{position:fixed;inset:0 auto 0 0;z-index:5;box-shadow:0 0 0 100vw rgba(0,0,0,.25)}}
+"""
+
+
 def _navigator_html(items: dict[str, Path], registry_path: Path) -> str:
+    """ChatGPT-style shell: datasets down the left, the selected dataset's own
+    pages (root landing page -> its units -> ...) in an iframe on the right.
+    The iframe keeps the address in the hash (#/<name>/...), so reload / back
+    / bookmarks land on the same page."""
     e = _h.escape
     rows = []
     jids = {name: _root_job_id(p) for name, p in items.items()}
     jstates = _slurm_states([j for j in jids.values() if j])
     for name, p in sorted(items.items()):
         st = _dataset_state(p)
-        cells = index._n(st["final_cells"]) or "–"
+        cells = index._n(st["final_cells"])
         job_html, job_text = _job_cell(jids[name], jstates.get(jids[name] or ""))
-        rows.append(f'<tr data-text="{e((name + " " + str(p) + " " + st["stage"] + " " + job_text).lower())}">'
-                    f'<td class="l"><input class="sel" type="checkbox" value="{e(name)}"></td>'
-                    f'<td><a href="/{e(name)}/"><b>{e(name)}</b></a></td>'
-                    f'<td class="num">{index._n(st["n_input"]) or "–"}</td>'
-                    f'<td class="num"><b>{cells}</b>{"" if st["cls"] == "released" else " <small class=\"muted\">so far</small>" if st["final_cells"] else ""}</td>'
-                    f'<td class="num">{st["released"]}/{st["units"]}</td>'
-                    f'<td class="l"><span class="pill {st["cls"]}">{e(st["stage"])}</span></td>'
-                    f'<td class="l">{job_html}</td>'
-                    f'<td class="l muted"><code class="path">{e(str(p))}</code></td></tr>')
+        meta = [f'<span class="pill {st["cls"]}">{e(st["stage"])}</span>']
+        if cells:
+            meta.append(f'<b>{cells}</b> cells' + ("" if st["cls"] == "released" else " so far"))
+        if st["units"] > 1:
+            meta.append(f'{st["released"]}/{st["units"]} units')
+        if jids[name]:
+            meta.append(job_html)
+        rows.append(f'<a class="item" href="/{e(name)}/" data-name="{e(name)}" title="{e(str(p))}" '
+                    f'data-text="{e((name + " " + str(p) + " " + st["stage"] + " " + job_text).lower())}">'
+                    f'<input class="sel" type="checkbox" value="{e(name)}" title="select for unbind">'
+                    f'<div class="body"><div class="nm">{e(name)}</div><div class="meta">{" · ".join(meta)}</div></div></a>')
     hint = ("A bindable directory is an eca-rsi <b>organize root</b> (contains <code>organize/manifest.json</code> or a "
             "<code>units/</code> dir — e.g. <code>&lt;dataset&gt;/rsi</code>, the <code>&lt;root&gt;</code> you gave "
             "<code>eca-rsi run</code>) or a single <b>unit</b> (contains <code>input/organized.h5ad</code> or "
             "<code>input/manifest.json</code> — e.g. <code>&lt;root&gt;/units/&lt;unit&gt;</code>). "
             "Absolute path on the server host; a raw eca-pp <code>standardize/</code> dir or a bare h5ad is not bindable.")
-    toolbar = (
-        '<div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin:0 0 .8rem">'
-        '<button id="bind-open" class="btn">+ Bind dataset…</button>'
-        '<button id="unbind-go" class="btn danger" disabled>Unbind selected</button>'
-        f'<span class="muted" style="font-size:.85rem">bind/unbind edit <code class="path">{e(str(registry_path))}</code>; nothing in the run directories is touched</span></div>'
-        '<div id="bind-form" class="callout" style="display:none">'
-        '<label style="display:block;font-weight:600;margin-bottom:.3rem">Directory to bind</label>'
-        '<input id="bind-path" type="text" placeholder="/oak/…/<dataset>/rsi" autocomplete="off" spellcheck="false" '
-        'style="width:100%;font:.92em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:.45rem .7rem;border:1px solid var(--line);border-radius:6px">'
-        f'<p class="desc" style="margin:.5rem 0">{hint}</p>'
-        '<div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap">'
-        '<label>name <input id="bind-name" type="text" placeholder="(default: directory basename)" autocomplete="off" '
-        'style="font:inherit;padding:.35rem .6rem;border:1px solid var(--line);border-radius:6px;width:22ch"></label>'
-        '<button id="bind-go" class="btn">Bind</button><button id="bind-cancel" class="btn plain">Cancel</button></div></div>'
+    sidebar = (
+        '<aside class="sb" id="sb"><div class="sb-head">'
+        '<div class="ttl"><span>Datasets <small><span id="nav-n">0</span></small></span>'
+        '<button class="icon" id="sb-toggle" title="hide sidebar">&#9776;</button></div>'
+        '<input id="nav-q" type="search" placeholder="search name / path / stage / job…" autocomplete="off"></div>'
+        f'<div class="sb-list">{"".join(rows) if rows else "<p class=\"muted\" style=\"padding:.5rem\">nothing bound yet</p>"}</div>'
+        '<div class="sb-foot">'
+        '<div class="row"><button id="bind-open" class="btn sm">+ Bind…</button><button id="unbind-go" class="btn sm danger" disabled>Unbind…</button></div>'
+        '<div id="bind-form" class="callout" style="display:none"><b>Directory to bind</b>'
+        '<input id="bind-path" type="text" placeholder="/oak/…/<dataset>/rsi" autocomplete="off" spellcheck="false">'
+        '<input id="bind-name" type="text" placeholder="name (default: directory basename)" autocomplete="off">'
+        f'<p class="desc" style="margin:.3rem 0">{hint}</p>'
+        '<div class="row"><button id="bind-go" class="btn sm">Bind</button><button id="bind-cancel" class="btn sm plain">Cancel</button></div></div>'
         '<div id="nav-msg" class="callout" style="display:none"></div>'
+        f'<div class="reg" title="registry file: bind/unbind edit it; nothing in the run directories is touched">{e(str(registry_path))}</div>'
+        '</div></aside>'
     )
-    table = (
-        '<input id="nav-q" type="search" placeholder="search name / path / stage / job state…" autocomplete="off" '
-        'style="width:100%;font:inherit;padding:.5rem .8rem;border:1px solid var(--line);border-radius:8px;margin:0 0 .8rem">'
-        '<div class="wrap"><table><thead><tr><th class="l" style="width:1.5rem"><input id="sel-all" type="checkbox" title="select all visible"></th>'
-        '<th class="l">dataset</th><th>input cells</th><th>final cells</th>'
-        '<th>units released</th><th class="l">stage</th><th class="l" title="last job in <root>/jobs.log (or status.txt), asked of squeue/sacct">slurm job</th><th class="l">path</th></tr></thead>'
-        f'<tbody>{"".join(rows)}</tbody></table></div>'
-        if items else '<p class="empty">nothing bound yet — use <b>+ Bind dataset…</b> above or <code>eca-rsi serve scan-add &lt;dir-or-glob&gt;</code></p>'
+    main = (
+        '<main><div class="mbar"><button class="icon" id="sb-show" title="show sidebar">&#9776;</button>'
+        '<span id="crumb"></span><button class="icon" id="reload" title="reload page">&#8635;</button>'
+        '<a id="open" href="/" target="_blank" title="open in a new tab">&#8599;</a></div>'
+        '<iframe id="frame" name="frame" title="dataset"></iframe>'
+        '<div id="empty" style="display:none"><h2>Nothing bound yet</h2><p class="desc">Use <b>+ Bind…</b> in the sidebar or, on the server host, '
+        '<code>eca-rsi serve scan-add &lt;dir-or-glob&gt;</code>. The server picks up registry changes on the next request.</p>'
+        f'<p class="desc">{hint}</p></div></main>'
     )
-    body = (
-        '<header class="top"><div><div class="crumb">ecarsi serve</div><h1>Datasets</h1></div>'
-        f'<div class="event"><span id="nav-n">{len(items)}</span> bound</div></header>'
-        f'<section>{toolbar}{table}</section><script>{NAV_JS}</script>'
-    )
-    css = (".btn{font:inherit;font-weight:600;padding:.4rem .9rem;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}"
-           ".btn:disabled{opacity:.45;cursor:default}.btn.danger{background:var(--bad);border-color:var(--bad)}"
-           ".btn.plain{background:var(--card);color:var(--ink);border-color:var(--line)}")
     return (
         '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1"><title>ecarsi serve</title>'
-        f"<style>{index.CSS}{css}</style></head><body><div class=\"page\">{body}</div></body></html>"
+        f"<style>{index.CSS}{NAV_CSS}</style></head><body>{sidebar}{main}<script>{NAV_JS}</script></body></html>"
     )
 
 
