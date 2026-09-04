@@ -63,6 +63,14 @@ def main(argv: list[str]) -> int:
     else:
         existing = L.rounds(unit)
         out_root = existing[-1] if existing else L.round_dir(unit, 1)
+    manifest = out_root / L.MANIFEST
+    if manifest.is_file():
+        import json
+
+        from . import check_agent_config
+
+        with open(manifest) as fh:
+            check_agent_config(json.load(fh), str(manifest))
     idir = L.crosssample_dir(out_root)
     missing = [f for f in MSP_CONTRACT if not (idir / f).is_file()]
     if missing:

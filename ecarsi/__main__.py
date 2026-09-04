@@ -1,6 +1,6 @@
 """eca-rsi — the one entry point of the main line.
 
-    eca-rsi run       <eca-pp-dir> <root> [--rounds N] [--cap 10] [--serve [PORT]] [--ngrok] [--domain D] [--auth U:P]
+    eca-rsi [--harness BACKEND] [--model MODEL] run <eca-pp-dir> <root> [--rounds N] [--cap 10] [--serve [PORT]]
     eca-rsi organize  <eca-pp-dir> <root>
     eca-rsi persample <unit> [...]           eca-rsi loop   <unit> [...]
     eca-rsi crosssample <unit> [round_dir]   eca-rsi zoomin <unit> [round_dir]
@@ -18,11 +18,16 @@ registry) in the foreground at http://127.0.0.1:PORT/<root-name>/ (add
 --ngrok to publish; Ctrl-C to stop).
 Every step resumes, so re-running the same command after an interruption
 continues where it stopped. `python -m ecarsi ...` is the same thing.
+The global --harness and --model options may appear before or after the
+subcommand; explicit CLI values override HARNESS / MODEL environment values.
+By default a resume rejects a recorded harness/model mismatch; use
+--allow-agent-change only when a deliberately mixed run is wanted.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -112,6 +117,17 @@ def run(argv: list[str]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    runtime = argparse.ArgumentParser(add_help=False)
+    runtime.add_argument("--harness", choices=["deepseek", "openai", "claude"])
+    runtime.add_argument("--model")
+    runtime.add_argument("--allow-agent-change", action="store_true")
+    selected, argv = runtime.parse_known_args(argv)
+    if selected.harness:
+        os.environ["HARNESS"] = selected.harness
+    if selected.model:
+        os.environ["MODEL"] = selected.model
+    if selected.allow_agent_change:
+        os.environ["ECA_ALLOW_AGENT_CHANGE"] = "1"
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__)
         return 0 if argv else 2

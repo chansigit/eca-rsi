@@ -416,7 +416,7 @@ def main(argv: list[str]) -> int:
     out_root = Path(args.out).resolve() if args.out else (
         h5ad.parent / L.PERSAMPLE if bare else L.persample_root(unit)
     )
-    from . import model as _model
+    from . import agent_config, check_agent_config, model as _model
 
     py = os.environ.get("OSP_PYTHON", sys.executable)
     model = _model()
@@ -428,6 +428,7 @@ def main(argv: list[str]) -> int:
         # overrides — a bare re-invocation may not silently change behavior
         with open(mpath) as f:
             man = json.load(f)
+        check_agent_config(man, str(mpath))
         col = man["sample_column"]
         counts = {s["value"]: s["n_cells"] for s in man["samples"]}
         annotate = man.get("annotate", True) if args.annotate is None else args.annotate
@@ -450,6 +451,7 @@ def main(argv: list[str]) -> int:
                                 species, tissue, context)
         man = {
             "h5ad": str(h5ad),
+            **agent_config(),
             "sample_column": col,
             "rationale": decision["rationale"],
             "species": species,

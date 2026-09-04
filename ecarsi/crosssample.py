@@ -231,9 +231,16 @@ async def _propose(inventories: list[dict]) -> dict:
         input_schema={"decision_json": str},
         handler=submit_inclusion,
     )
+    # Inventories contain absolute figure paths under the persample tree.  The
+    # read-only harness confines every path to cwd, so anchor it at their
+    # actual common parent rather than at whichever directory launched ecarsi.
+    # The old launcher cwd worked only when a model happened not to inspect
+    # the figures.
+    sample_dirs = [str(Path(item["dir"]).resolve(strict=True)) for item in inventories]
+    inclusion_cwd = os.path.commonpath(sample_dirs)
     result = await run_agent(
         tools=[tool], submit_tool="submit_inclusion", prompt=prompt,
-        cwd=os.getcwd(), model=model(),
+        cwd=inclusion_cwd, model=model(),
         max_turns=80, max_buffer_size=50_000_000,  # figure Reads can exceed the 1MB default
         allowed_builtin=("read", "glob", "grep"), label="sample inclusion",
     )
@@ -265,6 +272,10 @@ def main(argv: list[str]) -> int:
 
     unit = Path(args.unit).resolve()
     ps = load_persample(unit)
+    from . import agent_config, check_agent_config, model
+
+    check_agent_config(ps, str(L.persample_manifest(unit)))
+    selected_model = model()
     out_root = Path(args.out).resolve() if args.out else L.round_dir(unit, 1)
     # a null sample column means persample ran the whole file as one sample;
     # osp then labels every cell obs["sample"] = "all", which is the batch key
@@ -281,6 +292,7 @@ def main(argv: list[str]) -> int:
     if mpath.is_file():
         with open(mpath) as f:
             man = json.load(f)
+        check_agent_config(man, str(mpath))
         decision = man["inclusion"]
         print("[include] reusing recorded inclusion decision")
     else:
@@ -289,6 +301,7 @@ def main(argv: list[str]) -> int:
         cost.record(unit, f"{out_root.name}/inclusion", getattr(propose_inclusion, "last_cost", None), "sample inclusion")
         man = {
             "unit": str(unit),
+            **agent_config(),
             "batch_col": batch_col,
             "species": species,
             "ecapp_batch_designations": ecapp,
@@ -313,9 +326,7 @@ def main(argv: list[str]) -> int:
     py = os.environ.get("MSP_PYTHON", sys.executable)
     inputs = [str(Path(by_val[s]["dir"]) / "clustered.h5ad") for s in included]
     idir = L.crosssample_dir(out_root)
-    from . import model
-
-    cmd = msp_command(py, inputs, batch_col, idir, species, model(), L.report_context(unit, out_root))
+    cmd = msp_command(py, inputs, batch_col, idir, species, selected_model, L.report_context(unit, out_root))
     print(f"[msp] {cmd}")
 
     # msp's report reads sample_decisions.csv if present — write it before

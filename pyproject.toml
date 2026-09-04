@@ -16,6 +16,8 @@ requires-python = ">=3.10"
 # of ecarsi. Install them per INSTALL.md.
 dependencies = [
     "claude-agent-sdk>=0.2.139",  # organize / persample / crosssample agents
+    "openai-agents==0.22.0",      # HARNESS=openai with the Doubao Ark endpoint
+    "mcp>=1.19,<2",               # preserve the validated dsh/MCP 1.x backend
     "anndata",
     "scanpy",
     "h5py",

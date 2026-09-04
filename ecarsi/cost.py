@@ -11,7 +11,7 @@ Nothing persisted that; it scrolled by in the Slurm log. Now:
 - `summarize()` reads those events back (progress.log is the audit trail
   anyway) and release/summary.md gets an "Agent cost" section from it.
 
-Backends that don't report cost (deepseek) simply produce no events — the
+Backends that don't report cost (deepseek/openai) simply produce no events — the
 section then says so instead of pretending zero.
 """
 

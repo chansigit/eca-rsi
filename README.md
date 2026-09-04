@@ -121,10 +121,17 @@ no provenance at all.
 
 ## Requirements
 
-- [Claude Code](https://claude.com/claude-code) CLI (`claude`), authenticated
+- One configured agent backend: DeepSeek Harness, OpenAI Agents SDK + an Ark
+  API key, or an authenticated Claude Code CLI
 - Python with `scanpy`, `anndata`, `harmonypy`, `scrublet`
   (path configurable via `PY=...`)
-- Backend defaults to `HARNESS=deepseek` (DeepSeek Harness driving Doubao; `HARNESS=claude` uses claude_agent_sdk); model defaults per backend (`doubao-seed-2-1-turbo-260628` / `claude-sonnet-5`); override globally with `MODEL=<id>` or per step with `MODEL_<STEP>=<id>` (e.g. `MODEL_ANNOTATE=claude-opus-5`)
+- Backend defaults to `HARNESS=deepseek`. Set `HARNESS=openai` for OpenAI
+  Agents SDK driving Doubao through Ark, or `HARNESS=claude` for
+  claude_agent_sdk. The Doubao backends default to
+  `doubao-seed-2-1-turbo-260628`; override globally with `MODEL=<id>` or use
+  the global CLI options `--harness` and `--model`. For example, the
+  quality-oriented, higher-cost candidate is
+  `eca-rsi --harness openai --model doubao-seed-2-1-pro-260628 run ...`.
 
 ## Caveats
 

@@ -276,6 +276,9 @@ def main(argv: list[str]) -> int:
         else:
             prev = L.round_dir(unit, n - 1)
             man = json.load(open(L.round_dir(unit, 1) / L.MANIFEST))
+            from . import check_agent_config
+
+            check_agent_config(man, str(L.round_dir(unit, 1) / L.MANIFEST))
             inp = rdir / L.ROUND_INPUT
             if not inp.is_file():
                 src = L.zoomin_dir(prev) / "annotated_zmip.h5ad"

@@ -22,6 +22,8 @@ COPIES = {
     "harness.py": ("msp", "osp", "ecarsi"),
     "_harness_claude.py": ("msp", "osp", "ecarsi"),
     "_harness_deepseek.py": ("msp", "osp", "ecarsi"),
+    "_harness_host_tools.py": ("msp", "osp", "ecarsi"),
+    "_harness_openai.py": ("msp", "osp", "ecarsi"),
     "resources.py": ("msp", "ecarsi"),
 }
 
