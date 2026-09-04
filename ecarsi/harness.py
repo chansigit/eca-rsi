@@ -139,6 +139,24 @@ def backend_name() -> str:
     return os.environ.get("HARNESS", "claude")
 
 
+_DEFAULT_MODEL = {
+    "claude": "claude-sonnet-5",
+    # HARNESS=deepseek's default provider is Doubao via dsh's pi-ai adapter
+    # (see _harness_deepseek); DSH_PROVIDER=deepseek-official switches to a
+    # real DeepSeek model, in which case override MODEL too.
+    "deepseek": "doubao-seed-2-1-turbo-260628",
+}
+
+
+def default_model() -> str:
+    """A model id a standalone call (no caller-supplied model=...) can fall
+    back to — MODEL env, else the HARNESS-appropriate default. Callers that
+    already receive a resolved model string (e.g. from ecarsi) never need
+    this; it exists so this package's own CLI works un-orchestrated."""
+    backend = backend_name()
+    return os.environ.get("MODEL", _DEFAULT_MODEL.get(backend, _DEFAULT_MODEL["claude"]))
+
+
 async def run_agent(
     *,
     tools: list[ToolSpec],
@@ -155,9 +173,11 @@ async def run_agent(
 ) -> AgentRunResult:
     """Run one agent turn to completion; raise AgentIncompleteError if
     `submit_tool` never fired. `allowed_builtin` is the read-only filesystem
-    exploration surface ("read", "glob", "grep" — the only values used
-    anywhere in this codebase today); the model never gets write access
-    under either backend."""
+    exploration surface ("read", "glob", "grep") plus "tasks" — a session
+    task list the model keeps as its own progress checklist (Claude Code's
+    TaskCreate/TaskUpdate/TaskList/TaskGet; the DeepSeek backend serves
+    same-named in-memory tools so prompts stay identical). The model never
+    gets write access under either backend."""
     backend = backend_name()
     if backend == "claude":
         from ._harness_claude import run_agent as _run
