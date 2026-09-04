@@ -16,13 +16,13 @@
 </p>
 
 <p align="center">
-  <a href="#get-started">Get started</a>
+  <a href="#-get-started">Get started</a>
   &nbsp;&nbsp;&nbsp;
-  <a href="#how-it-works">How it works</a>
+  <a href="#-how-it-works">How it works</a>
   &nbsp;&nbsp;&nbsp;
-  <a href="#faq">FAQ</a>
+  <a href="#-faq">FAQ</a>
   &nbsp;&nbsp;&nbsp;
-  <a href="#further-reading">Further reading</a>
+  <a href="#-further-reading">Further reading</a>
 </p>
 
 <br>
@@ -39,7 +39,7 @@ iterative quality review and cell-type annotation of single-cell datasets.
 
 <br>
 
-## News
+## 📰 News
 
 - **2026-09-04: OSP 0.1.1.** Backend-agnostic annotation agent with
   `--harness openai|deepseek|claude`, explicit input and rerun contracts with
@@ -50,7 +50,7 @@ iterative quality review and cell-type annotation of single-cell datasets.
 
 <br>
 
-## Why start with one sample?
+## 🔬 Why start with one sample?
 
 Better inputs make downstream results easier to trust. OSP adds a dedicated
 review before integration:
@@ -72,7 +72,7 @@ to integrate reviewed samples and continue annotation across samples.
 
 <br>
 
-## What you get
+## 📦 What you get
 
 - **Cell-type labels with evidence.** Proposed identities, supporting genes,
   uncertainties, and quality concerns for each cluster.
@@ -85,7 +85,7 @@ to integrate reviewed samples and continue annotation across samples.
 
 <br>
 
-## How it works
+## 🔧 How it works
 
 One run follows a single sample through the stages below. Click the diagram
 to open the interactive version, with pan, zoom, search, and guided views.
@@ -189,7 +189,7 @@ and cluster coverage before writing the results for review.
 
 <br>
 
-## Get started
+## 🚀 Get started
 
 ### Recommended: let ECA-RSI coordinate the analysis
 
@@ -319,7 +319,7 @@ and AI proposals affect your data.
 
 <br>
 
-## FAQ
+## ❓ FAQ
 
 ### Does OSP remove cells?
 
@@ -361,7 +361,7 @@ ECA-RSI to manage the runs or adapt the
 
 <br>
 
-## Further reading
+## 📚 Further reading
 
 ### Related projects in the ECA-RSI ecosystem
 
