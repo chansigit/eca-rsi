@@ -20,7 +20,7 @@ Runs after ecarsi.organize, once per analysis unit. Four stages:
      it never blocks the rest.
   4. VERIFY (code): hard exit listing whatever is still missing.
 
-Env: MODEL (identify agent + osp --annotate, default claude-sonnet-5),
+Env: HARNESS / MODEL (identify agent + osp --annotate; defaults per harness),
 OSP_PYTHON (interpreter that has osp installed; defaults to this
 interpreter), PERSAMPLE_PARALLEL (hard cap on concurrent samples, 1 =
 sequential; default min(#samples, cpus // 2)), PERSAMPLE_MEM_PER_CELL_MB

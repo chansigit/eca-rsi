@@ -124,7 +124,7 @@ no provenance at all.
 - [Claude Code](https://claude.com/claude-code) CLI (`claude`), authenticated
 - Python with `scanpy`, `anndata`, `harmonypy`, `scrublet`
   (path configurable via `PY=...`)
-- Model defaults to `claude-sonnet-5`; override globally with `MODEL=<id>` or per step with `MODEL_<STEP>=<id>` (e.g. `MODEL_ANNOTATE=claude-opus-5`)
+- Backend defaults to `HARNESS=deepseek` (DeepSeek Harness driving Doubao; `HARNESS=claude` uses claude_agent_sdk); model defaults per backend (`doubao-seed-2-1-turbo-260628` / `claude-sonnet-5`); override globally with `MODEL=<id>` or per step with `MODEL_<STEP>=<id>` (e.g. `MODEL_ANNOTATE=claude-opus-5`)
 
 ## Caveats
 

@@ -88,7 +88,8 @@ claude --version                                                     # SDK 靠�
 
 | 变量 | 作用 | 默认 |
 |---|---|---|
-| `MODEL` | 所有 agent 调用的模型 | `claude-sonnet-5` |
+| `HARNESS` | agent 后端:`deepseek`(dsh + 豆包)或 `claude` | `deepseek` |
+| `MODEL` | 所有 agent 调用的模型 | 随后端:`doubao-seed-2-1-turbo-260628` / `claude-sonnet-5` |
 | `OSP_PYTHON` / `MSP_PYTHON` / `ZMIP_PYTHON` | 内核用的解释器 | 当前解释器 |
 | `ZMIP_MIN_CELLS` | zmip 下钻的最小 lineage 细胞数 | 800 |
 | `MSP_DEVICE` | harmony 设备(`cuda` / `cpu`) | 自动 |
