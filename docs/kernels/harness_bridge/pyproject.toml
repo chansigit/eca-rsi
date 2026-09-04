@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-harness-bridge"
+version = "0.1.0"
+description = "A small compatibility layer for OpenAI Agents SDK, Claude Agent SDK, and DeepSeek Harness"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "chansigit", email = "chansigit@gmail.com" }]
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = []
+
+[project.optional-dependencies]
+openai = ["openai-agents==0.22.0"]
+claude = ["claude-agent-sdk>=0.2.152"]
+deepseek = [
+    "mcp>=1.19,<2",
+    "PyYAML>=6",
+    "uvicorn>=0.30",
+    "sse-starlette>=3,<4",
+]
+all = [
+    "openai-agents==0.22.0",
+    "claude-agent-sdk>=0.2.152",
+    "mcp>=1.19,<2",
+    "PyYAML>=6",
+    "uvicorn>=0.30",
+    "sse-starlette>=3,<4",
+]
+test = ["pytest>=8"]
+
+[tool.setuptools]
+packages = ["harness_bridge"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

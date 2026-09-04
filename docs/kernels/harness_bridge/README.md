@@ -1,0 +1,88 @@
+# Agent Harness Bridge
+
+`agent-harness-bridge` gives applications one small, submit-tool-oriented API
+for three different agent runtimes:
+
+- OpenAI Agents SDK, including OpenAI-compatible endpoints such as Volcengine Ark
+- Claude Agent SDK
+- DeepSeek Harness (`dsh`)
+
+It deliberately does not hide backend lifecycle differences. Each adapter owns
+its native session continuation, MCP transport, timeout, cleanup and recovery
+logic, while applications keep their prompts, domain tools and submit
+validation.
+
+## Install
+
+Install only the runtime you need, or all validated adapters:
+
+```bash
+pip install 'agent-harness-bridge[openai]==0.1.0'
+pip install 'agent-harness-bridge[claude]==0.1.0'
+pip install 'agent-harness-bridge[deepseek]==0.1.0'
+pip install 'agent-harness-bridge[all]==0.1.0'
+```
+
+The dsh adapter also imports `deepseek_harness`. DeepSeek's current SDK
+depends on a platform-specific runtime wheel, so the bridge does not force
+that wheel onto every installation. Install the SDK using the method supported
+by the target host. On older-glibc clusters, load `polyfill-glibc/0.1` before
+using its runtime or point `DSH_BIN` at a validated source build.
+
+## Configuration
+
+Harness and model selection are independent:
+
+```bash
+HARNESS=openai MODEL=doubao-seed-2-1-turbo-260628 python your_workflow.py
+HARNESS=openai MODEL=doubao-seed-2-1-pro-260628 python your_workflow.py
+HARNESS=deepseek MODEL=doubao-seed-2-1-turbo-260628 python your_workflow.py
+HARNESS=claude MODEL=claude-sonnet-5 python your_workflow.py
+```
+
+The default remains OpenAI Agents SDK with
+`doubao-seed-2-1-turbo-260628`. Model identifiers are intentionally open
+strings rather than a hard-coded catalog.
+
+## Contract
+
+Applications provide `ToolSpec` objects and designate one successful submit
+tool as the completion condition:
+
+```python
+from harness_bridge import ToolSpec, run_agent
+
+async def submit(args):
+    return {
+        "content": [{"type": "text", "text": "accepted"}],
+        "_submitted": args,
+    }
+
+result = await run_agent(
+    tools=[ToolSpec("submit_answer", "Submit the checked answer", {"answer": str}, submit)],
+    submit_tool="submit_answer",
+    prompt="Check the evidence and submit the answer.",
+    cwd="/absolute/read-only/workdir",
+)
+```
+
+Tool handlers return an MCP-shaped result containing text or image content,
+an optional `is_error`, and an optional private `_submitted` value captured by
+the host after successful validation.
+
+`backend_capabilities()` exposes runtime facts that callers can check before a
+run. Unsupported built-in capabilities fail closed.
+
+## Design boundary
+
+The bridge owns only runtime concerns. Domain workflows should continue to own:
+
+- prompts and scientific or business policy
+- tool handler implementations
+- submit validation
+- output files and resume manifests
+
+Backend-specific defenses remain adapter-local. In particular, OpenAI
+Responses continuation and context reset, Claude SDK teardown and permissions,
+and dsh MCP startup/watchdog/SSE recovery are not reduced to a lowest-common-
+denominator loop.
