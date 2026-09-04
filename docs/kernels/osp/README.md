@@ -43,6 +43,12 @@ to integrate reviewed samples and continue annotation across samples.
 
 ### Quality control in context
 
+OSP combines fixed and sample-adaptive thresholds with doublet detection
+and contamination estimates to assess cell quality in context.
+
+<details>
+<summary>QC measurements and filtering rules</summary>
+
 OSP measures several aspects of cell quality together:
 
 | Measurements | What they help assess |
@@ -71,7 +77,15 @@ analysis and records the reasons. DecontX, ribosomal and hemoglobin
 fractions, MALAT1, and stress scores provide supporting evidence without
 directly triggering this filter.
 
+</details>
+
 ### Interpreting each cluster
+
+The AI assistant combines marker genes, cluster relationships, and quality
+evidence to propose cell identities and flag populations for closer review.
+
+<details>
+<summary>How the assistant builds and checks each interpretation</summary>
 
 The AI assistant is instructed to build and verify an explanation for every
 cluster using several kinds of evidence:
@@ -104,6 +118,8 @@ cluster using several kinds of evidence:
 The assistant submits cell-type labels, supporting genes, confidence,
 unresolved questions, and QC proposals. OSP checks the submission's structure
 and cluster coverage before writing the results for review.
+
+</details>
 
 ## Run your first sample
 
