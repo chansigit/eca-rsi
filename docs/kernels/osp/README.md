@@ -47,20 +47,22 @@ analysis.
 
 ## How it works
 
-```mermaid
-flowchart LR
-    A["One sample"] --> B["Check cell quality"]
-    B --> C["Cluster retained cells"]
-    C --> D["Find marker genes"]
-    D --> E["Open the report"]
-    E -. "Optional" .-> F["Add AI annotation"]
-```
+**1. Assess the sample's quality.**
+OSP checks sequencing depth, detected genes, mitochondrial RNA, and possible
+doublets (two cells captured together). It also estimates ambient RNA from
+other cells. Cells that fail QC are excluded from clustering, with their
+measurements and removal reasons recorded for review.
 
-Quality control checks sequencing depth, detected genes, mitochondrial RNA,
-and possible doublets—two cells captured together. OSP also estimates
-ambient RNA contamination: RNA present in a droplet that may come from
-other cells. The report lets you examine these measurements alongside the
-cell populations they affect.
+**2. Explore the retained cell populations.**
+OSP groups similar cells, builds a two-dimensional cell map (UMAP), and
+identifies marker genes that distinguish each cluster. Quality measurements
+are shown alongside the clusters to help you judge whether a population
+reflects biology or a technical problem.
+
+**3. Review the evidence before combining samples.**
+Open the report to examine QC decisions, cluster structure, and marker
+genes together. Use this evidence to decide whether the sample needs
+further attention or is ready for analysis with other samples in MSP.
 
 ## Run your first sample
 
