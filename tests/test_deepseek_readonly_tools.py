@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import subprocess
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 import yaml
 
 from ecarsi import _harness_deepseek as H
 from ecarsi.harness import ToolSpec
-
 
 PNG_1X1 = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
@@ -79,6 +80,21 @@ def test_patch_enables_images_and_disables_all_sdk_coding_tools():
 
     rows = {row["id"]: row for row in patch[1:]}
     assert all(rows[tool_id]["disabled"] is True for tool_id in H._BUILTIN_DISABLE_IDS)
+
+
+def test_raw_attachment_plugin_is_valid_javascript(tmp_path: Path):
+    dsh_root = tmp_path / "dsh"
+    dsh_bin = dsh_root / "apps" / "cli" / "lib" / "bin.js"
+    attachment_api = dsh_root / "packages" / "attachment" / "attachment" / "lib" / "index.js"
+    dsh_bin.parent.mkdir(parents=True)
+    attachment_api.parent.mkdir(parents=True)
+    dsh_bin.write_text("// fake dsh entrypoint\n")
+    attachment_api.write_text("// fake attachment API\n")
+
+    plugin_url, api_url = H._write_raw_attachment_plugin(str(tmp_path), str(dsh_bin))
+    plugin = Path(urlparse(plugin_url).path)
+    assert api_url == attachment_api.as_uri()
+    subprocess.run(["node", "--check", str(plugin)], check=True, capture_output=True, text=True)
 
 
 def test_unknown_capability_fails_closed(tmp_path: Path):
