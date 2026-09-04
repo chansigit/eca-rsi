@@ -242,13 +242,6 @@ low-complexity populations.
 The AI annotation stage only records proposed actions. Cells marked `drop`
 by the assistant remain in OSP's `clustered.h5ad` for downstream processing.
 
-**Why do QC measurements affect clustering?**
-
-OSP includes available QC measurements alongside gene expression in its
-principal component analysis (PCA), making quality differences part of the
-similarity calculation. Python users can select expression-only PCA with
-`cluster_kwargs={"qc_pca_covariates": None}` in `run_one_sample_pipeline`.
-
 **Does DecontX change the expression matrix used for analysis?**
 
 OSP preserves raw counts and uses them as the starting point for
