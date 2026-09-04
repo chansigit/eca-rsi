@@ -90,7 +90,7 @@ claude --version                                                     # SDK 靠�
 
 | 变量 | 作用 | 默认 |
 |---|---|---|
-| `HARNESS` | agent 后端:`deepseek`(dsh + 豆包)、`openai`(OpenAI Agents SDK + Ark + 豆包)或 `claude` | `deepseek` |
+| `HARNESS` | agent 后端:`openai`(OpenAI Agents SDK + Ark + 豆包)、`deepseek`(dsh + 豆包)或 `claude` | `openai` |
 | `OPENAI_AGENTS_API` | `HARNESS=openai` 使用 `responses` 或文本兼容路径 `chat_completions`;图像工具结果需要 Responses | `responses` |
 | `OPENAI_AGENTS_MAX_NUDGES` | 模型正常结束但未 submit 时,保留同一历史继续提醒的次数 | `2` |
 | `OPENAI_AGENTS_MAX_CONTEXT_RESETS` | Ark 拒绝过长图文上下文时,保留 host 任务/提交状态并开新会话继续的上限 | `2` |

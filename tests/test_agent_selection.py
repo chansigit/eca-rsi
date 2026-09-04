@@ -12,6 +12,14 @@ from ecarsi import harness
 from ecarsi.harness import AgentRunResult, ToolSpec
 
 
+def test_default_agent_config_is_openai_turbo(monkeypatch):
+    monkeypatch.delenv("HARNESS", raising=False)
+    monkeypatch.delenv("MODEL", raising=False)
+
+    assert harness.backend_name() == "openai"
+    assert harness.default_model() == "doubao-seed-2-1-turbo-260628"
+
+
 def test_global_cli_agent_options_override_environment(monkeypatch):
     monkeypatch.setenv("HARNESS", "deepseek")
     monkeypatch.setenv("MODEL", "old-model")

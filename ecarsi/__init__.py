@@ -1,8 +1,8 @@
 """ecarsi — pluggable-harness tooling for the eca-rsi curation loop.
 
 HARNESS env var selects the agent execution backend for every call in this
-package (see ecarsi.harness): 'deepseek' (default — DeepSeek Harness / dsh
-driving Doubao), 'openai' (OpenAI Agents SDK driving Doubao through Ark), or
+package (see ecarsi.harness): 'openai' (default — OpenAI Agents SDK driving
+Doubao through Ark), 'deepseek' (DeepSeek Harness / dsh driving Doubao), or
 'claude' (claude_agent_sdk, spends Claude Code quota)."""
 
 from __future__ import annotations

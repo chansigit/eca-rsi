@@ -156,7 +156,7 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
 - **单样本 / 单批次**(persample 判不出样本列 → 整文件一个样本 `all`,或纳入 agent 只留 1 个):走同一条链,
   差别只有三处——纳入 agent 不开(直接纳入)、msp 跳过 harmony(`X_pca_harmony = X_pca`,uns 记 skipped)、
   inspect / annotate 被告知样本组成不作证据;osp 的 drop 照旧只作证据、在 annotate 一次真删;zmip 不变。
-- 环境:`HARNESS`(默认 **deepseek** = dsh 驱动豆包,2026-09-03 起;`openai` 走 OpenAI Agents SDK + Ark;`claude` 走 claude_agent_sdk,耗 Claude Code 额度)、
+- 环境:`HARNESS`(默认 **openai** = OpenAI Agents SDK + Ark 驱动豆包,2026-09-04 起;`deepseek` 走 dsh;`claude` 走 claude_agent_sdk,耗 Claude Code 额度)、
   `MODEL`(默认随后端:doubao-seed-2-1-turbo-260628 / claude-sonnet-5)、`DSH_BIN`(默认 `$SCRATCH/tools/deepseek-harness-src/apps/cli/lib/bin.js`)、`ARK_API_KEY`(shell 里 export)、`MSP_PYTHON` / `ZMIP_PYTHON`、`ZMIP_MIN_CELLS`;
   `OPENAI_AGENTS_API`(`responses` 默认,`chat_completions` 仅文本兼容)、`OPENAI_AGENTS_MAX_NUDGES`(默认 2)、`OPENAI_AGENTS_MAX_CONTEXT_RESETS`(默认 2)、`OPENAI_AGENTS_SERVER_STATE`(默认 1,Responses 增量续接)、
   `AGENT_WALL_MIN`(每次 agent 调用的墙钟预算,默认 180 分钟,所有后端都强制,超时重开一次);
