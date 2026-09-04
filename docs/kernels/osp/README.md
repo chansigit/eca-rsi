@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/osp-logo.svg" alt="OSP logo: a group of cells within one sample, with one cell in focus" width="176" height="176">
+  <img src="https://raw.githubusercontent.com/chansigit/osp/main/assets/osp-logo.svg" alt="OSP logo: a group of cells within one sample, with one cell in focus" width="176" height="176">
 </p>
 
 <h1 align="center">OSP: Agentic Single-Cell QC and Annotation Pipeline</h1>
@@ -36,6 +36,17 @@ before bringing samples together. OSP simply stands for "One Sample Pipeline".
 OSP is part of **[ECA-RSI](https://github.com/chansigit/eca-rsi)**
 (**Ensemble Cell Atlas: Recursive Self Improvement**), an ecosystem for
 iterative quality review and cell-type annotation of single-cell datasets.
+
+<br>
+
+## News
+
+- **2026-09-04: OSP 0.1.1.** Backend-agnostic annotation agent with
+  `--harness openai|deepseek|claude`, explicit input and rerun contracts with
+  atomic output writes, a pytest suite, and rewritten documentation with an
+  interactive workflow diagram. See the [full release notes](docs/NEWS.md).
+
+- **2026-09-02: OSP 0.1.0.** First release on PyPI as `osp-sc`.
 
 <br>
 
@@ -82,8 +93,8 @@ to open the interactive version, with pan, zoom, search, and guided views.
 <p align="center">
   <a href="https://raw.githack.com/chansigit/osp/main/docs/diagrams/osp-workflow.html">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="assets/osp-workflow-dark.svg">
-      <img src="assets/osp-workflow-light.svg" alt="OSP workflow: input H5AD, QC and DecontX, Leiden clustering with DEG and PAGA, output tables and HTML report, optional AI annotation agent with validated proposal" width="960">
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/chansigit/osp/main/assets/osp-workflow-dark.svg">
+      <img src="https://raw.githubusercontent.com/chansigit/osp/main/assets/osp-workflow-light.svg" alt="OSP workflow: input H5AD, QC and DecontX, Leiden clustering with DEG and PAGA, output tables and HTML report, optional AI annotation agent with validated proposal" width="960">
     </picture>
   </a>
 </p>
@@ -374,6 +385,8 @@ repositories help others discover them and guide their development.
 
 - [Input and output reference](docs/input-output.md): matrix contents,
   output fields, Python return values, and completion rules.
+
+- [Release notes](docs/NEWS.md): what changed in each version.
 
 - [Interactive workflow diagram](https://raw.githack.com/chansigit/osp/main/docs/diagrams/osp-workflow.html):
   the pipeline map above as an explorable page, generated from

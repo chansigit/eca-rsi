@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "osp-sc"   # PyPI distribution name (PyPI rejects "osp" as too similar to an existing "OSP"); import name stays `osp`
-version = "0.1.0"
+version = "0.1.1"
 description = "One-sample-pipeline: per-sample scRNA-seq QC, clustering, DEG and self-contained HTML report"
 readme = "README.md"
 license = { file = "LICENSE" }
