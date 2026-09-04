@@ -207,9 +207,9 @@ biological explanation.
 
 **Explore AI annotation with confidence: its suggestions do not remove
 cells in OSP.** Even cells marked `drop` remain in `clustered.h5ad`, with
-their labels and QC evidence available for review. The earlier QC step does
-filter cells before clustering, but records those removals in
-`qc_removed.csv`; your input H5AD remains unchanged.
+their labels and QC evidence available for review. The earlier QC step
+excludes flagged cells from the analysis output and records the reasons in
+`qc_removed.csv`. The original input file is preserved separately.
 
 Those AI-marked cells are available for cross-sample inspection in
 [MSP](https://github.com/chansigit/msp). MSP keeps the integrated dataset
@@ -233,10 +233,14 @@ python -m osp.annotate results/SAMPLE_A --species mouse --tissue "bone marrow"
 
 **Does OSP remove cells?**
 
-The full pipeline filters cells that fail its initial QC checks and records
-them in `qc_removed.csv`. Your input H5AD remains unchanged. The AI
-annotation stage only records proposed actions, so cells marked `drop` by
-the assistant remain in OSP's `clustered.h5ad` for downstream processing.
+OSP preserves your original input file and writes a separate analysis
+dataset. Cells flagged by the configured QC thresholds or doublet detection
+are excluded from that output, with the reasons recorded in `qc_removed.csv`.
+Review the thresholds against your sample's biology, especially for naturally
+low-complexity populations.
+
+The AI annotation stage only records proposed actions. Cells marked `drop`
+by the assistant remain in OSP's `clustered.h5ad` for downstream processing.
 
 **Why do QC measurements affect clustering?**
 
