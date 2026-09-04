@@ -1,194 +1,159 @@
-# osp — one-sample-pipeline
+# OSP — One-Sample Pipeline
 
-Single-sample scRNA-seq QC → clustering/DEG → self-contained HTML report, with
-an optional agent step that proposes cell-type annotations and QC
-actions from the report and the cluster marker tables.
+**Explore the quality and cell populations of a single-cell RNA-seq sample.**
 
-Strictly single-sample by design — one sample per run, no cross-sample batch
-integration. Loop over samples in an outer driver (e.g. a Slurm job array);
-treat integration as a separate downstream step.
+OSP takes one sample through quality control, clustering, and marker-gene
+analysis, then brings the results together in a report you can open in a
+browser. An optional AI assistant can suggest cell-type labels and highlight
+cells or clusters that deserve a closer look.
 
-## Install
+Use it to review a new sample, investigate an unusual cell population, or
+apply the same analysis to each sample before combining datasets. OSP works
+on one sample at a time; combining samples and correcting differences
+between batches are separate downstream steps.
 
-Python 3.10 or newer is required.
+## What you get
+
+| Result | What it helps you do |
+| --- | --- |
+| **A browser report** | Review cell quality, explore clusters, and inspect the genes that distinguish them. Plots are embedded, so the HTML file can be shared on its own. |
+| **An analyzed dataset** | Continue working in Python with retained cells, preserved raw counts, cluster labels, and visualization coordinates. |
+| **Tables and individual plots** | Check which cells were removed and why, examine marker genes, and reuse figures in your own analysis. |
+| **Optional AI suggestions** | Review proposed cell-type labels, supporting genes, uncertainties, and additional QC actions alongside the analysis. |
+
+## How it works
+
+```mermaid
+flowchart LR
+    A["One sample"] --> B["Check cell quality"]
+    B --> C["Cluster retained cells"]
+    C --> D["Find marker genes"]
+    D --> E["Open the report"]
+    E -. "Optional" .-> F["Add AI annotation"]
+```
+
+Quality control checks sequencing depth, detected genes, mitochondrial RNA,
+and possible doublets—two cells captured together. OSP also estimates
+ambient RNA contamination: RNA present in a droplet that may come from
+other cells. The report lets you examine these measurements alongside the
+cell populations they affect.
+
+## Run your first sample
+
+### 1. Install OSP
+
+Use a Python 3.10 or newer environment:
 
 ```bash
-pip install osp-sc                     # PyPI name; `import osp` / `python -m osp`
-# with the optional annotation agent (Claude, dsh, and OpenAI Agents SDK backends):
+pip install osp-sc
+```
+
+The package is named `osp-sc` on PyPI; the command and Python import use
+`osp`. To install the latest code from this repository instead:
+
+```bash
+pip install "git+https://github.com/chansigit/osp.git"
+```
+
+### 2. Prepare your input
+
+You need an **H5AD file**, the AnnData format commonly used with Scanpy,
+containing:
+
+- **Raw expression counts** in `layers["counts"]`, or in `X` if that layer
+  is absent. Already normalized expression alone is not a counts input.
+- **A sample identifier for each cell**, in `obs["sample"]` by default.
+
+The file may contain several samples; each run selects one. In the example
+below, replace `data.h5ad` with your file and `SAMPLE_A` with a sample label
+from your data. If your sample column has another name, add
+`--sample-col YOUR_COLUMN`.
+
+### 3. Run the analysis and open the report
+
+```bash
+python -m osp data.h5ad --sample SAMPLE_A --outdir results/SAMPLE_A
+```
+
+When the command finishes successfully, open
+**`results/SAMPLE_A/report.html`** in your browser. If you ran OSP on a
+remote server, download that HTML file to view it locally.
+
+Start with the QC summary to see how many cells were retained and which
+checks removed cells. Then look at the cluster plots and marker-gene
+tables to understand the remaining populations.
+
+The same directory also contains:
+
+| File | Contents |
+| --- | --- |
+| `clustered.h5ad` | The analyzed cells that passed QC, with raw counts preserved in a layer. |
+| `qc_removed.csv` | Cells removed during QC, with reasons and available quality measurements. |
+| `de_top_genes_*.csv` | Genes that distinguish each primary cluster from the remaining cells. |
+
+Use a separate output directory for each sample. Large inputs are read in
+backed mode so only the selected sample's expression matrix is brought into
+memory; that sample and its analysis still need to fit in available RAM.
+
+## Add AI annotation
+
+Once you have a report, you can ask the optional annotation assistant to
+inspect the plots, check marker genes and QC measurements, and propose
+cell-type labels. It can also split a heterogeneous cluster for closer
+inspection.
+
+Install the agent dependencies:
+
+```bash
 pip install "osp-sc[agent]"
 ```
 
-To use this checkout, including changes not yet released on PyPI:
+The default setup uses Doubao through **Volcengine Ark** and requires an
+Ark API key. Set your credentials in the environment, then annotate the
+existing results:
 
 ```bash
-pip install -e .
-# Include annotation runtimes and development checks when needed:
-pip install -e ".[agent,test]"
+export ARK_API_KEY="YOUR_ARK_API_KEY"
+python -m osp.annotate results/SAMPLE_A --species mouse --tissue "bone marrow"
 ```
 
-The runtime implementation comes from the independent
-`agent-harness-bridge==0.1.0` dependency; `osp.harness` remains a compatibility import.
-OSP continues to own its prompts, biological tools and submit validation.
+Replace the species and tissue with your sample's context. The assistant
+updates the report and dataset with proposed labels and QC actions, and
+saves its structured conclusions in `annotation_proposal.json`.
 
-## Annotation backend
+**You review the decisions.** An AI action of `drop` marks a suggested
+removal; it does not delete that cell from the dataset. Review the supporting
+genes, uncertainties, and QC evidence before using the labels or filtering
+further. The regular analysis and report work without AI or an API key.
 
-The default backend is OpenAI Agents SDK with
-`doubao-seed-2-1-turbo-260628`; provide `ARK_API_KEY`. It uses Ark's
-Responses API and server-side `previous_response_id` chaining by default.
-Set `HARNESS=deepseek` for dsh or `HARNESS=claude` for claude_agent_sdk. Set
-`OPENAI_AGENTS_SERVER_STATE=0` when complete local-history replay is required.
-OSP annotation needs image tools, so keep `OPENAI_AGENTS_API=responses`;
-the bridge's `chat_completions` mode does not support image tool output.
-If an image-heavy session reaches Ark's context limit, the backend retains
-host-side Tasks and accepted submissions and continues in a fresh model
-session (at most `OPENAI_AGENTS_MAX_CONTEXT_RESETS`, default 2).
+## A few choices to understand
 
-## Quick usage
+- **The full pipeline removes cells that fail QC before clustering.**
+  Inspect the report and removed-cell table: default thresholds may need
+  adjustment for your sample or cell populations.
+- **Clustering includes quality measurements by default.** OSP adds available
+  QC measurements to gene expression when calculating principal components
+  (PCA), which can influence which cells group together. Python users can
+  select expression-only PCA with
+  `cluster_kwargs={"qc_pca_covariates": None}` in
+  `run_one_sample_pipeline`.
+- **Ambient RNA estimates support interpretation.** DecontX estimates do
+  not directly remove cells, and its corrected counts do not replace raw
+  counts as the starting point for clustering.
+- **Rerunning replaces results in the same directory.** Keep separate
+  directories for analyses you want to compare, and check that a run
+  finished successfully before relying on its output.
 
-Pass one sample as an in-memory AnnData. Supply raw counts in
-`layers["counts"]`, or in `X` when that layer is absent. For large inputs,
-the CLI below loads only the selected sample's matrix into memory.
+## Further reading
 
-```python
-from osp import run_one_sample_pipeline, generate_report
+- [Input and output reference](docs/input-output.md) — matrix contents,
+  output fields, Python return values, and completion rules.
+- [Python sample driver](examples/run_one_sample.py) — run one sample from a
+  larger input file.
+- [Slurm job-array example](examples/submit_array.sbatch) — process samples
+  as separate cluster jobs.
+- [Report an issue](https://github.com/chansigit/osp/issues) — describe a
+  problem or suggest an improvement.
 
-ad_fo = adata[adata.obs["sample"] == "FO"]
-run_one_sample_pipeline(ad_fo, sample_label="FO", outdir="osp_out/FO")
-generate_report("osp_out/FO")
-```
-
-To inspect QC before choosing which cells to cluster:
-
-```python
-from osp import qc_one_sample, cluster_and_deg, deg_two_groups
-
-ad_qc, qc_summary = qc_one_sample(ad_fo, sample_label="FO")
-ad_pass = ad_qc[~ad_qc.obs["low_quality"]].copy()
-ad_final, de, clusters, paga, contamination = cluster_and_deg(
-    ad_pass, outdir="osp_out/FO"
-)
-```
-
-- `qc_one_sample` — QC only (flags cells, drops nothing)
-- `run_one_sample_pipeline` — runs QC, removes `low_quality` cells, then
-  clusters survivors; call `generate_report` separately in Python.
-- `cluster_and_deg` — clustering/DEG/PAGA on caller-selected cells; it does
-  not apply the `low_quality` filter itself.
-- `deg_two_groups` — Wilcoxon DEG between two groups, or one group versus
-  the remaining cells. Expects normalized, log1p expression; uses HVGs by
-  default (`hvg_only=False` includes all genes).
-
-Pass `qc_kwargs` and `cluster_kwargs` to `run_one_sample_pipeline` for
-parameter control. For example, `cluster_kwargs={"qc_pca_covariates": None}`
-selects expression-only PCA. See [input and output conventions](docs/input-output.md)
-for matrix contents, return values, and output files.
-
-## Command line
-
-```bash
-python -m osp data.h5ad --sample FO --outdir osp_out/FO     # full pipeline + report
-python -m osp data.h5ad --sample FO --outdir osp_out/FO --annotate \
-    --harness openai --model doubao-seed-2-1-turbo-260628
-# quality-oriented, higher-cost option; validate it on your workload
-python -m osp data.h5ad --sample FO --outdir osp_out/FO --annotate \
-    --harness openai --model doubao-seed-2-1-pro-260628
-python -m osp.report osp_out/FO                           # rebuild the report only
-# Annotate existing outputs without rerunning QC or clustering:
-HARNESS=openai python -m osp.annotate osp_out/FO --species mouse --tissue "bone marrow"
-# QC plots and printed summary only; this command does not export an H5AD:
-python -m osp.qc data.h5ad --sample FO --figdir qc_figs/FO
-```
-
-Use `--sample-col` when the sample identifier is not in `obs["sample"]`.
-CLI sample selection compares labels as strings, including numeric labels.
-Each sample needs its own `--outdir`; the main CLI uses the supplied path
-directly and does not append the sample name. `--resolution` selects the
-primary Leiden resolution (default 1.0). `--species` and `--tissue` on the
-main CLI provide annotation context; they do not change QC gene patterns.
-
-`--harness` overrides `HARNESS`, and `--model` overrides `MODEL`; otherwise
-the bridge defaults apply. The standalone annotation CLI selects its backend
-through `HARNESS`. Use `--language Chinese` for Chinese annotation text.
-
-See [examples/run_one_sample.py](examples/run_one_sample.py) for the sample
-driver (which appends the sample name to its output root), and
-[examples/submit_array.sbatch](examples/submit_array.sbatch) for Slurm.
-From the repository root, edit the template's paths and sample list, create
-`osp_out/logs`, then submit an explicit array range such as
-`sbatch --array=0-2 examples/submit_array.sbatch` for three samples.
-
-## Development checks
-
-```bash
-pip install -e ".[test]"
-ruff check .
-pytest -q
-```
-
-The tests cover input and proposal validation, action precedence, DecontX
-boundary cases, atomic writes, and stale-output handling. They do not
-establish biological annotation accuracy or live provider reliability.
-If Python/readline fails at startup with an unavailable locale on the
-cluster, use `LC_ALL=C LANG=C pytest -q`.
-
-## Conventions
-
-- **Raw counts convention**: if `adata.layers["counts"]` exists, `X` is swapped
-  for it at the start of both the QC and clustering stages — this makes the
-  pipeline robust to inputs where `X` already holds normalized values with
-  raw counts kept in a layer (common in released h5ad files).
-- **QC is flag-only**: `qc_one_sample` never drops cells; `low_quality` is a
-  column. The full pipeline filters that column before clustering and writes
-  the removed-cell ledger to `qc_removed.csv`.
-- **Agent actions are proposals**: annotation adds `_ann_coarse`, `_ann_fine`,
-  and `_qc_action` to `clustered.h5ad`. Even `drop` leaves the cell in this
-  file; downstream filtering requires a separate decision. If both `flag`
-  and `drop` match a cell, `drop` takes precedence.
-- **PCA includes QC covariates by default**: available doublet score, counts,
-  gene count, DecontX contamination, MT percentage, and dissociation score
-  are standardized and appended to HVG expression before PCA. This affects
-  neighbors and clustering; use `qc_pca_covariates=None` in
-  `cluster_and_deg` for expression-only PCA.
-- **DecontX initialization and degeneracy guard**: OSP supplies an explicit
-  coarse-Leiden clustering to the vendored DecontX implementation. The
-  historical compatibility value is
-  `summary["decontx_z_source"] == "leiden_fallback"`; it now denotes the normal
-  explicit-clustering path, not a failed first attempt. Fits pinned near
-  complete contamination are retained for inspection but marked in
-  `adata.uns["osp_decontx_degenerate"]` and excluded from PCA covariates.
-  DecontX is enabled by default for monitoring; corrected counts do not
-  replace raw counts for clustering, and contamination does not directly
-  set `low_quality`.
-- **MAD-outlier assumption**: the adaptive per-sample QC thresholds (`nmads`
-  MADs around the median) assume a roughly regular within-sample
-  distribution. On samples with unusually shallow depth or heavy ambient
-  contamination this assumption can break — a naturally low-complexity but
-  perfectly healthy population (e.g. neutrophils, dominated by a handful of
-  granule genes) can get its `pct_counts_in_top_20_genes` MAD range squeezed
-  and be flagged en masse. The QC report's "MAD keep-ranges" table exists
-  specifically so this is visible instead of silent — a suspiciously tight
-  range, or one metric dominating the fail counts, is a signal to check which
-  cell types are being flagged before trusting the calls.
-
-## Outputs and reruns
-
-The main outputs are `clustered.h5ad`, QC and cluster CSV tables, individual
-PNGs, and `report.html`. Annotation updates the H5AD and report and publishes
-`annotation_proposal.json` last, after those writes succeed.
-
-Use one output directory per sample and one active writer per directory.
-Rerunning the full pipeline invalidates the old report and annotation
-completion files. A failed rerun may leave earlier intermediate files, so
-file existence alone does not prove that a new run completed. See
-[output files and completion rules](docs/input-output.md#reruns-and-completion)
-before implementing resume logic.
-
-## Sherlock / HPC notes
-
-- Never run the pipeline on a login node — submit through Slurm or use an
-  interactive allocation.
-- For large h5ad files, load in backed mode and subset to one sample before
-  bringing it into memory (see `examples/run_one_sample.py`).
-- `osp.annotate` is intentionally not imported by `osp/__init__.py` — it
-  depends on the optional agent runtime extras; import it explicitly
-  (`from osp.annotate import propose_annotation`) only when you need it.
+OSP is distributed under the [MIT license](LICENSE). See
+[third-party notices](THIRD_PARTY_NOTICES.md) for included components.
