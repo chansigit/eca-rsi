@@ -35,10 +35,19 @@ parser.add_argument("--report-context", default=None, metavar="TEXT",
 args = parser.parse_args()
 if args.harness:
     os.environ["HARNESS"] = args.harness
-write_report_context(args.outdir, args.report_context)
 
-adata = sc.read_h5ad(args.h5ad_path)
-sub = adata[adata.obs[args.sample_col] == args.sample]
+adata = sc.read_h5ad(args.h5ad_path, backed="r")
+try:
+    if args.sample_col not in adata.obs:
+        raise ValueError(f"sample column {args.sample_col!r} is not present in the input obs")
+    mask = adata.obs[args.sample_col].astype(str) == args.sample
+    if not mask.any():
+        raise ValueError(f"sample {args.sample!r} matches no cells in obs[{args.sample_col!r}]")
+    sub = adata[mask].to_memory()
+finally:
+    adata.file.close()
+
+write_report_context(args.outdir, args.report_context)
 _, _, cluster_summary, *_ = run_one_sample_pipeline(
     sub,
     sample_label=args.sample,

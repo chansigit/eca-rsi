@@ -30,6 +30,13 @@ agent dependencies; use `from osp.annotate import propose_annotation` when
 needed.
 """
 
+from .cluster import (
+    DEFAULT_QC_PCA_COVARIATES,
+    QC_OVERLAY_COLS,
+    cluster_and_deg,
+    deg_two_groups,
+    run_one_sample_pipeline,
+)
 from .qc import (
     DISSOCIATION_GENES_HS,
     SPECIES_GENE_PATTERNS,
@@ -37,13 +44,6 @@ from .qc import (
     cluster_order,
     decontx_top_genes,
     qc_one_sample,
-)
-from .cluster import (
-    DEFAULT_QC_PCA_COVARIATES,
-    QC_OVERLAY_COLS,
-    cluster_and_deg,
-    deg_two_groups,
-    run_one_sample_pipeline,
 )
 from .report import generate_report
 

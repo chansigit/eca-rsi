@@ -47,6 +47,8 @@ import os
 
 import pandas as pd
 
+from ._io import atomic_write_text
+
 # Fixed display order for the well-known QC metric suffixes — anything not
 # in this list still shows up, just after these, alphabetically.
 _QC_METRIC_ORDER = [
@@ -157,11 +159,15 @@ def _read_qc_summary(outdir):
 
 
 def _read_qc_stats(outdir):
-    """QC overview JSON, written by qc_per_sample.qc_one_sample into
-    <outdir>/qc_figures/ when run through run_pipeline()."""
+    """QC overview JSON written by ``qc_one_sample`` under ``qc_figures``."""
     json_paths = glob.glob(os.path.join(outdir, "qc_figures", "*_qc_overview.json"))
     if not json_paths:
         return None
+    if len(json_paths) > 1:
+        raise RuntimeError(
+            f"multiple QC overview files in {outdir!r}; use one output directory per sample: "
+            f"{sorted(os.path.basename(path) for path in json_paths)}"
+        )
     with open(json_paths[0]) as fh:
         return json.load(fh)
 
@@ -173,6 +179,11 @@ def _find_cluster_tables(outdir):
     that entry's key IS the primary resolution, used elsewhere to find the
     matching umap_clusters_{key}.png / paga_connectivities_{key}.csv etc."""
     summary_paths = sorted(glob.glob(os.path.join(outdir, "cluster_summary_leiden_r*.csv")))
+    if len(summary_paths) > 1:
+        raise RuntimeError(
+            f"multiple primary cluster summaries in {outdir!r}; rerun clustering to remove "
+            f"stale tables: {[os.path.basename(path) for path in summary_paths]}"
+        )
     results = []
     for sp in summary_paths:
         key = os.path.basename(sp)[len("cluster_summary_") : -len(".csv")]
@@ -336,11 +347,10 @@ def _section_contamination(outdir, cluster_tables, qc_summary=None):
         parts.append(
             '<div style="background:#fff3cd;border:1px solid #e0a800;border-radius:4px;'
             'padding:8px 12px;margin:8px 0;">'
-            "DecontX's internal initialization degenerated on this sample "
-            "(dominant-lineage profile indistinguishable from the ambient profile); "
-            "contamination was re-estimated with an explicit coarse clustering "
-            "(<code>decontx_z_source=leiden_fallback</code>). Treat per-cluster "
-            "contamination with the usual care but the estimates below are from the corrected run."
+            "DecontX was initialized with an explicit coarse Leiden clustering. "
+            "The compatibility field remains <code>decontx_z_source=leiden_fallback</code>, "
+            "although this is now OSP's normal initialization path. Treat the estimates "
+            "with the usual dataset-specific care."
             "</div>"
         )
 
@@ -376,20 +386,23 @@ def _section_contamination(outdir, cluster_tables, qc_summary=None):
     return "\n".join(parts)
 
 
-def _section_agent_annotation(outdir):
+def _section_agent_annotation(outdir, proposal=None):
     """6. Present only when osp.annotate has been run: agent-proposed cluster
     annotations (coarse = lineage-level, fine = detailed) + standardized QC
     actions. A proposal for human review, not an applied annotation."""
-    path = os.path.join(outdir, "annotation_proposal.json")
-    if not os.path.exists(path):
-        return ""
-    with open(path) as fh:
-        proposal = json.load(fh)
+    if proposal is None:
+        path = os.path.join(outdir, "annotation_proposal.json")
+        if not os.path.exists(path):
+            return ""
+        with open(path) as fh:
+            proposal = json.load(fh)
 
     parts = [
         '<h2 id="agent-annotation">Agent Annotation</h2>',
-        '<p class="hint">Proposed by the annotation agent (osp.annotate) — a proposal for human review, '
-        "not an applied annotation. Full reasoning in annotation_notes.md.</p>",
+        (
+            '<p class="hint">Proposed by the annotation agent (osp.annotate) — a proposal for '
+            "human review, not an applied annotation. Full reasoning in annotation_notes.md.</p>"
+        ),
     ]
 
     # coarse/fine annotation UMAPs side by side — same figsize/axes rect as
@@ -572,12 +585,16 @@ def report_context(outdir):
 
 def write_report_context(outdir, text):
     if text:
-        os.makedirs(outdir, exist_ok=True)
-        with open(os.path.join(outdir, CONTEXT_FILE), "w") as f:
-            f.write(text.strip() + "\n")
+        atomic_write_text(os.path.join(outdir, CONTEXT_FILE), text.strip() + "\n")
 
 
-def generate_report(outdir, out_html=None, title=None, top_n_de_display=10):
+def generate_report(
+    outdir,
+    out_html=None,
+    title=None,
+    top_n_de_display=10,
+    annotation_proposal=None,
+):
     """Build a single self-contained HTML report from an OSP output directory
     (whatever cluster_and_deg / run_pipeline wrote with outdir=...).
 
@@ -599,7 +616,7 @@ def generate_report(outdir, out_html=None, title=None, top_n_de_display=10):
         _section_qc_umap(outdir),
         _section_contamination(outdir, cluster_tables, qc_summary),
         _section_cluster_identities(outdir, cluster_tables, top_n_de_display),
-        _section_agent_annotation(outdir),
+        _section_agent_annotation(outdir, proposal=annotation_proposal),
     ]
     sections, toc = _number_sections(sections)
 
@@ -615,9 +632,7 @@ def generate_report(outdir, out_html=None, title=None, top_n_de_display=10):
         f"<body>{body}</body></html>"
     )
 
-    os.makedirs(os.path.dirname(out_html) or ".", exist_ok=True)
-    with open(out_html, "w") as fh:
-        fh.write(html_doc)
+    atomic_write_text(out_html, html_doc)
 
     return out_html
 

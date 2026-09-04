@@ -23,10 +23,10 @@ import scipy.sparse as sp
 from ._dirichlet import fit_dirichlet
 
 __all__ = [
-    "decontx_initialize",
-    "decontx_em",
-    "decontx_loglik",
     "calculate_native_matrix",
+    "decontx_em",
+    "decontx_initialize",
+    "decontx_loglik",
 ]
 
 

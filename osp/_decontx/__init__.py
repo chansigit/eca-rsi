@@ -28,11 +28,11 @@ from ._dirichlet import fit_dirichlet
 from .decontx import DecontXResult, decontx
 
 __all__ = [
-    "decontx",
     "DecontXResult",
-    "decontx_initialize",
-    "decontx_em",
-    "decontx_loglik",
     "calculate_native_matrix",
+    "decontx",
+    "decontx_em",
+    "decontx_initialize",
+    "decontx_loglik",
     "fit_dirichlet",
 ]

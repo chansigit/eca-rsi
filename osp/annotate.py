@@ -22,9 +22,9 @@ outdir=...) directory:
      clustering automatically;
   6. Submit a structured JSON via the submit_annotation tool — the host
      validates the schema, cluster coverage, and every qc_action record
-     (rejecting malformed submissions back to the agent), then writes
-     outdir/annotation_proposal.json; the agent's narrative is saved to
-     annotation_notes.md.
+     (rejecting malformed submissions back to the agent). The host publishes
+     outdir/annotation_proposal.json only after all final outputs succeed; the
+     agent's narrative is saved to annotation_notes.md.
 
 After a successful run the host applies the proposal to the AnnData
 (obs["_ann_coarse"], obs["_ann_fine"], obs["_qc_action"] in
@@ -41,9 +41,10 @@ QC actions are proposals only, never auto-applied to filtering (same
 philosophy as DecontX monitoring). species/tissue context is injected by
 the caller; the package itself assumes no cell-type knowledge.
 
-Auth uses the claude CLI's stored credentials (or ANTHROPIC_API_KEY). The
-SDK is an optional dependency: pip install claude-agent-sdk (the rest of
-osp works without it).
+Authentication depends on the selected adapter: Ark uses ``ARK_API_KEY``,
+Claude uses its CLI credentials (or ``ANTHROPIC_API_KEY``), and dsh uses its
+configured provider. Agent runtimes are optional; the rest of OSP works
+without installing ``osp-sc[agent]``.
 
 Usage:
     python -m osp.annotate osp_out/FO --species mouse --tissue "bone marrow"
@@ -59,24 +60,36 @@ import glob
 import json
 import operator
 import os
+from collections import Counter
 
 import numpy as np
 import pandas as pd
 import scanpy as sc
 import scipy.sparse as sp
 
+from ._io import atomic_write_h5ad, atomic_write_json, atomic_write_text
 from .cluster import (
-    QC_OVERLAY_COLS,
-    _save_single_umap,
-    _square_limits,
     _UMAP_AXES_RECT,
     _UMAP_DPI,
     _UMAP_FIGSIZE,
+    QC_OVERLAY_COLS,
+    _save_single_umap,
+    _square_limits,
 )
 from .qc import cluster_order
 from .report import generate_report
 
 _OPS = {">": operator.gt, ">=": operator.ge, "<": operator.lt, "<=": operator.le}
+_CONFIDENCE_VALUES = {"high", "medium", "low"}
+_QC_ACTIONS = {"drop", "flag"}
+_QC_REASONS = {
+    "doublet",
+    "ambient",
+    "debris",
+    "dissociation-stress",
+    "low-quality",
+    "other",
+}
 
 
 def _detect_primary_key(outdir):
@@ -84,6 +97,12 @@ def _detect_primary_key(outdir):
     if not paths:
         raise FileNotFoundError(
             f"no cluster_summary_leiden_r*.csv in {outdir} — run run_one_sample_pipeline(outdir=...) first"
+        )
+    if len(paths) > 1:
+        names = [os.path.basename(path) for path in paths]
+        raise RuntimeError(
+            f"multiple primary cluster summaries in {outdir}: {names}; rerun clustering to "
+            "remove stale tables or pass cluster_key explicitly"
         )
     return os.path.basename(paths[0])[len("cluster_summary_") : -len(".csv")]
 
@@ -195,42 +214,113 @@ _PROPOSAL_SCHEMA_DOC = """{
 
 
 def _validate_proposal(proposal, clusters, obs):
+    """Validate untrusted model JSON without assuming any nested type."""
     problems = []
+    if not isinstance(proposal, dict):
+        return [f"proposal must be a JSON object, got {type(proposal).__name__}"]
+
+    clusters = [str(cluster) for cluster in clusters]
+    cluster_set = set(clusters)
     entries = proposal.get("clusters")
     if not isinstance(entries, list) or not entries:
         problems.append('missing "clusters" list')
     else:
-        for e in entries:
-            missing = [k for k in ("cluster", "label_coarse", "label_fine", "confidence") if k not in e]
+        covered = []
+        for index, entry in enumerate(entries):
+            if not isinstance(entry, dict):
+                problems.append(f"clusters[{index}] must be an object, got {type(entry).__name__}")
+                continue
+            missing = [
+                key
+                for key in (
+                    "cluster",
+                    "label_coarse",
+                    "label_fine",
+                    "confidence",
+                    "evidence_genes",
+                    "doubts",
+                )
+                if key not in entry
+            ]
             if missing:
-                problems.append(f"cluster entry missing {missing}: {e}")
-        covered = {str(e.get("cluster")) for e in entries}
-        missed = [c for c in clusters if c not in covered]
+                problems.append(f"clusters[{index}] missing {missing}: {entry}")
+
+            cluster = str(entry.get("cluster"))
+            covered.append(cluster)
+            for field in ("label_coarse", "label_fine"):
+                value = entry.get(field)
+                if not isinstance(value, str) or not value.strip():
+                    problems.append(f"clusters[{index}].{field} must be a non-empty string")
+            if entry.get("confidence") not in _CONFIDENCE_VALUES:
+                problems.append(
+                    f"clusters[{index}].confidence must be high|medium|low: {entry.get('confidence')!r}"
+                )
+            evidence = entry.get("evidence_genes")
+            if not isinstance(evidence, list) or any(
+                not isinstance(gene, str) or not gene.strip() for gene in evidence
+            ):
+                problems.append(f"clusters[{index}].evidence_genes must be a list of strings")
+            if not isinstance(entry.get("doubts"), str):
+                problems.append(f"clusters[{index}].doubts must be a string")
+
+        duplicates = sorted(cluster for cluster, count in Counter(covered).items() if count > 1)
+        if duplicates:
+            problems.append(f"clusters annotated more than once: {duplicates}")
+        covered_set = set(covered)
+        missed = [cluster for cluster in clusters if cluster not in covered_set]
         if missed:
             problems.append(f"clusters without an annotation: {missed}")
+        extra = sorted(covered_set - cluster_set)
+        if extra:
+            problems.append(f"annotations for unknown clusters: {extra}")
 
     actions = proposal.get("qc_actions", [])
     if not isinstance(actions, list):
         problems.append('"qc_actions" must be a list (may be empty)')
         actions = []
-    for a in actions:
-        if a.get("action") not in ("drop", "flag"):
-            problems.append(f'qc_action "action" must be drop|flag: {a}')
-        if str(a.get("cluster")) not in clusters:
-            problems.append(f"qc_action cluster {a.get('cluster')!r} is not a current cluster id: {a}")
-        scope = a.get("scope")
+    for index, action in enumerate(actions):
+        if not isinstance(action, dict):
+            problems.append(f"qc_actions[{index}] must be an object, got {type(action).__name__}")
+            continue
+        missing = [key for key in ("cluster", "scope", "action", "reason", "note") if key not in action]
+        if missing:
+            problems.append(f"qc_actions[{index}] missing {missing}: {action}")
+        if action.get("action") not in _QC_ACTIONS:
+            problems.append(f'qc_action "action" must be drop|flag: {action}')
+        if str(action.get("cluster")) not in cluster_set:
+            problems.append(
+                f"qc_action cluster {action.get('cluster')!r} is not a current cluster id: {action}"
+            )
+        if action.get("reason") not in _QC_REASONS:
+            problems.append(f"qc_action reason must be one of {sorted(_QC_REASONS)}: {action}")
+        if not isinstance(action.get("note"), str):
+            problems.append(f"qc_action note must be a string: {action}")
+        scope = action.get("scope")
         if scope == "cells":
-            metric = a.get("metric")
-            if metric not in obs.columns or not pd.api.types.is_numeric_dtype(obs[metric]):
-                problems.append(f'qc_action "metric" must be a numeric obs column: {a}')
-            if a.get("op") not in _OPS:
-                problems.append(f'qc_action "op" must be one of {sorted(_OPS)}: {a}')
+            metric = action.get("metric")
+            if (
+                not isinstance(metric, str)
+                or metric not in obs.columns
+                or not pd.api.types.is_numeric_dtype(obs[metric])
+            ):
+                problems.append(f'qc_action "metric" must be a numeric obs column: {action}')
+            if action.get("op") not in _OPS:
+                problems.append(f'qc_action "op" must be one of {sorted(_OPS)}: {action}')
             try:
-                float(a.get("value"))
+                value = float(action.get("value"))
             except (TypeError, ValueError):
-                problems.append(f'qc_action "value" must be numeric: {a}')
+                problems.append(f'qc_action "value" must be numeric: {action}')
+            else:
+                if isinstance(action.get("value"), bool) or not np.isfinite(value):
+                    problems.append(f'qc_action "value" must be finite and numeric: {action}')
         elif scope != "cluster":
-            problems.append(f'qc_action "scope" must be cluster|cells: {a}')
+            problems.append(f'qc_action "scope" must be cluster|cells: {action}')
+
+    suggestions = proposal.get("threshold_suggestions", [])
+    if not isinstance(suggestions, list) or any(not isinstance(item, str) for item in suggestions):
+        problems.append('"threshold_suggestions" must be a list of strings')
+    if "overall" in proposal and not isinstance(proposal["overall"], str):
+        problems.append('"overall" must be a string')
     return problems
 
 
@@ -297,6 +387,10 @@ def _system_prompt(outdir, cluster_key, clusters, species, tissue, language):
         "No species/tissue context was provided — infer cautiously from gene-name "
         "casing conventions and expression profiles, and state that inference in your conclusions."
     )
+    has_decontx_heatmap = os.path.isfile(
+        os.path.join(outdir, "figures", "decontx_heatmap_by_cluster.png")
+    )
+    required_contamination = ", and the decontx heatmap" if has_decontx_heatmap else ""
 
     return f"""You are a single-cell RNA-seq analysis expert. The current working directory is an \
 OSP (one-sample-pipeline) output directory. Task: propose a cell-type annotation for every cluster \
@@ -310,14 +404,14 @@ do not Glob and do not guess any other path):
 What the files are:
 - figures/umap_clusters_*.png, figures/paga.png: clustering structure
 - figures/umap_qc_*.png, figures/qc_violin_*.png: QC metrics on the UMAP / as per-cluster violins
-- figures/decontx_heatmap_by_cluster.png, decontx_top_genes_*.csv: ambient RNA (which cluster is contaminated by which genes)
+- figures/decontx_heatmap_by_cluster.png, decontx_top_genes_*.csv: ambient RNA when DecontX was run
 - qc_figures/*_qc_*.png, qc_figures/*_qc_overview.json: sample-level QC histograms and key numbers
 - de_top_genes_*.csv: top DE genes per cluster (pct1/pct2 = expressing fraction inside/outside the cluster)
 - cluster_summary_*.csv, paga_connectivities_*.csv, qc_summary.csv
 
 Mandatory workflow:
-1. Figures BEFORE conclusions: view at least umap_clusters, paga, every qc_violin_*, and the \
-decontx heatmap. Figures are more direct than tables — especially for judging whether a cluster \
+1. Figures BEFORE conclusions: view at least umap_clusters, paga, every qc_violin_*{required_contamination}. \
+Figures are more direct than tables — especially for judging whether a cluster \
 is driven by doublets/contamination/dissociation stress.
 2. Read the de_top_genes CSV and form an identity hypothesis per cluster.
 3. Verify canonical markers with check_genes (top DE lists often miss canonical markers — active \
@@ -357,17 +451,41 @@ async def _run_agent(ad, outdir, cluster_key, species, tissue, language, model, 
         return cluster_order(ad.obs[state["key"]].astype(str))
 
     async def check_genes(args):
-        genes = args["genes"]
+        genes = args.get("genes")
         if isinstance(genes, str):
             genes = [g for g in genes.replace(",", " ").split() if g]
+        if not isinstance(genes, list) or any(not isinstance(gene, str) for gene in genes):
+            return {
+                "content": [{"type": "text", "text": "genes must be a list of gene-name strings"}],
+                "is_error": True,
+            }
+        genes = [gene.strip() for gene in genes if gene.strip()]
+        if not genes:
+            return {"content": [{"type": "text", "text": "genes must not be empty"}], "is_error": True}
+        if len(genes) > 200:
+            return {
+                "content": [{"type": "text", "text": "check at most 200 genes in one call"}],
+                "is_error": True,
+            }
         return {"content": [{"type": "text", "text": _gene_table(ad, genes, state["key"])}]}
 
     async def check_qc_scores(args):
         return {"content": [{"type": "text", "text": _qc_table(ad, state["key"])}]}
 
     async def subcluster(args):
-        c = str(args["cluster"])
-        res = float(args["resolution"])
+        c = str(args.get("cluster"))
+        try:
+            res = float(args.get("resolution"))
+        except (TypeError, ValueError):
+            return {
+                "content": [{"type": "text", "text": "resolution must be a finite positive number"}],
+                "is_error": True,
+            }
+        if not np.isfinite(res) or res <= 0:
+            return {
+                "content": [{"type": "text", "text": "resolution must be a finite positive number"}],
+                "is_error": True,
+            }
         if c not in current_clusters():
             return {"content": [{"type": "text", "text": f"unknown cluster {c!r}; current clusters: {current_clusters()}"}], "is_error": True}
         new_key = f"ann_sub{state['n_sub'] + 1}"
@@ -379,18 +497,24 @@ async def _run_agent(ad, outdir, cluster_key, species, tissue, language, model, 
         return {"content": [{"type": "text", "text": text}]}
 
     async def submit_annotation(args):
+        raw = args.get("proposal_json")
+        if not isinstance(raw, str):
+            return {
+                "content": [{"type": "text", "text": "proposal_json must be a JSON string"}],
+                "is_error": True,
+            }
         try:
-            proposal = json.loads(args["proposal_json"])
-        except json.JSONDecodeError as e:
+            proposal = json.loads(raw)
+        except (json.JSONDecodeError, TypeError) as e:
             return {"content": [{"type": "text", "text": f"JSON parse error, fix and resubmit: {e}"}], "is_error": True}
         problems = _validate_proposal(proposal, current_clusters(), ad.obs)
         if problems:
             return {"content": [{"type": "text", "text": "validation failed, fix and resubmit:\n- " + "\n- ".join(problems)}], "is_error": True}
         proposal["cluster_key"] = state["key"]
-        path = os.path.join(outdir, "annotation_proposal.json")
-        with open(path, "w") as fh:
-            json.dump(proposal, fh, ensure_ascii=False, indent=2)
-        return {"content": [{"type": "text", "text": f"saved to {path}"}], "_submitted": proposal}
+        return {
+            "content": [{"type": "text", "text": "accepted; the host will finalize the output files"}],
+            "_submitted": proposal,
+        }
 
     tools = [
         ToolSpec(
@@ -432,8 +556,11 @@ async def _run_agent(ad, outdir, cluster_key, species, tissue, language, model, 
     )
 
     if result.transcript_text:
-        with open(os.path.join(outdir, "annotation_notes.md"), "w") as fh:
-            fh.write(result.transcript_text)
+        await asyncio.to_thread(
+            atomic_write_text,
+            os.path.join(outdir, "annotation_notes.md"),
+            result.transcript_text,
+        )
     return result.submitted
 
 
@@ -455,20 +582,38 @@ def propose_annotation(outdir, species=None, tissue=None, language="English", cl
     agent is told to infer cautiously and say so.
     language: language for the annotation output (doubts/notes/overall...),
     default "English".
-    model/effort: e.g. model="claude-fable-5", effort="high"; defaults follow
-    the claude CLI configuration.
+    model/effort: backend-specific model id and optional reasoning effort;
+    defaults follow ``HARNESS``/``MODEL`` and the bridge defaults.
     """
     from .harness import default_model
 
-    cluster_key = cluster_key or _detect_primary_key(outdir)
     ad = sc.read_h5ad(os.path.join(outdir, "clustered.h5ad"))
+    if cluster_key is None:
+        paga_key = ad.uns.get("paga", {}).get("groups")
+        cluster_key = str(paga_key) if paga_key in ad.obs else _detect_primary_key(outdir)
+    if cluster_key not in ad.obs:
+        raise ValueError(f"cluster_key {cluster_key!r} is not present in clustered.h5ad obs")
+    # A previous proposal is a completion marker. Invalidate it before any
+    # agent or finalization work so a failed forced rerun remains resumable
+    # instead of looking complete because an old proposal survived.
+    proposal_path = os.path.join(outdir, "annotation_proposal.json")
+    if os.path.isfile(proposal_path):
+        os.unlink(proposal_path)
+
     proposal = asyncio.run(_run_agent(ad, outdir, cluster_key, species, tissue, language,
                                       model or default_model(), effort, max_turns))
+    if proposal is None:
+        raise RuntimeError("annotation agent returned without a validated proposal")
 
     _apply_proposal(ad, proposal["cluster_key"], proposal)
     _plot_annotation(ad, os.path.join(outdir, "figures"))
-    ad.write(os.path.join(outdir, "clustered.h5ad"))
-    print(f"== report refreshed: {generate_report(outdir)}", flush=True)
+    atomic_write_h5ad(ad, os.path.join(outdir, "clustered.h5ad"))
+    # annotation_proposal.json is the outer pipeline's completion signal, so
+    # publish it last. The report is rendered from the in-memory proposal and
+    # atomically replaced first; an interrupted finalization remains resumable.
+    report = generate_report(outdir, annotation_proposal=proposal)
+    atomic_write_json(proposal_path, proposal)
+    print(f"== report refreshed: {report}", flush=True)
     return proposal
 
 
@@ -481,12 +626,11 @@ if __name__ == "__main__":
     parser.add_argument("--cluster-key", default=None, help="autodetected from cluster_summary_*.csv by default")
     parser.add_argument(
         "--model", default=None,
-        help='model to use, e.g. "claude-fable-5" / "claude-sonnet-5" / "claude-opus-5" / '
-             '"claude-haiku-4-5" (aliases "sonnet"/"opus"/"haiku" also work); defaults to the claude CLI default',
+        help="model id for the selected HARNESS backend (default: MODEL env, then backend default)",
     )
     parser.add_argument(
         "--effort", default=None, choices=["low", "medium", "high", "xhigh", "max"],
-        help="reasoning effort (models that support it, e.g. fable-5/sonnet-5); defaults to the CLI setting",
+        help="reasoning effort for models that support it",
     )
     parser.add_argument("--max-turns", type=int, default=80)
     args = parser.parse_args()

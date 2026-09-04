@@ -26,7 +26,7 @@ from ._core import (
     decontx_loglik,
 )
 
-__all__ = ["decontx", "DecontXResult"]
+__all__ = ["DecontXResult", "decontx"]
 
 
 @dataclass
@@ -93,8 +93,12 @@ class DecontXResult:
 def _process_cell_labels(z, n_cells: int) -> np.ndarray:
     """Validate and remap cluster labels to contiguous 1-based ints."""
     z = np.asarray(z)
+    if z.ndim != 1:
+        raise ValueError("'z' must be a one-dimensional vector of cell labels.")
     if len(z) != n_cells:
         raise ValueError("'z' must have one label per cell.")
+    if pd.isna(z).any():
+        raise ValueError("'z' must not contain missing cell labels.")
     uniq = pd.unique(z)
     if len(uniq) < 2:
         raise ValueError("DecontX needs at least 2 clusters; only "
@@ -191,25 +195,55 @@ def decontx(x, z=None, batch=None, background=None, max_iter: int = 500,
     counts, gene_names, cell_names = _extract_counts(x, layer=layer)
     counts = _to_genes_by_cells_sparse(counts)
     G, C = counts.shape
+    if G == 0 or C == 0:
+        raise ValueError(f"'x' must contain at least one gene and one cell, got shape {(G, C)}.")
+    if not np.isfinite(counts.data).all():
+        raise ValueError("'x' contains NaN or infinite count values.")
+    if (counts.data < 0).any():
+        raise ValueError("'x' contains negative count values.")
+    if (np.asarray(counts.sum(axis=0)).ravel() <= 0).any():
+        raise ValueError("DecontX cannot fit cells with zero total counts.")
+
+    if isinstance(max_iter, bool) or not isinstance(max_iter, (int, np.integer)) or max_iter < 1:
+        raise ValueError("'max_iter' must be a positive integer.")
+    if (
+        isinstance(iter_log_lik, bool)
+        or not isinstance(iter_log_lik, (int, np.integer))
+        or iter_log_lik < 1
+    ):
+        raise ValueError("'iter_log_lik' must be a positive integer.")
+    if convergence <= 0 or not np.isfinite(convergence):
+        raise ValueError("'convergence' must be a finite positive number.")
+    delta_array = np.asarray(delta, dtype=float)
+    if delta_array.shape != (2,) or not np.isfinite(delta_array).all() or (delta_array <= 0).any():
+        raise ValueError("'delta' must contain exactly two finite positive values.")
 
     if z is None:
         raise ValueError(
             "'z' (cell cluster labels) is required. Cluster the cells "
             "first, e.g. with Leiden, and pass the labels.")
     z = np.asarray(z)
-    if len(z) != C:
-        raise ValueError("'z' must have one label per cell.")
+    if z.ndim != 1 or len(z) != C:
+        raise ValueError("'z' must be a one-dimensional vector with one label per cell.")
+    if pd.isna(z).any():
+        raise ValueError("'z' must not contain missing cell labels.")
 
     if background is not None:
         background = _to_genes_by_cells_sparse(background)
         if background.shape[0] != G:
             raise ValueError(
                 "'background' must have the same number of genes as 'x'.")
+        if not np.isfinite(background.data).all() or (background.data < 0).any():
+            raise ValueError("'background' must contain finite, non-negative counts.")
 
     if batch is None:
         batch = np.array(["all_cells"] * C)
     else:
         batch = np.asarray(batch)
+        if batch.ndim != 1 or len(batch) != C:
+            raise ValueError("'batch' must be a one-dimensional vector with one label per cell.")
+        if pd.isna(batch).any():
+            raise ValueError("'batch' must not contain missing cell labels.")
     batch_index = pd.unique(batch)
 
     run_params = {
@@ -298,7 +332,7 @@ def _decontx_one_batch(counts, z, background, max_iter, delta,
                        seed, verbose):
     """Run the variational-EM loop for a single batch of cells."""
     counts = counts.tocsc().astype(float)
-    G, C = counts.shape
+    _, C = counts.shape
     z = _process_cell_labels(z, C)
 
     rng = np.random.default_rng(seed)
@@ -350,6 +384,22 @@ def _decontx_one_batch(counts, z, background, max_iter, delta,
                                      pseudocount=1e-20))
             if verbose:
                 print(f"  iter {iter_count} | converge: {max_div:.4g}")
+
+    fitted = {
+        "phi": phi,
+        "eta": eta,
+        "theta": theta,
+        "delta": delta,
+        "contamination": next_decon["contamination"],
+        "log_likelihood": ll,
+    }
+    non_finite = [
+        name for name, value in fitted.items() if not np.isfinite(np.asarray(value)).all()
+    ]
+    contamination = np.asarray(next_decon["contamination"])
+    if non_finite or (contamination < 0).any() or (contamination > 1).any():
+        detail = f"non-finite outputs: {non_finite}" if non_finite else "contamination outside [0, 1]"
+        raise FloatingPointError(f"DecontX numerical fit failed ({detail})")
 
     return {
         "z": z,

@@ -84,14 +84,18 @@ def fit_dirichlet(x: np.ndarray, const: float | None = None,
     try:
         cand = dirichlet_fp(np.maximum(0.01, alpha0), logx_mean,
                             maxit=maxit, abstol=abstol)
-        if not np.any(np.isnan(cand)):
+        if np.isfinite(cand).all() and (cand > 0).all():
             alpha = cand
-    except Exception:  # pragma: no cover - fall through to random init
+    except Exception:  # noqa: BLE001  # pragma: no cover - retry from a safer start
         alpha = None
 
-    if alpha is None or np.any(np.isnan(alpha)):
-        rng = np.random.default_rng()
-        alpha = dirichlet_fp(rng.uniform(0.5, 1.0, size=len(alpha0)),
-                             logx_mean, maxit=maxit, abstol=abstol)
+    if alpha is None:
+        # A fixed asymmetric fallback preserves decontx(seed=...) reproducibility.
+        # The previous unseeded random start made rare numerical fallbacks vary
+        # across identical runs even when the caller supplied a seed.
+        fallback = np.linspace(0.5, 1.0, num=len(alpha0), endpoint=False)
+        alpha = dirichlet_fp(fallback, logx_mean, maxit=maxit, abstol=abstol)
+        if not np.isfinite(alpha).all() or (alpha <= 0).any():
+            raise FloatingPointError("Dirichlet fitting did not produce finite positive parameters")
 
     return {"alpha": alpha, "sum": float(np.sum(alpha))}

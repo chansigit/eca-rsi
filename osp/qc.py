@@ -42,19 +42,20 @@ Usage:
     pd.DataFrame(rows).set_index("sample")
 """
 
-import json
+import glob
 import os
 import re
 
+import matplotlib
 import numpy as np
 import pandas as pd
 import scanpy as sc
 import scipy.sparse as sp
 
-import matplotlib
-
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+from ._io import atomic_write_dataframe_csv, atomic_write_json
 
 
 def _mad_outlier(x, nmads):
@@ -73,6 +74,14 @@ def _mad_bounds(x, nmads):
     med = np.median(x)
     mad = np.median(np.abs(x - med))
     return med - nmads * mad, med + nmads * mad
+
+
+def _safe_expm1(value):
+    """Inverse log1p for JSON summaries; ``None`` denotes an open bound."""
+    if value > np.log(np.finfo(float).max):
+        return None
+    result = float(np.expm1(value))
+    return round(result, 1) if np.isfinite(result) else None
 
 
 def _natural_key(s):
@@ -111,9 +120,17 @@ def decontx_top_genes(ad, cluster_key=None, top_n=20, counts_layer="counts", dec
     """
     if decontx_layer not in ad.layers:
         raise ValueError(f"{decontx_layer!r} not in ad.layers — run qc_one_sample(..., run_decontx=True) first")
+    if isinstance(top_n, bool) or not isinstance(top_n, (int, np.integer)) or top_n < 1:
+        raise ValueError(f"top_n must be a positive integer, got {top_n!r}")
+    if cluster_key is not None and cluster_key not in ad.obs:
+        raise ValueError(f"cluster_key {cluster_key!r} is not present in ad.obs")
 
-    raw = sp.csr_matrix(ad.layers[counts_layer] if counts_layer in ad.layers else ad.X)
+    raw = sp.csr_matrix(ad.layers.get(counts_layer, ad.X))
     decon = sp.csr_matrix(ad.layers[decontx_layer])
+    if raw.shape != decon.shape:
+        raise ValueError(
+            f"raw and DecontX matrices must have the same shape, got {raw.shape} and {decon.shape}"
+        )
     removed = raw - decon
     removed.data = np.clip(removed.data, 0, None)  # guard against float noise going slightly negative
     removed.eliminate_zeros()
@@ -147,30 +164,18 @@ def decontx_top_genes(ad, cluster_key=None, top_n=20, counts_layer="counts", dec
     return global_df, per_cluster_df
 
 
-def _decontx_degenerate(obs, internal_init=True):
-    """Fingerprint of a degenerate DecontX fit; returns a reason string or None.
+def _decontx_degenerate(obs):
+    """Fingerprint of an unusable DecontX fit; return a reason or ``None``.
 
-    DecontX's default init (its own UMAP + DBSCAN) can collapse when the
-    sample's dominant lineage also dominates the ambient pool: that lineage
-    lands in one huge internal cluster whose native profile is
-    indistinguishable from the ambient profile, and the EM pins its
-    contamination at ~1 (observed on Liu-2025 FO: median 0.85, one internal
-    cluster holding 63% of cells at contamination 0.998). Real contamination
-    in a called-cells matrix doesn't produce these shapes.
-
-    The EM's landing spot is not stable across BLAS thread counts on such
-    data (the same FO sample gave median 0.85 on one node and 0.37 on
-    another), so the most reliable symptom is the mechanistic one: the
-    DBSCAN init shattering into a huge number of clusters (FO: 132; healthy
-    samples: 7-15). That check only makes sense for DecontX's own init —
-    set internal_init=False when validating a fit made with an explicit z,
-    which may legitimately have many clusters.
+    OSP always supplies an explicit coarse Leiden ``z`` because the vendored
+    implementation requires one. The remaining checks catch fits whose EM
+    solution is still pinned near complete contamination. They deliberately
+    do not reject a large number of supplied clusters: unlike the historical
+    internal DBSCAN initializer, an explicit ``z`` may legitimately be fine.
     """
-    if internal_init:
-        n_z = obs["decontX_clusters"].nunique()
-        if n_z > 50:
-            return f"internal init shattered into {n_z} clusters"
     c = obs["decontX_contamination"]
+    if not np.isfinite(c.to_numpy(dtype=float)).all():
+        return "non-finite contamination estimates"
     med = float(c.median())
     if med > 0.5:
         return f"median contamination {med:.2f} > 0.5"
@@ -187,7 +192,7 @@ def _decontx_degenerate(obs, internal_init=True):
 
 
 def _coarse_clusters_for_decontx(ad, n_top_genes=2000, n_pcs=30, resolution=1.0):
-    """Quick leiden labels to hand DecontX as an explicit z (fallback path).
+    """Quick Leiden labels to hand DecontX as an explicit ``z``.
 
     Deliberately finer-grained than "broad cell types": the degenerate
     direction for DecontX is a z that lumps the dominant lineage into one
@@ -212,8 +217,8 @@ def _coarse_clusters_for_decontx(ad, n_top_genes=2000, n_pcs=30, resolution=1.0)
 # callers who want to be explicit or align with another convention — an
 # unknown species name raises instead of silently applying the wrong regex.
 SPECIES_GENE_PATTERNS = {
-    "mouse": dict(mt_prefix="mt-", ribo_regex=r"^Rp[sl]\d", hb_regex=r"^Hb[ab]"),
-    "human": dict(mt_prefix="MT-", ribo_regex=r"^RP[SL]\d", hb_regex=r"^HB[AB]"),
+    "mouse": {"mt_prefix": "mt-", "ribo_regex": r"^Rp[sl]\d", "hb_regex": r"^Hb[ab]"},
+    "human": {"mt_prefix": "MT-", "ribo_regex": r"^RP[SL]\d", "hb_regex": r"^HB[AB]"},
 }
 
 
@@ -249,11 +254,19 @@ DISSOCIATION_GENES_HS = [
 
 def assert_single_sample(adata, sample_col="sample"):
     """Assert the adata holds exactly one sample (OSP's input contract)."""
+    if adata.n_obs == 0:
+        raise ValueError("expected a non-empty single-sample AnnData, got 0 cells")
     if sample_col not in adata.obs.columns:
         return
-    n_unique = adata.obs[sample_col].nunique()
-    if n_unique > 1:
-        raise ValueError(f"expected a single sample, got {n_unique}: {sorted(adata.obs[sample_col].unique())}")
+    labels = adata.obs[sample_col]
+    n_missing = int(labels.isna().sum())
+    if n_missing:
+        raise ValueError(
+            f"expected every cell to have obs[{sample_col!r}], got {n_missing} missing value(s)"
+        )
+    unique = list(pd.unique(labels))
+    if len(unique) != 1:
+        raise ValueError(f"expected a single sample, got {len(unique)}: {unique}")
 
 
 def qc_one_sample(
@@ -306,17 +319,14 @@ def qc_one_sample(
     whether to filter on it is a dataset-specific decision that shouldn't be
     made here on the caller's behalf.
 
-    DecontX degeneracy guard: its default init (own UMAP + DBSCAN) can pin
-    contamination at ~1 for the dominant lineage when that lineage also
-    dominates the ambient pool (see _decontx_degenerate for the fingerprint).
-    When detected — and only then — DecontX is re-run with an explicit coarse
-    leiden clustering as z; summary["decontx_z_source"] records which path
-    produced the estimates ("internal" / "leiden_fallback" / "user" when z
-    came in via decontx_kwargs, which disables the guard entirely). If the
-    re-run is still degenerate, ad.uns["osp_decontx_degenerate"] = True is
-    set and cluster_and_deg drops the contamination column from its PCA
-    covariates. Samples that don't trip the fingerprint are untouched —
-    byte-identical to the ungated behavior.
+    OSP supplies an explicit coarse Leiden clustering as DecontX's ``z`` by
+    default. For compatibility with existing summaries this path is recorded
+    as ``decontx_z_source="leiden_fallback"`` even though it is now the normal
+    path; a caller-provided ``z`` is recorded as ``"user"``. If the fit is
+    still pinned near complete contamination, ``ad.uns["osp_decontx_degenerate"]
+    = True`` is set and cluster_and_deg drops the contamination column from
+    its PCA covariates. The estimates remain available for inspection rather
+    than being silently discarded.
 
     Per-cell decontX_contamination is only an aggregate score; "who is
     contaminated by which genes" comes from the difference between raw counts
@@ -340,6 +350,30 @@ def qc_one_sample(
     dissociation stress response rather than real biology.
     """
     assert_single_sample(adata, sample_col=sample_col)
+    numeric_parameters = {
+        "nmads": nmads,
+        "mt_nmads": mt_nmads,
+        "mt_soft_pct": mt_soft_pct,
+        "hard_min_genes": hard_min_genes,
+        "hard_min_counts": hard_min_counts,
+        "hard_max_mt_pct": hard_max_mt_pct,
+    }
+    numeric_types = (int, float, np.integer, np.floating)
+    invalid_parameters = [
+        name
+        for name, value in numeric_parameters.items()
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, numeric_types)
+            or not np.isfinite(value)
+            or value < 0
+        )
+    ]
+    if invalid_parameters:
+        raise ValueError(
+            "QC thresholds must be finite non-negative numbers; invalid: "
+            + ", ".join(invalid_parameters)
+        )
 
     if species is not None:
         if species not in SPECIES_GENE_PATTERNS:
@@ -351,12 +385,17 @@ def qc_one_sample(
         )
 
     ad = adata.copy()
+    if ad.n_vars == 0:
+        raise ValueError("expected at least one gene, got an AnnData with 0 variables")
     # All of QC must run on raw counts (calculate_qc_metrics absolute values,
     # Scrublet, DecontX, and the score_genes normalization all assume counts);
     # when the input's X is already normalized with raw counts kept in a layer
     # (common in released h5ad files), swap them back in.
     if counts_layer in ad.layers:
         ad.X = ad.layers[counts_layer].copy()
+    count_values = ad.X.data if sp.issparse(ad.X) else np.asarray(ad.X)
+    if not np.isfinite(count_values).all() or (count_values < 0).any():
+        raise ValueError("QC input counts must contain only finite, non-negative values")
 
     if sample_label is None:
         sample_label = "sample"
@@ -374,9 +413,17 @@ def qc_one_sample(
     ad.var["malat1"] = ad.var_names.str.upper() == "MALAT1"
     if ad.var["malat1"].any():
         qc_vars.append("malat1")
+    top_n = min(20, ad.n_vars)
     sc.pp.calculate_qc_metrics(
-        ad, qc_vars=qc_vars, percent_top=[20], log1p=True, inplace=True
+        ad, qc_vars=qc_vars, percent_top=[top_n], log1p=True, inplace=True
     )
+    if top_n != 20:
+        # Preserve OSP's public obs/summary schema for targeted panels with
+        # fewer than 20 genes: "top 20" then means every available gene.
+        ad.obs.rename(
+            columns={f"pct_counts_in_top_{top_n}_genes": "pct_counts_in_top_20_genes"},
+            inplace=True,
+        )
 
     if run_dissociation_score:
         diss_genes = dissociation_genes if dissociation_genes is not None else DISSOCIATION_GENES_HS
@@ -420,30 +467,34 @@ def qc_one_sample(
     if run_decontx:
         from . import _decontx
 
+        ad.uns.pop("osp_decontx_degenerate", None)
         dkw = dict(decontx_kwargs or {})
+        dkw.setdefault("seed", 0)
+        dkw.setdefault("verbose", False)
         if "z" in dkw:
             decontx_z_source = "user"
-            res = _decontx.decontx(ad, seed=0, verbose=False, **dkw)
+            res = _decontx.decontx(ad, **dkw)
         else:
-            # no internal UMAP+DBSCAN init here — the explicit-leiden path
-            # is the standard path
+            # The explicit-Leiden path is OSP's standard initialization.
             decontx_z_source = "leiden_fallback"
             z = _coarse_clusters_for_decontx(ad)
-            res = _decontx.decontx(ad, z=z, seed=0, verbose=False, **dkw)
+            res = _decontx.decontx(ad, z=z, **dkw)
         # decontx() only writes into the AnnData with copy=True; fold the
         # returned DecontXResult in ourselves (same fields as its copy branch)
         ad.obs["decontX_contamination"] = res.contamination
         ad.obs["decontX_clusters"] = pd.Categorical(res.z)
         ad.layers["decontX_counts"] = res.decontx_counts.T.tocsr()
-        if decontx_z_source == "leiden_fallback":
-            still = _decontx_degenerate(ad.obs, internal_init=False)
-            if still is not None:
-                # contamination estimates are untrustworthy even with a good
-                # z — leave a flag so downstream stages (PCA covariates)
-                # can keep the column out of the model
-                print(f"== decontX degenerate with leiden z ({still}); "
-                      "flagging uns['osp_decontx_degenerate']", flush=True)
-                ad.uns["osp_decontx_degenerate"] = True
+        still = _decontx_degenerate(ad.obs)
+        if still is not None:
+            # Contamination estimates are untrustworthy even with supplied
+            # labels. Keep the values for review, but prevent the downstream
+            # PCA from treating this failed fit as a biological signal.
+            print(
+                f"== decontX degenerate ({still}); "
+                "flagging uns['osp_decontx_degenerate']",
+                flush=True,
+            )
+            ad.uns["osp_decontx_degenerate"] = True
         ad.uns["decontx_top_genes"], ad.uns["decontx_top_genes_by_cluster"] = decontx_top_genes(
             ad, cluster_key="decontX_clusters"
         )
@@ -495,8 +546,11 @@ def qc_one_sample(
     if "dissociation_score" in obs:
         summary["median_dissociation_score"] = float(obs["dissociation_score"].median())
 
+    resolved_figdir = figdir or ("qc_figs" if make_plots else None)
+    if resolved_figdir is not None:
+        _remove_stale_sample_qc_outputs(resolved_figdir, sample_label)
     if make_plots:
-        figdir = figdir or "qc_figs"
+        figdir = resolved_figdir
         os.makedirs(figdir, exist_ok=True)
         _plot_sample_qc(ad, sample_label, hard_min_genes, hard_min_counts, hard_max_mt_pct, figdir, nmads=nmads)
         if run_decontx:
@@ -505,13 +559,32 @@ def qc_one_sample(
     return ad, summary
 
 
+def _remove_stale_sample_qc_outputs(figdir, sample_label):
+    """Remove only this sample's generated QC files before a rerun.
+
+    A shared ``figdir`` may contain other samples, so the escaped sample
+    prefix is part of every pattern. This also removes optional DecontX files
+    when a rerun disables DecontX, preventing a stale report section.
+    """
+    prefix = glob.escape(str(sample_label))
+    patterns = (
+        f"{prefix}_qc_*.png",
+        f"{prefix}_qc_overview.json",
+        f"{prefix}_decontx_top_genes*",
+    )
+    for pattern in patterns:
+        for path in glob.glob(os.path.join(figdir, pattern)):
+            if os.path.isfile(path):
+                os.unlink(path)
+
+
 def _annotate_threshold(ax, x, label, y_frac=0.92):
     """Write the threshold value and failing-cell count right next to the
     threshold line, so an agent doesn't have to eyeball pixel positions."""
     ax.text(
         x, y_frac, f" {label}", transform=ax.get_xaxis_transform(),
         color="red", fontsize=9, va="top", ha="left", rotation=0,
-        bbox=dict(boxstyle="round", fc="white", ec="red", alpha=0.85, pad=0.2),
+        bbox={"boxstyle": "round", "fc": "white", "ec": "red", "alpha": 0.85, "pad": 0.2},
     )
 
 
@@ -536,7 +609,14 @@ def _finish_qc_plot(fig, ax, figdir, sample_label, suffix):
 
 
 def _log_bins(values, n=80):
-    return np.logspace(np.log10(max(values.min(), 1)), np.log10(values.max()), n)
+    """Positive, strictly increasing bins for a logarithmic count axis."""
+    values = np.asarray(values, dtype=float)
+    positive = values[np.isfinite(values) & (values > 0)]
+    if not len(positive):
+        return np.geomspace(0.5, 1.5, n)
+    lo = max(float(positive.min()), 0.5)
+    hi = max(float(positive.max()), lo * 1.01)
+    return np.geomspace(lo, hi, n)
 
 
 def _qc_hist(obs, col, color, sample_label, figdir, bins=80, logx=False, logy=True,
@@ -653,8 +733,8 @@ def _plot_sample_qc(ad, sample_label, min_genes, min_counts, max_mt_pct, figdir,
         # means the sample's distribution shape is breaking the MAD assumption.
         "mad_nmads": nmads,
         "mad_keep_ranges": {
-            "total_counts": [round(float(np.expm1(b)), 1) for b in _mad_bounds(obs["log1p_total_counts"], nmads)],
-            "n_genes_by_counts": [round(float(np.expm1(b)), 1) for b in _mad_bounds(obs["log1p_n_genes_by_counts"], nmads)],
+            "total_counts": [_safe_expm1(b) for b in _mad_bounds(obs["log1p_total_counts"], nmads)],
+            "n_genes_by_counts": [_safe_expm1(b) for b in _mad_bounds(obs["log1p_n_genes_by_counts"], nmads)],
             "pct_counts_in_top_20_genes": [round(float(b), 2) for b in _mad_bounds(top20, nmads)],
         },
         "n_fail_mad": {
@@ -669,8 +749,7 @@ def _plot_sample_qc(ad, sample_label, min_genes, min_counts, max_mt_pct, figdir,
         stats["median_pct_counts_malat1"] = float(obs["pct_counts_malat1"].median())
     if has_diss:
         stats["median_dissociation_score"] = float(obs["dissociation_score"].median())
-    with open(os.path.join(figdir, f"{sample_label}_qc_overview.json"), "w") as fh:
-        json.dump(stats, fh, indent=2)
+    atomic_write_json(os.path.join(figdir, f"{sample_label}_qc_overview.json"), stats)
 
 
 def _plot_decontx_top_genes(ad, sample_label, figdir, top_n_plot=15):
@@ -696,13 +775,19 @@ def _plot_decontx_top_genes(ad, sample_label, figdir, top_n_plot=15):
     fig.tight_layout()
     fig.savefig(os.path.join(figdir, f"{sample_label}_decontx_top_genes.png"), dpi=150)
     plt.close(fig)
-    global_df.to_csv(os.path.join(figdir, f"{sample_label}_decontx_top_genes.csv"), index=False)
+    atomic_write_dataframe_csv(
+        global_df,
+        os.path.join(figdir, f"{sample_label}_decontx_top_genes.csv"),
+        index=False,
+    )
     if per_cluster_df is not None:
         # "decontx_cluster" (not just "cluster") to disambiguate from the
-        # real Leiden clusters computed later in cluster_and_deg — this
-        # file uses DecontX's own internal rough clustering.
-        per_cluster_df.to_csv(
-            os.path.join(figdir, f"{sample_label}_decontx_top_genes_by_decontx_cluster.csv"), index=False
+        # real Leiden clusters computed later in cluster_and_deg — this file
+        # uses the coarse Leiden labels supplied to DecontX.
+        atomic_write_dataframe_csv(
+            per_cluster_df,
+            os.path.join(figdir, f"{sample_label}_decontx_top_genes_by_decontx_cluster.csv"),
+            index=False,
         )
 
 
@@ -718,8 +803,18 @@ if __name__ == "__main__":
     parser.add_argument("--no-decontx", action="store_true")
     args = parser.parse_args()
 
-    adata = sc.read_h5ad(args.h5ad_path)
-    sub = adata[adata.obs[args.sample_col] == args.sample]
+    adata = sc.read_h5ad(args.h5ad_path, backed="r")
+    try:
+        if args.sample_col not in adata.obs:
+            raise ValueError(f"sample column {args.sample_col!r} is not present in the input obs")
+        mask = adata.obs[args.sample_col].astype(str) == args.sample
+        if not mask.any():
+            raise ValueError(
+                f"sample {args.sample!r} matches no cells in obs[{args.sample_col!r}]"
+            )
+        sub = adata[mask].to_memory()
+    finally:
+        adata.file.close()
     _, summary = qc_one_sample(
         sub,
         sample_label=args.sample,

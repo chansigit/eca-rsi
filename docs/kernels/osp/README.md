@@ -66,6 +66,14 @@ See `examples/run_one_sample.py` for a driver that loads a large h5ad in
 backed mode and pulls out one sample (for per-sample Slurm array tasks), and
 `examples/submit_array.sbatch` for the job-array template.
 
+## Development checks
+
+```bash
+pip install -e ".[test]"
+ruff check .
+pytest -q
+```
+
 ## Conventions
 
 - **Raw counts convention**: if `adata.layers["counts"]` exists, `X` is swapped
@@ -74,13 +82,13 @@ backed mode and pulls out one sample (for per-sample Slurm array tasks), and
   raw counts kept in a layer (common in released h5ad files).
 - **QC is flag-only**: `qc_one_sample` never drops cells; `low_quality` is a
   column, filtering is the caller's decision.
-- **DecontX degeneracy guard**: DecontX's own UMAP+DBSCAN init can collapse on
-  samples where the dominant cell lineage's transcriptome resembles the
-  ambient RNA pool (all contamination pinned near 1, or the init shattering
-  into 100+ tiny clusters). When detected, `qc_one_sample` automatically
-  re-runs DecontX with an explicit coarse-leiden clustering; check
-  `summary["decontx_z_source"]` (`"internal"` vs `"leiden_fallback"`) and the
-  Ambient Contamination section of the report.
+- **DecontX initialization and degeneracy guard**: OSP supplies an explicit
+  coarse-Leiden clustering to the vendored DecontX implementation. The
+  historical compatibility value is
+  `summary["decontx_z_source"] == "leiden_fallback"`; it now denotes the normal
+  explicit-clustering path, not a failed first attempt. Fits pinned near
+  complete contamination are retained for inspection but marked in
+  `adata.uns["osp_decontx_degenerate"]` and excluded from PCA covariates.
 - **MAD-outlier assumption**: the adaptive per-sample QC thresholds (`nmads`
   MADs around the median) assume a roughly regular within-sample
   distribution. On samples with unusually shallow depth or heavy ambient

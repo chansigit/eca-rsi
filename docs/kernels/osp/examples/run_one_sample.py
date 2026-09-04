@@ -2,8 +2,8 @@
 
 Loads the h5ad in backed mode and pulls only the requested sample into
 memory, so each Slurm array task doesn't load the whole matrix. With
---annotate, the Claude annotation agent runs afterwards (needs network +
-claude CLI credentials on the node).
+--annotate, the selected annotation backend runs afterwards and needs its
+provider credentials on the node.
 
 Usage: python run_osp_sample.py <h5ad_path> <sample> <output_root> [--annotate] [--model M]
 """
@@ -23,8 +23,13 @@ parser.add_argument("--model", default=None)
 args = parser.parse_args()
 
 a = sc.read_h5ad(args.h5ad_path, backed="r")
-sub = a[a.obs["sample"] == args.sample].to_memory()
-a.file.close()
+try:
+    mask = a.obs["sample"].astype(str) == args.sample
+    if not mask.any():
+        raise ValueError(f"sample {args.sample!r} matches no cells in obs['sample']")
+    sub = a[mask].to_memory()
+finally:
+    a.file.close()
 print(f"sample {args.sample}: {sub.shape}", flush=True)
 
 outdir = f"{args.outroot}/{args.sample}"

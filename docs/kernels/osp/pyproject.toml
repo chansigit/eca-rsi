@@ -7,7 +7,7 @@ name = "osp-sc"   # PyPI distribution name (PyPI rejects "osp" as too similar to
 version = "0.1.0"
 description = "One-sample-pipeline: per-sample scRNA-seq QC, clustering, DEG and self-contained HTML report"
 readme = "README.md"
-license = "MIT"
+license = { file = "LICENSE" }
 authors = [{ name = "chansigit" }]
 requires-python = ">=3.10"
 dependencies = [
@@ -23,6 +23,10 @@ dependencies = [
 
 [project.optional-dependencies]
 agent = ["agent-harness-bridge[all]==0.1.0"]
+test = ["pytest>=8", "ruff>=0.16"]
 
 [tool.setuptools]
 packages = ["osp", "osp._decontx"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

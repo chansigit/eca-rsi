@@ -68,6 +68,7 @@ Usage:
     cluster_and_deg(ad_qcpass, resolutions=(0.3, 0.5, 0.8, 1.2), primary_resolution=0.8)
 """
 
+import glob
 import os
 import re
 
@@ -82,6 +83,7 @@ import scanpy as sc
 import scipy.sparse as sp
 from sklearn.decomposition import PCA
 
+from ._io import atomic_write_dataframe_csv, atomic_write_h5ad
 from .qc import assert_single_sample, cluster_order, decontx_top_genes, qc_one_sample
 
 # OSP doesn't know what tissue/species it is given, so there is no built-in
@@ -96,6 +98,9 @@ DEFAULT_QC_PCA_COVARIATES = (
     "doublet_score", "total_counts", "n_genes_by_counts", "decontX_contamination",
     "pct_counts_mt", "dissociation_score",
 )
+
+_DEG_GROUP1 = "__osp_group1__"
+_DEG_GROUP2 = "__osp_group2__"
 
 
 def _as_labels(x):
@@ -147,6 +152,11 @@ def deg_two_groups(
       high_in/low_in hold the human-readable group1_label/group2_label chosen
       by the sign of logfc — not scanpy's internal temporary group names)
     """
+    if group_key not in adata.obs:
+        raise ValueError(f"group_key {group_key!r} is not present in adata.obs")
+    if isinstance(n_top_genes, bool) or not isinstance(n_top_genes, (int, np.integer)) or n_top_genes < 1:
+        raise ValueError(f"n_top_genes must be a positive integer, got {n_top_genes!r}")
+
     group1 = _as_labels(group1)
     if group2 is not None:
         group2 = _as_labels(group2)
@@ -154,10 +164,23 @@ def deg_two_groups(
             raise ValueError(f"group1/group2 overlap: {sorted(set(group1) & set(group2))}")
 
     labels = adata.obs[group_key].astype(str)
+    available = set(labels)
+    unknown1 = sorted(set(group1) - available)
+    unknown2 = sorted(set(group2 or ()) - available)
+    if unknown1 or unknown2:
+        raise ValueError(
+            f"unknown labels for obs[{group_key!r}]: group1={unknown1}, group2={unknown2}; "
+            f"available={cluster_order(available)}"
+        )
     mask1 = labels.isin(group1)
     mask2 = ~mask1 if group2 is None else labels.isin(group2)
     group1_label = "+".join(group1)
     group2_label = "rest" if group2 is None else "+".join(group2)
+    if group2_label == group1_label:
+        # Keep the public high_in/low_in columns interpretable when a real
+        # category is literally named "rest" (or joined labels stringify to
+        # the same text on both sides).
+        group2_label = "all other cells" if group2 is None else f"group2:{group2_label}"
 
     if mask1.sum() == 0:
         raise ValueError(f"group1={group1} matches no cells in obs[{group_key!r}]")
@@ -167,18 +190,27 @@ def deg_two_groups(
     keep = mask1 | mask2
     ad = adata[keep].copy()
     tmp_key = "_deg_group"
-    ad.obs[tmp_key] = pd.Categorical(np.where(mask1[keep].values, group1_label, group2_label))
+    # Internal sentinels must not reuse human labels: a real group named
+    # "rest" (or joined labels such as ["A", "B"] versus "A+B") would
+    # otherwise collapse both sides into one category and silently yield NaN
+    # fold changes.
+    ad.obs[tmp_key] = pd.Categorical(
+        np.where(mask1[keep].values, _DEG_GROUP1, _DEG_GROUP2),
+        categories=[_DEG_GROUP1, _DEG_GROUP2],
+    )
 
     if hvg_only:
         if "highly_variable" not in ad.var:
             sc.pp.highly_variable_genes(ad, n_top_genes=n_top_genes, flavor="seurat")
         ad = ad[:, ad.var["highly_variable"]].copy()
+        if ad.n_vars == 0:
+            raise ValueError("no highly variable genes are available for DEG")
 
     sc.tl.rank_genes_groups(
-        ad, tmp_key, groups=[group1_label], reference=group2_label,
+        ad, tmp_key, groups=[_DEG_GROUP1], reference=_DEG_GROUP2,
         method="wilcoxon", layer=layer, use_raw=False, tie_correct=tie_correct,
     )
-    df = sc.get.rank_genes_groups_df(ad, group=group1_label)
+    df = sc.get.rank_genes_groups_df(ad, group=_DEG_GROUP1)
     df = df.rename(columns={
         "names": "gene", "logfoldchanges": "logfc", "pvals": "pval", "pvals_adj": "pval_adj",
     })
@@ -187,8 +219,8 @@ def deg_two_groups(
     # with an explicit reference group it's left out, so compute both
     # fractions ourselves off the same (HVG-subsetted) matrix used above.
     X = ad.layers[layer] if layer else ad.X
-    mat1 = X[(ad.obs[tmp_key] == group1_label).values]
-    mat2 = X[(ad.obs[tmp_key] == group2_label).values]
+    mat1 = X[(ad.obs[tmp_key] == _DEG_GROUP1).values]
+    mat2 = X[(ad.obs[tmp_key] == _DEG_GROUP2).values]
     if sp.issparse(mat1):
         pct1 = np.asarray((mat1 != 0).sum(axis=0)).ravel() / mat1.shape[0]
         pct2 = np.asarray((mat2 != 0).sum(axis=0)).ravel() / mat2.shape[0]
@@ -276,6 +308,38 @@ def cluster_and_deg(
         osp.qc.decontx_top_genes().
     """
     assert_single_sample(adata, sample_col=sample_col)
+    if adata.n_obs < 3:
+        raise ValueError(f"clustering requires at least 3 cells, got {adata.n_obs}")
+    if adata.n_vars < 2:
+        raise ValueError(f"clustering requires at least 2 genes, got {adata.n_vars}")
+    integer_parameters = {
+        "n_top_genes": n_top_genes,
+        "n_pcs": n_pcs,
+        "n_neighbors": n_neighbors,
+        "top_n_de": top_n_de,
+    }
+    invalid_integer_parameters = [
+        name
+        for name, value in integer_parameters.items()
+        if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or value < 1
+    ]
+    if invalid_integer_parameters:
+        raise ValueError(
+            "clustering size parameters must be positive integers; invalid: "
+            + ", ".join(invalid_integer_parameters)
+        )
+    if isinstance(qc_pca_covariates, str):
+        raise TypeError("qc_pca_covariates must be a sequence of obs column names, not a string")
+
+    resolutions = tuple(resolutions)
+    if not resolutions:
+        raise ValueError("resolutions must contain at least one value")
+    try:
+        invalid_resolutions = any(not np.isfinite(r) or r < 0 for r in resolutions)
+    except TypeError as error:
+        raise ValueError(f"resolutions must be numeric: {resolutions}") from error
+    if invalid_resolutions:
+        raise ValueError(f"resolutions must contain finite non-negative values: {resolutions}")
 
     leiden_keys = [f"leiden_r{r}" for r in resolutions]
     primary_key = f"leiden_r{primary_resolution}"
@@ -285,6 +349,9 @@ def cluster_and_deg(
     ad = adata.copy()
     if counts_layer in ad.layers:
         ad.X = ad.layers[counts_layer].copy()
+        # The input may already have been analyzed. X is raw again, so remove
+        # stale normalization metadata before applying the new log1p transform.
+        ad.uns.pop("log1p", None)
     else:
         # X is about to be overwritten by normalize/log1p — stash the raw
         # counts in a layer first: decontx_top_genes / the contamination
@@ -301,6 +368,8 @@ def cluster_and_deg(
     sc.pp.highly_variable_genes(ad, n_top_genes=n_top_genes, flavor="seurat")
 
     hvg = ad[:, ad.var.highly_variable].copy()
+    if hvg.n_vars < 2:
+        raise ValueError(f"HVG selection produced only {hvg.n_vars} gene(s); at least 2 are required")
     sc.pp.scale(hvg, max_value=10)
     X_hvg = hvg.X
     n_features = X_hvg.shape[1]
@@ -314,6 +383,9 @@ def cluster_and_deg(
     if qc_cov_cols:
         print(f"== adding z-scored QC covariates to PCA input: {qc_cov_cols}", flush=True)
         qc_mat = ad.obs[qc_cov_cols].to_numpy(dtype=float)
+        if not np.isfinite(qc_mat).all():
+            bad = [c for i, c in enumerate(qc_cov_cols) if not np.isfinite(qc_mat[:, i]).all()]
+            raise ValueError(f"QC PCA covariates contain NaN or infinite values: {bad}")
         qc_std = qc_mat.std(axis=0, ddof=0)
         qc_std[qc_std == 0] = 1  # constant column -> z-score 0 everywhere, avoid /0
         qc_z = np.clip((qc_mat - qc_mat.mean(axis=0)) / qc_std, -10, 10)
@@ -327,11 +399,17 @@ def cluster_and_deg(
     del hvg
 
     print("== neighbors (use_rep=X_pca)", flush=True)
-    sc.pp.neighbors(ad, use_rep="X_pca", n_neighbors=n_neighbors)
+    sc.pp.neighbors(ad, use_rep="X_pca", n_neighbors=min(n_neighbors, ad.n_obs - 1))
 
     for res, key in zip(resolutions, leiden_keys):
         print(f"== leiden {key}", flush=True)
         sc.tl.leiden(ad, resolution=res, key_added=key, flavor="igraph", n_iterations=2)
+
+    if ad.obs[primary_key].nunique() < 2:
+        raise ValueError(
+            f"primary clustering {primary_key!r} produced fewer than 2 clusters; "
+            "choose a higher primary_resolution"
+        )
 
     print("== umap", flush=True)
     sc.tl.umap(ad)
@@ -355,17 +433,29 @@ def cluster_and_deg(
         print(f"== decontX gene contamination by {primary_key}", flush=True)
         _, decontx_by_cluster = decontx_top_genes(ad, cluster_key=primary_key, counts_layer=counts_layer)
 
+    resolved_figdir = figdir or (os.path.join(outdir, "figures") if outdir else "cluster_figs")
     if outdir:
         os.makedirs(outdir, exist_ok=True)
-        de_top.to_csv(os.path.join(outdir, f"de_top_genes_{primary_key}.csv"), index=False)
-        cluster_summary.to_csv(os.path.join(outdir, f"cluster_summary_{primary_key}.csv"))
-        paga_df.to_csv(os.path.join(outdir, f"paga_connectivities_{primary_key}.csv"))
+        _invalidate_stale_derived_outputs(outdir, resolved_figdir)
+        _remove_stale_primary_tables(outdir, primary_key, decontx_by_cluster is not None)
+        atomic_write_dataframe_csv(
+            de_top, os.path.join(outdir, f"de_top_genes_{primary_key}.csv"), index=False
+        )
+        atomic_write_dataframe_csv(
+            cluster_summary, os.path.join(outdir, f"cluster_summary_{primary_key}.csv")
+        )
+        atomic_write_dataframe_csv(
+            paga_df, os.path.join(outdir, f"paga_connectivities_{primary_key}.csv")
+        )
         if decontx_by_cluster is not None:
-            decontx_by_cluster.to_csv(os.path.join(outdir, f"decontx_top_genes_{primary_key}.csv"), index=False)
-        ad.write(os.path.join(outdir, "clustered.h5ad"))
+            atomic_write_dataframe_csv(
+                decontx_by_cluster,
+                os.path.join(outdir, f"decontx_top_genes_{primary_key}.csv"),
+                index=False,
+            )
+        atomic_write_h5ad(ad, os.path.join(outdir, "clustered.h5ad"))
 
     if make_plots:
-        resolved_figdir = figdir or (os.path.join(outdir, "figures") if outdir else "cluster_figs")
         os.makedirs(resolved_figdir, exist_ok=True)
         _plot_cluster_overview(ad, leiden_keys, marker_genes, resolved_figdir)
         _plot_paga(ad, resolved_figdir)
@@ -374,6 +464,59 @@ def cluster_and_deg(
             _plot_decontx_cluster_heatmap(ad, primary_key, decontx_by_cluster, counts_layer, resolved_figdir)
 
     return ad, de_top, cluster_summary, paga_df, decontx_by_cluster
+
+
+def _remove_stale_primary_tables(outdir, primary_key, has_decontx):
+    """Remove tables from an older primary resolution in the same outdir.
+
+    OSP writes summaries only for the current primary resolution. Leaving an
+    older run's tables beside them makes report/annotation autodetection pick
+    an arbitrary file and mix two analyses.
+    """
+    prefixes = ("de_top_genes_", "cluster_summary_", "paga_connectivities_")
+    for prefix in prefixes:
+        keep = f"{prefix}{primary_key}.csv"
+        for path in glob.glob(os.path.join(outdir, f"{prefix}leiden_r*.csv")):
+            if os.path.basename(path) != keep:
+                os.unlink(path)
+
+    for path in glob.glob(os.path.join(outdir, "decontx_top_genes_leiden_r*.csv")):
+        keep = has_decontx and os.path.basename(path) == f"decontx_top_genes_{primary_key}.csv"
+        if not keep:
+            os.unlink(path)
+
+
+def _invalidate_stale_derived_outputs(outdir, figdir):
+    """Invalidate outputs that refer to an older clustering.
+
+    This runs only after the replacement analysis has completed in memory.
+    Keeping an old report or annotation proposal beside a new clustered H5AD
+    can fool an outer file-based resume check into accepting mismatched data.
+    """
+    _invalidate_completion_markers(outdir)
+
+    figure_dirs = {os.path.abspath(figdir), os.path.abspath(os.path.join(outdir, "figures"))}
+    patterns = (
+        "paga.png",
+        "umap_clusters_*.png",
+        "umap_qc_*.png",
+        "qc_violin_*.png",
+        "decontx_heatmap_by_cluster.png",
+        "umap_markers_*.png",
+        "umap_ann_*.png",
+    )
+    for directory in figure_dirs:
+        for pattern in patterns:
+            for path in glob.glob(os.path.join(directory, pattern)):
+                os.unlink(path)
+
+
+def _invalidate_completion_markers(outdir):
+    """Remove files that an outer driver may treat as completion markers."""
+    for name in ("report.html", "annotation_proposal.json", "annotation_notes.md"):
+        path = os.path.join(outdir, name)
+        if os.path.isfile(path):
+            os.unlink(path)
 
 
 def _cluster_summary_table(ad, cluster_key):
@@ -494,7 +637,7 @@ def _plot_decontx_cluster_heatmap(ad, cluster_key, decontx_by_cluster, counts_la
     if not top_genes:
         return
 
-    raw = sp.csr_matrix(ad.layers[counts_layer] if counts_layer in ad.layers else ad.X)
+    raw = sp.csr_matrix(ad.layers.get(counts_layer, ad.X))
     decon = sp.csr_matrix(ad.layers["decontX_counts"])
     removed = raw - decon
     removed.data = np.clip(removed.data, 0, None)
@@ -596,6 +739,8 @@ def run_one_sample_pipeline(adata, sample_label=None, sample_col="sample", qc_kw
     qc_kwargs.setdefault("sample_col", sample_col)
     cluster_kwargs.setdefault("sample_col", sample_col)
     if outdir:
+        os.makedirs(outdir, exist_ok=True)
+        _invalidate_completion_markers(outdir)
         qc_kwargs.setdefault("figdir", os.path.join(outdir, "qc_figures"))
 
     print(f"== QC ({sample_label})", flush=True)
@@ -604,8 +749,9 @@ def run_one_sample_pipeline(adata, sample_label=None, sample_col="sample", qc_kw
     ad_pass = ad_qc[~ad_qc.obs["low_quality"]].copy()
 
     if outdir:
-        os.makedirs(outdir, exist_ok=True)
-        pd.Series(qc_summary).to_csv(os.path.join(outdir, "qc_summary.csv"))
+        atomic_write_dataframe_csv(
+            pd.Series(qc_summary), os.path.join(outdir, "qc_summary.csv")
+        )
         # per-cell ledger of everything this filter drops — the only place
         # these cells leave a trace (clustered.h5ad holds survivors only);
         # every later step (msp annotate, zmip) keeps the same kind of file
@@ -616,7 +762,12 @@ def run_one_sample_pipeline(adata, sample_label=None, sample_col="sample", qc_kw
         removed = ad_qc.obs.loc[ad_qc.obs["low_quality"].values, ledger_cols].copy()
         removed.insert(0, "sample", sample_label)
         removed.index.name = "cell"
-        removed.to_csv(os.path.join(outdir, "qc_removed.csv"))
+        atomic_write_dataframe_csv(removed, os.path.join(outdir, "qc_removed.csv"))
+
+    if ad_pass.n_obs < 3:
+        raise ValueError(
+            f"QC retained {ad_pass.n_obs} cell(s); at least 3 are required for clustering"
+        )
 
     print(f"== after QC: {ad_pass.shape}", flush=True)
     print("== clustering + DEG", flush=True)
