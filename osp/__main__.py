@@ -26,7 +26,7 @@ parser.add_argument("--species", default=None, help="context passed to --annotat
 parser.add_argument("--tissue", default=None, help="context passed to --annotate")
 parser.add_argument("--language", default="English", help='annotation output language (default "English")')
 parser.add_argument("--harness", choices=["deepseek", "openai", "claude"], default=None,
-                    help="agent runtime backend (default: HARNESS env, then deepseek)")
+                    help="agent runtime backend (default: HARNESS env, then openai)")
 parser.add_argument("--model", default=None, help='model id for the selected HARNESS backend')
 parser.add_argument("--effort", default=None, choices=["low", "medium", "high", "xhigh", "max"],
                     help="reasoning effort for --annotate (models that support it)")
