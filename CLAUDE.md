@@ -103,7 +103,7 @@ silent bug 全部长在"规格与实现的接缝"上(记录了但没人执行、
 
 ```
 python -m ecarsi.organize    <输入目录> <root>       # eca-pp 守门 + 分析单元规划(agent)+ 细胞守恒审计
-python -m ecarsi.persample   <unit>                 # 样本列识别(agent)+ Task 子代理逐样本跑 osp(QC 只此一次,doublet 只在完整样本池算)
+python -m ecarsi.persample   <unit>                 # 样本列识别(agent)+ host 子进程池并行跑 osp(每样本 subset.h5ad;QC 只此一次,doublet 只在完整样本池算)
 python -m ecarsi.loop        <unit> [--rounds N] [--cap 10] [--force-reopen]
    round 1: ecarsi.crosssample(样本纳入 agent → msp integrate/inspect/annotate)→ ecarsi.zoomin(zmip)
    round N: 上轮 zoomin/annotated_zmip.h5ad,先验列改名 r(N-1)_* → msp --from-h5ad → zmip
@@ -150,7 +150,14 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
 - **单样本 / 单批次**(persample 判不出样本列 → 整文件一个样本 `all`,或纳入 agent 只留 1 个):走同一条链,
   差别只有三处——纳入 agent 不开(直接纳入)、msp 跳过 harmony(`X_pca_harmony = X_pca`,uns 记 skipped)、
   inspect / annotate 被告知样本组成不作证据;osp 的 drop 照旧只作证据、在 annotate 一次真删;zmip 不变。
-- 环境:`MODEL`(默认 claude-sonnet-5)、`MSP_PYTHON` / `ZMIP_PYTHON`、`ZMIP_MIN_CELLS`。
+- 环境:`MODEL`(默认 claude-sonnet-5)、`HARNESS`(claude|deepseek)、`MSP_PYTHON` / `ZMIP_PYTHON`、`ZMIP_MIN_CELLS`;
+  `AGENT_WALL_MIN`(每次 agent 调用的墙钟预算,默认 180 分钟,两个后端都强制,超时重开一次);
+  并发池:`PERSAMPLE_PARALLEL` / `PERSAMPLE_MEM_PER_CELL_MB`(persample)、`ZMIP_PARALLEL` / `ZMIP_MEM_PER_CELL_MB`(zoomin),
+  默认从 affinity CPU + cgroup 内存自动定(`ecarsi.resources`,与 msp.resources 同一份拷贝)。
+- persample(2026-09-03 起)不再开 agent 驱动:host 读一次 organized.h5ad 写出每样本 `subset.h5ad`,
+  子进程池并行跑 `python -m osp`(大样本先跑),失败重试一次后记 `persample/failures.md` 继续;12 样本 Fu2022 约 5 分钟。
+- zmip plan 有 host 连通性校验:`lineage_islands.csv`(UMAP 2D kNN 连通分量)——把分开的岛并成一个 lineage 直接打回;
+  同一岛拆成多个 lineage 打回一次,agent 可带 `confirm_shared_islands: true` 重交,记入 plan 的 `host_warnings` 与 needs_review。
 - 测试数据:`$SCRATCH/eca-runs/_organize_test/fu2022/fu2022-meniscus` 是旧结构的真实跑(不迁移);
   `$SCRATCH/eca-runs/_layout_test/fu2022` 是它的 symlink 复刻(新结构,验证 index/serve 用),
   `_layout_test/running` 是"round 3 跑到一半"的假象。直播:`python -m ecarsi.serve <root> --port 8899 --detach`,

@@ -18,6 +18,8 @@ Sections, most consequential first:
   inspect_flag    inspection verdicts that were flagged / ambiguous / low
                   confidence (advisory to annotate; nothing was removed here)
   lineage_skipped lineages the host refused to zoom (too few cells)
+  plan_warning    zoom-in plans the host flagged (labels sharing one UMAP
+                  island split across lineages) and the agent confirmed
   low_confidence  kept clusters labelled with low confidence — merged
                   splinters listed apart from clusters that stand alone
 """
@@ -48,6 +50,9 @@ KINDS: list[tuple[str, str, str]] = [
      "Cluster QC verdicts flagged, ambiguous or low-confidence. Advisory to annotate; nothing was removed here."),
     ("lineage_skipped", "Lineages not zoomed",
      "The host refused to zoom these (below --min-cells); their msp labels are final for the round."),
+    ("plan_warning", "Zoom-in plan warnings",
+     "Labels that share one UMAP island (host-computed) were split across lineages; the plan agent confirmed "
+     "the split on the picture. Advisory: check lineage_islands.csv against the coarse UMAP."),
     ("low_confidence", "Low-confidence labels (kept)",
      "Clusters kept with low confidence. 'merged into' = the agent folded it into a sibling cluster."),
 ]
@@ -182,7 +187,11 @@ def _zoomin_items(n: int, zdir: Path, unit: Path) -> list[Item]:
     plan_p = zdir / "zmip_plan.json"
     if not plan_p.is_file():
         return items
-    for ln in _json(plan_p)["lineages"]:
+    plan = _json(plan_p)
+    for w in plan.get("host_warnings", []):
+        items.append(Item("plan_warning", n, "zoomin", scope="plan", action="confirmed by agent", note=w,
+                          link=_rel(zdir / "report.html", unit)))
+    for ln in plan["lineages"]:
         name = ln["name"]
         if "host:" in ln.get("reason", ""):
             items.append(Item("lineage_skipped", n, "zoomin", scope=name, n_cells=ln.get("n_cells"),

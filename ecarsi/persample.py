@@ -1,24 +1,31 @@
-"""ecarsi-persample — identify the 10x-run sample column, then drive osp per sample.
+"""ecarsi-persample — identify the 10x-run sample column, then run osp per sample.
 
     python -m ecarsi.persample <unit_dir | organized.h5ad> [out_dir] [--annotate]
 
 Runs after ecarsi.organize, once per analysis unit. Four stages:
 
   1. PROFILE (code): obs-column profile of the organized h5ad.
-  2. IDENTIFY (agent, structured output): which obs column is the
-     10x-run-level sample column (null → whole file is one run). The
-     decision is persisted to <out_dir>/manifest.json — re-runs reuse it.
-  3. DRIVE (agent session): this step's own SDK session works through the
-     sample checklist, one Task subagent per sample, each running the exact
-     osp command it is handed. A sample is done when its contract files
+  2. IDENTIFY (agent, submit tool): which obs column is the 10x-run-level
+     sample column (null → whole file is one run). The decision is
+     persisted to <out_dir>/manifest.json — re-runs reuse it.
+  3. DRIVE (code): every pending sample's cells are written to
+     <sample dir>/subset.h5ad and `python -m osp` runs on that subset as a
+     child process; several samples run side by side, concurrency sized
+     from what this process may actually use (ecarsi.resources: affinity
+     CPUs + cgroup memory — nothing is passed in from the job script) and a
+     per-sample memory estimate. A sample is done when its contract files
      exist (report.html + clustered.h5ad, plus annotation_proposal.json
-     when annotating); done samples are skipped on resume — finish one,
-     cross one off.
-  4. VERIFY (code): sessions are relaunched while they make progress (one
-     no-progress retry), then hard exit listing whatever is missing.
+     when annotating); done samples are skipped on resume. A failed sample
+     is retried once, then recorded in <out_dir>/failures.md and skipped so
+     it never blocks the rest.
+  4. VERIFY (code): hard exit listing whatever is still missing.
 
-Env: MODEL (both agent calls, default claude-sonnet-5), OSP_PYTHON
-(interpreter that has osp installed; defaults to this interpreter).
+Env: MODEL (identify agent + osp --annotate, default claude-sonnet-5),
+OSP_PYTHON (interpreter that has osp installed; defaults to this
+interpreter), PERSAMPLE_PARALLEL (hard cap on concurrent samples, 1 =
+sequential; default min(#samples, cpus // 2)), PERSAMPLE_MEM_PER_CELL_MB
+(RAM an osp run of N cells is assumed to need per cell, default 0.5, plus
+1 GiB fixed per child — a 5k-cell Fu2022 sample peaked at 2.5 GiB).
 """
 
 from __future__ import annotations
@@ -28,7 +35,11 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
+import threading
+import time
+from collections import deque
 from pathlib import Path
 
 from . import layout as L
@@ -43,6 +54,8 @@ SAMPLE_COL_SCHEMA = {
 }
 
 CONTRACT = L.PS_CONTRACT
+SUBSET_FILE = "subset.h5ad"  # the driver's hand-off to an osp child; removed once the sample is settled
+FIXED_BYTES_PER_CHILD = 1 << 30
 
 
 # ---------------------------------------------------------------- profiling
@@ -153,10 +166,10 @@ def list_samples(h5ad: Path, col: str) -> dict[str, int]:
     return counts
 
 
-def _osp_command(py: str, h5ad: Path, col: str, value: str, outdir: Path,
+def _osp_command(py: str, subset: Path, col: str, value: str, outdir: Path,
                  annotate: bool, model: str, species: str | None, tissue: str | None,
                  context: str | None = None) -> str:
-    cmd = [py, "-m", "osp", str(h5ad), "--sample-col", col, "--sample", value,
+    cmd = [py, "-m", "osp", str(subset), "--sample-col", col, "--sample", value,
            "--outdir", str(outdir)]
     if context:
         cmd += ["--report-context", context]
@@ -204,7 +217,8 @@ def build_entries(h5ad: Path, col: str | None, counts: dict[str, int], out_root:
         if col is None:
             command = _whole_file_command(py, h5ad, outdir, annotate, model, species, tissue, context)
         else:
-            command = _osp_command(py, h5ad, col, value, outdir, annotate, model, species, tissue, context)
+            command = _osp_command(py, outdir / SUBSET_FILE, col, value, outdir, annotate, model,
+                                   species, tissue, context)
         entries.append({"value": value, "n_cells": n, "outdir": str(outdir), "command": command})
     return entries
 
@@ -238,30 +252,136 @@ def _is_done(outdir: Path, annotate: bool = False) -> bool:
     return all((outdir / f).is_file() for f in files)
 
 
-# ---------------------------------------------------------- drive (agent)
+# ----------------------------------------------------------- drive (pool)
 
 
-async def _drive(pending: list[dict], out_root: Path) -> None:
-    from claude_agent_sdk import ClaudeAgentOptions, query
+def _estimate_bytes(n_cells: int) -> int:
+    per_cell = float(os.environ.get("PERSAMPLE_MEM_PER_CELL_MB", "0.5")) * (1 << 20)
+    return int(n_cells * per_cell) + FIXED_BYTES_PER_CHILD
 
-    brief = (Path(__file__).parent / "prompts" / "persample_driver.md").read_text()
-    checklist = "\n".join(
-        f"- sample {p['value']!r} ({p['n_cells']} cells) -> {p['outdir']}\n"
-        f"  command: {p['command']}"
-        for p in pending
-    )
-    prompt = brief.replace("{{OUT_ROOT}}", str(out_root)).replace("{{CHECKLIST}}", checklist)
-    from . import model
 
-    options = ClaudeAgentOptions(
-        model=model(),
-        allowed_tools=["Task", "Bash", "BashOutput", "Read", "Glob", "Grep", "Write"],
-        permission_mode="bypassPermissions",
-        cwd=str(out_root),
-        max_turns=500,  # long runs burn many sleep/check turns per sample
-    )
-    async for _ in query(prompt=prompt, options=options):
-        pass
+def plan_concurrency(pending: list[dict]) -> tuple[int, int, int]:
+    """(max_parallel, budget_bytes, threads_per_child) from the resources
+    this process really has (same recipe as zmip's lineage pool)."""
+    from .resources import available_cpus, available_memory_bytes, current_rss_bytes
+
+    cpus = available_cpus()
+    cap = os.environ.get("PERSAMPLE_PARALLEL", "")
+    if cap.strip().isdigit() and int(cap) > 0:
+        max_parallel = min(int(cap), len(pending))
+    else:
+        max_parallel = max(1, min(len(pending), cpus // 2))
+    budget = int(available_memory_bytes() * 0.85) - current_rss_bytes()
+    threads = max(1, cpus // max(1, max_parallel))
+    return max_parallel, budget, threads
+
+
+def write_subsets(h5ad: Path, col: str, pending: list[dict]) -> None:
+    """One <sample dir>/subset.h5ad per pending sample (skipped when present),
+    the sample column cast to str so osp's `--sample <value>` comparison
+    holds whatever dtype the column had."""
+    todo = [e for e in pending if not (Path(e["outdir"]) / SUBSET_FILE).is_file()]
+    if not todo:
+        return
+    import scanpy as sc
+
+    print(f"[subset] reading {h5ad.name} once to write {len(todo)} sample subset(s)", flush=True)
+    full = sc.read_h5ad(h5ad)
+    key = full.obs[col].astype(str)
+    for e in todo:
+        outdir = Path(e["outdir"])
+        outdir.mkdir(parents=True, exist_ok=True)
+        sub = full[(key == e["value"]).values].copy()
+        sub.obs[col] = sub.obs[col].astype(str)
+        tmp = outdir / (SUBSET_FILE + ".tmp")
+        sub.write_h5ad(tmp)
+        os.replace(tmp, outdir / SUBSET_FILE)
+        print(f"[subset] {e['value']}: {sub.n_obs} cells -> {outdir / SUBSET_FILE}", flush=True)
+    del full
+
+
+def _pump(proc: subprocess.Popen, tag: str, tail: deque) -> None:
+    assert proc.stdout is not None
+    for raw in proc.stdout:
+        line = raw.rstrip("\n")
+        tail.append(line)
+        print(f"[{tag}] {line}", flush=True)
+
+
+def drive(pending: list[dict], out_root: Path, annotate: bool, on_done=None) -> list[dict]:
+    """Run every pending sample's command as a child process under the
+    concurrency plan; one retry per sample; failures go to failures.md.
+    Returns the entries that did not finish."""
+    import resource
+
+    pending = sorted(pending, key=lambda e: -e["n_cells"])  # biggest first: it bounds the wall-clock
+    max_parallel, budget, threads = plan_concurrency(pending)
+    from .resources import available_cpus, available_memory_bytes
+
+    print(f"[drive] {len(pending)} sample(s), up to {max_parallel} at once, {threads} thread(s) each, "
+          f"memory budget {budget / 2**30:.1f} GiB ({available_cpus()} cpu(s), "
+          f"{available_memory_bytes() / 2**30:.1f} GiB available)", flush=True)
+    env = dict(os.environ)
+    for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS",
+              "MSP_MAX_THREADS"):
+        env[k] = str(threads)
+
+    queue = list(pending)
+    running: dict[str, tuple] = {}  # value -> (proc, est, t0, entry, tail)
+    attempts: dict[str, int] = {}
+    failed: list[dict] = []
+    while queue or running:
+        for value in list(running):
+            proc, est, t0, e, tail = running[value]
+            rc = proc.poll()
+            if rc is None:
+                continue
+            proc.stdout.close()
+            del running[value]
+            took = (time.time() - t0) / 60
+            outdir = Path(e["outdir"])
+            if rc == 0 and _is_done(outdir, annotate):
+                print(f"[drive] {value} done in {took:.1f} min", flush=True)
+                (outdir / SUBSET_FILE).unlink(missing_ok=True)
+                if on_done:
+                    on_done(e, took)
+            elif attempts[value] < 2:
+                print(f"[drive] {value} FAILED (exit {rc}) after {took:.1f} min — retrying once", flush=True)
+                queue.append(e)
+            else:
+                print(f"[drive] {value} FAILED again (exit {rc}) after {took:.1f} min — recorded, moving on",
+                      flush=True)
+                with open(out_root / "failures.md", "a") as f:
+                    f.write(f"## {value} ({e['n_cells']} cells) — exit {rc}, {time.strftime('%Y-%m-%d %H:%M')}\n\n"
+                            f"command: `{e['command']}`\n\n```\n" + "\n".join(tail) + "\n```\n\n")
+                (outdir / SUBSET_FILE).unlink(missing_ok=True)
+                failed.append(e)
+        used = sum(est for _, est, _, _, _ in running.values())
+        while queue and len(running) < max_parallel:
+            e = queue[0]
+            est = _estimate_bytes(e["n_cells"])
+            if running and used + est > budget:
+                break  # wait for memory; an idle pool always admits the next one
+            queue.pop(0)
+            value = e["value"]
+            outdir = Path(e["outdir"])
+            outdir.mkdir(parents=True, exist_ok=True)
+            attempts[value] = attempts.get(value, 0) + 1
+            tail: deque = deque(maxlen=40)
+            proc = subprocess.Popen(e["command"], shell=True, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True, env=env, bufsize=1,
+                                    cwd=str(outdir))
+            threading.Thread(target=_pump, args=(proc, value, tail), daemon=True).start()
+            running[value] = (proc, est, time.time(), e, tail)
+            used += est
+            print(f"[drive] {value} started (attempt {attempts[value]}): {e['n_cells']} cells, "
+                  f"est {est / 2**30:.1f} GiB, {len(running)} running, {len(queue)} waiting", flush=True)
+        if running:
+            time.sleep(5)
+    peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * 1024
+    print(f"[drive] peak child RSS {peak / 2**30:.1f} GiB (largest sample {pending[0]['n_cells']} cells; "
+          f"tune PERSAMPLE_MEM_PER_CELL_MB from this)", flush=True)
+    return failed
 
 
 # ---------------------------------------------------------------- cli
@@ -342,38 +462,28 @@ def main(argv: list[str]) -> int:
         print("[plan-only] manifest written, nothing driven")
         return 0
 
-    # keep opening driver sessions while they make progress (a session may
-    # exhaust its turns mid-checklist on long runs); allow one no-progress
-    # retry for transient deaths, then give up — per-sample retries already
-    # happened inside the sessions
     in_unit = not bare and L.is_unit(unit)
     if in_unit:
         L.log_event(unit, f"persample start: {len(entries)} sample(s), column {col!r}")
-    grace, prev = 1, None
-    while True:
-        pending = [e for e in entries if not _is_done(Path(e["outdir"]), annotate)]
-        if not pending:
-            break
-        if prev is not None and len(pending) >= prev:
-            if grace == 0:
-                break
-            grace -= 1
-        prev = len(pending)
-        print(f"[drive] {len(pending)} sample(s) pending: "
-              + ", ".join(e["value"] for e in pending))
-        from .agent_retry import run_with_retry
+    pending = [e for e in entries if not _is_done(Path(e["outdir"]), annotate)]
+    if pending:
+        print(f"[drive] {len(pending)} sample(s) pending: " + ", ".join(e["value"] for e in pending))
+        if col is not None:
+            write_subsets(h5ad, col, pending)
 
-        run_with_retry(lambda: _drive(pending, out_root), label="persample drive")
-        if in_unit:
-            from .index import write_all
+        def on_done(e, took):
+            if in_unit:
+                L.log_event(unit, f"persample sample {e['value']} done: {e['n_cells']} cells, {took:.1f} min")
+                from .index import write_all
 
-            write_all(unit)
+                write_all(unit)
 
+        drive(pending, out_root, annotate, on_done)
     missing = [e["value"] for e in entries if not _is_done(Path(e["outdir"]), annotate)]
     if missing:
         if in_unit:
             L.log_event(unit, "persample failed: incomplete samples " + ", ".join(missing))
-        print("[fail] samples still incomplete after retry: " + ", ".join(missing))
+        print("[fail] samples still incomplete after retry (see failures.md): " + ", ".join(missing))
         return 1
     if in_unit:
         L.log_event(unit, f"persample done: {len(entries)} sample(s)")
