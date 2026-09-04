@@ -2,7 +2,7 @@
   <img src="assets/osp-logo.svg" alt="OSP logo: a group of cells within one sample, with one cell in focus" width="176" height="176">
 </p>
 
-<h1 align="center">OSP: One-Sample Pipeline for Quality Control and AI Cell-Type Annotation</h1>
+<h1 align="center">OSP: Agentic Single-Cell QC and Annotation Pipeline</h1>
 
 <p align="center">
   <strong>Better single-cell analysis starts with carefully reviewed samples.</strong>
@@ -31,7 +31,7 @@ OSP combines **sample-level quality control with AI-assisted cell-type
 annotation**. It checks cell quality, finds cell populations, and uses an AI
 assistant to interpret marker genes and quality measurements together. You
 get proposed labels, supporting evidence, and a browser report to review
-before bringing samples together.
+before bringing samples together. OSP simply stands for "One Sample Pipeline".
 
 OSP is part of **[ECA-RSI](https://github.com/chansigit/eca-rsi)**
 (**Ensemble Cell Atlas: Recursive Self Improvement**), an ecosystem for
