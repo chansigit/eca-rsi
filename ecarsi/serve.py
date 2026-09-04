@@ -37,10 +37,11 @@ Default: local only (http://127.0.0.1:PORT). --ngrok additionally opens ONE
 ngrok tunnel covering every bound dataset (ngrok binary + authtoken are the
 user's responsibility; so are account limits such as one agent session per
 free account). --domain uses a reserved domain instead of a random URL;
---auth adds HTTP basic auth on the tunnel — note this is the only thing
-gating the admin operations from the public internet, since ngrok forwards
-to 127.0.0.1 same as a local request; use it if the daemon's tunnel is ever
-left open to untrusted networks.
+--auth adds HTTP basic auth on the tunnel. The navigator page has Bind /
+Unbind buttons (POST /_bind, /_unbind); requests that arrive through the
+tunnel (ngrok stamps X-Forwarded-For) are refused with 403 unless the daemon
+was started with --auth — local requests always may. The CLI bind/unbind
+go over the admin socket regardless.
 """
 
 from __future__ import annotations
@@ -151,11 +152,41 @@ def _refresh_index(root: Path, mode: str, sub: str) -> None:
 
 NAV_JS = r"""
 (function(){
-  const q = document.getElementById("nav-q"), rows = [...document.querySelectorAll("tbody tr")], n = document.getElementById("nav-n");
-  function apply(){ const t = q.value.trim().toLowerCase(); let k = 0;
+  const $ = id => document.getElementById(id);
+  const q = $("nav-q"), rows = [...document.querySelectorAll("tbody tr")], n = $("nav-n"), msg = $("nav-msg");
+  function apply(){ const t = q ? q.value.trim().toLowerCase() : ""; let k = 0;
     for (const r of rows) { const hit = !t || r.dataset.text.includes(t); r.style.display = hit ? "" : "none"; k += hit; }
-    n.textContent = t ? `${k} / ${rows.length}` : `${rows.length}`; }
-  q.addEventListener("input", apply); q.focus(); apply();
+    if (n) n.textContent = t ? `${k} / ${rows.length}` : `${rows.length}`; }
+  if (q) { q.addEventListener("input", apply); q.focus(); apply(); }
+  function say(text, bad){ msg.textContent = text; msg.className = "callout" + (bad ? " bad" : ""); msg.style.display = "block"; }
+  async function post(url, body){
+    const r = await fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    let j; try { j = await r.json(); } catch (e) { j = {ok: false, error: r.status + " " + r.statusText}; }
+    if (r.status === 403) j.error = j.error || "admin actions are refused through the public tunnel unless the daemon was started with --auth";
+    return j; }
+  const form = $("bind-form");
+  $("bind-open").addEventListener("click", () => { form.style.display = form.style.display === "none" ? "" : "none"; if (form.style.display === "") $("bind-path").focus(); });
+  $("bind-cancel").addEventListener("click", () => { form.style.display = "none"; });
+  $("bind-go").addEventListener("click", async () => {
+    const path = $("bind-path").value.trim(), name = $("bind-name").value.trim();
+    if (!path) { say("enter a directory path", true); return; }
+    $("bind-go").disabled = true;
+    const j = await post("/_bind", {path, name: name || null});
+    $("bind-go").disabled = false;
+    if (j.ok) location.reload(); else say("bind failed: " + j.error, true); });
+  $("bind-path").addEventListener("keydown", ev => { if (ev.key === "Enter") $("bind-go").click(); });
+  const boxes = [...document.querySelectorAll("input.sel")], ub = $("unbind-go"), all = $("sel-all");
+  function sync(){ const k = boxes.filter(b => b.checked).length; ub.disabled = !k; ub.textContent = k ? `Unbind selected (${k})` : "Unbind selected"; }
+  boxes.forEach(b => b.addEventListener("change", sync));
+  if (all) all.addEventListener("change", () => { boxes.forEach(b => { if (b.closest("tr").style.display !== "none") b.checked = all.checked; }); sync(); });
+  ub.addEventListener("click", async () => {
+    const names = boxes.filter(b => b.checked).map(b => b.value);
+    if (!names.length) return;
+    if (!confirm("Unbind " + names.length + " dataset(s) from this server?\n\n" + names.join("\n") + "\n\n(Only the binding is removed; nothing on disk is touched.)")) return;
+    ub.disabled = true;
+    const j = await post("/_unbind", {names});
+    if (j.ok) location.reload(); else { ub.disabled = false; say("unbind failed: " + j.error, true); } });
+  sync();
 })();
 """
 
@@ -189,26 +220,55 @@ def _navigator_html(items: dict[str, Path]) -> str:
         st = _dataset_state(p)
         cells = index._n(st["final_cells"]) or "–"
         rows.append(f'<tr data-text="{e((name + " " + str(p) + " " + st["stage"]).lower())}">'
+                    f'<td class="l"><input class="sel" type="checkbox" value="{e(name)}"></td>'
                     f'<td><a href="/{e(name)}/"><b>{e(name)}</b></a></td>'
                     f'<td class="num">{index._n(st["n_input"]) or "–"}</td>'
                     f'<td class="num"><b>{cells}</b>{"" if st["cls"] == "released" else " <small class=\"muted\">so far</small>" if st["final_cells"] else ""}</td>'
                     f'<td class="num">{st["released"]}/{st["units"]}</td>'
                     f'<td class="l"><span class="pill {st["cls"]}">{e(st["stage"])}</span></td>'
                     f'<td class="l muted"><code class="path">{e(str(p))}</code></td></tr>')
+    hint = ("A bindable directory is an eca-rsi <b>organize root</b> (contains <code>organize/manifest.json</code> or a "
+            "<code>units/</code> dir — e.g. <code>&lt;dataset&gt;/rsi</code>, the <code>&lt;root&gt;</code> you gave "
+            "<code>eca-rsi run</code>) or a single <b>unit</b> (contains <code>input/organized.h5ad</code> or "
+            "<code>input/manifest.json</code> — e.g. <code>&lt;root&gt;/units/&lt;unit&gt;</code>). "
+            "Absolute path on the server host; a raw eca-pp <code>standardize/</code> dir or a bare h5ad is not bindable.")
+    toolbar = (
+        '<div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin:0 0 .8rem">'
+        '<button id="bind-open" class="btn">+ Bind dataset…</button>'
+        '<button id="unbind-go" class="btn danger" disabled>Unbind selected</button>'
+        '<span class="muted" style="font-size:.85rem">bind/unbind only change what this server shows; nothing on disk is touched</span></div>'
+        '<div id="bind-form" class="callout" style="display:none">'
+        '<label style="display:block;font-weight:600;margin-bottom:.3rem">Directory to bind</label>'
+        '<input id="bind-path" type="text" placeholder="/oak/…/<dataset>/rsi" autocomplete="off" spellcheck="false" '
+        'style="width:100%;font:.92em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:.45rem .7rem;border:1px solid var(--line);border-radius:6px">'
+        f'<p class="desc" style="margin:.5rem 0">{hint}</p>'
+        '<div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap">'
+        '<label>name <input id="bind-name" type="text" placeholder="(default: directory basename)" autocomplete="off" '
+        'style="font:inherit;padding:.35rem .6rem;border:1px solid var(--line);border-radius:6px;width:22ch"></label>'
+        '<button id="bind-go" class="btn">Bind</button><button id="bind-cancel" class="btn plain">Cancel</button></div></div>'
+        '<div id="nav-msg" class="callout" style="display:none"></div>'
+    )
+    table = (
+        '<input id="nav-q" type="search" placeholder="search name / path / stage…" autocomplete="off" '
+        'style="width:100%;font:inherit;padding:.5rem .8rem;border:1px solid var(--line);border-radius:8px;margin:0 0 .8rem">'
+        '<div class="wrap"><table><thead><tr><th class="l" style="width:1.5rem"><input id="sel-all" type="checkbox" title="select all visible"></th>'
+        '<th class="l">dataset</th><th>input cells</th><th>final cells</th>'
+        '<th>units released</th><th class="l">stage</th><th class="l">path</th></tr></thead>'
+        f'<tbody>{"".join(rows)}</tbody></table></div>'
+        if items else '<p class="empty">nothing bound yet — use <b>+ Bind dataset…</b> above or <code>eca-rsi serve bind &lt;dir&gt;</code></p>'
+    )
     body = (
         '<header class="top"><div><div class="crumb">ecarsi serve</div><h1>Datasets</h1></div>'
         f'<div class="event"><span id="nav-n">{len(items)}</span> bound</div></header>'
-        + ('<section><input id="nav-q" type="search" placeholder="search name / path / stage…" autocomplete="off" '
-           'style="width:100%;font:inherit;padding:.5rem .8rem;border:1px solid var(--line);border-radius:8px;margin:0 0 .8rem">'
-           '<div class="wrap"><table><thead><tr><th class="l">dataset</th><th>input cells</th><th>final cells</th>'
-           '<th>units released</th><th class="l">stage</th><th class="l">path</th></tr></thead>'
-           f'<tbody>{"".join(rows)}</tbody></table></div></section><script>{NAV_JS}</script>'
-           if items else '<p class="empty">nothing bound yet — <code>ecarsi serve bind &lt;dir&gt;</code></p>')
+        f'<section>{toolbar}{table}</section><script>{NAV_JS}</script>'
     )
+    css = (".btn{font:inherit;font-weight:600;padding:.4rem .9rem;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}"
+           ".btn:disabled{opacity:.45;cursor:default}.btn.danger{background:var(--bad);border-color:var(--bad)}"
+           ".btn.plain{background:var(--card);color:var(--ink);border-color:var(--line)}")
     return (
         '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1"><title>ecarsi serve</title>'
-        f"<style>{index.CSS}</style></head><body><div class=\"page\">{body}</div></body></html>"
+        f"<style>{index.CSS}{css}</style></head><body><div class=\"page\">{body}</div></body></html>"
     )
 
 
@@ -219,9 +279,66 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     request, which is safe — they're read fresh by translate_path on every
     call, not cached from __init__)."""
 
-    def __init__(self, *a, registry: Registry, **kw):
+    def __init__(self, *a, registry: Registry, admin_remote: bool = False, **kw):
         self._registry = registry
+        self._admin_remote = admin_remote
         super().__init__(*a, **kw)  # directory defaults to cwd; do_GET always overrides it before use
+
+    # -- admin over HTTP (the navigator's Bind / Unbind buttons) --
+    # ngrok forwards from 127.0.0.1 too, so the client address can't tell a
+    # local request from one arriving through the public tunnel — but ngrok
+    # stamps X-Forwarded-For on everything it forwards. Forwarded requests
+    # may only administer if the daemon was started with --auth (then ngrok
+    # has already basic-auth-gated them); local requests always may.
+    def _admin_allowed(self) -> bool:
+        return self._admin_remote or not self.headers.get("X-Forwarded-For")
+
+    def _json(self, code: int, obj: dict) -> None:
+        enc = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(enc)))
+        self.end_headers()
+        self.wfile.write(enc)
+
+    def do_POST(self):
+        path = self.path.split("?", 1)[0]
+        if path not in ("/_bind", "/_unbind"):
+            return self.send_error(404)
+        if not self._admin_allowed():
+            return self._json(403, {"ok": False, "error": "admin actions are refused through the public tunnel unless the daemon was started with --auth"})
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            req = json.loads(self.rfile.read(n) or b"{}")
+        except Exception:
+            return self._json(400, {"ok": False, "error": "bad JSON body"})
+        try:
+            if path == "/_bind":
+                raw = str(req.get("path") or "").strip()
+                if not raw:
+                    raise ValueError("path is required")
+                d = Path(raw).expanduser().resolve()
+                if not d.is_dir():
+                    raise ValueError(f"{d} is not a directory on the server host")
+                name = (req.get("name") or d.name).strip()
+                if not name or "/" in name:
+                    raise ValueError("name must be non-empty and contain no '/'")
+                self._registry.bind(name, d)
+                self.log_message("admin bind %s -> %s", name, d)
+                return self._json(200, {"ok": True, "name": name})
+            names = [str(x) for x in (req.get("names") or [])]
+            if not names:
+                raise ValueError("names is required")
+            bound = self._registry.snapshot()
+            missing = [nm for nm in names if nm not in bound]
+            if missing:  # all-or-nothing, so a typo in one name doesn't half-apply the batch
+                raise ValueError("nothing bound as " + ", ".join(repr(m) for m in missing))
+            for nm in names:
+                self._registry.unbind(nm)
+            self.log_message("admin unbind %s", ", ".join(names))
+            return self._json(200, {"ok": True, "removed": names})
+        except ValueError as e:
+            return self._json(400, {"ok": False, "error": str(e)})
 
     def do_GET(self):
         raw = self.path.split("?", 1)[0]
@@ -385,7 +502,8 @@ def _daemon_main(args: argparse.Namespace) -> int:
     state = Path(args.state)
     state.mkdir(parents=True, exist_ok=True)
     registry = Registry()
-    httpd = http.server.ThreadingHTTPServer((args.bind, args.port), partial(Handler, registry=registry))
+    httpd = http.server.ThreadingHTTPServer((args.bind, args.port),
+                                          partial(Handler, registry=registry, admin_remote=bool(args.auth)))
     admin = _AdminServer(state / "admin.sock", registry)
     threading.Thread(target=admin.serve_forever, daemon=True).start()
     (state / "pid").write_text(str(os.getpid()))
