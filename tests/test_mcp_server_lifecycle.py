@@ -95,6 +95,9 @@ def _run(hold_seconds: float = 0.0) -> list[tuple[int, str, bool]]:
         return SimpleNamespace(finish_reason="stop", final_response="", events=[])
 
     H._run_sync = fake_run_sync
+    H._write_raw_attachment_plugin = lambda _home, _bin: (
+        "file:///tmp/test-attachment.mjs", "file:///tmp/test-attachment-api.js"
+    )
     os.environ.setdefault("DSH_BIN", "/bin/true")
 
     class _Catch(logging.Handler):
@@ -119,7 +122,8 @@ def _run(hold_seconds: float = 0.0) -> list[tuple[int, str, bool]]:
 def test_consecutive_mcp_servers_in_one_process():
     outcomes = _run(hold_seconds=3.0)
     assert all(ok for _, _, ok in outcomes), outcomes
-    assert all("2 tools" in msg for _, msg, _ in outcomes), outcomes
+    # add + submit_answer + the cwd-confined Read capability requested above
+    assert all("3 tools" in msg for _, msg, _ in outcomes), outcomes
 
 
 if __name__ == "__main__":
