@@ -48,7 +48,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import crosssample, review, zoomin
+from . import cost, crosssample, review, zoomin
 from . import layout as L
 from .index import fmt_elapsed, read_stats, write_all
 from .ledger import run_ledger
@@ -192,8 +192,17 @@ def _release(unit: Path, rounds: list[Path], stats: list[dict], forced: bool, su
                "", f"Ledger + Sankey: {L.RELEASE}/cell_ledger.csv, {L.RELEASE}/sankey_coarse.png",
                f"Flags: {L.RELEASE}/needs_review.md ({len(items)} items: "
                + ", ".join(f"{t} {n}" for _, t, n, _ in review.counts(items)) + ")",
-               "", f"Landing page: {L.INDEX} (ecarsi.index; serve with python -m ecarsi.serve)"]
+               "", f"Landing page: {L.INDEX} (ecarsi.index; serve with python -m ecarsi.serve)",
+               "", *cost.summary_md(unit)]
     (rel / "summary.md").write_text("\n".join(summary) + "\n")
+    # the same facts as a small machine-readable file, so nothing downstream
+    # has to open final.h5ad or parse markdown to get the headline numbers
+    (rel / "summary.json").write_text(json.dumps({
+        "unit": unit.name, "rounds": len(rounds), "forced": forced, "superseded": superseded,
+        "final_cells": stats[-1]["n_out"], "input_cells": stats[0]["n_in"] if stats else None,
+        "final_h5ad": str(final), "labels": ["zmip_ann_coarse", "zmip_ann_fine"],
+        "round_stats": stats, "needs_review": {t: n for _, t, n, _ in review.counts(items)},
+        "agent_cost": cost.summarize(unit)}, indent=2, default=str))
     write_all(unit)
     _log(unit, f"release rounds={len(rounds)} final_cells={stats[-1]['n_out']} forced={forced}")
 

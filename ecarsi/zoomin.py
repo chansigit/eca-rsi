@@ -34,6 +34,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from . import cost
 from . import layout as L
 
 MSP_CONTRACT = L.MSP_CONTRACT
@@ -88,7 +89,7 @@ def main(argv: list[str]) -> int:
               "re-run once installed")
         return 4
 
-    ret = subprocess.run(cmd, shell=True).returncode
+    ret = cost.run_streamed(cmd, unit, f"{out_root.name}/{L.ZOOMIN}")
     if ret != 0:
         print(f"[fail] zmip exited {ret}")
         return 1

@@ -54,6 +54,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from . import cost
 from . import layout as L
 
 INCLUSION_SCHEMA = {
@@ -236,6 +237,7 @@ async def _propose(inventories: list[dict]) -> dict:
         max_turns=80, max_buffer_size=50_000_000,  # figure Reads can exceed the 1MB default
         allowed_builtin=("read", "glob", "grep"), label="sample inclusion",
     )
+    propose_inclusion.last_cost = result.cost_usd  # type: ignore[attr-defined]
     return result.submitted
 
 
@@ -284,6 +286,7 @@ def main(argv: list[str]) -> int:
     else:
         inventories = [_sample_inventory(s) for s in ps["samples"]]
         decision = propose_inclusion(inventories)
+        cost.record(unit, f"{out_root.name}/inclusion", getattr(propose_inclusion, "last_cost", None), "sample inclusion")
         man = {
             "unit": str(unit),
             "batch_col": batch_col,
@@ -337,7 +340,7 @@ def main(argv: list[str]) -> int:
               "inclusion decision archived, re-run once installed")
         return 4
 
-    ret = subprocess.run(cmd, shell=True).returncode
+    ret = cost.run_streamed(cmd, unit, f"{out_root.name}/{L.CROSSSAMPLE}")
     if ret != 0:
         print(f"[fail] msp exited {ret}")
         return 1

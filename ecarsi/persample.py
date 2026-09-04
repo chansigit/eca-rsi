@@ -42,6 +42,7 @@ import time
 from collections import deque
 from pathlib import Path
 
+from . import cost
 from . import layout as L
 
 SAMPLE_COL_SCHEMA = {
@@ -143,6 +144,7 @@ async def _identify(profile: dict) -> dict:
         cwd=os.getcwd(), model=model(),
         max_turns=5, allowed_builtin=(), label="identify sample column",
     )
+    identify_sample_column.last_cost = result.cost_usd  # type: ignore[attr-defined]
     return result.submitted
 
 
@@ -300,12 +302,16 @@ def write_subsets(h5ad: Path, col: str, pending: list[dict]) -> None:
     del full
 
 
-def _pump(proc: subprocess.Popen, tag: str, tail: deque) -> None:
+def _pump(proc: subprocess.Popen, tag: str, tail: deque, unit: Path | None = None) -> None:
     assert proc.stdout is not None
     for raw in proc.stdout:
         line = raw.rstrip("\n")
         tail.append(line)
         print(f"[{tag}] {line}", flush=True)
+        if unit is not None:
+            m = cost.COST_RE.search(line)
+            if m:
+                cost.record(unit, f"{L.PERSAMPLE}/{tag}", float(m.group("usd")), (m.group("label") or m.group("pre") or "").strip())
 
 
 def drive(pending: list[dict], out_root: Path, annotate: bool, on_done=None) -> list[dict]:
@@ -371,7 +377,7 @@ def drive(pending: list[dict], out_root: Path, annotate: bool, on_done=None) -> 
             proc = subprocess.Popen(e["command"], shell=True, stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT, text=True, env=env, bufsize=1,
                                     cwd=str(outdir))
-            threading.Thread(target=_pump, args=(proc, value, tail), daemon=True).start()
+            threading.Thread(target=_pump, args=(proc, value, tail, out_root.parent if out_root.name == L.PERSAMPLE else None), daemon=True).start()
             running[value] = (proc, est, time.time(), e, tail)
             used += est
             print(f"[drive] {value} started (attempt {attempts[value]}): {e['n_cells']} cells, "
@@ -433,6 +439,7 @@ def main(argv: list[str]) -> int:
     else:
         profile = profile_obs(h5ad)
         decision = identify_sample_column(profile)
+        cost.record(out_root.parent if out_root.name == L.PERSAMPLE else out_root, f"{L.PERSAMPLE}/identify", getattr(identify_sample_column, "last_cost", None), "identify sample column")
         col = decision["sample_column"]
         annotate = True if args.annotate is None else args.annotate
         species = args.species or (None if bare else _upstream_species(unit))
