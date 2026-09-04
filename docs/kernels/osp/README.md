@@ -137,10 +137,20 @@ confidence, and open questions. Check whether the labels fit the marker
 expression and whether populations flagged for QC have a plausible
 biological explanation.
 
-**You review the decisions.** An AI action of `drop` marks a suggested
-removal; it does not delete that cell from the dataset. Review the supporting
-genes, uncertainties, and QC evidence before using the labels or filtering
-further.
+**Explore AI annotation with confidence: its suggestions do not remove
+cells in OSP.** Even cells marked `drop` remain in `clustered.h5ad`, with
+their labels and QC evidence available for review. The earlier QC step does
+filter cells before clustering, but records those removals in
+`qc_removed.csv`; your input H5AD remains unchanged.
+
+Those AI-marked cells are available for cross-sample inspection in
+[MSP](https://github.com/chansigit/msp). MSP keeps the integrated dataset
+and applies removal decisions, including inherited OSP `drop` proposals,
+when writing a separate annotated dataset.
+[ZMIP](https://github.com/chansigit/zmip) then refines the retained cells
+within individual lineages. You can follow the evidence and removal records
+through each stage and return to preserved inputs when a decision needs
+another look.
 
 To annotate existing pipeline results, or rerun annotation without repeating
 QC and clustering:
@@ -177,6 +187,7 @@ stage in the wider workflow.
 | --- | --- |
 | [OSP: One-Sample Pipeline](https://github.com/chansigit/osp) | Review quality and cell populations within each sample before integration. |
 | [MSP: Multi-Sample Pipeline](https://github.com/chansigit/msp) | Integrate reviewed samples, inspect populations across samples, and annotate cell types. |
+| [ZMIP: Zoom-In Pipeline](https://github.com/chansigit/zmip) | Refine retained cells within individual lineages after MSP, reviewing labels and remaining quality concerns. |
 | [ECA-RSI](https://github.com/chansigit/eca-rsi) | Coordinate the wider curation workflow, including iterative review, annotation, and focused reanalysis. |
 
 Continue with [MSP's input guide](https://github.com/chansigit/msp#prepare-your-data)
