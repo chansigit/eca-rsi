@@ -109,7 +109,9 @@ python -m ecarsi.loop        <unit> [--rounds N] [--cap 10] [--force-reopen]
    round N: 上轮 zoomin/annotated_zmip.h5ad,先验列改名 r(N-1)_* → msp --from-h5ad → zmip
 python -m ecarsi.ledger      <unit> [round dirs]    # 逐细胞台账 cell_ledger.csv + Sankey(每步删除流进红色 sink)
 python -m ecarsi.index       <root|unit>            # 从磁盘推导落地页(每步结束也自动写)
-python -m ecarsi.serve       <root|unit> [--port 8899] [--ngrok [--domain D] [--auth u:p]] [--detach|--stop]
+python -m ecarsi.serve       start [dir] [--port 8899] [--ngrok [--domain D] [--auth u:p]] [--attach]   # 常驻多数据集导航 daemon(tmux 里)
+                             bind <dir> [--name N] | unbind <name> | list | dump [p] | reload [p]      # 运行时增删数据集,内存态;dump/reload 手动快照
+                             attach | stop | status                                                    # attach 进 tmux 看日志,prefix+d 退出;stop 连 ngrok 一起收
 eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__main__.py);run.sh 是 primitive 分支的旧入口
 ```
 
@@ -160,5 +162,5 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
   同一岛拆成多个 lineage 打回一次,agent 可带 `confirm_shared_islands: true` 重交,记入 plan 的 `host_warnings` 与 needs_review。
 - 测试数据:`$SCRATCH/eca-runs/_organize_test/fu2022/fu2022-meniscus` 是旧结构的真实跑(不迁移);
   `$SCRATCH/eca-runs/_layout_test/fu2022` 是它的 symlink 复刻(新结构,验证 index/serve 用),
-  `_layout_test/running` 是"round 3 跑到一半"的假象。直播:`python -m ecarsi.serve <root> --port 8899 --detach`,
+  `_layout_test/running` 是"round 3 跑到一半"的假象。直播:`eca-rsi serve start <root> --domain csj.ngrok.pizza`(一个 daemon、一条隧道,`/<name>/` 路径路由;再 `bind` 别的 root 不用重启),
   用户自己的 ngrok 隧道 8899 → csj.ngrok.pizza(勿动;ngrok 账号并发 endpoint 有上限,`--ngrok` 会直接报它的错)。
