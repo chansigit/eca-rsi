@@ -137,16 +137,60 @@ def _refresh_index(root: Path, mode: str, sub: str) -> None:
         sys.stderr.write(f"[serve] index refresh failed for {sub}: {e}\n")
 
 
+NAV_JS = r"""
+(function(){
+  const q = document.getElementById("nav-q"), rows = [...document.querySelectorAll("tbody tr")], n = document.getElementById("nav-n");
+  function apply(){ const t = q.value.trim().toLowerCase(); let k = 0;
+    for (const r of rows) { const hit = !t || r.dataset.text.includes(t); r.style.display = hit ? "" : "none"; k += hit; }
+    n.textContent = t ? `${k} / ${rows.length}` : `${rows.length}`; }
+  q.addEventListener("input", apply); q.focus(); apply();
+})();
+"""
+
+
+def _dataset_state(root: Path) -> dict:
+    """Per-bound-dataset summary read from disk (ecarsi.index), for the navigator."""
+    try:
+        units = [root] if L.is_unit(root) else L.units(root)
+        states = [index.unit_state(u) for u in units]
+    except Exception as e:  # a broken run dir must not take the navigator down
+        return {"units": 0, "released": 0, "n_input": None, "final_cells": None, "stage": f"unreadable: {e}", "cls": "failed"}
+    released = sum(1 for s in states if s["released"])
+    final = [s["final_cells"] for s in states if s["final_cells"] is not None]
+    n_in = [s["n_input"] for s in states if s["n_input"] is not None]
+    if not states:
+        stage, cls = "no units", "neutral"
+    elif released == len(states):
+        stage, cls = "released", "released"
+    elif any(s["stage_class"] == "failed" for s in states):
+        stage, cls = "failed", "failed"
+    else:
+        stage, cls = states[0]["stage"] if len(states) == 1 else f"{released}/{len(states)} released", "running"
+    return {"units": len(states), "released": released, "n_input": sum(n_in) if n_in else None,
+            "final_cells": sum(final) if final else None, "stage": stage, "cls": cls}
+
+
 def _navigator_html(items: dict[str, Path]) -> str:
     e = _h.escape
-    rows = "".join(
-        f'<li><a href="/{e(name)}/"><b>{e(name)}</b></a> &nbsp;<span class="muted">{e(str(p))}</span></li>'
-        for name, p in sorted(items.items())
-    )
+    rows = []
+    for name, p in sorted(items.items()):
+        st = _dataset_state(p)
+        cells = index._n(st["final_cells"]) or "–"
+        rows.append(f'<tr data-text="{e((name + " " + str(p) + " " + st["stage"]).lower())}">'
+                    f'<td><a href="/{e(name)}/"><b>{e(name)}</b></a></td>'
+                    f'<td class="num">{index._n(st["n_input"]) or "–"}</td>'
+                    f'<td class="num"><b>{cells}</b>{"" if st["cls"] == "released" else " <small class=\"muted\">so far</small>" if st["final_cells"] else ""}</td>'
+                    f'<td class="num">{st["released"]}/{st["units"]}</td>'
+                    f'<td class="l"><span class="pill {st["cls"]}">{e(st["stage"])}</span></td>'
+                    f'<td class="l muted"><code class="path">{e(str(p))}</code></td></tr>')
     body = (
         '<header class="top"><div><div class="crumb">ecarsi serve</div><h1>Datasets</h1></div>'
-        f'<div class="event">{len(items)} bound</div></header>'
-        + (f'<section><ul style="list-style:none;padding:0;line-height:2.4;font-size:1.02rem">{rows}</ul></section>'
+        f'<div class="event"><span id="nav-n">{len(items)}</span> bound</div></header>'
+        + ('<section><input id="nav-q" type="search" placeholder="search name / path / stage…" autocomplete="off" '
+           'style="width:100%;font:inherit;padding:.5rem .8rem;border:1px solid var(--line);border-radius:8px;margin:0 0 .8rem">'
+           '<div class="wrap"><table><thead><tr><th class="l">dataset</th><th>input cells</th><th>final cells</th>'
+           '<th>units released</th><th class="l">stage</th><th class="l">path</th></tr></thead>'
+           f'<tbody>{"".join(rows)}</tbody></table></div></section><script>{NAV_JS}</script>'
            if items else '<p class="empty">nothing bound yet — <code>ecarsi serve bind &lt;dir&gt;</code></p>')
     )
     return (
