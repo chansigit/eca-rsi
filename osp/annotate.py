@@ -570,12 +570,12 @@ def propose_annotation(outdir, species=None, tissue=None, language="English", cl
     clustering the annotation refers to, which may be a subclustered
     refinement like "ann_sub1").
 
-    Writes outdir/annotation_proposal.json (structured conclusions) and
-    outdir/annotation_notes.md (the agent's narrative); then applies the
-    proposal to the AnnData (obs["_ann_coarse"] / obs["_ann_fine"] /
-    obs["_qc_action"]), saves the updated clustered.h5ad, renders the
-    annotation and QC-action UMAPs into figures/, and refreshes report.html
-    (its "Agent Annotation" section shows all of this).
+    Applies the proposal to the AnnData (obs["_ann_coarse"] /
+    obs["_ann_fine"] / obs["_qc_action"]), renders annotation and QC-action
+    UMAPs into figures/, saves the updated clustered.h5ad, and refreshes
+    report.html. Publishes annotation_proposal.json last, after these steps
+    succeed. annotation_notes.md is best-effort narrative text from the
+    backend. QC actions remain proposals; no cells are removed here.
 
     species/tissue: caller-provided context (e.g. "mouse"/"bone marrow");
     verify against the data's own metadata when available. When omitted the

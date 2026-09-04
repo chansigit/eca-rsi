@@ -5,7 +5,7 @@ memory, so each Slurm array task doesn't load the whole matrix. With
 --annotate, the selected annotation backend runs afterwards and needs its
 provider credentials on the node.
 
-Usage: python run_osp_sample.py <h5ad_path> <sample> <output_root> [--annotate] [--model M]
+Usage: python examples/run_one_sample.py <h5ad_path> <sample> <output_root> [--annotate] [--model M]
 """
 
 import argparse
