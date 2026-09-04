@@ -21,7 +21,9 @@ runtime without restarting the daemon or its ngrok tunnel — `bind`/`unbind`
 talk to the running daemon over a local admin socket
 (<state>/admin.sock, not reachable through the public tunnel).
 
-The daemon always runs inside a tmux session (default name `ecarsi-serve`)
+The daemon always runs inside a tmux session (default name `ecarsi-serve`,
+on a dedicated tmux server `tmux -L ecarsi-serve` so it survives the user's
+own `tmux kill-server`)
 so it can be watched and detached like any other tmux session: `attach`
 drops you into its live output, the ordinary tmux prefix+d detaches you
 back to your shell (no custom code — it's just tmux), and the daemon keeps
@@ -64,6 +66,16 @@ from . import index
 from . import layout as L
 
 DEFAULT_SESSION = "ecarsi-serve"
+TMUX_SERVER = "ecarsi-serve"  # our own tmux server (tmux -L), so the user's `tmux kill-server` can't take the daemon down
+
+
+def _tmux(*args: str) -> list[str]:
+    return ["tmux", "-L", TMUX_SERVER, *args]
+
+
+def _exec_tmux_attach(session: str) -> None:
+    os.environ.pop("TMUX", None)  # we may be called from inside the user's own tmux; nesting across servers is fine
+    os.execvp("tmux", _tmux("attach", "-t", session))
 
 
 # ---------------------------------------------------------------- registry
@@ -414,7 +426,7 @@ def _daemon_main(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------- tmux process lifecycle
 
 def _tmux_has_session(session: str) -> bool:
-    return subprocess.run(["tmux", "has-session", "-t", session],
+    return subprocess.run(_tmux("has-session", "-t", session),
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
 
 
@@ -439,7 +451,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         cmd += ["--domain", args.domain]
     if args.auth:
         cmd += ["--auth", args.auth]
-    subprocess.run(["tmux", "new-session", "-d", "-s", args.session, shlex.join(cmd)], check=True,
+    subprocess.run(_tmux("new-session", "-d", "-s", args.session, shlex.join(cmd)), check=True,
                    cwd=str(Path(__file__).resolve().parent.parent))
     deadline = time.time() + 15
     up = False
@@ -449,7 +461,7 @@ def cmd_start(args: argparse.Namespace) -> int:
             break
         time.sleep(0.3)
     if not up:
-        print(f"[serve] daemon did not come up in time; check `tmux attach -t {args.session}`")
+        print(f"[serve] daemon did not come up in time; check `tmux -L {TMUX_SERVER} attach -t {args.session}`")
         return 1
     print(f"[serve] started (tmux session {args.session!r}); attach with `ecarsi serve attach`")
     if args.dir:
@@ -457,7 +469,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         r = _admin_call(state, "bind", name=name, path=str(Path(args.dir).resolve()))
         print(f"[serve] bound {name!r} -> {args.dir}" if r.get("ok") else f"[serve] bind failed: {r.get('error')}")
     if args.attach:
-        os.execvp("tmux", ["tmux", "attach", "-t", args.session])
+        _exec_tmux_attach(args.session)
     return 0
 
 
@@ -495,7 +507,7 @@ def cmd_stop(args: argparse.Namespace) -> int:
             print(f"[serve] stopped orphaned ngrok pid {npid}")
         npf.unlink(missing_ok=True)
     if _tmux_has_session(args.session):
-        subprocess.run(["tmux", "kill-session", "-t", args.session])
+        subprocess.run(_tmux("kill-session", "-t", args.session))
     return 0
 
 
@@ -503,7 +515,7 @@ def cmd_attach(args: argparse.Namespace) -> int:
     if not _tmux_has_session(args.session):
         print(f"[serve] no tmux session {args.session!r} — `ecarsi serve start` first")
         return 1
-    os.execvp("tmux", ["tmux", "attach", "-t", args.session])
+    _exec_tmux_attach(args.session)
 
 
 def cmd_status(args: argparse.Namespace) -> int:
