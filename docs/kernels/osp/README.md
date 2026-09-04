@@ -1,16 +1,40 @@
 # OSP — One-Sample Pipeline
 
-**Explore the quality and cell populations of a single-cell RNA-seq sample.**
+**Better single-cell analysis starts with carefully reviewed samples.**
 
 OSP takes one sample through quality control, clustering, and marker-gene
 analysis, then brings the results together in a report you can open in a
 browser. An optional AI assistant can suggest cell-type labels and highlight
 cells or clusters that deserve a closer look.
 
-Use it to review a new sample, investigate an unusual cell population, or
-apply the same analysis to each sample before combining datasets. OSP works
-on one sample at a time; combining samples and correcting differences
-between batches are separate downstream steps.
+OSP is part of the **[ECA-RSI](https://github.com/chansigit/eca-rsi)**
+ecosystem — **Ensemble Cell Atlas - Recursive Self Improvement** — for
+iterative quality review and cell-type annotation of single-cell datasets.
+
+## Why start with one sample?
+
+**Data quality shapes every downstream conclusion.** Damaged cells,
+doublets, and ambient RNA can influence which genes appear variable, how
+cells cluster, and which cell types we think we have found. Careful quality
+control is therefore part of the scientific analysis itself. A dedicated
+pipeline helps apply those checks consistently and makes the evidence and
+removal decisions available for review.
+
+A sample from a single experimental batch is the simplest starting point:
+you can examine its quality and cell populations without first having to
+separate differences between batches from biological variation. Sequencing
+depth and contamination can vary between samples, so reviewing each one
+individually makes its own quality patterns easier to interpret. Technical
+variation within a sample still needs attention.
+
+**Our recommended workflow is to review each sample with OSP before
+integrating samples.** Inspect the report, consider whether the QC decisions
+make biological sense, and then use
+**[MSP — Multi-Sample Pipeline](https://github.com/chansigit/msp)** to bring
+the reviewed samples together. MSP handles integration and supports further
+quality review and cell-type annotation across samples. Together, the two
+stages support a careful, traceable path from individual samples to a shared
+analysis.
 
 ## What you get
 
@@ -143,6 +167,24 @@ further. The regular analysis and report work without AI or an API key.
 - **Rerunning replaces results in the same directory.** Keep separate
   directories for analyses you want to compare, and check that a run
   finished successfully before relying on its output.
+
+## Part of the ECA-RSI ecosystem
+
+These projects work together within **Ensemble Cell Atlas - Recursive Self
+Improvement (ECA-RSI)**. You can use OSP on its own or as the first analysis
+stage in the wider workflow.
+
+| Project | Role |
+| --- | --- |
+| [OSP — One-Sample Pipeline](https://github.com/chansigit/osp) | Review quality and cell populations within each sample before integration. |
+| [MSP — Multi-Sample Pipeline](https://github.com/chansigit/msp) | Integrate reviewed samples, inspect populations across samples, and annotate cell types. |
+| [ECA-RSI](https://github.com/chansigit/eca-rsi) | Coordinate the wider curation workflow, including iterative review, annotation, and focused reanalysis. |
+
+Continue with [MSP's input guide](https://github.com/chansigit/msp#prepare-your-data)
+when your samples are ready for joint analysis, or explore
+[ECA-RSI](https://github.com/chansigit/eca-rsi) for the complete workflow.
+If these tools help your work, stars, issues, and feedback on the related
+repositories help others discover them and guide their development.
 
 ## Further reading
 
