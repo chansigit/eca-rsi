@@ -20,6 +20,8 @@ served as-is (ecarsi.serve) and rendered from disk alone (ecarsi.index):
           ledger/                            cell_ledger.csv + sankeys (all rounds so far)
           stats.txt  decision.txt
         release/{final.h5ad, summary.md, needs_review.{md,json}, cell_ledger.csv, sankey_coarse.png}
+                                             + pruned.json once ecarsi.prune has dropped the round h5ads
+                                             (each leaves <file>.pruned; labelled ones also <file>.obs.parquet)
 
 A unit is an analysis unit organize carved out of the input (e.g. one tissue
 of one study); persample and the loop run per unit.
@@ -171,8 +173,17 @@ def lineage_dir(zdir: Path, lineage: str) -> Path:
     return zdir / slug(lineage)
 
 
+PRUNED_SUFFIX = ".pruned"  # marker ecarsi.prune leaves where an intermediate h5ad used to be
+
+
+def present(p: Path) -> bool:
+    """The file is there, or was pruned after doing its job (ecarsi.prune
+    leaves <file>.pruned) — either way the step that produced it is done."""
+    return p.is_file() or p.with_name(p.name + PRUNED_SUFFIX).is_file()
+
+
 def complete(d: Path, contract: tuple[str, ...]) -> bool:
-    return all((d / f).is_file() for f in contract)
+    return all(present(d / f) for f in contract)
 
 
 def report_context(unit: Path, rdir: Path | None = None) -> str:

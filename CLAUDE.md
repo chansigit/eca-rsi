@@ -115,6 +115,10 @@ python -m ecarsi.serve       [dir...] [--registry F] [--port 8899] [--ngrok [--d
 eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__main__.py);run.sh 是 primitive 分支的旧入口
 ```
 
+- **release 后默认 prune**(`ecarsi.prune`,`--no-prune` 关):删各轮/各样本的中间 h5ad(pbmc68k 31 GB → ~2 GB),留 `<file>.pruned` marker(契约仍算完成)和 `<file>.obs.parquet`(ledger 回退读它,force-reopen 仍能重建台账),`release/pruned.json` 记账;`input/organized.h5ad` 与 `release/` 不动。跑在 Oak 上就靠这个控容量。
+
+- **release 后默认 prune**(`ecarsi.prune`,`--no-prune` 关):删各轮/各样本的中间 h5ad(pbmc68k 31 GB → ~2 GB),留 `<file>.pruned` marker(契约仍算完成)和 `<file>.obs.parquet`(ledger 回退读它,force-reopen 仍能重建台账),`release/pruned.json` 记账;`input/organized.h5ad` 与 `release/` 不动。跑在 Oak 上就靠这个控容量。
+
 **目录结构只在 `ecarsi/layout.py` 一处定义**,各步不得自拼路径(2026-09-02 统一):
 
 ```

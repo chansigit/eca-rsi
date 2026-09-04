@@ -5,6 +5,7 @@
     eca-rsi persample <unit> [...]           eca-rsi loop   <unit> [...]
     eca-rsi crosssample <unit> [round_dir]   eca-rsi zoomin <unit> [round_dir]
     eca-rsi ledger    <unit> [round dirs]    eca-rsi index  <root|unit>
+    eca-rsi prune     <root|unit> [--dry-run]  (runs by itself after every release unless --no-prune)
     eca-rsi serve     [dir...] [--registry F] [--port] [--ngrok --domain D] [--auth U:P]
     eca-rsi serve     scan-add|remove|list|dump|reload ...   (edit the registry file)
     eca-rsi umapdata  <h5ad> <out.json>
@@ -27,7 +28,7 @@ from pathlib import Path
 
 from . import layout as L
 
-STEPS = ("organize", "persample", "crosssample", "zoomin", "loop", "ledger", "index", "serve", "umapdata")
+STEPS = ("organize", "persample", "crosssample", "zoomin", "loop", "ledger", "index", "serve", "umapdata", "prune")
 
 
 def _module(name: str):
@@ -43,6 +44,7 @@ def run(argv: list[str]) -> int:
     ap.add_argument("--rounds", type=int, default=None, help="fixed number of loop rounds (default: converge on cell count)")
     ap.add_argument("--cap", type=int, default=None, help="loop safety cap (default 10)")
     ap.add_argument("--force-reopen", action="store_true", help="continue past an existing release")
+    ap.add_argument("--no-prune", action="store_true", help="keep intermediate round h5ads after release (default: prune them)")
     ap.add_argument("--serve", nargs="?", const=8899, type=int, default=None, metavar="PORT",
                     help="after the run, add <root> to the serve registry and serve (foreground) on this port (default 8899)")
     ap.add_argument("--ngrok", action="store_true", help="with --serve: also open an ngrok tunnel")
@@ -69,6 +71,8 @@ def run(argv: list[str]) -> int:
         loop_args += ["--cap", str(a.cap)]
     if a.force_reopen:
         loop_args.append("--force-reopen")
+    if a.no_prune:
+        loop_args.append("--no-prune")
     failed = []
     for u in units:
         print(f"\n[eca-rsi] ===== unit {u.name}: persample =====", flush=True)

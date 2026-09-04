@@ -48,7 +48,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import cost, crosssample, review, zoomin
+from . import cost, crosssample, prune, review, zoomin
 from . import layout as L
 from .index import fmt_elapsed, read_stats, write_all
 from .ledger import run_ledger
@@ -217,6 +217,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--cap", type=int, default=DEFAULT_CAP,
                     help=f"auto mode safety ceiling (forced, flagged release; default {DEFAULT_CAP})")
     ap.add_argument("--force-reopen", action="store_true", help="continue past an existing release")
+    ap.add_argument("--no-prune", action="store_true",
+                    help="keep every round's intermediate h5ads after release (default: ecarsi.prune drops them)")
     args = ap.parse_args(argv)
     unit = Path(args.unit).resolve()
     if not L.is_unit(unit):
@@ -276,7 +278,10 @@ def main(argv: list[str]) -> int:
             man = json.load(open(L.round_dir(unit, 1) / L.MANIFEST))
             inp = rdir / L.ROUND_INPUT
             if not inp.is_file():
-                _prepare_input(L.zoomin_dir(prev) / "annotated_zmip.h5ad", inp, n - 1)
+                src = L.zoomin_dir(prev) / "annotated_zmip.h5ad"
+                if not src.is_file() and (L.release_dir(unit) / "final.h5ad").is_file():
+                    src = L.release_dir(unit) / "final.h5ad"  # the pruned round's survivors live on as the release
+                _prepare_input(src, inp, n - 1)
                 _log(unit, f"round {n} input prepared from round {n - 1} ({_n_obs(inp)} cells)")
             ret = _run_msp_from_h5ad(py, inp, L.crosssample_dir(rdir), man["batch_col"], man.get("species"), model(),
                                      L.report_context(unit, rdir))
@@ -309,6 +314,8 @@ def main(argv: list[str]) -> int:
 
     forced = str(stats[-1].get("reason", "")).startswith("FORCED")
     _release(unit, rounds, stats, forced, superseded)
+    if not args.no_prune:
+        prune.prune_unit(unit)
     print(f"[done] {summary}")
     return 0
 

@@ -105,7 +105,7 @@ def load_persample(unit: Path) -> dict:
     for s in man["samples"]:  # located under this unit, whatever the manifest recorded
         s["dir"] = str(L.sample_dir(unit, s))
     incomplete = [s["value"] for s in man["samples"]
-                  if not all((Path(s["dir"]) / f).is_file() for f in PS_CONTRACT)]
+                  if not all(L.present(Path(s["dir"]) / f) for f in PS_CONTRACT)]
     if incomplete:
         raise SystemExit(
             "persample (with annotation) is a hard prerequisite; incomplete samples: "

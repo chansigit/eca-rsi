@@ -49,12 +49,35 @@ OTHER_MIN_FRAC = 0.01  # labels below this share of a stage are pooled into "oth
 
 # ---------------------------------------------------------------- ledger
 
-def _obs(path: Path, cols: list[str]) -> pd.DataFrame:
-    import anndata as ad
+def _obs_source(path: Path) -> Path | None:
+    """The h5ad itself, or the obs sidecar ecarsi.prune left in its place."""
+    if path.is_file():
+        return path
+    for suf in (".obs.parquet", ".obs.csv.gz"):
+        side = path.with_name(path.name + suf)
+        if side.is_file():
+            return side
+    return None
 
-    a = ad.read_h5ad(path, backed="r")
-    df = a.obs[[c for c in cols if c in a.obs.columns]].copy()
-    a.file.close()
+
+def _obs(path: Path, cols: list[str]) -> pd.DataFrame:
+    src = _obs_source(path)
+    if src is None:
+        raise FileNotFoundError(path)
+    if src.suffix == ".parquet":
+        obs = pd.read_parquet(src)
+    elif src.name.endswith(".csv.gz"):
+        obs = pd.read_csv(src, index_col=0, low_memory=False)
+    else:
+        import anndata as ad
+
+        a = ad.read_h5ad(src, backed="r")
+        obs = a.obs
+        df = obs[[c for c in cols if c in obs.columns]].copy()
+        a.file.close()
+        df.index.name = "cell"
+        return df.astype(object)
+    df = obs[[c for c in cols if c in obs.columns]].copy()
     df.index.name = "cell"
     return df.astype(object)
 
@@ -63,7 +86,7 @@ def _persample_frames(unit: Path) -> list[pd.DataFrame]:
     frames = []
     ps_root = L.persample_root(unit)
     for d in L.sample_dirs(unit):
-        if not (d / "clustered.h5ad").is_file():
+        if _obs_source(d / "clustered.h5ad") is None:
             continue
         o = _obs(d / "clustered.h5ad", ["_ann_coarse", "_ann_fine"])
         o = o.rename(columns={"_ann_coarse": "osp_coarse", "_ann_fine": "osp_fine"})
@@ -100,7 +123,7 @@ def _apply_round(ledger: pd.DataFrame, rdir: Path, prefix: str, alive_col: str) 
         idx = ledger.index.intersection(r.index)
         ledger.loc[idx, ms] = (REMOVED_PREFIX + pd.Series(src, index=r.index)).reindex(idx)
     ann = idir / "annotated.h5ad"
-    if ann.is_file():
+    if _obs_source(ann) is not None:
         o = _obs(ann, ["msp_ann_coarse", "msp_ann_fine"]).rename(
             columns={"msp_ann_coarse": f"{prefix}msp_coarse", "msp_ann_fine": f"{prefix}msp_fine"})
         for c in o.columns:
@@ -120,7 +143,7 @@ def _apply_round(ledger: pd.DataFrame, rdir: Path, prefix: str, alive_col: str) 
         idx = ledger.index.intersection(r.index)
         ledger.loc[idx, zs] = (REMOVED_PREFIX + pd.Series(src, index=r.index)).reindex(idx)
     ann = zdir / "annotated_zmip.h5ad"
-    if ann.is_file():
+    if _obs_source(ann) is not None:
         o = _obs(ann, ["zmip_lineage", "zmip_ann_coarse", "zmip_ann_fine"]).rename(
             columns={"zmip_lineage": f"{prefix}zmip_lineage", "zmip_ann_coarse": f"{prefix}zmip_coarse",
                      "zmip_ann_fine": f"{prefix}zmip_fine"})

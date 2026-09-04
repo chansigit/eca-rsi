@@ -251,7 +251,7 @@ def _upstream_species(unit: Path) -> str | None:
 
 def _is_done(outdir: Path, annotate: bool = False) -> bool:
     files = CONTRACT + (("annotation_proposal.json",) if annotate else ())
-    return all((outdir / f).is_file() for f in files)
+    return all(L.present(outdir / f) for f in files)
 
 
 # ----------------------------------------------------------- drive (pool)
