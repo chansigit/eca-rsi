@@ -1,0 +1,329 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "OSP One-Sample Pipeline: QC → Clustering/DEG → Report → AI Annotation",
+    "quality_profile": "showcase",
+    "output": "docs/diagrams/osp-workflow.html",
+    "views": [
+      {
+        "id": "qc-path",
+        "label": "Quality control",
+        "focus": [
+          "input",
+          "qc",
+          "decontx",
+          "ledger",
+          "cluster"
+        ],
+        "note": "Hard thresholds, MAD outliers, and Scrublet set low_quality; DecontX only adds evidence."
+      },
+      {
+        "id": "cluster-path",
+        "label": "Clustering and DEG",
+        "focus": [
+          "cluster",
+          "deg",
+          "tables",
+          "report"
+        ],
+        "note": "The primary Leiden resolution drives Wilcoxon markers, PAGA, and the cluster summary."
+      },
+      {
+        "id": "annotate-path",
+        "label": "AI annotation agent",
+        "focus": [
+          "report",
+          "agent",
+          "validate",
+          "proposal",
+          "tables"
+        ],
+        "note": "The agent gathers evidence with tools; a checked submission updates the H5AD and report before the proposal is published."
+      }
+    ],
+    "legend": {
+      "mode": "auto",
+      "entries": {
+        "external": {
+          "label": "Input data"
+        },
+        "backend": {
+          "label": "Analysis step"
+        },
+        "database": {
+          "label": "Output file"
+        },
+        "frontend": {
+          "label": "HTML report"
+        },
+        "cloud": {
+          "label": "LLM agent"
+        },
+        "security": {
+          "label": "Validation gate"
+        }
+      }
+    }
+  },
+  "lanes": [
+    {
+      "id": "entry",
+      "label": "Entry · python -m osp"
+    },
+    {
+      "id": "qc",
+      "label": "Quality control · osp.qc"
+    },
+    {
+      "id": "clu",
+      "label": "Clustering & DEG · osp.cluster"
+    },
+    {
+      "id": "ann",
+      "label": "AI annotation · osp.annotate (optional --annotate)"
+    },
+    {
+      "id": "out",
+      "label": "Output directory · outdir"
+    }
+  ],
+  "mainPath": [
+    "input",
+    "qc",
+    "cluster",
+    "deg",
+    "tables",
+    "report",
+    "agent",
+    "validate",
+    "proposal"
+  ],
+  "nodes": [
+    {
+      "id": "input",
+      "lane": "entry",
+      "col": 0,
+      "type": "external",
+      "label": "Input H5AD",
+      "sublabel": "backed read, one sample",
+      "tag": "counts layer over X",
+      "width": 132
+    },
+    {
+      "id": "qc",
+      "lane": "qc",
+      "col": 1,
+      "type": "backend",
+      "label": "QC metrics & flags",
+      "sublabel": "hard · MAD · Scrublet",
+      "tag": "low_quality flag",
+      "width": 132
+    },
+    {
+      "id": "decontx",
+      "lane": "qc",
+      "col": 2,
+      "type": "backend",
+      "label": "DecontX estimate",
+      "sublabel": "pure-Python port",
+      "tag": "evidence only, no filter",
+      "width": 132
+    },
+    {
+      "id": "ledger",
+      "lane": "out",
+      "col": 1,
+      "type": "database",
+      "label": "qc_summary.csv",
+      "sublabel": "qc_removed.csv ledger",
+      "width": 132
+    },
+    {
+      "id": "cluster",
+      "lane": "clu",
+      "col": 2,
+      "type": "backend",
+      "label": "Leiden + UMAP",
+      "sublabel": "normalize · HVG · PCA",
+      "tag": "QC covariates in PCA",
+      "width": 132
+    },
+    {
+      "id": "deg",
+      "lane": "clu",
+      "col": 3,
+      "type": "backend",
+      "label": "DEG + PAGA",
+      "sublabel": "each cluster vs rest",
+      "width": 132
+    },
+    {
+      "id": "tables",
+      "lane": "out",
+      "col": 3,
+      "type": "database",
+      "label": "clustered.h5ad",
+      "sublabel": "DEG · summary · PAGA",
+      "tag": "atomic writes",
+      "width": 132
+    },
+    {
+      "id": "report",
+      "lane": "out",
+      "col": 4,
+      "type": "frontend",
+      "label": "report.html",
+      "sublabel": "embedded plots, one file",
+      "width": 132
+    },
+    {
+      "id": "agent",
+      "lane": "ann",
+      "col": 4,
+      "type": "cloud",
+      "label": "Annotation agent",
+      "sublabel": "agent-harness-bridge",
+      "tag": "check_genes · subcluster",
+      "width": 132
+    },
+    {
+      "id": "validate",
+      "lane": "ann",
+      "col": 5,
+      "type": "security",
+      "label": "Check submission",
+      "sublabel": "schema + cluster coverage",
+      "width": 132
+    },
+    {
+      "id": "proposal",
+      "lane": "out",
+      "col": 5,
+      "type": "database",
+      "label": "Proposal JSON",
+      "sublabel": "annotation_proposal.json",
+      "tag": "completion signal",
+      "width": 132
+    }
+  ],
+  "edges": [
+    {
+      "id": "select-sample",
+      "from": "input",
+      "to": "qc",
+      "label": "select sample",
+      "variant": "default"
+    },
+    {
+      "id": "qc-decontx",
+      "from": "qc",
+      "to": "decontx",
+      "label": "ambient",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "qc-ledger",
+      "from": "qc",
+      "to": "ledger",
+      "label": "all cells + reasons",
+      "variant": "default",
+      "role": "branch"
+    },
+    {
+      "id": "qc-cluster",
+      "from": "qc",
+      "to": "cluster",
+      "label": "keep passing cells",
+      "variant": "emphasis"
+    },
+    {
+      "id": "decontx-cluster",
+      "from": "decontx",
+      "to": "cluster",
+      "label": "PCA covariate",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "cluster-deg",
+      "from": "cluster",
+      "to": "deg",
+      "label": "labels",
+      "variant": "default"
+    },
+    {
+      "id": "deg-tables",
+      "from": "deg",
+      "to": "tables",
+      "label": "write tables",
+      "variant": "default"
+    },
+    {
+      "id": "tables-report",
+      "from": "tables",
+      "to": "report",
+      "label": "render",
+      "variant": "emphasis"
+    },
+    {
+      "id": "report-agent",
+      "from": "report",
+      "to": "agent",
+      "label": "--annotate: read outputs",
+      "variant": "default"
+    },
+    {
+      "id": "agent-validate",
+      "from": "agent",
+      "to": "validate",
+      "label": "submit",
+      "variant": "emphasis"
+    },
+    {
+      "id": "validate-reject",
+      "from": "validate",
+      "to": "agent",
+      "label": "reject, resubmit",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "validate-proposal",
+      "from": "validate",
+      "to": "proposal",
+      "label": "apply, refresh, publish",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Design constraints",
+      "items": [
+        "Strictly one sample per run; no cross-sample batch integration",
+        "QC filtering removes cells, with reasons recorded in qc_removed.csv",
+        "AI annotation only proposes (_ann_*, _qc_action); it never drops cells or reruns QC"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Entry points",
+      "items": [
+        "python -m osp data.h5ad --sample S --outdir out [--annotate]",
+        "python -m osp.qc / osp.report / osp.annotate run the stages separately",
+        "Python API: run_one_sample_pipeline + generate_report"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Completion and atomicity",
+      "items": [
+        "H5AD, CSV, JSON, and report writes go through a temp file then replace",
+        "annotation_proposal.json is published last and marks completion for outer drivers",
+        "Reruns delete the old report and proposal first so stale files never look complete"
+      ]
+    }
+  ]
+}

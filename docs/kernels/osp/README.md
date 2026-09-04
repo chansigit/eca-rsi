@@ -2,7 +2,7 @@
   <img src="assets/osp-logo.svg" alt="OSP logo: a group of cells within one sample, with one cell in focus" width="176" height="176">
 </p>
 
-<h1 align="center">OSP: One-Sample Pipeline</h1>
+<h1 align="center">OSP: One-Sample Pipeline for Quality Control and AI Cell-Type Annotation</h1>
 
 <p align="center">
   <strong>Better single-cell analysis starts with carefully reviewed samples.</strong>
@@ -75,6 +75,20 @@ to integrate reviewed samples and continue annotation across samples.
 <br>
 
 ## How it works
+
+One run follows a single sample through the stages below. Click the diagram
+to open the interactive version, with pan, zoom, search, and guided views.
+
+<p align="center">
+  <a href="https://raw.githack.com/chansigit/osp/main/docs/diagrams/osp-workflow.html">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="assets/osp-workflow-dark.svg">
+      <img src="assets/osp-workflow-light.svg" alt="OSP workflow: input H5AD, QC and DecontX, Leiden clustering with DEG and PAGA, output tables and HTML report, optional AI annotation agent with validated proposal" width="960">
+    </picture>
+  </a>
+</p>
+
+<br>
 
 ### Quality control in context
 
@@ -360,6 +374,10 @@ repositories help others discover them and guide their development.
 
 - [Input and output reference](docs/input-output.md): matrix contents,
   output fields, Python return values, and completion rules.
+
+- [Interactive workflow diagram](https://raw.githack.com/chansigit/osp/main/docs/diagrams/osp-workflow.html):
+  the pipeline map above as an explorable page, generated from
+  [`docs/diagrams/osp-workflow.archify.json`](docs/diagrams/osp-workflow.archify.json).
 
 - [Python sample driver](examples/run_one_sample.py): run one sample from a
   larger input file.
