@@ -37,16 +37,20 @@ Default: local only (http://127.0.0.1:PORT). --ngrok additionally opens ONE
 ngrok tunnel covering every bound dataset (ngrok binary + authtoken are the
 user's responsibility; so are account limits such as one agent session per
 free account). --domain uses a reserved domain instead of a random URL;
---auth adds HTTP basic auth on the tunnel. The navigator page has Bind /
-Unbind buttons (POST /_bind, /_unbind); requests that arrive through the
-tunnel (ngrok stamps X-Forwarded-For) are refused with 403 unless the daemon
-was started with --auth — local requests always may. The CLI bind/unbind
-go over the admin socket regardless.
+--auth USER:PASS puts a password on the whole site (HTTP basic auth,
+checked by this server on every request — local, LAN or tunnel; ngrok is
+not involved). Default: no password, so day-to-day debugging is prompt-free.
+The navigator page has Bind / Unbind buttons (POST /_bind, /_unbind);
+requests arriving through the tunnel (ngrok stamps X-Forwarded-For) are
+refused with 403 unless a password is set — local requests always may. The
+CLI bind/unbind go over the admin socket regardless.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
+import hmac
 import html as _h
 import http.server
 import json
@@ -279,19 +283,40 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     request, which is safe — they're read fresh by translate_path on every
     call, not cached from __init__)."""
 
-    def __init__(self, *a, registry: Registry, admin_remote: bool = False, **kw):
+    def __init__(self, *a, registry: Registry, auth: str | None = None, **kw):
         self._registry = registry
-        self._admin_remote = admin_remote
+        self._auth = auth  # "user:pass" -> HTTP basic auth enforced here, on every request; None = open
         super().__init__(*a, **kw)  # directory defaults to cwd; do_GET always overrides it before use
+
+    def _authorized(self) -> bool:
+        """Web-level password (--auth). Checked by the server itself, so it
+        covers local, LAN and tunnel access alike and needs nothing from
+        ngrok. Off by default — debugging with a password prompt is a pain."""
+        if not self._auth:
+            return True
+        hdr = self.headers.get("Authorization", "")
+        if not hdr.startswith("Basic "):
+            return False
+        try:
+            given = base64.b64decode(hdr[6:].strip()).decode("utf-8", "replace")
+        except Exception:
+            return False
+        return hmac.compare_digest(given, self._auth)
+
+    def _demand_auth(self) -> None:
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Basic realm="ecarsi serve", charset="UTF-8"')
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     # -- admin over HTTP (the navigator's Bind / Unbind buttons) --
     # ngrok forwards from 127.0.0.1 too, so the client address can't tell a
     # local request from one arriving through the public tunnel — but ngrok
     # stamps X-Forwarded-For on everything it forwards. Forwarded requests
-    # may only administer if the daemon was started with --auth (then ngrok
-    # has already basic-auth-gated them); local requests always may.
+    # may only administer if the daemon has a password (--auth; the request
+    # has already passed it by the time we get here); local requests always may.
     def _admin_allowed(self) -> bool:
-        return self._admin_remote or not self.headers.get("X-Forwarded-For")
+        return bool(self._auth) or not self.headers.get("X-Forwarded-For")
 
     def _json(self, code: int, obj: dict) -> None:
         enc = json.dumps(obj).encode()
@@ -302,6 +327,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(enc)
 
     def do_POST(self):
+        if not self._authorized():
+            return self._demand_auth()
         path = self.path.split("?", 1)[0]
         if path not in ("/_bind", "/_unbind"):
             return self.send_error(404)
@@ -341,6 +368,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._json(400, {"ok": False, "error": str(e)})
 
     def do_GET(self):
+        if not self._authorized():
+            return self._demand_auth()
         raw = self.path.split("?", 1)[0]
         parts = [p for p in raw.split("/") if p]
         if not parts:
@@ -381,15 +410,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
 # ---------------------------------------------------------------- ngrok
 
-def start_ngrok(port: int, domain: str | None, auth: str | None) -> tuple[subprocess.Popen, str]:
+def start_ngrok(port: int, domain: str | None) -> tuple[subprocess.Popen, str]:
     exe = shutil.which("ngrok")
     if not exe:
         raise SystemExit("ngrok not found on PATH — install it and add your authtoken (ngrok config add-authtoken …)")
     cmd = [exe, "http", str(port), "--log", "stdout", "--log-format", "json"]
     if domain:
         cmd += ["--domain", domain]
-    if auth:
-        cmd += ["--basic-auth", auth]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     url, deadline = None, time.time() + 30
     assert proc.stdout is not None
@@ -503,17 +530,18 @@ def _daemon_main(args: argparse.Namespace) -> int:
     state.mkdir(parents=True, exist_ok=True)
     registry = Registry()
     httpd = http.server.ThreadingHTTPServer((args.bind, args.port),
-                                          partial(Handler, registry=registry, admin_remote=bool(args.auth)))
+                                          partial(Handler, registry=registry, auth=args.auth))
     admin = _AdminServer(state / "admin.sock", registry)
     threading.Thread(target=admin.serve_forever, daemon=True).start()
     (state / "pid").write_text(str(os.getpid()))
-    print(f"[serve] navigator on http://{args.bind}:{args.port}/  (state {state})", flush=True)
+    print(f"[serve] navigator on http://{args.bind}:{args.port}/  (state {state})"
+          + (f"  [password-protected, user {args.auth.split(':', 1)[0]!r}]" if args.auth else "  [no password]"), flush=True)
 
     tunnel = None
     npf = state / "ngrok_pid"
     if args.ngrok:
-        tunnel, url = start_ngrok(args.port, args.domain, args.auth)
-        print(f"[serve] public: {url}/" + (f"  (basic auth {args.auth.split(':', 1)[0]})" if args.auth else ""), flush=True)
+        tunnel, url = start_ngrok(args.port, args.domain)
+        print(f"[serve] public: {url}/", flush=True)
         # recorded separately from the main pidfile so `stop` can still reap
         # this child if the daemon ever dies without running its own cleanup
         # (crash, OOM-kill, kill -9) — otherwise it's an orphan forever
@@ -729,7 +757,7 @@ def main(argv: list[str]) -> int:
     p.add_argument("--bind", default="127.0.0.1", help="default local only; 0.0.0.0 to expose on the LAN")
     p.add_argument("--ngrok", action="store_true", help="also open an ngrok tunnel to this port")
     p.add_argument("--domain", default=None, help="reserved ngrok domain (implies --ngrok)")
-    p.add_argument("--auth", default=None, metavar="USER:PASS", help="HTTP basic auth on the ngrok tunnel")
+    p.add_argument("--auth", default=None, metavar="USER:PASS", help="web-level password (HTTP basic auth, enforced by the server on every request, local or tunnel); default none")
     p.add_argument("--attach", action="store_true", help="attach to the tmux session after starting")
     session_arg(p)
     state_arg(p)
