@@ -22,11 +22,11 @@ Command line:
     python -m osp.qc data.h5ad --sample FO                 # QC only
     python -m osp.report osp_out                           # report only
     python -m osp.annotate osp_out --species mouse --tissue "bone marrow"
-                                                           # Claude annotation agent
-                                                           # (needs claude-agent-sdk)
+                                                           # annotation agent
+                                                           # (needs osp-sc[agent])
 
 osp.annotate is intentionally not imported here — it depends on the optional
-claude-agent-sdk; use `from osp.annotate import propose_annotation` when
+agent dependencies; use `from osp.annotate import propose_annotation` when
 needed.
 """
 

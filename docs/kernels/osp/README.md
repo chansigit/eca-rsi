@@ -1,7 +1,7 @@
 # osp — one-sample-pipeline
 
 Single-sample scRNA-seq QC → clustering/DEG → self-contained HTML report, with
-an optional Claude-agent step that proposes cell-type annotations and QC
+an optional agent step that proposes cell-type annotations and QC
 actions from the report and the cluster marker tables.
 
 Strictly single-sample by design — one sample per run, no cross-sample batch
@@ -12,9 +12,18 @@ treat integration as a separate downstream step.
 
 ```bash
 pip install osp-sc                     # PyPI name; `import osp` / `python -m osp`
-# with the optional annotation agent (needs claude-agent-sdk + claude CLI credentials):
-pip install "osp-sc[agent]"            # + claude-agent-sdk for --annotate
+# with the optional annotation agent (Claude, dsh, and OpenAI Agents SDK backends):
+pip install "osp-sc[agent]"
 ```
+
+The default backend remains `HARNESS=deepseek`. For the direct Python path,
+export `HARNESS=openai` and `ARK_API_KEY`; it uses Ark's Responses API and
+server-side `previous_response_id` chaining by default. Set
+`OPENAI_AGENTS_API=chat_completions` only for text-only compatibility, or
+`OPENAI_AGENTS_SERVER_STATE=0` when complete local-history replay is required.
+If an image-heavy session reaches Ark's context limit, the backend retains
+host-side Tasks and accepted submissions and continues in a fresh model
+session (at most `OPENAI_AGENTS_MAX_CONTEXT_RESETS`, default 2).
 
 ## Quick usage
 
@@ -40,7 +49,11 @@ from osp import qc_one_sample, cluster_and_deg, deg_two_groups
 
 ```bash
 python -m osp data.h5ad --sample FO --outdir osp_out          # full pipeline + report
-python -m osp data.h5ad --sample FO --outdir osp_out --annotate --model claude-sonnet-5
+python -m osp data.h5ad --sample FO --outdir osp_out --annotate \
+    --harness openai --model doubao-seed-2-1-turbo-260628
+# quality-oriented, higher-cost option; validate it on your workload
+python -m osp data.h5ad --sample FO --outdir osp_out --annotate \
+    --harness openai --model doubao-seed-2-1-pro-260628
 python -m osp.report osp_out                                   # rebuild the report only
 ```
 

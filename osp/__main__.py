@@ -1,11 +1,12 @@
 """python -m osp: single-sample QC → clustering → DEG → HTML report, end to end.
 
-With --annotate, the Claude annotation agent (osp.annotate, needs the
-optional claude-agent-sdk) runs afterwards and its proposal is folded into
+With --annotate, the annotation agent (osp.annotate, needs the optional
+agent dependencies) runs afterwards and its proposal is folded into
 the report.
 """
 
 import argparse
+import os
 
 import scanpy as sc
 
@@ -20,16 +21,20 @@ parser.add_argument("--outdir", default="osp_out")
 parser.add_argument("--no-scrublet", action="store_true")
 parser.add_argument("--resolution", type=float, default=1.0)
 parser.add_argument("--annotate", action="store_true",
-                    help="after the pipeline, run the Claude annotation agent and refresh the report")
+                    help="after the pipeline, run the annotation agent and refresh the report")
 parser.add_argument("--species", default=None, help="context passed to --annotate")
 parser.add_argument("--tissue", default=None, help="context passed to --annotate")
 parser.add_argument("--language", default="English", help='annotation output language (default "English")')
-parser.add_argument("--model", default=None, help='model for --annotate, e.g. "claude-fable-5" / "claude-sonnet-5"')
+parser.add_argument("--harness", choices=["deepseek", "openai", "claude"], default=None,
+                    help="agent runtime backend (default: HARNESS env, then deepseek)")
+parser.add_argument("--model", default=None, help='model id for the selected HARNESS backend')
 parser.add_argument("--effort", default=None, choices=["low", "medium", "high", "xhigh", "max"],
                     help="reasoning effort for --annotate (models that support it)")
 parser.add_argument("--report-context", default=None, metavar="TEXT",
                     help="where this sample sits, for the report title (e.g. the analysis unit name)")
 args = parser.parse_args()
+if args.harness:
+    os.environ["HARNESS"] = args.harness
 write_report_context(args.outdir, args.report_context)
 
 adata = sc.read_h5ad(args.h5ad_path)
@@ -47,6 +52,10 @@ print(f"report: {generate_report(args.outdir)}")
 
 if args.annotate:
     from .annotate import propose_annotation
+    from .harness import backend_name, default_model
+
+    args.model = args.model or default_model()
+    print(f"[agent] harness={backend_name()} model={args.model}")
 
     propose_annotation(
         args.outdir, species=args.species, tissue=args.tissue, language=args.language,

@@ -1,6 +1,6 @@
 """
-osp.annotate — interpret an OSP output directory with a Claude agent
-(claude-agent-sdk): propose per-cluster cell-type annotations (coarse +
+osp.annotate — interpret an OSP output directory with the selected harness
+agent: propose per-cluster cell-type annotations (coarse +
 fine) and standardized, machine-appliable QC actions.
 
 The agent follows a fixed workflow over a run_one_sample_pipeline(...,

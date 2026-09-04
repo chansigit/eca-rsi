@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-agent = ["claude-agent-sdk"]
+agent = ["claude-agent-sdk", "openai-agents==0.22.0", "mcp>=1.19,<2"]
 
 [tool.setuptools]
 packages = ["osp", "osp._decontx"]
