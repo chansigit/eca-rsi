@@ -12,6 +12,8 @@ OSP is part of **[ECA-RSI](https://github.com/chansigit/eca-rsi)**
 (**Ensemble Cell Atlas: Recursive Self Improvement**), an ecosystem for
 iterative quality review and cell-type annotation of single-cell datasets.
 
+<br>
+
 ## Why start with one sample?
 
 Better inputs make downstream results easier to trust. OSP adds a dedicated
@@ -20,9 +22,11 @@ review before integration:
 - **QC in the sample's own context.** Adaptive checks use each sample's
   quality distribution, so differences in depth or contamination remain
   visible before pooling.
+
 - **Problems are easier to locate.** Within a single experimental batch,
   inspect suspicious populations without cross-sample batch differences
   complicating the picture.
+
 - **Labels come with evidence.** The AI assistant checks marker genes and
   QC profiles, can refine mixed clusters, and records uncertainty and
   proposed actions for your review.
@@ -30,14 +34,20 @@ review before integration:
 Start with OSP, then use **[MSP: Multi-Sample Pipeline](https://github.com/chansigit/msp)**
 to integrate reviewed samples and continue annotation across samples.
 
+<br>
+
 ## What you get
 
-| Result | What it helps you do |
-| --- | --- |
-| **AI-assisted annotation** | Review proposed cell-type labels, supporting genes, uncertainties, and QC actions alongside the analysis. |
-| **A browser report** | Review cell quality, explore clusters, and inspect the genes that distinguish them. Plots are embedded, so the HTML file can be shared on its own. |
-| **An analyzed dataset** | Continue working in Python with retained cells, preserved raw counts, cluster labels, and visualization coordinates. |
-| **Tables and individual plots** | Check which cells were removed and why, examine marker genes, and reuse figures in your own analysis. |
+- **Cell-type labels with evidence.** Proposed identities, supporting genes,
+  uncertainties, and quality concerns for each cluster.
+
+- **A report you can share.** Quality measurements, cell populations, and
+  annotation results together in one HTML file with embedded plots.
+
+- **Data ready for further analysis.** An analyzed H5AD with preserved raw
+  counts, plus marker tables, individual plots, and a record of QC removals.
+
+<br>
 
 ## How it works
 
@@ -79,6 +89,8 @@ directly triggering this filter.
 
 </details>
 
+<br>
+
 ### Interpreting each cluster
 
 The AI assistant combines marker genes, cluster relationships, and quality
@@ -94,6 +106,7 @@ cluster using several kinds of evidence:
    PAGA graph, which summarizes connections between cell populations.
    Connectivity provides context for interpreting related populations;
    marker and QC evidence support the biological interpretation.
+
 2. **Read differential expression with its coverage.** OSP computes
    Wilcoxon differential expression for each primary cluster against the
    remaining cells, using the full normalized gene matrix. Marker tables
@@ -101,15 +114,18 @@ cluster using several kinds of evidence:
    expressing each gene inside and outside the cluster (`pct1`/`pct2`).
    These fractions help distinguish broadly expressed markers from signals
    carried by a small subset of cells.
+
 3. **Actively verify the proposed identity.** The assistant queries
    canonical and discriminating markers, including genes absent from the
    top DEG list. It receives mean expression and the percentage of cells
    expressing each queried gene across clusters.
+
 4. **Check whether quality explains the signal.** Per-cluster QC summaries
    include medians and 90th percentiles. DecontX tables rank the estimated
    ambient contribution of individual genes from the difference between raw
    and corrected counts, helping assess whether apparent markers reflect
    contamination.
+
 5. **Resolve mixed populations more locally.** When a cluster appears
    heterogeneous, the assistant can split it. OSP then computes DEG between
    the resulting subclusters within that parent population, giving a more
@@ -121,52 +137,72 @@ and cluster coverage before writing the results for review.
 
 </details>
 
-## Run your first sample
+<br>
 
-### 1. Install OSP
+## Get started
 
-Use a Python 3.10 or newer environment and install OSP with its AI
-dependencies:
+### Recommended: let ECA-RSI coordinate the analysis
 
-```bash
-pip install "osp-sc[agent]"
-```
+Prepare your data with **[ECA-PP](https://github.com/chansigit/eca-pp)**,
+then let **[ECA-RSI](https://github.com/chansigit/eca-rsi)** organize samples
+and run OSP and the downstream analyses. ECA-PP handles counts validation,
+gene standardization, and sample or batch metadata identification. It can
+also recover counts from supported log-normalized data.
 
-The package is named `osp-sc` on PyPI; the command and Python import use
-`osp`. To install the latest code from this repository instead:
+Follow the [ECA-PP guide](https://github.com/chansigit/eca-pp#try-it) to
+prepare your data, then the
+[ECA-RSI setup guide](https://github.com/chansigit/eca-rsi/blob/main/INSTALL.md)
+to run the workflow.
+
+<details>
+<summary>How ECA-PP recovers counts from log-normalized data</summary>
+
+ECA-PP uses our [stancounts](https://github.com/chansigit/stancounts) method
+to recover integer counts from supported log1p-normalized matrices. It
+reverses the log transform and infers each cell's scaling factor from the
+discrete expression values, without requiring the original normalization
+target. Recovery depends on the retained count structure and precision;
+unsupported or ambiguous inputs are reported for review.
+
+</details>
+
+<br>
+
+### Run OSP on its own
+
+For a standalone sample analysis, follow the three steps below.
+
+#### 1. Install
+
+Use Python 3.10 or newer. Install the current GitHub version with AI support:
 
 ```bash
 pip install "osp-sc[agent] @ git+https://github.com/chansigit/osp.git"
 ```
 
-QC and plotting run in Python, including the bundled DecontX implementation.
-**No R installation is required.**
+**No R installation is required**, including for DecontX and plotting.
 
-### 2. Prepare your input
+<details>
+<summary>Install a published release from PyPI</summary>
 
-**We recommend preparing data with [ECA-PP](https://github.com/chansigit/eca-pp)
-and letting [ECA-RSI](https://github.com/chansigit/eca-rsi) coordinate the
-analysis.** ECA-PP locates and validates counts, standardizes gene names,
-and identifies suitable sample or batch metadata. ECA-RSI organizes the
-prepared data, resolves the per-sample grouping, and schedules OSP and the
-downstream analyses.
+```bash
+pip install "osp-sc[agent]"
+```
 
-**Starting with log-normalized data?** ECA-PP uses our
-[stancounts](https://github.com/chansigit/stancounts) method to recover
-integer counts from supported log1p-normalized matrices. It reverses the
-log transform and infers each cell's scaling factor from the discrete
-expression values, without requiring the original normalization target.
-Recovery depends on the retained count structure and precision; unsupported
-or ambiguous inputs are reported for review. See the
-[ECA-PP guide](https://github.com/chansigit/eca-pp#try-it) to prepare your
-data and the [ECA-RSI setup guide](https://github.com/chansigit/eca-rsi/blob/main/INSTALL.md)
-to run the wider workflow.
+The package is named `osp-sc`; its Python import and command use `osp`.
 
-If you prefer to prepare the input and run OSP yourself, provide an
-**H5AD file**, the AnnData format commonly used with Scanpy, containing:
+</details>
+
+<br>
+
+#### 2. Prepare your input
+
+Provide an **H5AD file**, the AnnData format commonly used with Scanpy,
+containing:
 
 - **Raw expression counts** in `layers["counts"]`, or in `X` if that layer
   is absent. Already normalized expression alone is not a counts input.
+
 - **A sample identifier for each cell**, in `obs["sample"]` by default.
 
 The file may contain several samples; each run selects one. In the example
@@ -174,20 +210,20 @@ below, replace `data.h5ad` with your file and `SAMPLE_A` with a sample label
 from your data. If your sample column has another name, add
 `--sample-col YOUR_COLUMN`.
 
-### 3. Run QC and AI annotation
+<br>
+
+#### 3. Run QC and AI annotation
 
 The default AI backend uses Doubao through **Volcengine Ark**. Set your Ark
 API key, then run the analysis with annotation enabled. Replace the species
-and tissue below with your sample's context.
+and tissue below with your sample's context, and use a separate output
+directory for each sample.
 
 ```bash
 export ARK_API_KEY="YOUR_ARK_API_KEY"
 python -m osp data.h5ad --sample SAMPLE_A --outdir results/SAMPLE_A \
     --annotate --species mouse --tissue "bone marrow"
 ```
-
-The recommended command includes AI annotation through `--annotate`.
-For QC and clustering alone, omit that flag; no API key is needed.
 
 When the command finishes successfully, open
 **`results/SAMPLE_A/report.html`** in your browser. If you ran OSP on a
@@ -209,9 +245,7 @@ profiles, and the assistant's notes.
 
 </details>
 
-Use a separate output directory for each sample. Large inputs are read in
-backed mode so only the selected sample's expression matrix is brought into
-memory; that sample and its analysis still need to fit in available RAM.
+<br>
 
 <details>
 <summary>Review the annotation</summary>
@@ -221,21 +255,6 @@ confidence, and open questions. Check whether the labels fit the marker
 expression and whether populations flagged for QC have a plausible
 biological explanation.
 
-**Explore AI annotation with confidence: its suggestions do not remove
-cells in OSP.** Even cells marked `drop` remain in `clustered.h5ad`, with
-their labels and QC evidence available for review. The earlier QC step
-excludes flagged cells from the analysis output and records the reasons in
-`qc_removed.csv`. The original input file is preserved separately.
-
-Those AI-marked cells are available for cross-sample inspection in
-[MSP](https://github.com/chansigit/msp). MSP keeps the integrated dataset
-and applies removal decisions, including inherited OSP `drop` proposals,
-when writing a separate annotated dataset.
-[ZMIP](https://github.com/chansigit/zmip) then refines the retained cells
-within individual lineages. You can follow the evidence and removal records
-through each stage and return to preserved inputs when a decision needs
-another look.
-
 To annotate existing pipeline results, or rerun annotation without repeating
 QC and clustering:
 
@@ -243,11 +262,16 @@ QC and clustering:
 python -m osp.annotate results/SAMPLE_A --species mouse --tissue "bone marrow"
 ```
 
+See [Does OSP remove cells?](#does-osp-remove-cells) for how QC filtering
+and AI proposals affect your data.
+
 </details>
+
+<br>
 
 ## FAQ
 
-**Does OSP remove cells?**
+### Does OSP remove cells?
 
 OSP preserves your original input file and writes a separate analysis
 dataset. Cells flagged by the configured QC thresholds or doublet detection
@@ -257,25 +281,42 @@ low-complexity populations.
 
 The AI annotation stage only records proposed actions. Cells marked `drop`
 by the assistant remain in OSP's `clustered.h5ad` for downstream processing.
+For subsequent filtering, see [MSP's output guide](https://github.com/chansigit/msp#find-and-understand-your-results).
 
-**Does DecontX change the expression matrix used for analysis?**
+### Can I use OSP without AI?
+
+Yes. Omit `--annotate` to run QC, clustering, and report generation without
+an API key. For installation without the AI dependencies, omit `[agent]`
+from the package name.
+
+### Does DecontX change the expression matrix used for analysis?
 
 OSP preserves raw counts and uses them as the starting point for
 normalization and clustering. DecontX stores corrected counts separately
 and provides contamination estimates for interpretation. Its contamination
 score does not directly trigger the initial QC filter.
 
-**Can I rerun an analysis?**
+### Can I rerun an analysis?
 
 Yes. Rerunning replaces results in the same output directory. Use a new
 directory to compare settings or preserve an earlier analysis, and check
 that a run finished successfully before relying on its output.
 
-## Part of the ECA-RSI ecosystem
+### Can I use a large H5AD containing multiple samples?
 
-These projects work together within **Ensemble Cell Atlas: Recursive Self
-Improvement (ECA-RSI)**. You can use OSP on its own or as the first analysis
-stage in the wider workflow.
+Yes. The CLI loads only the selected sample's expression matrix into memory.
+Allow enough RAM for that sample and its analysis. For many samples, use
+ECA-RSI to manage the runs or adapt the
+[Slurm job-array example](examples/submit_array.sbatch).
+
+<br>
+
+## Further reading
+
+### Related projects in the ECA-RSI ecosystem
+
+Use these companion projects to prepare inputs and continue from individual
+samples to a shared, iteratively reviewed analysis.
 
 | Project | Role |
 | --- | --- |
@@ -285,20 +326,22 @@ stage in the wider workflow.
 | [ZMIP: Zoom-In Pipeline](https://github.com/chansigit/zmip) | Refine retained cells within individual lineages after MSP, reviewing labels and remaining quality concerns. |
 | [ECA-RSI](https://github.com/chansigit/eca-rsi) | Coordinate the wider curation workflow, including iterative review, annotation, and focused reanalysis. |
 
-Continue with [MSP's input guide](https://github.com/chansigit/msp#prepare-your-data)
-when your samples are ready for joint analysis, or explore
-[ECA-RSI](https://github.com/chansigit/eca-rsi) for the complete workflow.
 If these tools help your work, stars, issues, and feedback on the related
 repositories help others discover them and guide their development.
 
-## Further reading
+<br>
+
+### Documentation and examples
 
 - [Input and output reference](docs/input-output.md): matrix contents,
   output fields, Python return values, and completion rules.
+
 - [Python sample driver](examples/run_one_sample.py): run one sample from a
   larger input file.
+
 - [Slurm job-array example](examples/submit_array.sbatch): process samples
   as separate cluster jobs.
+
 - [Report an issue](https://github.com/chansigit/osp/issues): describe a
   problem or suggest an improvement.
 
