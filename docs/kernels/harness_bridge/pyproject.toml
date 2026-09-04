@@ -16,6 +16,11 @@ classifiers = [
 ]
 dependencies = []
 
+[project.urls]
+Homepage = "https://github.com/chansigit/agent-harness-bridge"
+Repository = "https://github.com/chansigit/agent-harness-bridge"
+Issues = "https://github.com/chansigit/agent-harness-bridge/issues"
+
 [project.optional-dependencies]
 openai = ["openai-agents==0.22.0"]
 claude = ["claude-agent-sdk>=0.2.152"]
