@@ -11,6 +11,7 @@ license = "MIT"
 authors = [{ name = "chansigit" }]
 requires-python = ">=3.10"
 dependencies = [
+    "agent-harness-bridge==0.1.0",
     "scanpy",
     "igraph",
     "pandas",
@@ -21,7 +22,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-agent = ["claude-agent-sdk", "openai-agents==0.22.0", "mcp>=1.19,<2"]
+agent = ["agent-harness-bridge[all]==0.1.0"]
 
 [tool.setuptools]
 packages = ["osp", "osp._decontx"]

@@ -16,6 +16,10 @@ pip install osp-sc                     # PyPI name; `import osp` / `python -m os
 pip install "osp-sc[agent]"
 ```
 
+The runtime implementation comes from the independent
+`agent-harness-bridge` package; `osp.harness` remains a compatibility import.
+OSP continues to own its prompts, biological tools and submit validation.
+
 The default backend is OpenAI Agents SDK with
 `doubao-seed-2-1-turbo-260628`; provide `ARK_API_KEY`. It uses Ark's
 Responses API and server-side `previous_response_id` chaining by default.
@@ -95,5 +99,5 @@ backed mode and pulls out one sample (for per-sample Slurm array tasks), and
 - For large h5ad files, load in backed mode and subset to one sample before
   bringing it into memory (see `examples/run_one_sample.py`).
 - `osp.annotate` is intentionally not imported by `osp/__init__.py` — it
-  depends on the optional `claude-agent-sdk`; import it explicitly
+  depends on the optional agent runtime extras; import it explicitly
   (`from osp.annotate import propose_annotation`) only when you need it.
