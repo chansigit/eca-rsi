@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://pypi.org/project/osp-sc/"><img src="https://img.shields.io/pypi/v/osp-sc?style=flat&amp;label=PyPI&amp;color=258B81" alt="PyPI version"></a>
+  <a href="https://pypi.org/project/osp-sc/"><img src="https://img.shields.io/pypi/v/osp-sc?label=PyPI&amp;color=258B81&amp;style=flat" alt="PyPI version"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat&amp;logo=python&amp;logoColor=white" alt="Python 3.10 or newer"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-173B49?style=flat" alt="MIT license"></a>
   <a href="https://github.com/chansigit/eca-rsi"><img src="https://img.shields.io/badge/Ecosystem-ECA--RSI-258B81?style=flat" alt="Part of the ECA-RSI ecosystem"></a>
