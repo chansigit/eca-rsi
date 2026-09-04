@@ -1,6 +1,31 @@
-# OSP: One-Sample Pipeline
+<p align="center">
+  <img src="assets/osp-logo.svg" alt="OSP logo: a group of cells within one sample, with one cell in focus" width="176" height="176">
+</p>
 
-**Better single-cell analysis starts with carefully reviewed samples.**
+<h1 align="center">OSP: One-Sample Pipeline</h1>
+
+<p align="center">
+  <strong>Better single-cell analysis starts with carefully reviewed samples.</strong>
+</p>
+
+<p align="center">
+  <a href="https://pypi.org/project/osp-sc/"><img src="https://img.shields.io/pypi/v/osp-sc?style=flat&amp;label=PyPI&amp;color=258B81" alt="PyPI version"></a>
+  <a href="pyproject.toml"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat&amp;logo=python&amp;logoColor=white" alt="Python 3.10 or newer"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-173B49?style=flat" alt="MIT license"></a>
+  <a href="https://github.com/chansigit/eca-rsi"><img src="https://img.shields.io/badge/Ecosystem-ECA--RSI-258B81?style=flat" alt="Part of the ECA-RSI ecosystem"></a>
+</p>
+
+<p align="center">
+  <a href="#get-started">Get started</a>
+  &nbsp;&nbsp;&nbsp;
+  <a href="#how-it-works">How it works</a>
+  &nbsp;&nbsp;&nbsp;
+  <a href="#faq">FAQ</a>
+  &nbsp;&nbsp;&nbsp;
+  <a href="#further-reading">Further reading</a>
+</p>
+
+<br>
 
 OSP combines **sample-level quality control with AI-assisted cell-type
 annotation**. It checks cell quality, finds cell populations, and uses an AI
