@@ -66,16 +66,23 @@ eca-pp-output/
 ```
 
 The input can also be a single source directory containing `standardize/`.
-Source directory names must be unique. Every H5AD discovered under the input
-must be a recognized `standardize/standardized.h5ad` with its accompanying
-`result.json`; extra H5AD files cause the input check to fail. Keep ECA-RSI
-outputs outside this input tree and outside the source repository.
+Source directory names must be unique. ECA-PP's step-local `.history/` archives
+are ignored; unexpected H5AD files outside those archives cause validation to
+fail. Keep ECA-RSI outputs outside the input tree and the source repository.
 
-Review upstream `result.json` files before starting. The discovery check
-recognizes the file layout; it does not replace upstream quality assessment.
-ECA-PP's `identify_columns/result.json` is optional. ECA-RSI identifies the
-experimental-run sample column separately, and that choice takes precedence
-over the upstream batch designation during integration.
+Organize checks upstream status and exit codes, opens each accepted H5AD, and
+validates cell/gene IDs, dimensions, and finite nonnegative values in the
+required `layers["counts"]`. Failed or inconsistent results block processing.
+Rejected sources remain in the source inventory even without an H5AD;
+nonblocking `needs_review` results can proceed with their reasons preserved.
+Upstream results and metadata evidence are saved as snapshots for later review.
+
+ECA-PP's `identify_columns/result.json` and derived TSV evidence are optional.
+RSI aligns that evidence to the original cell IDs and identifies experiments
+within each source. Two sources both using `sample=S1` remain separate OSP
+inputs. A technical batch column is not automatically an experimental sample
+column; explicit sample mappings are supported. See
+[FRONT_INTEGRATION.md](FRONT_INTEGRATION.md) for mapping formats.
 
 ## Run the workflow
 
@@ -115,17 +122,26 @@ eca-rsi run /path/to/eca-pp-output /path/to/eca-runs/study \
 `./run-eca-rsi.sh <input> <root>`; set `ECA_RSI_PYTHON` to select its interpreter.
 Use `eca-rsi --help` and `eca-rsi run --help` for available commands.
 
-### Front-pipeline upgrade
+### Compatible packages
 
-The ECA-PP/OSP adapter now validates upstream outcomes, records complete source
-snapshots, partitions experiments within each source, and checks successful OSP
-run records and exact QC cell conservation. See [FRONT_INTEGRATION.md](FRONT_INTEGRATION.md)
-for sample-map JSON, parameters and migration. The tested revisions are in
-[FRONT_COMPATIBILITY.json](FRONT_COMPATIBILITY.json).
+The 0.1.0 release uses bridge **0.2.3**, OSP **0.1.2**, and MSP/ZMIP **0.3.3**
+as its minimum compatible versions, with upper version bounds in
+`pyproject.toml`. These dependencies are published on PyPI. MSP uses Harmony 2
+on the CPU; this workflow does not require torch. See [INSTALL.md](INSTALL.md)
+for the tested package combination and configurable kernel parameters.
 
-MSP/ZMIP integration is temporarily frozen. Validate this upgrade with
-`eca-rsi run INPUT NEW_ROOT --stop-after persample`, or run organize/persample
-separately for explicit experiment mappings and OSP options.
+To validate the input and per-sample stages before starting iterative analysis:
+
+```bash
+eca-rsi run /path/to/eca-pp-output /path/to/eca-runs/new-study --stop-after persample
+```
+
+For explicit experiment mappings and OSP options, run `organize` and
+`persample` separately. The front and downstream integration records are in
+[FRONT_INTEGRATION.md](FRONT_INTEGRATION.md) and
+[DOWNSTREAM_INTEGRATION.md](DOWNSTREAM_INTEGRATION.md).
+`FRONT_COMPATIBILITY.json` records the earlier front-only validation snapshot;
+it is not the current full-workflow dependency list.
 
 ### Processing stages
 
@@ -154,6 +170,13 @@ below its zoom threshold (default 800 cells) retain existing annotations.
 ZMIP's output inherits MSP's global embedding; global re-embedding happens in
 the next round.
 
+Completion requires successful kernel execution and validated outputs,
+including readable H5ADs, required labels, and cell conservation against removal
+and reassignment ledgers. Empty placeholder files do not mark a stage complete.
+Only OSP failures explicitly marked retryable receive the driver's one retry.
+Stress-related expression remains evidence for review; there is no blanket
+stress-population or mitochondrial top-DEG deletion switch in this release.
+
 ### Stopping rules
 
 In automatic mode, round 1 continues. From round 2, a unit releases when:
@@ -175,6 +198,11 @@ automatic stopping and releases after the specified total round count, including
 `--rounds 1`. Check the recorded reason before interpreting a release as converged.
 
 ## Read the results
+
+The unit's `index.html` is RSI's report across all rounds. MSP and ZMIP
+`report.html` files describe individual analysis stages; ZMIP also produces
+reports for each processed lineage. A standalone MSP/ZMIP run does not produce
+an RSI final release.
 
 Each analysis unit has its own release:
 
@@ -218,7 +246,8 @@ an explicit configuration override.
 
 Open a unit's `index.html` directly in a browser to view its saved report.
 The final UMAP includes its plotting data in the HTML; zoom, hover and legend
-filtering work offline with JavaScript enabled. Keep the run directory together
+filtering work offline with JavaScript enabled. Point size adapts to the plotted
+cell count, panel size, and zoom. Keep the run directory together
 for links to other reports and files. To update older saved pages, run
 `python -m ecarsi.index /path/to/root-or-unit` (no analysis is rerun).
 
@@ -237,24 +266,25 @@ changes. `eca-rsi run ... --serve 8899` starts it after processing. Optional
 
 ## Resume and storage
 
-Repeat the same `eca-rsi run` command after an interruption to reuse recorded
-decisions and completed outputs. Keep the input, installed sources, and analysis
-settings fixed. New organize/persample manifests require matching input,
-configuration and source identities; legacy manifests remain browsable but
-require a new directory for upgraded computation. Pruned intermediate files
-are historical records, not runnable completion. These front-pipeline checks
-do not provide end-to-end validation of the frozen later stages. In particular,
-skipping a completed ZMIP directory bypasses the newer kernel's own input,
-configuration, and runtime identity checks. Use a new output root when changing
-inputs or analysis code.
+Repeat the same `eca-rsi run` command after an interruption to reuse validated
+outputs. Organize and per-sample manifests track input, configuration, and
+adapter/runtime identities. MSP and ZMIP stages also check their input content,
+computation settings, runtime sources, and completed output hashes. RSI invokes
+ZMIP's own resume checks even when lineage outputs already exist. Completed
+rounds and releases have integrity receipts; pruned historical releases can
+be checked without requiring deleted intermediate matrices.
 
-Modern manifests record the harness and model. Checked mismatches are rejected
-unless their stage supports `--allow-agent-change`; older downstream manifests
-can only emit a warning. New persample manifests always require a new output
-directory for a model/configuration change. This option does not recompute
-finished downstream stages. `--force-reopen` continues beyond an existing release; with `--rounds N`,
-choose a total larger than the completed round count. It is not a cache reset
-or a forwarded ZMIP `--force` option.
+Use a new output root when inputs or analysis code change. Legacy outputs
+without the required identities or receipts remain browsable, but are not
+accepted as verified completion for upgraded computation.
+
+Recorded harness/model changes are rejected unless the stage supports an
+explicit `--allow-agent-change`. That option permits an intentional mixed run;
+it does not reset computation caches or override input/runtime checks.
+Per-sample model/configuration changes require a new output directory.
+`--force-reopen` continues beyond an existing release; with `--rounds N`, choose
+a total larger than the completed round count. It does not restore pruned
+matrices or forward ZMIP's `--force` option.
 
 **Release normally triggers cleanup of intermediate H5ADs.** Use `--no-prune`
 on `run` or `loop` to retain them. Cleanup keeps `input/organized.h5ad`, the
@@ -267,10 +297,27 @@ history, but not every intermediate expression matrix.
 eca-rsi prune /path/to/eca-runs/study --dry-run
 ```
 
+## Validation scope
+
+Release checks passed **131 tests**, with **2 skipped**. Wheel and source archive
+metadata checks passed, and the installed wheel's modules and prompt resources
+were verified. A browser check confirmed offline UMAP rendering, legend
+selection, and zoom without fetching plot data.
+
+Real-data validation includes a two-round RSI run on **Clayton**, ending with
+850 cells and a matching cell ledger, and a separate full-size **19Liu MSP/ZMIP**
+run, from 81,079 to 75,394 cells. Clayton used historical ECA-PP 0.2 inputs;
+19Liu was a downstream kernel validation, not a full RSI run. Subsequent kernel
+fixes received targeted validation rather than a complete repeat of all model
+decisions. These checks establish engineering behavior, not independently
+validated biological accuracy. Details and remaining review items are in
+[DOWNSTREAM_INTEGRATION.md](DOWNSTREAM_INTEGRATION.md).
+
 ## Development and history
 
 See [CLAUDE.md](CLAUDE.md) for source layout, operating conventions, and targeted
-checks. The [architecture diagram](diagrams/architecture.html) illustrates the
+checks. See [CHANGELOG.md](CHANGELOG.md) for release changes and
+[TODO.md](TODO.md) for deferred policy discussions. The [architecture diagram](diagrams/architecture.html) illustrates the
 main package flow; consult this README and the source for current runtime and
 resume behavior.
 
