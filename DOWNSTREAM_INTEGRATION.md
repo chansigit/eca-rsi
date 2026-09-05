@@ -133,6 +133,7 @@ MSP 多文件入口要求每文件一个 batch 值，若校正列在单实验内
 ## 2026-09-05 统筹实施记录
 
 用户追加的维护清单与 E1–E4 同步安排，不将内核维护测试冒充 RSI 全流程验证。
+下表 MSP/ZMIP 提交及覆盖率是首次实施快照；最终发布、CI 和当前验证状态以文首为准。
 
 | 工作线 | 已落地内容 | 验证/边界 |
 | --- | --- | --- |
@@ -153,8 +154,9 @@ RSI 验证目录：同级 `clayton`；运行日志在同级 `clayton-logs`。
 
 - MSP harness 删除属于 0.4 的既定兼容性变更，不在 0.3 补丁提前删除。
 - adjustText 的逐字节确定性不只靠 seed：还受 RNG 与按时间停止的迭代预算影响，需单独验证策略。
-- DegTables 懒加载、report 共用 helper、旧快速 monkeypatch 测试替换仍在 MSP TODO，
-  属于性能/可维护性工作，不阻断本轮修复；没有性能证据时不进行大范围重构。
+- DegTables 按需导入、report 共用 helper 仍在 MSP TODO，属于性能/可维护性工作；
+  分别以启动耗时/峰值内存及查询一致性、HTML 转义/空表行为不变为验收。
+  旧快速 monkeypatch 测试已决定保留，与独立真实数值 E2E 覆盖不同失效路径。
 - ZMIP schema-1 的 torch=None 只是身份字段；直接删除会使旧运行身份不匹配，随有迁移说明的
   schema 升级再清理。此字段不代表仍依赖 torch。
 - `correction=unnecessary` 自动决策和单实验含多个技术校正因子的高级策略尚未实现；
@@ -262,3 +264,16 @@ annotated.h5ad，ZMIP 没有启动。失败归档见 `19liu/VALIDATION_STATUS.md
 正在准备 bridge 0.2.2 的精准有限恢复，再使用有状态查询和表达结果限制的新运行目录验证。
 跨进程保存部分标注需要绑定输入/配置和安全恢复协议，作为后续独立工作；不能从截断日志
 重建提案，也不通过无限重试掩盖失败。
+
+
+### 最终配套版本与纯 PyPI 验证
+
+bridge 0.2.3（5fdfd69）、MSP 0.3.2（5dea759）、ZMIP 0.3.2（017a089）和
+OSP 0.1.2（b1e2bdf）均已发布并同步 GitHub Release。RSI 最低版本及安装说明已更新，
+包括 Pandas 字符串类型修复的驱动提交已推送到 main。
+`final-public-023/` 验证了 front/kernels × Python 3.10/3.12 四种纯 PyPI 解析。
+独立 target 安装的四个包全部从 PyPI 下载，URL/SHA 与 PyPI JSON 一致；实际导入路径
+落在该 target，bridge/MSP 的公开版本与发行元数据相同，OSP/ZMIP 没有公开
+`__version__` 属性，按发行元数据记录。运行时兼容检查及 StringDtype 先验回归通过。
+此项 `--no-deps` target 安装只核对四个发行产物与导入；依赖解析由四种解析检查覆盖，
+新鲜科学栈正常安装及 pip check 的证据另见上节，不混称本项做了全新完整依赖安装。
