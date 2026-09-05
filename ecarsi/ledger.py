@@ -28,7 +28,6 @@ sankey_fine_<lineage>.png per zoomed lineage of the last round (msp → zmip).
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import sys
 from pathlib import Path
@@ -67,7 +66,8 @@ def _obs(path: Path, cols: list[str]) -> pd.DataFrame:
     if src.suffix == ".parquet":
         obs = pd.read_parquet(src)
     elif src.name.endswith(".csv.gz"):
-        obs = pd.read_csv(src, index_col=0, low_memory=False)
+        obs = pd.read_csv(src, dtype=str, keep_default_na=False)
+        obs = obs.set_index(obs.columns[0])
     else:
         import anndata as ad
 
@@ -76,84 +76,178 @@ def _obs(path: Path, cols: list[str]) -> pd.DataFrame:
         df = obs[[c for c in cols if c in obs.columns]].copy()
         a.file.close()
         df.index.name = "cell"
+        _cell_ids(df.index, str(src))
         return df.astype(object)
     df = obs[[c for c in cols if c in obs.columns]].copy()
     df.index.name = "cell"
+    _cell_ids(df.index, str(src))
     return df.astype(object)
+
+
+def _cell_ids(values, source):
+    ids = pd.Index(values)
+    if ids.hasnans or not ids.is_unique or any(not isinstance(v, str) or not v for v in ids):
+        raise ValueError(f"invalid/duplicate cell IDs: {source}")
+    return set(ids)
+
+
+def _table(path, columns):
+    if not path.is_file():
+        raise ValueError(f"missing ledger: {path}")
+    table = pd.read_csv(path, dtype=str, keep_default_na=False)
+    if not set(columns) <= set(table.columns):
+        raise ValueError(f"missing ledger columns {columns}: {path}")
+    if "cell" in columns:
+        _cell_ids(table["cell"], str(path))
+        table = table.set_index("cell")
+    return table
+
+
+def _partition(expected, survivors, removed, stage):
+    kept = _cell_ids(survivors, stage + " survivors")
+    gone = _cell_ids(removed, stage + " removed")
+    if kept & gone or kept | gone != expected:
+        raise ValueError(f"{stage} cell conservation failed: survivors and removals must partition the input")
+
+
+def _boolean(table, column, path):
+    if column not in table:
+        return pd.Series(False, index=table.index)
+    values = table[column].str.lower()
+    if not values.isin(["true", "false"]).all():
+        raise ValueError(f"invalid boolean {column}: {path}")
+    return values.eq("true")
+
+
+def _input_ids(path, expected):
+    """Pruned input matrices have no obs sidecar; their predecessor is retained."""
+    if _obs_source(path) is not None:
+        if _cell_ids(_obs(path, []).index, str(path)) != expected:
+            raise ValueError(f"input cell set differs from preceding stage: {path}")
+    elif not path.with_name(path.name + L.PRUNED_SUFFIX).is_file():
+        raise ValueError(f"missing stage input: {path}")
 
 
 def _persample_frames(unit: Path) -> list[pd.DataFrame]:
     frames = []
-    ps_root = L.persample_root(unit)
-    for d in L.sample_dirs(unit):
-        if _obs_source(d / "clustered.h5ad") is None:
-            continue
+    manifest = json.loads(L.persample_manifest(unit).read_text())
+    entries = manifest["samples"]
+    sample_ids = {L.sample_dir(unit, item).name: item["value"] for item in entries}
+    if len(sample_ids) != len(entries) or len(set(sample_ids.values())) != len(entries):
+        raise ValueError("duplicate persample manifest samples/directories")
+    for item in entries:
+        d = L.sample_dir(unit, item)
         o = _obs(d / "clustered.h5ad", ["_ann_coarse", "_ann_fine"])
+        r = _table(d / "qc_removed.csv", ["cell", "qc_reason"])
+        if r["qc_reason"].eq("").any():
+            raise ValueError(f"missing QC removal reason: {d}")
+        expected_path = d / "input_cells.csv.gz"
+        if expected_path.is_file():
+            inputs = _table(expected_path, ["cell_id"])
+            expected = _cell_ids(inputs.cell_id, str(expected_path))
+            _partition(expected, o.index, r.index, f"OSP {item['value']}")
+        else:
+            # Older/pruned runs predate per-sample input ID snapshots. Their
+            # global union is still checked against organized.h5ad below.
+            if set(o.index) & set(r.index):
+                raise ValueError(f"OSP survivor/removal overlap: {d}")
+        if "n_cells" in item and len(o) + len(r) != int(item["n_cells"]):
+            raise ValueError(f"OSP cell count differs from manifest: {d}")
         o = o.rename(columns={"_ann_coarse": "osp_coarse", "_ann_fine": "osp_fine"})
-        o.insert(0, "sample", d.name)
+        o.insert(0, "sample", sample_ids[d.name])
         o.insert(1, "osp_status", "kept")
         frames.append(o)
-        rm = d / "qc_removed.csv"
-        if rm.is_file():
-            r = pd.read_csv(rm, index_col="cell")
-            frames.append(pd.DataFrame({"sample": d.name,
-                                        "osp_status": REMOVED_PREFIX + r["qc_reason"].astype(str)}, index=r.index))
+        frames.append(pd.DataFrame({"sample": sample_ids[d.name],
+                                    "osp_status": REMOVED_PREFIX + r["qc_reason"]}, index=r.index))
     if not frames:
-        sys.exit(f"no persample outputs under {ps_root}")
+        raise ValueError(f"no persample outputs under {L.persample_root(unit)}")
+    all_ids = pd.concat(frames).index
+    actual = _cell_ids(all_ids, "persample ledger")
+    if _obs_source(L.input_h5ad(unit)) is not None:
+        if actual != set(_obs(L.input_h5ad(unit), []).index):
+            raise ValueError("persample ledger does not cover organized input")
+    elif any(not (L.sample_dir(unit, item) / "input_cells.csv.gz").is_file() for item in entries):
+        raise ValueError("cannot verify legacy persample input without organized.h5ad")
     return frames
 
 
 def _apply_round(ledger: pd.DataFrame, rdir: Path, prefix: str, alive_col: str) -> None:
-    """Add one round's msp + zmip column groups in place. alive_col: the
-    previous stage's status column (cells 'kept' there enter this round)."""
+    """Require exact stage partitions before assigning any successful status.
+
+    Partial output is an error, never an implicit retained-cell result. Both
+    kept and not-zoomed cells survive into the following round.
+    """
     idir, zdir = L.crosssample_dir(rdir), L.zoomin_dir(rdir)
     ms, zs = f"{prefix}msp_status", f"{prefix}zmip_status"
-    ledger[ms] = np.where(ledger[alive_col] == "kept", "kept", "")
+    entering = set(ledger.index[ledger[alive_col].isin(["kept", "not-zoomed"])])
+    round_input = rdir / L.ROUND_INPUT
+    later = alive_col != "osp_status"
+    if later:
+        _input_ids(round_input, entering)
+    excluded = set()
     dec = idir / "sample_decisions.csv"
     if dec.is_file():
-        excluded = {r["sample"] for r in csv.DictReader(open(dec)) if r["decision"] == "exclude"}
-        ledger.loc[ledger["sample"].isin(list(excluded)) & (ledger[ms] == "kept"), ms] = "excluded-sample"
-    rm = idir / "annotation_removed.csv"
-    if rm.is_file():
-        r = pd.read_csv(rm, index_col="cell")
-        agent = r["annotate_remove"].astype(bool) if "annotate_remove" in r else pd.Series(False, index=r.index)
-        insp = r["inspect_drop"].astype(bool) if "inspect_drop" in r else pd.Series(False, index=r.index)
-        src = np.where(agent, "agent:" + r.get("remove_reason", pd.Series("", index=r.index)).astype(str),
-                       np.where(insp, "inspect", "preannotation"))
-        idx = ledger.index.intersection(r.index)
-        ledger.loc[idx, ms] = (REMOVED_PREFIX + pd.Series(src, index=r.index)).reindex(idx)
-    ann = idir / "annotated.h5ad"
-    if _obs_source(ann) is not None:
-        o = _obs(ann, ["msp_ann_coarse", "msp_ann_fine"]).rename(
-            columns={"msp_ann_coarse": f"{prefix}msp_coarse", "msp_ann_fine": f"{prefix}msp_fine"})
-        for c in o.columns:
-            ledger[c] = o[c].reindex(ledger.index)
+        decisions = _table(dec, ["sample", "decision"])
+        samples = set(ledger.loc[list(entering), "sample"])
+        if decisions["sample"].duplicated().any() or not decisions.decision.isin(["include", "exclude"]).all():
+            raise ValueError(f"invalid sample decisions: {dec}")
+        if set(decisions["sample"]) != samples:
+            raise ValueError(f"sample decisions do not cover entering samples: {dec}")
+        excluded_samples = set(decisions.loc[decisions.decision.eq("exclude"), "sample"])
+        excluded = entering & set(ledger.index[ledger["sample"].isin(excluded_samples)])
+    elif not later:
+        raise ValueError(f"missing ledger: {dec}")
+    expected = entering - excluded
+    _input_ids(idir / "integrated.h5ad", expected)
+    removed_path = idir / "annotation_removed.csv"
+    removed = _table(removed_path, ["cell"])
+    agent = _boolean(removed, "annotate_remove", removed_path)
+    inspected = _boolean(removed, "inspect_drop", removed_path)
+    reasons = removed.get("remove_reason", pd.Series("", index=removed.index))
+    source = np.where(agent, "agent:" + reasons, np.where(inspected, "inspect", "preannotation"))
+    obs = _obs(idir / "annotated.h5ad", ["msp_ann_coarse", "msp_ann_fine"])
+    _partition(expected, obs.index, removed.index, "MSP")
+    for column in ("msp_ann_coarse", "msp_ann_fine"):
+        if column not in obs or obs[column].isna().any() or obs[column].eq("").any():
+            raise ValueError(f"missing survivor annotation: {column}")
+    ledger[ms] = ""
+    ledger.loc[list(excluded), ms] = "excluded-sample"
+    ledger.loc[obs.index, ms] = "kept"
+    ledger.loc[removed.index, ms] = REMOVED_PREFIX + pd.Series(source, index=removed.index)
+    for column in obs:
+        ledger[prefix + column.replace("msp_ann_", "msp_", 1)] = obs[column].reindex(ledger.index)
 
-    ledger[zs] = np.where(ledger[ms] == "kept", "kept", "")
-    plan_p = zdir / "zmip_plan.json"
-    if plan_p.is_file() and f"{prefix}msp_coarse" in ledger:
-        plan = json.load(open(plan_p))
-        not_zoomed = [lab for ln in plan["lineages"] if not ln["zoom"] for lab in ln["coarse_labels"]]
-        m = (ledger[zs] == "kept") & ledger[f"{prefix}msp_coarse"].isin(not_zoomed)
-        ledger.loc[m, zs] = "not-zoomed"
-    rm = zdir / "zmip_removed.csv"
-    if rm.is_file():
-        r = pd.read_csv(rm, index_col="cell")
-        src = np.where(r["annotate_remove"].astype(bool), "agent:" + r["remove_reason"].astype(str), "preannotation")
-        idx = ledger.index.intersection(r.index)
-        ledger.loc[idx, zs] = (REMOVED_PREFIX + pd.Series(src, index=r.index)).reindex(idx)
-    ann = zdir / "annotated_zmip.h5ad"
-    if _obs_source(ann) is not None:
-        o = _obs(ann, ["zmip_lineage", "zmip_ann_coarse", "zmip_ann_fine"]).rename(
-            columns={"zmip_lineage": f"{prefix}zmip_lineage", "zmip_ann_coarse": f"{prefix}zmip_coarse",
-                     "zmip_ann_fine": f"{prefix}zmip_fine"})
-        for c in o.columns:
-            ledger[c] = o[c].reindex(ledger.index)
+    removed_path = zdir / "zmip_removed.csv"
+    removed = _table(removed_path, ["cell", "annotate_remove", "remove_reason"])
+    agent = _boolean(removed, "annotate_remove", removed_path)
+    source = np.where(agent, "agent:" + removed.remove_reason, "preannotation")
+    zoom = _obs(zdir / "annotated_zmip.h5ad", ["zmip_lineage", "zmip_ann_coarse", "zmip_ann_fine"])
+    _partition(set(obs.index), zoom.index, removed.index, "ZMIP")
+    for column in ("zmip_lineage", "zmip_ann_coarse", "zmip_ann_fine"):
+        if column not in zoom or zoom[column].isna().any() or zoom[column].eq("").any():
+            raise ValueError(f"missing survivor annotation: {column}")
+    plan_path = zdir / "zmip_plan.json"
+    if not plan_path.is_file():
+        raise ValueError(f"missing ZMIP plan: {plan_path}")
+    plan = json.loads(plan_path.read_text())
+    if any(type(ln["zoom"]) is not bool for ln in plan["lineages"]):
+        raise ValueError("ZMIP plan zoom must be boolean")
+    not_zoomed = {lab for ln in plan["lineages"] if not ln["zoom"] for lab in ln["coarse_labels"]}
+    ledger[zs] = ""
+    ledger.loc[zoom.index, zs] = "kept"
+    if f"{prefix}msp_coarse" in ledger:
+        mask = ledger.index.isin(zoom.index) & ledger[f"{prefix}msp_coarse"].isin(not_zoomed)
+        ledger.loc[mask, zs] = "not-zoomed"
+    ledger.loc[removed.index, zs] = REMOVED_PREFIX + pd.Series(source, index=removed.index)
+    names = {"zmip_lineage": "zmip_lineage", "zmip_ann_coarse": "zmip_coarse", "zmip_ann_fine": "zmip_fine"}
+    for column in zoom:
+        ledger[prefix + names[column]] = zoom[column].reindex(ledger.index)
 
 
 def build_ledger(unit: Path, round_dirs: list[Path]) -> pd.DataFrame:
     ledger = pd.concat(_persample_frames(unit))
-    ledger = ledger[~ledger.index.duplicated(keep="first")]
+    if not ledger.index.is_unique:
+        raise ValueError("duplicate cell IDs in persample ledger")
     alive = "osp_status"
     for i, rdir in enumerate(round_dirs, 1):
         prefix = f"r{i:02d}_"
@@ -179,10 +273,10 @@ def _stage_nodes(ledger: pd.DataFrame, label_col: str | None, status_col: str, k
     """Per-row node id for one stage: the label for cells still in play,
     'removed: <source>' for cells the stage removed, None for cells already
     gone before this stage. Small labels pooled into 'other' when pool."""
-    status = ledger[status_col].astype(str) if status_col in ledger else pd.Series("kept", index=ledger.index)
+    status = ledger[status_col].astype(str) if status_col in ledger else pd.Series("", index=ledger.index)
     node = pd.Series([None] * len(ledger), index=ledger.index, dtype=object)
     gone_here = status.str.startswith(REMOVED_PREFIX).values | (status == "excluded-sample").values
-    alive = keep_mask & ~gone_here
+    alive = keep_mask & status.isin(["kept", "not-zoomed"]).values
     if label_col and label_col in ledger:
         lab = ledger[label_col].astype(object).where(ledger[label_col].notna(), "unlabelled").astype(str)
         node[alive] = lab[alive]

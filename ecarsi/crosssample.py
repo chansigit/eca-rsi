@@ -54,6 +54,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+from . import downstream as D
+from .run_state import file_identity, read_json, write_json
+from .osp_contract import is_done
 from . import cost
 from . import layout as L
 
@@ -102,10 +105,15 @@ def load_persample(unit: Path) -> dict:
             "persample manifest predates the 'dir' field — re-run ecarsi.persample "
             "(--plan-only is enough) to refresh it"
         )
+    if man.get("schema_version") != 2 or man.get("state") != "complete" or man.get("failed_samples"):
+        raise ValueError("persample must have a verified complete schema-2 manifest")
+    values = [s["value"] for s in man["samples"]]
+    if not values or len(values) != len(set(values)):
+        raise ValueError("persample sample IDs must be nonempty and unique")
     for s in man["samples"]:  # located under this unit, whatever the manifest recorded
         s["dir"] = str(L.sample_dir(unit, s))
     incomplete = [s["value"] for s in man["samples"]
-                  if not all(L.present(Path(s["dir"]) / f) for f in PS_CONTRACT)]
+                  if not is_done(Path(s["dir"]), True, s.get("identity"))]
     if incomplete:
         raise SystemExit(
             "persample (with annotation) is a hard prerequisite; incomplete samples: "
@@ -173,6 +181,19 @@ def _sample_inventory(s: dict) -> dict:
 SINGLE_SAMPLE_NOTE = "single sample — inclusion agent not consulted; harmony is skipped downstream"
 
 
+def validate_inclusion(decision, expected):
+    if not isinstance(decision, dict) or not isinstance(decision.get("notes"), str):
+        raise ValueError("invalid inclusion decision")
+    rows = decision.get("samples")
+    if not isinstance(rows, list) or any(not isinstance(e, dict) or not isinstance(e.get("sample"), str) for e in rows):
+        raise ValueError("inclusion samples must be named objects")
+    got = [e["sample"] for e in rows]
+    if sorted(got) != sorted(expected) or len(got) != len(set(got)):
+        raise ValueError("inclusion must cover each sample exactly once")
+    if any(type(e.get("include")) is not bool or not isinstance(e.get("reason"), str) or not e["reason"].strip() for e in rows):
+        raise ValueError("inclusion requires boolean include and nonempty reasons")
+
+
 def propose_inclusion(inventories: list[dict]) -> dict:
     """One sample: nothing to weigh against, include it without a session.
     Two or more: the inclusion agent decides."""
@@ -213,15 +234,10 @@ async def _propose(inventories: list[dict]) -> dict:
         except json.JSONDecodeError as exc:
             return {"content": [{"type": "text", "text": f"JSON parse error, fix and resubmit: {exc}"}],
                     "is_error": True}
-        missing = [k for k in ("samples", "notes") if k not in decision]
-        if missing:
-            return {"content": [{"type": "text", "text": f"missing field(s) {missing}, fix and resubmit"}],
-                    "is_error": True}
-        got = [e["sample"] for e in decision["samples"]]
-        if sorted(got) != sorted(want) or len(got) != len(set(got)):
-            return {"content": [{"type": "text",
-                                 "text": f"must cover every sample exactly once: got {got}, want {want}"}],
-                    "is_error": True}
+        try:
+            validate_inclusion(decision, want)
+        except (ValueError, TypeError, KeyError) as exc:
+            return {"content": [{"type": "text", "text": str(exc)}], "is_error": True}
         return {"content": [{"type": "text", "text": "recorded"}], "is_error": False, "_submitted": decision}
 
     tool = ToolSpec(
@@ -261,9 +277,11 @@ def msp_command(py: str, inputs: list[str], batch_col: str, outdir: Path,
         cmd += ["--species", species]
     if context:
         cmd += ["--report-context", context]
+    cmd += D.options("msp")
     return " ".join(shlex.quote(c) for c in cmd)
 
 
+@D.locked_unit
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="ecarsi.crosssample", description=__doc__)
     ap.add_argument("unit", help="organize unit dir (persample/ completed inside)")
@@ -279,7 +297,11 @@ def main(argv: list[str]) -> int:
     out_root = Path(args.out).resolve() if args.out else L.round_dir(unit, 1)
     # a null sample column means persample ran the whole file as one sample;
     # osp then labels every cell obs["sample"] = "all", which is the batch key
-    batch_col = ps["sample_column"] or "sample"
+    experiment_col = ps["sample_column"] or "sample"
+    batch_col = os.environ.get("MSP_BATCH_COL") or experiment_col
+    policy = {"experiment_column": experiment_col, "batch_col": batch_col,
+              "correction": "harmony_if_multiple_batch_values",
+              "selection": "explicit" if os.environ.get("MSP_BATCH_COL") else "compatibility_default"}
     species = ps.get("species")
 
     ecapp = ecapp_batch_designations(unit)
@@ -288,11 +310,15 @@ def main(argv: list[str]) -> int:
             print(f"[batch] eca-pp designated {b.get('value')!r} for {src}; "
                   f"persample's {batch_col!r} wins (archived)")
 
+    evidence = {s["value"]: {"identity": s["identity"], "state": file_identity(Path(s["dir"]) / L.RUN_STATE)}
+                for s in ps["samples"]}
     mpath = out_root / "manifest.json"
     if mpath.is_file():
         with open(mpath) as f:
             man = json.load(f)
         check_agent_config(man, str(mpath))
+        if man.get("inclusion_evidence") != evidence or man.get("batch_col") != batch_col or man.get("species") != species:
+            raise ValueError("inclusion inputs changed or lack identity; use a new output directory")
         decision = man["inclusion"]
         print("[include] reusing recorded inclusion decision")
     else:
@@ -303,14 +329,16 @@ def main(argv: list[str]) -> int:
             "unit": str(unit),
             **agent_config(),
             "batch_col": batch_col,
+            "integration_policy": policy,
             "species": species,
             "ecapp_batch_designations": ecapp,
             "inclusion": decision,
+            "inclusion_evidence": evidence,
         }
         out_root.mkdir(parents=True, exist_ok=True)
-        with open(mpath, "w") as f:
-            json.dump(man, f, indent=2)
+        write_json(mpath, man)
 
+    validate_inclusion(decision, [s["value"] for s in ps["samples"]])
     by_val = {s["value"]: s for s in ps["samples"]}
     included = [e["sample"] for e in decision["samples"] if e["include"]]
     excluded = [(e["sample"], e["reason"]) for e in decision["samples"] if not e["include"]]
@@ -325,6 +353,13 @@ def main(argv: list[str]) -> int:
 
     py = os.environ.get("MSP_PYTHON", sys.executable)
     inputs = [str(Path(by_val[s]["dir"]) / "clustered.h5ad") for s in included]
+    for path in inputs:
+        data = D._data(path)
+        try:
+            if batch_col not in data.obs or data.obs[batch_col].isna().any() or data.obs[batch_col].astype(str).nunique() != 1:
+                raise ValueError(f"{path}: MSP_BATCH_COL must have exactly one nonmissing value per complete experiment; do not split OSP pools")
+        finally:
+            data.file.close()
     idir = L.crosssample_dir(out_root)
     cmd = msp_command(py, inputs, batch_col, idir, species, selected_model, L.report_context(unit, out_root))
     print(f"[msp] {cmd}")
@@ -339,15 +374,14 @@ def main(argv: list[str]) -> int:
             n = by_val[e["sample"]]["n_cells"]
             w.writerow([e["sample"], "include" if e["include"] else "exclude", n, e["reason"]])
 
-    if all((idir / f).is_file() for f in MSP_CONTRACT):
-        print("[msp] contract already satisfied — skipping (resume)")
-        return 0
+    identity = D.prepare(py, "msp", inputs, idir,
+                         {"batch_col": batch_col, "species": species, "options": D.options("msp")})
     done = [f for f in MSP_CONTRACT if (idir / f).is_file()]
     if done:
         print(f"[msp] partial contract {done} — msp resumes the remaining steps")
     probe = subprocess.run([py, "-c", "import msp, msp.inspect, msp.annotate"], capture_output=True)
     if probe.returncode != 0:
-        print("[pending] msp[agent] not importable in MSP_PYTHON (needs msp + claude-agent-sdk) — "
+        print("[pending] msp[agent] not importable in MSP_PYTHON (needs a compatible msp and selected bridge backend) — "
               "inclusion decision archived, re-run once installed")
         return 4
 
@@ -359,6 +393,7 @@ def main(argv: list[str]) -> int:
     if missing:
         print(f"[fail] msp exited 0 but contract files missing: {missing}")
         return 1
+    D.verify(py, "msp", inputs, idir, identity)
     print(f"[done] integration + inspection + annotation at {idir} (annotated.h5ad = survivors)")
     return 0
 

@@ -34,6 +34,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from . import downstream as D
 from . import cost
 from . import layout as L
 
@@ -44,13 +45,15 @@ ZMIP_CONTRACT = L.ZMIP_CONTRACT
 def zmip_command(py: str, h5ad: Path, outdir: Path, model: str, min_cells: str | None,
                  context: str | None = None) -> str:
     cmd = [py, "-m", "zmip", str(h5ad), "--outdir", str(outdir), "--model", model]
-    if min_cells:
+    cmd += D.options("zmip")
+    if min_cells and not os.environ.get("ZMIP_MIN_CELLS"):
         cmd += ["--min-cells", str(min_cells)]
     if context:
         cmd += ["--report-context", context]
     return " ".join(shlex.quote(c) for c in cmd)
 
 
+@D.locked_unit
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="ecarsi.zoomin", description=__doc__)
     ap.add_argument("unit", help="organize unit dir (a round's crosssample/ completed inside)")
@@ -85,15 +88,20 @@ def main(argv: list[str]) -> int:
     cmd = zmip_command(py, idir / "annotated.h5ad", zdir, model(), os.environ.get("ZMIP_MIN_CELLS"),
                        L.report_context(unit, out_root))
     print(f"[zmip] {cmd}")
-    if all((zdir / f).is_file() for f in ZMIP_CONTRACT):
-        print("[zmip] contract already satisfied — skipping (resume)")
-        return 0
+    if list((idir / ".msp-state").glob("*.pending")):
+        raise ValueError("MSP has an unfinished step")
+    mstate = D.read_json(idir / D.STATE)
+    if mstate.get("state") != "complete":
+        raise ValueError("MSP has no verified RSI completion state")
+    if any(D.file_identity(idir / name) != ident for name, ident in mstate["validation"]["outputs"].items()):
+        raise ValueError("MSP output changed since validation")
+    identity = D.prepare(py, "zmip", [idir / "annotated.h5ad"], zdir, {"options": D.options("zmip")})
     done = [f for f in ZMIP_CONTRACT if (zdir / f).is_file()]
     if done:
         print(f"[zmip] partial contract {done} — zmip resumes finished lineages")
     probe = subprocess.run([py, "-c", "import zmip, msp"], capture_output=True)
     if probe.returncode != 0:
-        print("[pending] zmip not importable in ZMIP_PYTHON (needs zmip + msp + claude-agent-sdk) — "
+        print("[pending] zmip not importable in ZMIP_PYTHON (needs compatible zmip, msp and the selected bridge backend) — "
               "re-run once installed")
         return 4
 
@@ -105,6 +113,7 @@ def main(argv: list[str]) -> int:
     if missing:
         print(f"[fail] zmip exited 0 but contract files missing: {missing}")
         return 1
+    D.verify(py, "zmip", [idir / "annotated.h5ad"], zdir, identity)
     print(f"[done] zoom-in at {zdir} (annotated_zmip.h5ad = survivors with zmip_ann_* labels)")
     return 0
 

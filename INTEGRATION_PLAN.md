@@ -3,7 +3,9 @@
 审查日期：2026-09-04。状态：用户已授权实施，A/B/C 已落地，D 已完成前半程验收。
 
 下文第 2–6 节保留实施前的审查证据。新版行为见 [FRONT_INTEGRATION.md](FRONT_INTEGRATION.md)，
-实际验收与剩余边界见 [FRONT_VALIDATION.md](FRONT_VALIDATION.md)。MSP/ZMIP 冻结要求继续有效。
+实际验收与剩余边界见 [FRONT_VALIDATION.md](FRONT_VALIDATION.md)。
+2026-09-05 更新：用户已解除 MSP/ZMIP 冻结；最新源码审查、复现与 E1–E4 实施规划见
+[DOWNSTREAM_INTEGRATION.md](DOWNSTREAM_INTEGRATION.md)。下文冻结措辞保留为前阶段历史记录。
 
 本次覆盖 `eca-pp → organize → persample → osp`，以及共享 `agent-harness-bridge` 的接入边界。
 MSP、ZMIP 及其 crosssample / zoomin 调用适配暂缓，等用户通知其开发完成后再审查和实施。
@@ -198,4 +200,4 @@ ZMIP 本次未深入复审；以上不是其缺陷的最终认定，也没有把
 复现脚本：`/tmp/eca-rsi-integration-audit-20260904.py`。本次结果：`/tmp/eca-rsi-integration-audit-wkskswl5/results.json`。临时目录可能被清理，关键条件和观察值已记录在本文；正式实施时应将这些边界行为转为仓库内回归测试。
 
 实施已启动并落地 A → B → C；D 的结果另记 FRONT_VALIDATION.md。
-MSP/ZMIP 联合升级仍等用户通知。
+MSP/ZMIP 联合升级已于 2026-09-05 获用户通知启动，当前审查记录见 DOWNSTREAM_INTEGRATION.md。

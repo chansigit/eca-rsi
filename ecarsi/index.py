@@ -566,8 +566,10 @@ def render_unit(unit: Path) -> str:
         if dec == "exclude" and d.get("reason"):  # reason folded behind a red "?" — click opens, click again closes (CSS-only <details>)
             dpill += (f'<details class="why"><summary title="why excluded?">?</summary>'
                       f'<div class="why-body"><b>{e(smp["name"])} excluded:</b> {e(d["reason"])}</div></details>')
+        status_pill = ('<span class="pill released">done</span>' if smp["done"]
+                       else '<span class="pill running">pending</span>')
         prow.append(f'<tr><td>{e(smp["name"])}</td><td class="num">{_n(smp["n_cells"])}</td>'
-                    f'<td class="l">{"<span class=\"pill released\">done</span>" if smp["done"] else "<span class=\"pill running\">pending</span>"}</td>'
+                    f'<td class="l">{status_pill}</td>'
                     f'<td class="l why-cell">{dpill}</td><td class="l">{link}</td></tr>')
     parts.append(f'<section id="samples"><h2>Samples <small>osp runs once per sample · {ps["n_done"]}/{ps["n"]} done'
                  + (f' · sample column <code>{e(str(ps["sample_column"]))}</code>' if ps["sample_column"] else "") + "</small></h2>"

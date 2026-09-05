@@ -41,6 +41,7 @@ import time
 from pathlib import Path
 
 from . import layout as L
+from .run_state import write_json
 
 # h5ads whose obs carries labels the ledger joins later -> keep obs as a sidecar
 LABELLED = {"clustered.h5ad", "annotated.h5ad", "annotated_zmip.h5ad"}
@@ -90,9 +91,9 @@ def prune_unit(unit: Path, dry_run: bool = False) -> dict:
         if not dry_run:
             if p.name in LABELLED:
                 rec["obs"] = _save_obs(p).name
+            write_json(p.with_name(p.name + L.PRUNED_SUFFIX),
+                       {"bytes": size, "pruned": time.strftime("%Y-%m-%d %H:%M:%S"), "obs": rec.get("obs")})
             p.unlink()
-            p.with_name(p.name + L.PRUNED_SUFFIX).write_text(json.dumps(
-                {"bytes": size, "pruned": time.strftime("%Y-%m-%d %H:%M:%S"), "obs": rec.get("obs")}))
         removed.append(rec)
         total += size
         print(f"[prune] {'would remove' if dry_run else 'removed'} {rec['file']} ({size / 2**30:.2f} GiB)", flush=True)
@@ -100,7 +101,29 @@ def prune_unit(unit: Path, dry_run: bool = False) -> dict:
                "kept": [str(L.input_h5ad(unit).relative_to(unit)), L.RELEASE + "/"], "removed": removed,
                "when": time.strftime("%Y-%m-%d %H:%M:%S")}
     if not dry_run:
-        (rel / "pruned.json").write_text(json.dumps(summary, indent=2))
+        previous = rel / "pruned.json"
+        merged = {}
+        if previous.is_file():
+            old = json.loads(previous.read_text())
+            merged.update({r["file"]: r for r in old.get("removed", [])})
+        # An interrupted pass may have deleted files before writing the aggregate
+        # summary. Durable per-file markers recover those completed deletions.
+        # A marker precedes unlink, so an existing matrix is not yet reclaimed.
+        for root in (L.persample_root(unit), L.rounds_root(unit)):
+            for marker in sorted(root.rglob("*.h5ad" + L.PRUNED_SUFFIX)):
+                source = marker.with_name(marker.name[:-len(L.PRUNED_SUFFIX)])
+                if source.exists():
+                    continue
+                saved = json.loads(marker.read_text())
+                rec = {"file": str(source.relative_to(unit)), "bytes": saved["bytes"]}
+                if saved.get("obs"):
+                    rec["obs"] = saved["obs"]
+                merged[rec["file"]] = rec
+        merged.update({r["file"]: r for r in removed})
+        summary["removed"] = list(merged.values())
+        summary["files"] = len(merged)
+        summary["bytes"] = sum(r["bytes"] for r in merged.values())
+        write_json(rel / "pruned.json", summary)
         L.log_event(unit, f"prune: removed {len(removed)} intermediate h5ad(s), {total / 2**30:.1f} GiB reclaimed")
     else:
         print(f"[prune] dry run: {len(removed)} file(s), {total / 2**30:.1f} GiB")
@@ -121,7 +144,13 @@ def main(argv: list[str]) -> int:
         if not (L.release_dir(u) / "summary.md").is_file():
             print(f"[prune] {u.name}: not released, skipped")
             continue
-        prune_unit(u, a.dry_run)
+        from . import downstream as D
+        with D.unit_lock(u):
+            if not a.dry_run:
+                D.check_release(u)
+            prune_unit(u, a.dry_run)
+            if not a.dry_run:
+                D.seal_release(u, L.rounds(u))
     return 0
 
 

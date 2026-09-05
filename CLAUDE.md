@@ -85,7 +85,7 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
 - persample 前半程接入已升级：逐来源实验映射、`eca_sample_id`、上游快照、完整实验池检查；
   同名样本默认跨来源隔离，跨文件合池须显式映射。统一 `ecarsi.osp_worker` 子进程调用 OSP 公共 API。
   每样本成功状态、内容指纹和 QC 细胞守恒共同决定完成；只自动重试明确临时错误，注释失败可单独恢复。
-  参数、迁移及测试见 [FRONT_INTEGRATION.md](FRONT_INTEGRATION.md)。MSP/ZMIP 适配仍冻结。
+  参数、迁移及测试见 [FRONT_INTEGRATION.md](FRONT_INTEGRATION.md)。MSP/ZMIP 冻结已解除；后段升级记录见 [DOWNSTREAM_INTEGRATION.md](DOWNSTREAM_INTEGRATION.md)。
 - zmip plan 有 host 连通性校验:`lineage_islands.csv`(UMAP 2D kNN 连通分量)——把分开的岛并成一个 lineage 直接打回;
   同一岛拆成多个 lineage 打回一次,agent 可带 `confirm_shared_islands: true` 重交,记入 plan 的 `host_warnings` 与 needs_review。
 - 历史测试与服务记录（使用前核对当前目录和进程）：`$SCRATCH/eca-runs/_organize_test/fu2022/fu2022-meniscus` 是旧结构的真实跑(不迁移);
@@ -102,12 +102,19 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
   源码、输入和计划一致时可恢复部分计划；普通空 units 目录不代表组织完成。
 - `run --stop-after organize|persample` 可验证前半程。新版 persample 校验输入/配置/解释器/源码身份和 QC 台账。
   旧 manifest 和 `.pruned` 可以浏览，不能替代新计算的成功证据；前半程变更配置需要新输出目录。
-- crosssample/zoomin 外层仍按原契约跳步，其与活跃开发内核的身份/锁/恢复接缝待用户另行授权。
-  前半程验证不代表整条 release 已验证。已有 `--allow-agent-change` 不覆盖新版 persample 严格身份要求。
+- crosssample/zoomin/loop 通过 `downstream.py` 校验输入内容、实际解释器/源码、计算参数和输出；
+  `unit_lock` 覆盖整个下游写入，MSP pending 与 ZMIP publication 凭证不能被文件跳步绕过。
+  counts 使用 HDF5 直接分块比较，不能用 AnnData backed 模式假设 layers 不占内存。
+- `release_state.py` 在暂存目录生成完整 release 和收据，再可恢复地切换目录；入口先恢复中断发布。
+  重开保留旧 round decision，只新增轮次；已有 release 无收据仅可浏览，计算用新目录。
+  `--allow-agent-change` 不覆盖新版 persample 严格身份要求；下游 agent 预算变化不使计算身份失效。
 - `--force-reopen` 继续已有 release，不等于 ZMIP 的 `--force`；`--rounds N` 是总轮数，要大于已完成轮数。
 - 本轮删除统计从 MSP integrated 到 ZMIP survivors，不含此前 OSP QC 和整样本排除；完整历史查 ledger。
   达到停止阈值不证明注释准确；轮数上限或固定轮数发布应按 reason 与收敛发布区分。
 - `ecarsi.cost` 只累计捕获到的费用事件；缺失记录不能解释成免费或完整账单。
+- MSP/ZMIP 使用 0.3 系列，Harmony 2 为 CPU 实现，无需 torch/MSP_DEVICE；RSI 资源副本已同步。
+- `MSP_BATCH_COL` 可显式选择校正列，完整 OSP 实验内必须只有一个值；默认仍为 `eca_sample_id`，
+  不自动推断 biological condition 应被校正，不将校正分组用于重切 OSP 实验池。
 - 新版内核的输入检查、锁和发布恢复机制不能自动视为 ECA-RSI 外层的端到端保证。
   内核独立验证与配套版本声明也不代替更新组合后的真实运行验证。
 
@@ -116,8 +123,8 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
 ```bash
 # 前半程独立检查；不依赖 MSP/ZMIP
 python -m pytest -q tests/test_front_integration.py tests/test_osp_worker.py tests/test_agent_selection.py
-# 原有跨内核检查保留，MSP/resources 的不一致尚未修改
-python -m pytest -q tests/test_crosssample_cwd.py tests/test_harness_sync.py
+# 下游集成、细胞守恒、发布故障恢复与公共对象身份
+python -m pytest -q tests/test_downstream.py tests/test_downstream_state.py tests/test_ledger_conservation.py tests/test_release_state.py tests/test_crosssample_cwd.py tests/test_harness_sync.py
 ```
 
 纯文档修改检查 `git diff --check`、本地链接和 CLI 示例即可，无需启动模型或数据分析任务。

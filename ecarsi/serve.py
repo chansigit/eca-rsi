@@ -404,12 +404,13 @@ def _navigator_html(items: dict[str, Path], registry_path: Path) -> str:
             "<code>eca-rsi run</code>) or a single <b>unit</b> (contains <code>input/organized.h5ad</code> or "
             "<code>input/manifest.json</code> — e.g. <code>&lt;root&gt;/units/&lt;unit&gt;</code>). "
             "Absolute path on the server host; a raw eca-pp <code>standardize/</code> dir or a bare h5ad is not bindable.")
+    sidebar_rows = "".join(rows) if rows else '<p class="muted" style="padding:.5rem">nothing bound yet</p>'
     sidebar = (
         '<aside class="sb" id="sb"><div class="sb-head">'
         '<div class="ttl"><span>Datasets <small><span id="nav-n">0</span></small></span>'
         '<button class="icon" id="sb-toggle" title="hide sidebar">&#9776;</button></div>'
         '<input id="nav-q" type="search" placeholder="search name / path / stage / job…" autocomplete="off"></div>'
-        f'<div class="sb-list">{"".join(rows) if rows else "<p class=\"muted\" style=\"padding:.5rem\">nothing bound yet</p>"}</div>'
+        f'<div class="sb-list">{sidebar_rows}</div>'
         '<div class="sb-foot">'
         '<div class="row"><button id="bind-open" class="btn sm">+ Bind…</button><button id="unbind-go" class="btn sm danger" disabled>Unbind…</button></div>'
         '<div id="bind-form" class="callout" style="display:none"><b>Directory to bind</b>'

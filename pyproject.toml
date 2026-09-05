@@ -15,8 +15,8 @@ requires-python = ">=3.10"
 # may point at other interpreters), so they are not import-time dependencies
 # of ecarsi. Install them per INSTALL.md.
 dependencies = [
-    "agent-harness-bridge[all]>=0.2.0,<0.3",
-    "anndata",
+    "agent-harness-bridge[all]>=0.2.1,<0.3",
+    "anndata>=0.11",
     "scanpy",
     "h5py",
     "numpy",
@@ -28,8 +28,8 @@ dependencies = [
 eca-rsi = "ecarsi.__main__:main"
 
 [project.optional-dependencies]
-kernels = ["osp-sc[agent]>=0.1.1,<0.2", "msp-sc[agent]>=0.2.0", "zmip>=0.1.0"]
-front = ["osp-sc[agent]>=0.1.1,<0.2"]  # tested source revision is recorded in FRONT_COMPATIBILITY.json
+kernels = ["osp-sc[agent]>=0.1.2,<0.2", "msp-sc[agent]>=0.3.1,<0.4", "zmip>=0.3.1,<0.4"]
+front = ["osp-sc[agent]>=0.1.2,<0.2"]  # tested source revision is recorded in FRONT_COMPATIBILITY.json
 
 [tool.setuptools]
 packages = ["ecarsi"]

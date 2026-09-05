@@ -49,6 +49,9 @@ import time
 from pathlib import Path
 
 from . import cost, crosssample, prune, review, zoomin
+from . import downstream as D
+from . import release_state as R
+from .run_state import file_identity, read_json, write_json
 from . import layout as L
 from .index import fmt_elapsed, read_stats, write_all
 from .ledger import run_ledger
@@ -139,26 +142,26 @@ def _run_msp_from_h5ad(py: str, h5ad: Path, outdir: Path, batch_col: str, specie
         cmd += ["--species", species]
     if context:
         cmd += ["--report-context", context]
+    cmd += D.options("msp")
     cmd_s = " ".join(shlex.quote(c) for c in cmd)
     print(f"[msp] {cmd_s}", flush=True)
-    if L.complete(outdir, L.MSP_CONTRACT):
-        print("[msp] contract already satisfied — skipping (resume)")
-        return 0
-    ret = subprocess.run(cmd_s, shell=True).returncode
+    identity = D.prepare(py, "msp", [h5ad], outdir,
+                         {"batch_col": batch_col, "species": species, "options": D.options("msp")})
+    unit = outdir.parent.parent.parent
+    ret = cost.run_streamed(cmd_s, unit, f"{outdir.parent.name}/{L.CROSSSAMPLE}")
     if ret != 0:
         return ret
     missing = [f for f in L.MSP_CONTRACT if not (outdir / f).is_file()]
     if missing:
         print(f"[fail] msp exited 0 but contract files missing: {missing}")
         return 1
+    D.verify(py, "msp", [h5ad], outdir, identity)
     return 0
 
 
 # ---------------------------------------------------------------- release
 
-def _release(unit: Path, rounds: list[Path], stats: list[dict], forced: bool, superseded: bool) -> None:
-    rel = L.release_dir(unit)
-    rel.mkdir(exist_ok=True)
+def _write_release(unit: Path, rounds: list[Path], stats: list[dict], forced: bool, superseded: bool, rel: Path) -> None:
     last = rounds[-1]
     final_src = L.zoomin_dir(last) / "annotated_zmip.h5ad"
     final = rel / "final.h5ad"
@@ -183,7 +186,7 @@ def _release(unit: Path, rounds: list[Path], stats: list[dict], forced: bool, su
     summary = [f"# Release — {unit.name}", "",
                f"Rounds: {len(rounds)}" + (" (FORCED at the safety cap)" if forced else f" ({stats[-1].get('reason', '')})")
                + (" — supersedes an earlier release (--force-reopen)" if superseded else ""),
-               f"Final cells: {stats[-1]['n_out']}", f"Output h5ad: {final}",
+               f"Final cells: {stats[-1]['n_out']}", f"Output h5ad: {L.release_dir(unit) / 'final.h5ad'}",
                f"(= {final_src.relative_to(unit)}; zmip_ann_coarse / zmip_ann_fine are the final labels)", "",
                "| round | cells in | cells out | removed | removed % | decision | reason | wall time |",
                "|---|---|---|---|---|---|---|---|", rows, "",
@@ -200,15 +203,22 @@ def _release(unit: Path, rounds: list[Path], stats: list[dict], forced: bool, su
     (rel / "summary.json").write_text(json.dumps({
         "unit": unit.name, "rounds": len(rounds), "forced": forced, "superseded": superseded,
         "final_cells": stats[-1]["n_out"], "input_cells": stats[0]["n_in"] if stats else None,
-        "final_h5ad": str(final), "labels": ["zmip_ann_coarse", "zmip_ann_fine"],
+        "final_h5ad": str(L.release_dir(unit) / "final.h5ad"), "labels": ["zmip_ann_coarse", "zmip_ann_fine"],
         "round_stats": stats, "needs_review": {t: n for _, t, n, _ in review.counts(items)},
         "agent_cost": cost.summarize(unit)}, indent=2, default=str))
+
+
+def _release(unit: Path, rounds: list[Path], stats: list[dict], forced: bool, superseded: bool) -> None:
+    with R.publication(unit) as stage:
+        _write_release(unit, rounds, stats, forced, superseded, stage)
+        D.seal_release(unit, rounds, release_dir=stage)
     write_all(unit)
     _log(unit, f"release rounds={len(rounds)} final_cells={stats[-1]['n_out']} forced={forced}")
 
 
 # ---------------------------------------------------------------- main
 
+@D.locked_unit
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="ecarsi.loop", description=__doc__)
     ap.add_argument("unit", help="organize unit dir (persample/ completed inside)")
@@ -226,12 +236,22 @@ def main(argv: list[str]) -> int:
         return 2
     L.rounds_root(unit).mkdir(exist_ok=True)
 
+    R.recover(unit)
     superseded = False
+    published_rounds = 0
     summary = L.release_dir(unit) / "summary.md"
     if summary.is_file():
+        D.check_release(unit)
         if not args.force_reopen:
+            if not args.no_prune:
+                prune.prune_unit(unit)
+                D.seal_release(unit, L.rounds(unit))
             print(f"[loop] already released: {summary} (use --force-reopen to continue)")
             return 0
+        published_rounds = int(read_json(L.release_dir(unit) / "summary.json")["rounds"])
+        limit = args.rounds if args.rounds is not None else args.cap
+        if limit <= published_rounds:
+            raise ValueError("force-reopen requires a round limit greater than the published history")
         superseded = True
         _log(unit, "force-reopen: continuing past existing release")
 
@@ -247,6 +267,8 @@ def main(argv: list[str]) -> int:
         rounds.append(rdir)
         dec_p, st_p = rdir / L.DECISION, rdir / L.STATS
         if dec_p.is_file() and st_p.is_file():
+            if not superseded or n > published_rounds:
+                D.check_round(rdir)
             st = read_stats(st_p)
             st.setdefault("elapsed_s", _elapsed_from_log(unit, n))
             stats.append(st)
@@ -257,12 +279,8 @@ def main(argv: list[str]) -> int:
             if decision == "release" and not (superseded and n == len(stats)):
                 break
             if decision == "release":
-                # reopened past this release: the round is no longer the last one
-                st["decision"] = decision = "continue"
-                st["reason"] = "reopened (--force-reopen)"
-                _write_stats(st_p, st)
-                dec_p.write_text("continue\n")
-                _log(unit, f"round {n} decision rewritten release → continue (force-reopen)")
+                # Keep historical decisions immutable; reopening adds a new round.
+                _log(unit, f"round {n} historical release retained; continuing (--force-reopen)")
             continue
 
         _log(unit, f"round {n} start")
@@ -279,12 +297,22 @@ def main(argv: list[str]) -> int:
             from . import check_agent_config
 
             check_agent_config(man, str(L.round_dir(unit, 1) / L.MANIFEST))
+            requested_batch = os.environ.get("MSP_BATCH_COL")
+            if requested_batch and requested_batch != man["batch_col"]:
+                raise ValueError("MSP_BATCH_COL changed after round 1; use a new output directory")
             inp = rdir / L.ROUND_INPUT
-            if not inp.is_file():
-                src = L.zoomin_dir(prev) / "annotated_zmip.h5ad"
-                if not src.is_file() and (L.release_dir(unit) / "final.h5ad").is_file():
-                    src = L.release_dir(unit) / "final.h5ad"  # the pruned round's survivors live on as the release
+            src = L.zoomin_dir(prev) / "annotated_zmip.h5ad"
+            if not src.is_file() and n - 1 == published_rounds and (L.release_dir(unit) / "final.h5ad").is_file():
+                src = L.release_dir(unit) / "final.h5ad"
+            receipt = rdir / "input_identity.json"
+            source_identity = file_identity(src)
+            if inp.is_file():
+                saved = read_json(receipt)
+                if saved != {"source": source_identity, "input": file_identity(inp)}:
+                    raise ValueError("round input changed or comes from a different previous result")
+            else:
                 _prepare_input(src, inp, n - 1)
+                write_json(receipt, {"source": source_identity, "input": file_identity(inp)})
                 _log(unit, f"round {n} input prepared from round {n - 1} ({_n_obs(inp)} cells)")
             ret = _run_msp_from_h5ad(py, inp, L.crosssample_dir(rdir), man["batch_col"], man.get("species"), model(),
                                      L.report_context(unit, rdir))
@@ -311,6 +339,7 @@ def main(argv: list[str]) -> int:
                    f"[{reason}] elapsed={fmt_elapsed(st['elapsed_s'])}")
         run_ledger(unit, rounds, L.ledger_dir(rdir))
         dec_p.write_text(decision + "\n")
+        D.seal_round(rdir)
         write_all(unit)
         if decision == "release":
             break
@@ -319,6 +348,7 @@ def main(argv: list[str]) -> int:
     _release(unit, rounds, stats, forced, superseded)
     if not args.no_prune:
         prune.prune_unit(unit)
+    D.seal_release(unit, rounds)
     print(f"[done] {summary}")
     return 0
 
