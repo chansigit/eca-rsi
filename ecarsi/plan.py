@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 from .harness import ToolSpec, run_agent
@@ -112,6 +113,8 @@ async def _propose(profiles: list[dict]) -> dict:
 def _validate(plan: dict, profiles: list[dict]) -> None:
     """Executor-side sanity: every member references a real unit and a real
     obs column; unit names unique. Schema handled the shapes already."""
+    if not isinstance(plan, dict) or not plan.get("analysis_units"):
+        raise ValueError("plan needs nonempty analysis_units")
     known = {p["name"]: p for p in profiles}
     by_h5ad = {p["h5ad"]: p["name"] for p in profiles}  # tolerate agent citing the h5ad path instead of the unit name
     # tolerate whitespace/quoting noise and path variants (resolved symlinks,
@@ -122,6 +125,8 @@ def _validate(plan: dict, profiles: list[dict]) -> None:
     if len(names) != len(set(names)):
         raise ValueError(f"duplicate analysis unit names in plan: {names}")
     for au in plan["analysis_units"]:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", au["name"]) or not au.get("members"):
+            raise ValueError("analysis unit needs a safe name and nonempty members")
         for m in au["members"]:
             src = m["source"]
             if src not in known:
@@ -150,3 +155,6 @@ def _validate(plan: dict, profiles: list[dict]) -> None:
                     f"plan filters {m['source']!r} on obs column {flt['column']!r}, "
                     "which its profile does not contain"
                 )
+        species = {known[m["source"]].get("species") for m in au["members"]}
+        if None in species or len(species) != 1:
+            raise ValueError(f"analysis unit {au['name']!r} must contain one resolved species: {species}")

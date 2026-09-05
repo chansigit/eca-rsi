@@ -1,31 +1,7 @@
-"""ecarsi-persample — identify the 10x-run sample column, then run osp per sample.
+"""Source-scoped experiment mapping and resumable OSP workers.
 
-    python -m ecarsi.persample <unit_dir | organized.h5ad> [out_dir] [--annotate]
-
-Runs after ecarsi.organize, once per analysis unit. Four stages:
-
-  1. PROFILE (code): obs-column profile of the organized h5ad.
-  2. IDENTIFY (agent, submit tool): which obs column is the 10x-run-level
-     sample column (null → whole file is one run). The decision is
-     persisted to <out_dir>/manifest.json — re-runs reuse it.
-  3. DRIVE (code): every pending sample's cells are written to
-     <sample dir>/subset.h5ad and `python -m osp` runs on that subset as a
-     child process; several samples run side by side, concurrency sized
-     from what this process may actually use (ecarsi.resources: affinity
-     CPUs + cgroup memory — nothing is passed in from the job script) and a
-     per-sample memory estimate. A sample is done when its contract files
-     exist (report.html + clustered.h5ad, plus annotation_proposal.json
-     when annotating); done samples are skipped on resume. A failed sample
-     is retried once, then recorded in <out_dir>/failures.md and skipped so
-     it never blocks the rest.
-  4. VERIFY (code): hard exit listing whatever is still missing.
-
-Env: HARNESS / MODEL (identify agent + osp --annotate; defaults per harness),
-OSP_PYTHON (interpreter that has osp installed; defaults to this
-interpreter), PERSAMPLE_PARALLEL (hard cap on concurrent samples, 1 =
-sequential; default min(#samples, cpus // 2)), PERSAMPLE_MEM_PER_CELL_MB
-(RAM an osp run of N cells is assumed to need per cell, default 0.5, plus
-1 GiB fixed per child — a 5k-cell Fu2022 sample peaked at 2.5 GiB).
+Every sample requires a successful run record plus validated counts, annotation
+and per-cell QC ledger. Input/config/source changes require a new output root.
 """
 
 from __future__ import annotations
@@ -44,12 +20,16 @@ from pathlib import Path
 
 from . import cost
 from . import layout as L
+from .run_state import digest, file_identity, read_json, write_json, writer_lock
+from .sample_mapping import SAMPLE_KEY, build_mapping, mapping_identity, obs_profile
+from .osp_contract import INPUT_CELLS, REQUEST, is_done
 
 SAMPLE_COL_SCHEMA = {
     "type": "object",
     "properties": {
         "sample_column": {"type": ["string", "null"]},
         "rationale": {"type": "string"},
+        "confirmed_single": {"type": "boolean"},
     },
     "required": ["sample_column", "rationale"],
 }
@@ -64,35 +44,33 @@ FIXED_BYTES_PER_CHILD = 1 << 30
 
 def profile_obs(h5ad: Path, max_levels: int = 50) -> dict:
     import anndata as ad
-
     a = ad.read_h5ad(h5ad, backed="r")
-    cols = {}
-    for c in a.obs.columns:
-        s = a.obs[c]
-        nuniq = int(s.nunique(dropna=True))
-        entry: dict = {"dtype": str(s.dtype), "n_unique": nuniq, "n_na": int(s.isna().sum())}
-        if nuniq <= max_levels and (s.dtype == object or str(s.dtype) == "category"):
-            # drop unused categorical levels — phantom zero counts would
-            # pollute the profile the agent reasons over
-            entry["value_counts"] = {str(k): int(v) for k, v in s.value_counts().items() if v}
-        cols[str(c)] = entry
-    prof = {"n_obs": int(a.n_obs), "obs_columns": cols}
-    a.file.close()
-    return prof
+    try:
+        return obs_profile(a.obs)
+    finally:
+        a.file.close()
 
 
 # ------------------------------------------------------- identify (agent)
 
 
-def _validate_sample_column(decision: dict, profile: dict) -> str | None:
+def _validate_sample_column(decision: dict, profile: dict, *, allow_unknown: bool = False) -> str | None:
     """None if valid, else a problem description (fix-and-resubmit style)."""
+    if not isinstance(decision, dict) or "sample_column" not in decision:
+        return "decision must contain sample_column"
     col = decision.get("sample_column")
+    if not isinstance(decision.get("rationale"), str) or not decision["rationale"].strip():
+        return "experiment decision requires a rationale"
     if col is None:
-        return None
+        if allow_unknown and decision.get("confirmed_single") is False:
+            return None  # valid uncertainty; execution still requires an explicit partition
+        return None if decision.get("confirmed_single") is True else "unknown grouping is not a confirmed single experiment"
+    if not isinstance(col, str) or col in ("source_unit", "eca_source_cell_id", "eca_pp_cell_type", SAMPLE_KEY):
+        return "sample_column must be an experiment column, not a bookkeeping/cell-type column"
     info = profile["obs_columns"].get(col)
     if info is None:
         return f"picked obs column {col!r}, which does not exist"
-    if not 1 <= info["n_unique"] <= 200:
+    if info["n_unique"] < 1:
         return f"sample column {col!r} has {info['n_unique']} levels — implausible for 10x runs"
     if info.get("n_na", 0) > 0:
         # a column that leaves cells unassigned is not a partition: those
@@ -127,7 +105,9 @@ async def _identify(profile: dict) -> dict:
         if missing:
             return {"content": [{"type": "text", "text": f"missing field(s) {missing}, fix and resubmit"}],
                     "is_error": True}
-        problem = _validate_sample_column(decision, profile)
+        # Accept an honest unknown decision. build_mapping then stops before
+        # computation; repeatedly demanding resubmission would invite guesses.
+        problem = _validate_sample_column(decision, profile, allow_unknown=True)
         if problem:
             return {"content": [{"type": "text", "text": f"{problem} — fix and resubmit"}], "is_error": True}
         return {"content": [{"type": "text", "text": "recorded"}], "is_error": False, "_submitted": decision}
@@ -168,60 +148,15 @@ def list_samples(h5ad: Path, col: str) -> dict[str, int]:
     return counts
 
 
-def _osp_command(py: str, subset: Path, col: str, value: str, outdir: Path,
-                 annotate: bool, model: str, species: str | None, tissue: str | None,
-                 context: str | None = None) -> str:
-    cmd = [py, "-m", "osp", str(subset), "--sample-col", col, "--sample", value,
-           "--outdir", str(outdir)]
-    if context:
-        cmd += ["--report-context", context]
-    if annotate:
-        cmd += ["--annotate", "--model", model]
-        if species:
-            cmd += ["--species", species]
-        if tissue:
-            cmd += ["--tissue", tissue]
-    return " ".join(shlex.quote(c) for c in cmd)
-
-
-def _whole_file_command(py: str, h5ad: Path, outdir: Path, annotate: bool, model: str,
-                        species: str | None, tissue: str | None, context: str | None = None) -> str:
-    code = (
-        "import scanpy as sc; from osp import run_one_sample_pipeline, generate_report; "
-        "from osp.report import write_report_context; "
-        f"write_report_context({str(outdir)!r}, {context!r}); "
-        f"a = sc.read_h5ad({str(h5ad)!r}); a.obs['sample'] = 'all'; "
-        f"run_one_sample_pipeline(a, sample_label='all', outdir={str(outdir)!r}); "
-        f"print(generate_report({str(outdir)!r}))"
-    )
-    if annotate:
-        code += (
-            "; from osp.annotate import propose_annotation; "
-            f"propose_annotation({str(outdir)!r}, model={model!r}, "
-            f"species={species!r}, tissue={tissue!r})"
-        )
-    return " ".join(shlex.quote(c) for c in [py, "-c", code])
-
-
-def build_entries(h5ad: Path, col: str | None, counts: dict[str, int], out_root: Path,
-                  py: str, annotate: bool, model: str,
-                  species: str | None = None, tissue: str | None = None,
-                  context: str | None = None) -> list[dict]:
-    entries: list[dict] = []
-    seen: set[str] = set()
-    for value, n in counts.items():
-        base = _safe_name(value)
-        name, i = base, 1
-        while name in seen:  # dedup against names actually produced
-            name, i = f"{base}_{i}", i + 1
-        seen.add(name)
+def build_entries(h5ad, col, counts, out_root, py, annotate, model,
+                  species=None, tissue=None, context=None):
+    entries = []
+    for value, n in sorted(counts.items()):
+        name = _safe_name(value)[:80] + "_" + digest(value)[:12]
         outdir = out_root / name
-        if col is None:
-            command = _whole_file_command(py, h5ad, outdir, annotate, model, species, tissue, context)
-        else:
-            command = _osp_command(py, outdir / SUBSET_FILE, col, value, outdir, annotate, model,
-                                   species, tissue, context)
-        entries.append({"value": value, "n_cells": n, "outdir": str(outdir), "command": command})
+        command = [py, "-m", "ecarsi.osp_worker", str(outdir / REQUEST)]
+        entries.append({"value": value, "n_cells": n, "outdir": str(outdir),
+                        "command": command})
     return entries
 
 
@@ -250,8 +185,7 @@ def _upstream_species(unit: Path) -> str | None:
 
 
 def _is_done(outdir: Path, annotate: bool = False) -> bool:
-    files = CONTRACT + (("annotation_proposal.json",) if annotate else ())
-    return all(L.present(outdir / f) for f in files)
+    return is_done(outdir, annotate)
 
 
 # ----------------------------------------------------------- drive (pool)
@@ -278,28 +212,26 @@ def plan_concurrency(pending: list[dict]) -> tuple[int, int, int]:
     return max_parallel, budget, threads
 
 
-def write_subsets(h5ad: Path, col: str, pending: list[dict]) -> None:
-    """One <sample dir>/subset.h5ad per pending sample (skipped when present),
-    the sample column cast to str so osp's `--sample <value>` comparison
-    holds whatever dtype the column had."""
-    todo = [e for e in pending if not (Path(e["outdir"]) / SUBSET_FILE).is_file()]
-    if not todo:
-        return
-    import scanpy as sc
-
-    print(f"[subset] reading {h5ad.name} once to write {len(todo)} sample subset(s)", flush=True)
-    full = sc.read_h5ad(h5ad)
-    key = full.obs[col].astype(str)
-    for e in todo:
+def write_subsets(h5ad: Path, mapping, pending: list[dict]) -> None:
+    """Regenerate pending subsets from the verified input, never reuse by name."""
+    import anndata as ad
+    import pandas as pd
+    full = ad.read_h5ad(h5ad)
+    for e in pending:
         outdir = Path(e["outdir"])
         outdir.mkdir(parents=True, exist_ok=True)
-        sub = full[(key == e["value"]).values].copy()
-        sub.obs[col] = sub.obs[col].astype(str)
-        tmp = outdir / (SUBSET_FILE + ".tmp")
-        sub.write_h5ad(tmp)
-        os.replace(tmp, outdir / SUBSET_FILE)
-        print(f"[subset] {e['value']}: {sub.n_obs} cells -> {outdir / SUBSET_FILE}", flush=True)
-    del full
+        ids = mapping.index[mapping[SAMPLE_KEY] == e["value"]]
+        with writer_lock(outdir / ".writer.lock"):
+            sub = full[ids].copy()
+            sub.obs[SAMPLE_KEY] = e["value"]
+            tmp = outdir / "subset.tmp.h5ad"
+            sub.write_h5ad(tmp)
+            os.replace(tmp, outdir / SUBSET_FILE)
+            pd.DataFrame({"cell_id": ids}).to_csv(outdir / INPUT_CELLS, index=False,
+                                                compression={"method": "gzip", "mtime": 0})
+            e["request"]["subset_identity"] = file_identity(outdir / SUBSET_FILE)
+            write_json(outdir / REQUEST, e["request"])
+        print(f"[subset] {e['value']}: {len(ids)} cells", flush=True)
 
 
 def _pump(proc: subprocess.Popen, tag: str, tail: deque, unit: Path | None = None) -> None:
@@ -320,6 +252,8 @@ def drive(pending: list[dict], out_root: Path, annotate: bool, on_done=None) -> 
     Returns the entries that did not finish."""
     import resource
 
+    if not pending:
+        return []
     pending = sorted(pending, key=lambda e: -e["n_cells"])  # biggest first: it bounds the wall-clock
     max_parallel, budget, threads = plan_concurrency(pending)
     from .resources import available_cpus, available_memory_bytes
@@ -328,6 +262,8 @@ def drive(pending: list[dict], out_root: Path, annotate: bool, on_done=None) -> 
           f"memory budget {budget / 2**30:.1f} GiB ({available_cpus()} cpu(s), "
           f"{available_memory_bytes() / 2**30:.1f} GiB available)", flush=True)
     env = dict(os.environ)
+    # Also supports OSP_PYTHON with only the kernel installed.
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent) + os.pathsep + env.get("PYTHONPATH", "")
     for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS",
               "MSP_MAX_THREADS"):
         env[k] = str(threads)
@@ -342,25 +278,26 @@ def drive(pending: list[dict], out_root: Path, annotate: bool, on_done=None) -> 
             rc = proc.poll()
             if rc is None:
                 continue
-            proc.stdout.close()
             del running[value]
             took = (time.time() - t0) / 60
             outdir = Path(e["outdir"])
-            if rc == 0 and _is_done(outdir, annotate):
+            if rc == 0 and is_done(outdir, annotate, e.get("identity")):
                 print(f"[drive] {value} done in {took:.1f} min", flush=True)
                 (outdir / SUBSET_FILE).unlink(missing_ok=True)
+                (outdir / "computed.h5ad").unlink(missing_ok=True)
+                (outdir / "compute_state.json").unlink(missing_ok=True)
                 if on_done:
                     on_done(e, took)
-            elif attempts[value] < 2:
+            elif (attempts[value] < 2 and (outdir / L.RUN_STATE).is_file()
+                  and read_json(outdir / L.RUN_STATE).get("retryable") is True):
                 print(f"[drive] {value} FAILED (exit {rc}) after {took:.1f} min — retrying once", flush=True)
                 queue.append(e)
             else:
-                print(f"[drive] {value} FAILED again (exit {rc}) after {took:.1f} min — recorded, moving on",
+                print(f"[drive] {value} FAILED (exit {rc}) after {took:.1f} min — recorded, moving on",
                       flush=True)
                 with open(out_root / "failures.md", "a") as f:
                     f.write(f"## {value} ({e['n_cells']} cells) — exit {rc}, {time.strftime('%Y-%m-%d %H:%M')}\n\n"
-                            f"command: `{e['command']}`\n\n```\n" + "\n".join(tail) + "\n```\n\n")
-                (outdir / SUBSET_FILE).unlink(missing_ok=True)
+                            f"command: `{shlex.join(e['command'])}`\n\n```\n" + "\n".join(tail) + "\n```\n\n")
                 failed.append(e)
         used = sum(est for _, est, _, _, _ in running.values())
         while queue and len(running) < max_parallel:
@@ -374,7 +311,7 @@ def drive(pending: list[dict], out_root: Path, annotate: bool, on_done=None) -> 
             outdir.mkdir(parents=True, exist_ok=True)
             attempts[value] = attempts.get(value, 0) + 1
             tail: deque = deque(maxlen=40)
-            proc = subprocess.Popen(e["command"], shell=True, stdout=subprocess.PIPE,
+            proc = subprocess.Popen(e["command"], stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT, text=True, env=env, bufsize=1,
                                     cwd=str(outdir))
             threading.Thread(target=_pump, args=(proc, value, tail, out_root.parent if out_root.name == L.PERSAMPLE else None), daemon=True).start()
@@ -395,112 +332,152 @@ def drive(pending: list[dict], out_root: Path, annotate: bool, on_done=None) -> 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="ecarsi.persample", description=__doc__)
-    ap.add_argument("unit", help="organize unit dir (with input/organized.h5ad) or an h5ad path")
-    ap.add_argument("out", nargs="?", help="output root (default <unit>/persample)")
-    ap.add_argument("--annotate", action=argparse.BooleanOptionalAction, default=None,
-                    help="run osp's annotation agent per sample (default on; --no-annotate to "
-                         "skip; a resumed run reuses the recorded choice unless overridden)")
-    ap.add_argument("--species", default=None, help="context passed to osp --annotate")
-    ap.add_argument("--tissue", default=None, help="context passed to osp --annotate")
-    ap.add_argument("--plan-only", action="store_true",
-                    help="identify the sample column, write the manifest and print the "
-                         "per-sample commands, but do not drive any osp run")
+    ap.add_argument("unit")
+    ap.add_argument("out", nargs="?")
+    for option in ("annotate", "scrublet", "decontx"):
+        ap.add_argument("--" + option, action=argparse.BooleanOptionalAction, default=None)
+    for option in ("species", "tissue", "language"):
+        ap.add_argument("--" + option)
+    ap.add_argument("--effort", choices=["low", "medium", "high", "xhigh", "max"])
+    ap.add_argument("--resolution", type=float)
+    group = ap.add_mutually_exclusive_group()
+    group.add_argument("--sample-column", help="explicit experiment column, scoped independently per source")
+    group.add_argument("--single-sample", action="store_true", help="explicitly confirm one complete experiment")
+    group.add_argument("--sample-map", help="JSON source decisions and explicit cross-source merges")
+    ap.add_argument("--plan-only", action="store_true")
     args = ap.parse_args(argv)
-
     unit = Path(args.unit).resolve()
     bare = unit.suffix == ".h5ad"
     h5ad = unit if bare else L.input_h5ad(unit)
-    if not h5ad.is_file():
-        print(f"no input h5ad at {h5ad}")
-        return 2
-    out_root = Path(args.out).resolve() if args.out else (
-        h5ad.parent / L.PERSAMPLE if bare else L.persample_root(unit)
-    )
-    from . import agent_config, check_agent_config, model as _model
+    out = Path(args.out).resolve() if args.out else (h5ad.parent / L.PERSAMPLE if bare else L.persample_root(unit))
+    try:
+        with writer_lock(out / ".driver.lock"):
+            return _run(args, unit, h5ad, out, bare)
+    except (ValueError, RuntimeError, OSError, KeyError, subprocess.CalledProcessError) as exc:
+        print(f"[persample] {exc}")
+        return 1
 
+
+def _kernel_runtime(py: str) -> dict:
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent) + os.pathsep + env.get("PYTHONPATH", "")
+    result = subprocess.run([py, "-c", "import json; from ecarsi.run_state import runtime_identity; print(json.dumps(runtime_identity()))"],
+                            capture_output=True, text=True, env=env, check=True)
+    return json.loads(result.stdout)
+
+
+def _run(args, unit, h5ad, out, bare):
+    import pandas as pd
+    import anndata as ad
+    from . import agent_config, model as selected_model
+    from .upstream import validate_matrix, verify_snapshots
+
+    identity = file_identity(h5ad)
+    a = ad.read_h5ad(h5ad, backed="r")
+    try:
+        validate_matrix(a)
+    finally:
+        a.file.close()
+    metadata = None if bare else file_identity(L.input_manifest(unit))
+    if not bare:
+        verify_snapshots(L.input_manifest(unit).parent, read_json(L.input_manifest(unit)))
+    path = out / L.MANIFEST
+    old = read_json(path) if path.is_file() else None
+    if old and old.get("schema_version") != 2:
+        raise ValueError("legacy persample is readable but cannot claim verified resume; use a new output directory")
+    config = {"annotate": True, "scrublet": True, "decontx": True, "resolution": 1.0,
+              "species": None if bare else _upstream_species(unit), "tissue": None,
+              "language": "English", "effort": None, **agent_config()}
+    if old:
+        config.update(old["config"])
+    config.update(agent_config())
+    for key in ("annotate", "scrublet", "decontx", "resolution", "species", "tissue", "language", "effort"):
+        if getattr(args, key) is not None:
+            config[key] = getattr(args, key)
+    import math
+    if not math.isfinite(config["resolution"]) or config["resolution"] <= 0:
+        raise ValueError("resolution must be finite and positive")
     py = os.environ.get("OSP_PYTHON", sys.executable)
-    model = _model()
-    context = None if bare else L.report_context(unit)
-
-    mpath = out_root / "manifest.json"
-    if mpath.is_file():
-        # resume must reproduce the recorded run unless the CLI explicitly
-        # overrides — a bare re-invocation may not silently change behavior
-        with open(mpath) as f:
-            man = json.load(f)
-        check_agent_config(man, str(mpath))
-        col = man["sample_column"]
-        counts = {s["value"]: s["n_cells"] for s in man["samples"]}
-        annotate = man.get("annotate", True) if args.annotate is None else args.annotate
-        species = args.species or man.get("species")
-        tissue = args.tissue or man.get("tissue")
-        print(f"[identify] reusing recorded sample column: {col!r} (species {species!r})")
-        entries = build_entries(h5ad, col, counts, out_root, py, annotate, model,
-                                species, tissue, context)
+    runtime = _kernel_runtime(py)
+    spec = read_json(Path(args.sample_map)) if args.sample_map else None
+    explicit = {"sample_map": spec, "column": args.sample_column, "single": args.single_sample}
+    if old:
+        if (old["input_identity"] != identity or old.get("metadata_identity") != metadata or
+                old["config"] != config or old["runtime"] != runtime):
+            raise ValueError("input, configuration or runtime changed; use a new output directory")
+        if any((spec is not None, args.sample_column, args.single_sample)) and old["explicit_mapping"] != explicit:
+            raise ValueError("experiment mapping changed; use a new output directory")
+        table = pd.read_csv(out / L.SAMPLE_MAPPING, index_col=0, dtype=str, keep_default_na=False)
+        table.index = table.index.astype(str)
+        if mapping_identity(table) != old["mapping_identity"]:
+            raise ValueError("recorded cell/sample mapping changed")
+        decision = old["sample_mapping"]
     else:
-        profile = profile_obs(h5ad)
-        decision = identify_sample_column(profile)
-        cost.record(out_root.parent if out_root.name == L.PERSAMPLE else out_root, f"{L.PERSAMPLE}/identify", getattr(identify_sample_column, "last_cost", None), "identify sample column")
-        col = decision["sample_column"]
-        annotate = True if args.annotate is None else args.annotate
-        species = args.species or (None if bare else _upstream_species(unit))
-        tissue = args.tissue
-        print(f"[identify] sample column: {col!r} (species {species!r}) — {decision['rationale']}")
-        counts = list_samples(h5ad, col) if col is not None else {"all": profile["n_obs"]}
-        entries = build_entries(h5ad, col, counts, out_root, py, annotate, model,
-                                species, tissue, context)
-        man = {
-            "h5ad": str(h5ad),
-            **agent_config(),
-            "sample_column": col,
-            "rationale": decision["rationale"],
-            "species": species,
-            "tissue": tissue,
-            "annotate": annotate,
-            # dir recorded so downstream (crosssample) never re-derives names
-            "samples": [{"value": e["value"], "n_cells": e["n_cells"], "dir": e["outdir"]}
-                        for e in entries],
-        }
-        out_root.mkdir(parents=True, exist_ok=True)
-        with open(mpath, "w") as f:
-            json.dump(man, f, indent=2)
-    print(f"[samples] {len(entries)}: " + ", ".join(f"{e['value']}({e['n_cells']})" for e in entries))
+        table, decision = build_mapping(h5ad, None if bare else unit, spec, identify_sample_column,
+                                        args.sample_column, args.single_sample)
+    counts = {str(k): int(v) for k, v in table[SAMPLE_KEY].value_counts().items()}
+    entries = build_entries(h5ad, SAMPLE_KEY, counts, out, py, config["annotate"], selected_model())
+    run_identity = digest({"input": identity, "metadata": metadata, "config": config,
+                           "runtime": runtime, "mapping": mapping_identity(table)})
+    for e in entries:
+        e["identity"] = digest([run_identity, e["value"]])
+        e["request"] = {"identity": e["identity"], "config": config, "runtime": runtime,
+                        "value": e["value"], "n_cells": e["n_cells"],
+                        "context": None if bare else L.report_context(unit)}
+    man = {"schema_version": 2, "state": old.get("state", "planned") if old else "planned", "h5ad": str(h5ad), **agent_config(),
+           "input_identity": identity, "metadata_identity": metadata, "runtime": runtime, "config": config,
+           "sample_column": SAMPLE_KEY, "sample_mapping": decision, "explicit_mapping": old["explicit_mapping"] if old else explicit,
+           "mapping_identity": mapping_identity(table), "identity": run_identity,
+           "species": config["species"], "tissue": config["tissue"], "annotate": config["annotate"],
+           "rationale": "source-scoped experiment decisions; see sample_mapping",
+           "samples": [{"value": e["value"], "n_cells": e["n_cells"], "dir": e["outdir"], "identity": e["identity"]} for e in entries]}
+    if not old:
+        table.to_csv(out / L.SAMPLE_MAPPING, index_label="cell_id")
+    write_json(path, man)
     if args.plan_only:
         for e in entries:
-            print(f"[plan] {e['value']}: {e['command']}")
-        print("[plan-only] manifest written, nothing driven")
+            print(f"[plan] {e['value']} ({e['n_cells']} cells): {shlex.join(e['command'])}")
         return 0
-
-    in_unit = not bare and L.is_unit(unit)
-    if in_unit:
-        L.log_event(unit, f"persample start: {len(entries)} sample(s), column {col!r}")
-    pending = [e for e in entries if not _is_done(Path(e["outdir"]), annotate)]
+    pending = [e for e in entries if not is_done(Path(e["outdir"]), config["annotate"], e["identity"])]
+    failed = []
     if pending:
-        print(f"[drive] {len(pending)} sample(s) pending: " + ", ".join(e["value"] for e in pending))
-        if col is not None:
-            write_subsets(h5ad, col, pending)
-
-        def on_done(e, took):
-            if in_unit:
-                L.log_event(unit, f"persample sample {e['value']} done: {e['n_cells']} cells, {took:.1f} min")
-                from .index import write_all
-
-                write_all(unit)
-
-        drive(pending, out_root, annotate, on_done)
-    missing = [e["value"] for e in entries if not _is_done(Path(e["outdir"]), annotate)]
-    if missing:
-        if in_unit:
-            L.log_event(unit, "persample failed: incomplete samples " + ", ".join(missing))
-        print("[fail] samples still incomplete after retry (see failures.md): " + ", ".join(missing))
-        return 1
-    if in_unit:
-        L.log_event(unit, f"persample done: {len(entries)} sample(s)")
+        man["state"] = "running"
+        write_json(path, man)
+        write_subsets(h5ad, table, pending)
+        failed = drive(pending, out, config["annotate"])
+    missing = [e["value"] for e in entries if not is_done(Path(e["outdir"]), config["annotate"], e["identity"])]
+    man["state"] = "failed" if failed or missing else "complete"
+    man["failed_samples"] = sorted(set(missing) | {e["value"] for e in failed})
+    write_json(path, man)
+    _write_review(unit, out, man, bare)
+    if not bare:
+        L.log_event(unit, f"persample {man['state']}: {len(entries)} experiments; {len(man['failed_samples'])} failed")
         from .index import write_all
-
         write_all(unit)
-    print(f"[done] {len(entries)} sample(s) complete under {out_root}")
-    return 0
+    print(f"[persample] {man['state']}: {len(entries)} samples; failures={man['failed_samples']}")
+    return 1 if failed or missing else 0
+
+
+def _write_review(unit, out, man, bare):
+    items = []
+    if not bare:
+        upstream = read_json(L.input_manifest(unit)).get("upstream", {})
+        for source, evidence in upstream.items():
+            for step in ("standardize", "identify_columns"):
+                result = evidence.get(step, {})
+                for warning in result.get("reasons", []) + result.get("warnings", []):
+                    items.append({"step": step, "source": source, "detail": warning})
+    for entry in man["samples"]:
+        state_path = out / Path(entry["dir"]).name / L.RUN_STATE
+        state = read_json(state_path) if state_path.is_file() else {}
+        qc = state.get("validation", {}).get("qc_summary", {})
+        if str(qc.get("decontx_degenerate", "")).lower() == "true":
+            items.append({"step": "osp", "source": entry["value"], "detail": "DecontX degenerate"})
+        if state.get("state") == "failed":
+            items.append({"step": "osp", "source": entry["value"], "detail": state.get("error")})
+    write_json(out / "needs_review.json", {"items": items})
+    (out / "needs_review.md").write_text("# 输入与每样本复核记录\n\n" + "\n".join(
+        f"- {i['step']} / {i['source']}: {json.dumps(i['detail'], ensure_ascii=False)}" for i in items) + "\n")
 
 
 if __name__ == "__main__":

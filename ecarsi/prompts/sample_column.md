@@ -30,8 +30,19 @@ Guidance:
   whose levels look like run identifiers; name the runner-up in the
   rationale. If they disagree on some cells, prefer the one that is a
   clean partition at run scale.
-- Nothing plausibly run-level (single-run dataset, or metadata stripped):
-  return null — the whole file will then be treated as one sample.
+- The profile belongs to ONE source, and includes upstream identify-columns
+  evidence. `eca_pp_batch` may be a barcode-derived partition. Evaluate its
+  physical experiment meaning; correction recommended/unnecessary and batch
+  null do not establish a single experiment. A condition/donor classification
+  is not sufficient evidence for a technical library partition.
+- Return null only with `confirmed_single: true` and positive evidence for one
+  complete experiment. Missing metadata means unknown, not single. If the
+  grouping is unknown, return null with `confirmed_single: false`; the host
+  will stop for an explicit experiment mapping rather than pool the cells.
+- Source names and original barcode IDs are bookkeeping, not sample columns.
+  Valid datasets may have more than 200 experiments; group size summaries
+  accompany truncated value counts.
 
 Return only the structured result: `sample_column` (obs column name, or
-null) and `rationale` (2-3 sentences citing the levels you relied on).
+null), `confirmed_single` (required when null), and `rationale` (2-3 sentences
+citing the levels and upstream evidence you relied on).

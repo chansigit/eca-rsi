@@ -361,8 +361,17 @@ def persample_state(unit: Path) -> dict:
     for s in man.get("samples", []):
         d = L.sample_dir(unit, s)
         contract = L.PS_ANNOTATE_CONTRACT if man.get("annotate", True) else L.PS_CONTRACT
+        done = L.complete(d, contract)
+        if man.get("schema_version") == 2:
+            # Display the recorded validation; actual resume rehashes and
+            # rereads outputs in osp_contract. Never hash H5AD on HTTP GET.
+            state = _json(d / L.RUN_STATE, {})
+            done = (done and state.get("state") == "complete" and state.get("exit_code") == 0
+                    and state.get("identity") == s.get("identity")
+                    and s["value"] not in man.get("failed_samples", [])
+                    and all((d / f).is_file() for f in L.PS_QC_CONTRACT))
         samples.append({"name": d.name, "value": s["value"], "n_cells": s["n_cells"], "dir": d,
-                        "done": L.complete(d, contract), "report": (d / "report.html").is_file()})
+                        "done": done, "report": (d / "report.html").is_file()})
     return {"manifest": bool(man), "sample_column": man.get("sample_column"), "species": man.get("species"),
             "samples": samples, "n_done": sum(s["done"] for s in samples), "n": len(samples),
             "done": bool(samples) and all(s["done"] for s in samples)}

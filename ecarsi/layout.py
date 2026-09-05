@@ -48,10 +48,16 @@ STATS = "stats.txt"
 DECISION = "decision.txt"
 ROUND_INPUT = "input.h5ad"
 MANIFEST = "manifest.json"
+RUN_STATE = "run_state.json"
+UPSTREAM = "upstream"
+SAMPLE_MAPPING = "sample_mapping.csv.gz"
 
 # step contracts — a step is complete when every file exists
 PS_CONTRACT = ("report.html", "clustered.h5ad")
 PS_ANNOTATE_CONTRACT = PS_CONTRACT + ("annotation_proposal.json",)
+# Strong front-pipeline validation uses these in addition to PS_CONTRACT.
+# Legacy display and the frozen downstream contracts stay readable.
+PS_QC_CONTRACT = ("qc_summary.csv", "qc_removed.csv")
 MSP_CONTRACT = ("integrated.h5ad", "report.html", "inspection_proposal.json",
                 "annotation_proposal.json", "annotated.h5ad")
 ZMIP_CONTRACT = ("zmip_plan.json", "annotated_zmip.h5ad", "report.html")

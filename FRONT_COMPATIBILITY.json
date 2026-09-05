@@ -1,0 +1,27 @@
+{
+  "scope": "eca-pp -> organize -> persample -> osp; MSP/ZMIP integration frozen",
+  "eca_pp": {
+    "result_schema": 2,
+    "checkout_version": "0.5.1",
+    "commit": "b461c46184433aaa8721930913558d41333c19d4",
+    "legacy_result_versions_tested": [
+      "0.2.0"
+    ],
+    "initial_audit_commit": "9c3c8c20ae173acc4a0d02e5accbc39c09bc43fd",
+    "note": "0.5.1 release b461c46 includes 0576683: expanded .raw is trusted without the former HVG counts cross-check. Consumer regressions cover both old counts_check/needs_review and new check-free/ok results; snapshots preserve each result unchanged."
+  },
+  "osp": {
+    "distribution": "osp-sc",
+    "version": "0.1.1",
+    "commit": "32bd68ee9d12ec3753c9109f32def1ec33d88044",
+    "note": "Includes Unreleased fixes and local pyproject.toml bridge >=0.2.0,<0.3 dependency adjustment; install this source checkout. No new OSP distribution published."
+  },
+  "bridge": {
+    "distribution": "agent-harness-bridge",
+    "version": "0.2.0",
+    "commit": "7e658bc069fc0ccc164f91a7278b7a2ab4311dcd",
+    "note": "Published unchanged to PyPI; wheel/sdist SHA256 verified. Legacy shim identity, CLI/worker logging and a real OpenAI agent submit smoke passed."
+  },
+  "python_tested": "3.12",
+  "runtime_record": "Each persample manifest records actual interpreter, package paths, versions, git commits and source content SHA-256."
+}

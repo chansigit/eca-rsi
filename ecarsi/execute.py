@@ -13,11 +13,11 @@ to hand to persample and the loop):
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from . import layout as L
+from .run_state import file_identity, read_json, write_json
 
 if TYPE_CHECKING:
     import anndata as ad
@@ -37,6 +37,11 @@ def _load_member(units_by_name: dict, member: dict):
     import anndata as ad
 
     a = ad.read_h5ad(units_by_name[member["source"]]["h5ad"])
+    from .upstream import load_evidence
+    _, values, _ = load_evidence(units_by_name[member["source"]], a.obs)
+    a.obs["eca_source_cell_id"] = a.obs_names.astype(str)
+    for col, s in values.items():
+        a.obs[col] = s.fillna("").astype(str)
     mask = _keep_mask(a.obs, member.get("obs_filter"))
     return a[mask].copy() if mask is not None else a
 
@@ -105,9 +110,14 @@ def _conservation_audit(units_by_name: dict, plan: dict) -> dict:
     return {"sources": audit, "unit_expected": unit_expected}
 
 
-def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: Path) -> None:
+def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: Path,
+                 *, records: list[dict] | None = None, input_identity: str | None = None,
+                 adapter_identity: str | None = None) -> None:
     import anndata as ad
 
+    from .plan import _validate
+    from .upstream import snapshot, validate_matrix, verify_snapshots
+    _validate(plan, profiles)
     units_by_name = {u["name"]: u for u in units}
     species_by_name = {p["name"]: p.get("species") for p in profiles}
     audit = _conservation_audit(units_by_name, plan)
@@ -117,6 +127,9 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
     )
     out_root.mkdir(parents=True, exist_ok=True)
     global_manifest = {
+        "schema_version": 2, "state": "running", "input_identity": input_identity,
+        "adapter_identity": adapter_identity,
+        "source_inventory": records or units,
         "input_units": units,
         "profiles": profiles,
         "plan": plan,
@@ -124,9 +137,24 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
         "units_written": [],
         "warnings": [],
     }
+    gm = L.organize_manifest(out_root)
+    previous = read_json(gm) if gm.is_file() else {}
+    written = {u["name"]: u for u in previous.get("units_written", [])}
+    write_json(gm, {**global_manifest, "units_written": list(written.values())})
 
     for au in plan["analysis_units"]:
         name = au["name"]
+        unit = L.unit_dir(out_root, name)
+        if name in written:
+            item = written[name]
+            if (file_identity(L.input_h5ad(unit)) != item["identity"] or
+                    file_identity(L.input_manifest(unit)) != item["manifest_identity"]):
+                raise ValueError(f"partial organize output was changed: {unit}")
+            global_manifest["units_written"].append(item)
+            saved = read_json(L.input_manifest(unit))
+            verify_snapshots(L.input_manifest(unit).parent, saved)
+            global_manifest["warnings"].extend(saved.get("warnings", []))
+            continue
         # a list, not a dict keyed by source: two members of the same unit
         # can share a source (different obs_filter slices of one file) — a
         # dict would silently keep only the last and undercount cells
@@ -139,7 +167,7 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
         else:
             merged = ad.concat(
                 [a for _, a in parts], join="outer", label="source_unit",
-                keys=[src for src, _ in parts], index_unique="::", merge="first",
+                keys=[src for src, _ in parts], index_unique="::", merge="first", fill_value=0,
             )
 
         expected = audit["unit_expected"][name]
@@ -147,12 +175,19 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
             raise ValueError(
                 f"unit {name!r}: merged {merged.n_obs} cells but conservation audit expected {expected}"
             )
+        validate_matrix(merged)
 
         unit = L.unit_dir(out_root, name)
         udir = unit / L.INPUT
         udir.mkdir(parents=True, exist_ok=True)
         tmp = udir / "organized.tmp.h5ad"
         merged.write_h5ad(tmp)  # never in place: tmp + rename
+        check = ad.read_h5ad(tmp, backed="r")
+        try:
+            if check.shape != merged.shape or not check.obs_names.equals(merged.obs_names):
+                raise ValueError(f"organized H5AD failed readback: {name}")
+        finally:
+            check.file.close()
         tmp.rename(udir / "organized.h5ad")
 
         # one species per analysis unit is a plan invariant; surface it here so
@@ -163,26 +198,40 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
         for src, a in parts:
             src_totals[src] = src_totals.get(src, 0) + int(a.n_obs)
         unit_manifest = {
+            "schema_version": 2,
             "analysis_unit": au,
             "species": sps.pop() if len(sps) == 1 else None,
             "n_cells": int(merged.n_obs),
             "n_vars": int(merged.n_vars),
             "sources": src_totals,
             "warnings": warns,
+            "upstream": {},
         }
-        with open(L.input_manifest(unit), "w") as f:
-            json.dump(unit_manifest, f, indent=2)
+        for src in src_totals:
+            record = units_by_name[src]
+            target = udir / L.UPSTREAM / src
+            if "standardize" in record:
+                snapshot(record, target)
+                unit_manifest["upstream"][src] = {
+                    "dir": str(target.relative_to(udir)),
+                    "standardize": record["standardize"],
+                    "identify_columns": record.get("identify_columns", {}),
+                    "source_obs_identity": file_identity(target / "source_obs.csv.gz"),
+                    "snapshot_files": {p.name: file_identity(p) for p in sorted(target.iterdir()) if p.is_file()},
+                }
+        unit_manifest["identity"] = file_identity(L.input_h5ad(unit))
+        write_json(L.input_manifest(unit), unit_manifest)
         global_manifest["units_written"].append(
-            {"name": name, "dir": str(unit), "n_cells": int(merged.n_obs)}
+            {"name": name, "dir": str(unit), "n_cells": int(merged.n_obs),
+             "identity": unit_manifest["identity"], "manifest_identity": file_identity(L.input_manifest(unit))}
         )
         global_manifest["warnings"].extend(warns)
+        write_json(gm, global_manifest)
         L.log_event(unit, f"organize: {merged.n_obs} cells from {list(src_totals)}", echo=False)
         print(f"[write] {name}: {merged.n_obs} cells from {list(src_totals)} -> {udir / 'organized.h5ad'}")
 
-    gm = L.organize_manifest(out_root)
-    gm.parent.mkdir(parents=True, exist_ok=True)
-    with open(gm, "w") as f:
-        json.dump(global_manifest, f, indent=2)
+    global_manifest["state"] = "complete"
+    write_json(gm, global_manifest)
     from .index import write_all
 
     write_all(out_root)

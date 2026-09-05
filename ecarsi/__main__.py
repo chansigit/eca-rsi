@@ -46,6 +46,8 @@ def run(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="eca-rsi run", description="organize → persample → loop for every unit (→ serve)")
     ap.add_argument("input", help="eca-pp output directory (standardize/standardized.h5ad + result.json per sample)")
     ap.add_argument("root", help="run root; everything lands under <root>/units/<unit>/ (ecarsi.layout)")
+    ap.add_argument("--stop-after", choices=["organize", "persample"], help="validate the front pipeline without entering the loop")
+    ap.add_argument("--plan-json", help="explicit organize plan")
     ap.add_argument("--rounds", type=int, default=None, help="fixed number of loop rounds (default: converge on cell count)")
     ap.add_argument("--cap", type=int, default=None, help="loop safety cap (default 10)")
     ap.add_argument("--force-reopen", action="store_true", help="continue past an existing release")
@@ -58,12 +60,12 @@ def run(argv: list[str]) -> int:
     a = ap.parse_args(argv)
     root = Path(a.root).resolve()
 
-    if not L.is_root(root):
-        rc = _module("organize").main([a.input, str(root)])
-        if rc:
-            return rc
-    else:
-        print(f"[eca-rsi] {root} already organized — resuming")
+    organize_args = [a.input, str(root)]
+    if a.plan_json:
+        organize_args += ["--plan-json", a.plan_json]
+    rc = _module("organize").main(organize_args)
+    if rc or a.stop_after == "organize":
+        return rc
     units = L.units(root)
     if not units:
         print(f"[eca-rsi] no analysis units under {L.units_root(root)}")
@@ -84,6 +86,8 @@ def run(argv: list[str]) -> int:
         rc = _module("persample").main([str(u)])
         if rc:
             failed.append((u.name, "persample", rc))
+            continue
+        if a.stop_after == "persample":
             continue
         print(f"\n[eca-rsi] ===== unit {u.name}: loop =====", flush=True)
         rc = _module("loop").main([str(u), *loop_args])
@@ -116,6 +120,8 @@ def run(argv: list[str]) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from harness_bridge import configure_logging
+    configure_logging("ecarsi", stream=sys.stderr)
     argv = sys.argv[1:] if argv is None else argv
     runtime = argparse.ArgumentParser(add_help=False)
     runtime.add_argument("--harness", choices=["deepseek", "openai", "claude"])

@@ -106,6 +106,18 @@ eca-rsi run /path/to/eca-pp-output /path/to/eca-runs/study \
 `./run-eca-rsi.sh <input> <root>`; set `ECA_RSI_PYTHON` to select its interpreter.
 Use `eca-rsi --help` and `eca-rsi run --help` for available commands.
 
+### Front-pipeline upgrade
+
+The ECA-PP/OSP adapter now validates upstream outcomes, records complete source
+snapshots, partitions experiments within each source, and checks successful OSP
+run records and exact QC cell conservation. See [FRONT_INTEGRATION.md](FRONT_INTEGRATION.md)
+for sample-map JSON, parameters and migration. The tested revisions are in
+[FRONT_COMPATIBILITY.json](FRONT_COMPATIBILITY.json).
+
+MSP/ZMIP integration is temporarily frozen. Validate this upgrade with
+`eca-rsi run INPUT NEW_ROOT --stop-after persample`, or run organize/persample
+separately for explicit experiment mappings and OSP options.
+
 ### Processing stages
 
 1. **Organize.** Profile upstream files and propose analysis units using their
@@ -208,16 +220,20 @@ changes. `eca-rsi run ... --serve 8899` starts it after processing. Optional
 
 Repeat the same `eca-rsi run` command after an interruption to reuse recorded
 decisions and completed outputs. Keep the input, installed sources, and analysis
-settings fixed. ECA-RSI's outer wrappers largely check required files for
-existence; they do not provide end-to-end content validation. In particular,
+settings fixed. New organize/persample manifests require matching input,
+configuration and source identities; legacy manifests remain browsable but
+require a new directory for upgraded computation. Pruned intermediate files
+are historical records, not runnable completion. These front-pipeline checks
+do not provide end-to-end validation of the frozen later stages. In particular,
 skipping a completed ZMIP directory bypasses the newer kernel's own input,
 configuration, and runtime identity checks. Use a new output root when changing
 inputs or analysis code.
 
 Modern manifests record the harness and model. Checked mismatches are rejected
-unless `--allow-agent-change` is explicitly set; older manifests can only emit
-a warning. This option permits a mixed run and does not recompute finished
-stages. `--force-reopen` continues beyond an existing release; with `--rounds N`,
+unless their stage supports `--allow-agent-change`; older downstream manifests
+can only emit a warning. New persample manifests always require a new output
+directory for a model/configuration change. This option does not recompute
+finished downstream stages. `--force-reopen` continues beyond an existing release; with `--rounds N`,
 choose a total larger than the completed round count. It is not a cache reset
 or a forwarded ZMIP `--force` option.
 

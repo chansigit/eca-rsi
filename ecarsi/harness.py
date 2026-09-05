@@ -1,8 +1,9 @@
 """Compatibility shim for the shared agent-harness-bridge package.
 
-Application code may keep importing this module; every public object is the
+Legacy application code may keep importing this module; every public object is the
 same object exported by harness_bridge, so exception and dataclass identity
-remain stable across repositories.
+remain stable across repositories. New code imports harness_bridge directly;
+this module does not mirror additions to its public API.
 """
 
 from harness_bridge import (

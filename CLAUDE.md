@@ -82,8 +82,10 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
   并发池:`PERSAMPLE_PARALLEL` / `PERSAMPLE_MEM_PER_CELL_MB`(persample)、`ZMIP_PARALLEL`(zoomin)，
   各层结合可用 CPU 和内存估算调度，具体配置以对应内核为准。
 - agent runtime 实现在独立 `agent-harness-bridge` 包;`ecarsi.harness` / `msp.harness` / `osp.harness` 只是保持旧导入路径的 identity-preserving shim。adapter 回归测试在共享包,本仓库 `tests/test_harness_sync.py` 验证 shim 身份;`resources.py` 两份仍需逐字节相同。
-- persample(2026-09-03 起)不再开 agent 驱动:host 读一次 organized.h5ad 写出每样本 `subset.h5ad`,
-  子进程池并行跑 `python -m osp`(大样本先跑),失败重试一次后记 `persample/failures.md` 继续;12 样本 Fu2022 约 5 分钟。
+- persample 前半程接入已升级：逐来源实验映射、`eca_sample_id`、上游快照、完整实验池检查；
+  同名样本默认跨来源隔离，跨文件合池须显式映射。统一 `ecarsi.osp_worker` 子进程调用 OSP 公共 API。
+  每样本成功状态、内容指纹和 QC 细胞守恒共同决定完成；只自动重试明确临时错误，注释失败可单独恢复。
+  参数、迁移及测试见 [FRONT_INTEGRATION.md](FRONT_INTEGRATION.md)。MSP/ZMIP 适配仍冻结。
 - zmip plan 有 host 连通性校验:`lineage_islands.csv`(UMAP 2D kNN 连通分量)——把分开的岛并成一个 lineage 直接打回;
   同一岛拆成多个 lineage 打回一次,agent 可带 `confirm_shared_islands: true` 重交,记入 plan 的 `host_warnings` 与 needs_review。
 - 历史测试与服务记录（使用前核对当前目录和进程）：`$SCRATCH/eca-runs/_organize_test/fu2022/fu2022-meniscus` 是旧结构的真实跑(不迁移);
@@ -94,15 +96,14 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
 
 ## 主线检查与接口边界
 
-- 输入发现要求 ECA-PP 的 `standardize/standardized.h5ad` 和同目录 `result.json`，额外 H5AD 会被拒绝。
-  该检查不等于核验上游所有质量结论；`identify_columns/result.json` 可选，persample 的样本列优先。
-- organize 按来源审计每个细胞是否恰好分配一次；跨文件 barcode 重叠只发警告，未自动核验表达身份或去重。
-- 主线用 `eca-rsi run` 续跑；它会跳过已组织目录。不要反复调用 `organize` 来恢复整个流程。
-- 外层主要按必需文件存在跳步（部分路径也接受 `.pruned` 标记），没有整套流程的内容哈希验证。
-  新版 ZMIP 内部的输入/配置/源码身份检查只在真正调用内核时运行；外层跳过会绕开它。
-  改输入、分析参数或源码时使用新的输出根目录；不要写“任意修改后可安全续跑”。
-- 已记录 harness/model 的 manifest 在被检查时拒绝静默切换；`--allow-agent-change` 允许混跑，
-  不重算完成结果。旧 manifest 缺字段时只能警告；不能声称所有历史结果都已验证配置身份。
+- 输入发现校验 ECA-PP schema 2 / 状态 / counts / 维度 / 物种；精确排除步骤内 `.history`。
+  rejected 来源留清单，error/blocked 不允许把输入集合静默缩小。上游结果和派生 TSV 保存在 input/upstream。
+- organize 按来源检查细胞恰好分配一次；同一分析单元只容许一种物种，计划先登记再逐单元发布。
+  源码、输入和计划一致时可恢复部分计划；普通空 units 目录不代表组织完成。
+- `run --stop-after organize|persample` 可验证前半程。新版 persample 校验输入/配置/解释器/源码身份和 QC 台账。
+  旧 manifest 和 `.pruned` 可以浏览，不能替代新计算的成功证据；前半程变更配置需要新输出目录。
+- crosssample/zoomin 外层仍按原契约跳步，其与活跃开发内核的身份/锁/恢复接缝待用户另行授权。
+  前半程验证不代表整条 release 已验证。已有 `--allow-agent-change` 不覆盖新版 persample 严格身份要求。
 - `--force-reopen` 继续已有 release，不等于 ZMIP 的 `--force`；`--rounds N` 是总轮数，要大于已完成轮数。
 - 本轮删除统计从 MSP integrated 到 ZMIP survivors，不含此前 OSP QC 和整样本排除；完整历史查 ledger。
   达到停止阈值不证明注释准确；轮数上限或固定轮数发布应按 reason 与收敛发布区分。
@@ -113,7 +114,10 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
 开发时从本仓库运行现有针对性检查（需要配套依赖与 pytest）：
 
 ```bash
-python -m pytest -q tests/test_agent_selection.py tests/test_crosssample_cwd.py tests/test_harness_sync.py
+# 前半程独立检查；不依赖 MSP/ZMIP
+python -m pytest -q tests/test_front_integration.py tests/test_osp_worker.py tests/test_agent_selection.py
+# 原有跨内核检查保留，MSP/resources 的不一致尚未修改
+python -m pytest -q tests/test_crosssample_cwd.py tests/test_harness_sync.py
 ```
 
 纯文档修改检查 `git diff --check`、本地链接和 CLI 示例即可，无需启动模型或数据分析任务。

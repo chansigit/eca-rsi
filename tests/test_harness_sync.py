@@ -7,6 +7,8 @@ copy is still checked here until resource scheduling is extracted separately.
 
 from __future__ import annotations
 
+from tests.bridge_contract import BRIDGE_LEGACY_API
+
 import os
 from pathlib import Path
 
@@ -45,11 +47,11 @@ def test_legacy_harness_modules_reexport_shared_objects():
     from osp import harness as osp_harness
 
     for shim in (ecarsi_harness, msp_harness, osp_harness):
-        for name in harness_bridge.__all__:
+        for name in BRIDGE_LEGACY_API:
             assert getattr(shim, name) is getattr(harness_bridge, name), name
         for name in LEGACY_SHIM_EXPORTS:
             assert getattr(shim, name) is getattr(bridge_harness, name), name
-        assert set(shim.__all__) == set(harness_bridge.__all__) | LEGACY_SHIM_EXPORTS
+        assert BRIDGE_LEGACY_API | LEGACY_SHIM_EXPORTS <= set(shim.__all__)
 
 
 def test_no_project_keeps_private_harness_implementations():

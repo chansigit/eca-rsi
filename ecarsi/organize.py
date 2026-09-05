@@ -26,53 +26,9 @@ from pathlib import Path
 
 
 def find_ecapp_units(root: Path) -> tuple[list[dict], list[Path]]:
-    """Return (units, violations).
+    from .upstream import discover
 
-    A unit is a directory `d` holding `d/standardize/standardized.h5ad` and
-    `d/standardize/result.json` — its identity is `d`'s name (eca-pp names
-    every file standardized.h5ad, so filenames cannot distinguish samples).
-    The input root itself may be a unit (single-sample layout).
-    Violations are h5ad files not living inside any such unit.
-    """
-    units: list[dict] = []
-    claimed: set[Path] = set()
-
-    candidates = [root] + sorted(p for p in root.rglob("standardize") if p.is_dir())
-    for cand in candidates:
-        d = cand if cand is root else cand.parent
-        h5 = d / "standardize" / "standardized.h5ad"
-        rj = d / "standardize" / "result.json"
-        if h5.is_file() and rj.is_file() and h5 not in claimed:
-            # root-as-unit: staged layouts are often <dataset>/input, where
-            # "input" identifies nothing — climb to the dataset directory name
-            root_name = root.parent.name if root.name in ("input", "data") else root.name
-            unit = {
-                "name": root_name if d == root else d.name,
-                "dir": str(d),
-                "h5ad": str(h5),
-                "standardize_result": str(rj),
-            }
-            ic = d / "identify_columns" / "result.json"
-            if ic.is_file():
-                unit["identify_columns_result"] = str(ic)
-            units.append(unit)
-            claimed.add(h5)
-
-    violations = [p for p in sorted(root.rglob("*.h5ad")) if p not in claimed]
-
-    # unit identity is name-only downstream (execute.py keys units_by_name by
-    # name) — two source dirs sharing a basename would silently collapse into
-    # one, dropping a whole source from the plan with no error raised
-    seen: dict[str, str] = {}
-    for u in units:
-        if u["name"] in seen:
-            raise SystemExit(
-                f"duplicate unit name {u['name']!r}: {seen[u['name']]} and {u['dir']} "
-                "both resolve to it — rename one of the source directories"
-            )
-        seen[u["name"]] = u["dir"]
-
-    return units, violations
+    return discover(root)
 
 
 # ---------------------------------------------------------------- profiling
@@ -91,11 +47,17 @@ def profile_unit(unit: dict, max_levels: int = 30) -> dict:
     prof = {"name": unit["name"], "h5ad": unit["h5ad"]}
     with open(unit["standardize_result"]) as f:
         std = json.load(f)
+    from .upstream import load_evidence, validate_matrix
+
     prof["species"] = (std.get("species") or {}).get("resolved")
     prof["n_cells"] = (std.get("metrics") or {}).get("n_cells")
     prof["n_vars"] = (std.get("metrics") or {}).get("n_vars")
 
     a = ad.read_h5ad(unit["h5ad"], backed="r")
+    validate_matrix(a, std)
+    evidence, _, _ = load_evidence(unit, a.obs)
+    prof["upstream_evidence"] = evidence
+    prof["upstream_review"] = std.get("reasons", [])
     cols = {}
     for c in a.obs.columns:
         s = a.obs[c]
@@ -116,33 +78,80 @@ def profile_unit(unit: dict, max_levels: int = 30) -> dict:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print(__doc__)
-        return 2
-    root, out_root = Path(argv[0]).resolve(), Path(argv[1]).resolve()
+    import argparse
+    from . import layout as L
+    from .run_state import digest, file_identity, read_json, writer_lock, write_json
+    from .upstream import inspect_unit, verify_snapshots
 
-    units, violations = find_ecapp_units(root)
-    if violations:
-        print("These h5ad files are not eca-pp products — run eca-pp on them first:")
-        for p in violations:
-            print(f"  {p}")
-        print("(expected layout: <dataset-or-sample>/standardize/standardized.h5ad + result.json)")
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("input")
+    ap.add_argument("out")
+    ap.add_argument("--plan-json", help="explicit analysis-unit plan; skips the planning agent")
+    args = ap.parse_args(argv)
+    root, out_root = Path(args.input).resolve(), Path(args.out).resolve()
+    if not root.is_dir() or out_root == root or root in out_root.parents:
+        print("input must exist and output must be outside the input tree")
         return 3
-    if not units:
-        print(f"no eca-pp units found under {root}")
+    try:
+        with writer_lock(out_root / L.ORGANIZE / ".writer.lock"):
+            units, violations = find_ecapp_units(root)
+            records, problems = [], [f"undeclared H5AD: {p}" for p in violations]
+            for u in units:
+                try:
+                    records.append(inspect_unit(u))
+                except (ValueError, OSError, KeyError) as exc:
+                    records.append({**u, "state": "blocked", "error": str(exc)})
+                    problems.append(f"{u['name']}: {exc}")
+            write_json(out_root / L.ORGANIZE / "source_inventory.json", {"sources": records, "problems": problems})
+            if problems:
+                raise ValueError("input set is not ready: " + "; ".join(problems))
+            accepted = [r for r in records if r["state"] == "accepted"]
+            if not accepted:
+                raise ValueError("no accepted ECA-PP sources (see source_inventory.json)")
+            identity = digest([{
+                **{k: r.get(k) for k in ("name", "state", "files")},
+                "derived": {k: f["identity"] for k, f in r.get("derived_files", {}).items()},
+            } for r in records])
+            gm = L.organize_manifest(out_root)
+            package = Path(__file__).parent
+            adapter = digest({name: file_identity(package / name) for name in (
+                "organize.py", "execute.py", "upstream.py", "plan.py", "run_state.py", "prompts/plan.md")})
+            old = read_json(gm) if gm.is_file() else None
+            if old:
+                if (old.get("schema_version") != 2 or old.get("input_identity") != identity
+                        or old.get("adapter_identity") != adapter):
+                    raise ValueError("organize input/adapter changed or legacy manifest has no verified identity; use a new output root")
+                if args.plan_json and read_json(Path(args.plan_json)) != old["plan"]:
+                    raise ValueError("organize plan changed; use a new output root")
+                plan, profiles = old["plan"], old["profiles"]
+                if old.get("state") == "complete":
+                    expected = {u["name"] for u in plan["analysis_units"]}
+                    if expected != {u["name"] for u in old["units_written"]}:
+                        raise ValueError("organize completion record does not cover its plan")
+                    for item in old["units_written"]:
+                        unit = L.unit_dir(out_root, item["name"])
+                        if file_identity(L.input_h5ad(unit)) != item["identity"]:
+                            raise ValueError(f"organized input changed: {unit}")
+                        if file_identity(L.input_manifest(unit)) != item["manifest_identity"]:
+                            raise ValueError(f"unit manifest changed: {unit}")
+                        verify_snapshots(L.input_manifest(unit).parent, read_json(L.input_manifest(unit)))
+                    print("[organize] all planned units verified; resuming")
+                    from .index import write_all
+                    write_all(out_root)
+                    return 0
+            else:
+                if L.units(out_root):
+                    raise ValueError("existing units without a resumable organize record; use a new output root")
+                profiles = [profile_unit(u) for u in accepted]
+                from .plan import propose_plan
+                plan = read_json(Path(args.plan_json)) if args.plan_json else propose_plan(profiles)
+            from .execute import execute_plan
+            execute_plan(accepted, profiles, plan, out_root, records=records, input_identity=identity,
+                         adapter_identity=adapter)
+        return 0
+    except (ValueError, RuntimeError, OSError) as exc:
+        print(f"[organize] {exc}")
         return 3
-
-    print(f"[detect] {len(units)} eca-pp unit(s): " + ", ".join(u["name"] for u in units))
-    profiles = [profile_unit(u) for u in units]
-
-    from .plan import propose_plan  # agent call, structured output
-
-    plan = propose_plan(profiles)
-
-    from .execute import execute_plan  # deterministic merge/split + manifest
-
-    execute_plan(units, profiles, plan, out_root)
-    return 0
 
 
 if __name__ == "__main__":

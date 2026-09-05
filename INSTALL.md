@@ -11,11 +11,11 @@ ECA-PP 先独立运行；ECA-RSI 环境包含驱动包、OSP/MSP/ZMIP 三个内�
 
 | 发行名 / import 名 | 源码版本 | 关键依赖与职责 |
 | --- | --- | --- |
-| `ecarsi` / `ecarsi` | 0.1.0 | 驱动；依赖 `agent-harness-bridge[all]==0.1.0`、anndata、scanpy、h5py、numpy、pandas、matplotlib |
+| `ecarsi` / `ecarsi` | 0.1.0 | 驱动；依赖 `agent-harness-bridge[all]>=0.2.0,<0.3`、anndata、scanpy、h5py、numpy、pandas、matplotlib |
 | `osp-sc` / `osp` | 0.1.1 | 每样本 QC、Scrublet、内置 DecontX、聚类和注释建议；`[agent]` 安装 bridge 的全部后端依赖 |
 | `msp-sc` / `msp` | 0.2.0 | 跨样本整合与审查；依赖 `harmonypy==0.2.0`、torch、`standissect-lite>=0.2.0`；`[agent]` 安装后端依赖 |
-| `zmip` / `zmip` | 0.2.0 | lineage 内重算与细化；依赖 `msp-sc>=0.2.0,<0.3` 和 `agent-harness-bridge[all]==0.1.0`，另有运行时 API 兼容检查 |
-| `agent-harness-bridge` / `harness_bridge` | 0.1.0 | core 无依赖；extras 为 `openai`、`claude`、`deepseek`、`all` |
+| `zmip` / `zmip` | 0.2.0 | lineage 内重算与细化；依赖 `msp-sc>=0.2.0,<0.3` 和 `agent-harness-bridge[all]>=0.2.0,<0.3`，另有运行时 API 兼容检查 |
+| `agent-harness-bridge` / `harness_bridge` | 0.2.0 | core 无依赖；extras 为 `openai`、`claude`、`deepseek`、`all` |
 | `standissect-lite` / `standissect_lite` | 0.2.0 | MSP 使用的群体内部小片段检测库 |
 
 安装名是 `osp-sc` 和 `msp-sc`，import 和模块入口仍为 `osp` 和 `msp`。
@@ -40,6 +40,19 @@ ECA-PP 先独立运行；ECA-RSI 环境包含驱动包、OSP/MSP/ZMIP 三个内�
 源码构建。Sherlock 可按本地环境检查 `polyfill-glibc/0.1` 模块是否适用。
 
 ## 3. 从配套源码安装
+
+bridge 0.2.0 已于本次适配发布到 PyPI，并核对线上文件 SHA256 与构建文件一致。
+此前“解析不到 0.2.0”是发布缺失：本地版本和 README 已更新，但索引当时只有 0.1.0。
+单独安装共享包现在可用：
+
+```bash
+python -m pip install 'agent-harness-bridge[all]==0.2.0'
+```
+
+RSI 和 OSP 的配套源码要求 bridge `>=0.2.0,<0.3`。本次 OSP 仅调整两条依赖声明，
+尚未发布新的 OSP 包；请使用下述 OSP 源码安装方式。旧版 OSP 固定 bridge 0.1.0，
+不能与本次组合混装。不要用 `--no-deps` 掩盖这个依赖冲突。
+
 
 当前先使用同级源码 checkout 安装共享库和内核。下面的命令适用于这些仓库
 均已放在同一父目录的情况；替换路径，并选择需要保留的提交后再安装。
@@ -109,6 +122,19 @@ editable 安装的 `__file__` 应指向预期源码目录；wheel 安装应指�
 安装目录。检查路径是为了防止误用旧副本，不能统一要求所有安装都指向源码树。
 检查通过说明依赖和入口可用；数据处理与模型提交仍需实际运行验证。
 
+## 前半程升级的配套源码
+
+本次独立验收不要求安装或升级 MSP/ZMIP。OSP 当前版本号 0.1.1 包含尚未发布修复，
+复现本次基线请核对 [FRONT_COMPATIBILITY.json](FRONT_COMPATIBILITY.json)，或在独立环境安装该提交：
+
+```bash
+python -m pip install 'osp-sc[agent] @ git+https://github.com/chansigit/osp.git@32bd68ee9d12ec3753c9109f32def1ec33d88044'
+python -m pip install -e '.[front]'
+```
+
+运行记录另存实际解释器、版本、源码路径和内容指纹。样本映射、新参数及前半程恢复规则见
+[FRONT_INTEGRATION.md](FRONT_INTEGRATION.md)。现有环境无须为了读取 ECA-PP 结果而安装整套上游。
+
 ## 5. 运行配置
 
 | 配置 | 作用 / 默认值 |
@@ -151,7 +177,8 @@ eca-rsi serve --port 8899
 ```
 
 `UNIT` 取自 `organize/manifest.json`。中断后使用原来的 `eca-rsi run` 命令，
-复用已组织的目录及已完成输出；不要把重新执行 `organize` 当作通用续跑方法。
+新版前半程会校验输入、代码、配置和完成记录，再复用成功结果；`organize` 可恢复已记录的部分计划。
+旧结果可浏览，升级计算使用新目录。前半程验收加 `--stop-after persample`，不会进入 MSP/ZMIP。
 `--rounds N` 是总轮数，覆盖自动收敛规则；`--force-reopen` 越过既有 release
 继续新轮。发布默认清理中间 H5AD，要保留它们则在 `run` / `loop` 加 `--no-prune`。
 停止条件、清理范围和续跑检查边界见 [README](README.md#resume-and-storage)。

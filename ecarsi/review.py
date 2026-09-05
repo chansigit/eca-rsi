@@ -37,6 +37,8 @@ from . import layout as L
 OVER_BUDGET_FRAC = 0.10  # per-round removal budget the loop treats as "too much"
 
 KINDS: list[tuple[str, str, str]] = [
+    ("upstream_review", "Input and per-sample review",
+     "Upstream quality flags and OSP execution or QC warnings; see persample/needs_review.json."),
     ("convergence", "Loop convergence",
      "The loop did not stop on its own, or a round removed more than the per-round budget."),
     ("removed", "Cells removed below high confidence",
@@ -216,6 +218,12 @@ def _zoomin_items(n: int, zdir: Path, unit: Path) -> list[Item]:
 def collect(unit: Path, rounds: list[Path], stats: list[dict], forced: bool) -> list[Item]:
     """All review items of a unit, ordered by section then round."""
     items: list[Item] = []
+    front = L.persample_root(unit) / "needs_review.json"
+    if front.is_file():
+        for entry in _json(front).get("items", []):
+            items.append(Item("upstream_review", 0, entry["step"], scope=entry["source"],
+                              note=json.dumps(entry["detail"], ensure_ascii=False),
+                              link=f"{L.PERSAMPLE}/needs_review.md"))
     for i, (rdir, st) in enumerate(zip(rounds, stats), 1):
         items += _loop_items(i, st, forced, last=(i == len(stats)))
         items += _crosssample_items(i, L.crosssample_dir(rdir), unit)
