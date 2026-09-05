@@ -131,3 +131,23 @@ Large cell-level CSVs should be queried or searched for specific evidence, rathe
 than copied into the model context page by page. The smaller default prevents a
 single barcode ledger from consuming an entire context window; it does not guarantee
 that an arbitrarily long agent session cannot exhaust its context.
+
+### Recovering provider length limits
+
+The OpenAI Responses backend starts a fresh model session when the provider
+explicitly terminates an incomplete response for `length` or `max_output_tokens`.
+`OPENAI_AGENTS_MAX_OUTPUT_RESETS` limits these attempts (default `2`, `0` disables
+recovery), separately from `OPENAI_AGENTS_MAX_CONTEXT_RESETS`. Completed host
+tasks and validated partial submissions remain available in the same process.
+Content filtering, unknown incomplete reasons and unrelated model errors still
+propagate. Truncated response text never counts as a valid submission.
+
+A public SDK hook counts each logical model invocation before it starts, enforcing one
+turn budget across all fresh sessions, even when exceptions lack run data. Internal
+SDK/HTTP transport retries are not separate turns.
+Recovery also retains usage reported for completed requests in SDK exception
+state. If provider usage
+for the failed request is unavailable, logs explicitly mark usage as incomplete.
+The wall-clock limit continues across fresh sessions. This does not provide
+cross-process checkpoints; a process that has already exited cannot recover
+partial decisions from its transcript alone.

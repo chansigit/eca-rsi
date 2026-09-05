@@ -18,6 +18,10 @@ Environment:
                        fresh Responses sessions allowed after Ark rejects an
                        overlong image+text context (default 2). Host-side task
                        and submission state is retained.
+  OPENAI_AGENTS_MAX_OUTPUT_RESETS
+                       fresh sessions after explicit Responses output-length
+                       termination (default 2), separate from context resets.
+                       Host tools, Tasks and accepted submissions are retained.
   OPENAI_AGENTS_SERVER_STATE
                        Responses-only response chaining (default 1). Disable
                        with 0 to send the complete local history every turn.
@@ -29,6 +33,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from typing import Any
 
 from ._harness_host_tools import served_tools, with_runtime_instructions
@@ -40,6 +45,7 @@ DOUBAO_BASE_URL_DEFAULT = "https://ark.cn-beijing.volces.com/api/v3"
 DEFAULT_API_MODE = "responses"
 DEFAULT_MAX_NUDGES = 2
 DEFAULT_MAX_CONTEXT_RESETS = 2
+DEFAULT_MAX_OUTPUT_RESETS = 2
 
 _JSON_TYPES: dict[type, dict[str, Any]] = {
     str: {"type": "string"},
@@ -161,6 +167,30 @@ def _is_context_limit_error(exc: Exception) -> bool:
     )
 
 
+def _is_output_length_error(exc: Exception) -> bool:
+    """Recognize only the SDK's explicit incomplete Responses length failure.
+
+    The SDK currently exposes terminal details only in ModelBehaviorError text.
+    Require its exact event prefix and a complete supported reason payload;
+    unrelated model errors, content filters and unknown reasons must propagate.
+    """
+    from agents.exceptions import ModelBehaviorError
+
+    if not isinstance(exc, ModelBehaviorError):
+        return False
+    prefix = "Responses stream ended with terminal event `response.incomplete`. "
+    text = str(exc)
+    if not text.startswith(prefix):
+        return False
+    details = text[len(prefix):]
+    details = details.removeprefix("status=incomplete; ")
+    return re.fullmatch(
+        r"incomplete_details=(?:IncompleteDetails\(reason=['\"](?:length|max_output_tokens)['\"]\)|"
+        r"\{['\"]reason['\"]: ['\"](?:length|max_output_tokens)['\"]\})\.?",
+        details,
+    ) is not None
+
+
 def _env_int(name: str, default: int) -> int:
     value = int(os.environ.get(name, str(default)))
     if value < 0:
@@ -183,7 +213,15 @@ async def run_agent(
     max_buffer_size: int | None,
     wall_seconds: float | None = None,
 ) -> AgentRunResult:
-    from agents import Agent, ItemHelpers, MaxTurnsExceeded, ModelSettings, RunConfig, Runner
+    from agents import (
+        Agent,
+        ItemHelpers,
+        MaxTurnsExceeded,
+        ModelSettings,
+        RunConfig,
+        RunHooks,
+        Runner,
+    )
     from agents.agent import ToolsToFinalOutputResult
 
     if not model:
@@ -191,6 +229,7 @@ async def run_agent(
     api_mode = os.environ.get("OPENAI_AGENTS_API", DEFAULT_API_MODE).strip().lower()
     max_nudges = _env_int("OPENAI_AGENTS_MAX_NUDGES", DEFAULT_MAX_NUDGES)
     max_context_resets = _env_int("OPENAI_AGENTS_MAX_CONTEXT_RESETS", DEFAULT_MAX_CONTEXT_RESETS)
+    max_output_resets = _env_int("OPENAI_AGENTS_MAX_OUTPUT_RESETS", DEFAULT_MAX_OUTPUT_RESETS)
     server_state = (
         api_mode == "responses"
         and os.environ.get("OPENAI_AGENTS_SERVER_STATE", "1").strip().lower()
@@ -240,9 +279,22 @@ async def run_agent(
         turns_used = 0
         nudges = 0
         context_resets = 0
+        output_resets = 0
         transcript_parts: list[str] = []
         usage_totals = {"requests": 0, "input": 0, "output": 0, "reasoning": 0}
+        usage_incomplete = False
 
+        class RequestBudget(RunHooks):
+            async def on_llm_start(self, context, agent, system_prompt, input_items):
+                nonlocal turns_used
+                if turns_used >= max_turns:
+                    raise AgentIncompleteError(
+                        f"[{label}] HARNESS=openai exhausted max_turns={max_turns} without a successful "
+                        f"{submit_tool} call"
+                    )
+                turns_used += 1
+
+        request_budget = RequestBudget()
         while True:
             remaining = max_turns - turns_used
             if remaining <= 0:
@@ -257,7 +309,7 @@ async def run_agent(
                     if previous_response_id is not None:
                         runner_kwargs["previous_response_id"] = previous_response_id
                 result = await Runner.run(
-                    agent, run_input, max_turns=remaining, run_config=run_config,
+                    agent, run_input, max_turns=remaining, run_config=run_config, hooks=request_budget,
                     **runner_kwargs,
                 )
             except MaxTurnsExceeded:
@@ -266,7 +318,48 @@ async def run_agent(
                     f"{submit_tool} call"
                 ) from None
             except Exception as exc:
-                if not _is_context_limit_error(exc) or context_resets >= max_context_resets:
+                output_length = api_mode == "responses" and _is_output_length_error(exc)
+                context_limit = _is_context_limit_error(exc)
+                if output_length or context_limit:
+                    # The SDK attaches usage for completed requests to run_data.
+                    # The terminal failing request has no reliable token usage.
+                    usage_incomplete = True
+                    failed_usage = getattr(getattr(getattr(exc, "run_data", None), "context_wrapper", None), "usage", None)
+                    known = {}
+                    for key, attr in (("requests", "requests"), ("input", "input_tokens"), ("output", "output_tokens")):
+                        value = getattr(failed_usage, attr, None)
+                        known[key] = value if type(value) is int and value >= 0 else 0
+                    value = getattr(getattr(failed_usage, "output_tokens_details", None), "reasoning_tokens", None)
+                    known["reasoning"] = value if type(value) is int and value >= 0 else 0
+                    for key, value in known.items():
+                        usage_totals[key] += value
+                    log.info(
+                        f"== [{label}] usage incomplete after provider failure: retained "
+                        f"{known['requests']} completed request(s); failed-request tokens unavailable"
+                    )
+                if output_length:
+                    if output_resets >= max_output_resets:
+                        raise AgentIncompleteError(
+                            f"[{label}] HARNESS=openai exhausted output-length recovery budget "
+                            f"({max_output_resets} fresh sessions) without a successful {submit_tool} call"
+                        ) from exc
+                    output_resets += 1
+                    previous_response_id = None
+                    run_input = (
+                        "The provider ended the previous response at its output-length limit. "
+                        "Continue in this fresh session. Host-side tool state, completed Tasks, and "
+                        "all valid partial submissions are still present. The truncated response is "
+                        "not a valid submission. First use TaskList and available domain status tools "
+                        "to recover accepted work; do not repeat completed work. Request only small "
+                        "batches of missing evidence and submit concise decisions incrementally, "
+                        f"then finish with {submit_tool}."
+                    )
+                    log.info(
+                        f"== [{label}] output length limit reached — continuing with a fresh model "
+                        f"session ({output_resets}/{max_output_resets}); host tool state retained",
+                    )
+                    continue
+                if not context_limit or context_resets >= max_context_resets:
                     raise
                 context_resets += 1
                 previous_response_id = None
@@ -283,7 +376,6 @@ async def run_agent(
                 continue
 
             usage = result.context_wrapper.usage
-            turns_used += max(1, int(usage.requests))
             usage_totals["requests"] += int(usage.requests)
             usage_totals["input"] += int(usage.input_tokens)
             usage_totals["output"] += int(usage.output_tokens)
@@ -298,7 +390,8 @@ async def run_agent(
                     f"server_state={'on' if server_state else 'off'} model={model} run: "
                     f"{usage_totals['requests']} model request(s), {usage_totals['input']} input / "
                     f"{usage_totals['output']} output tokens "
-                    f"({usage_totals['reasoning']} reasoning)",
+                    f"({usage_totals['reasoning']} reasoning)"
+                    + ("; usage incomplete: failed-provider usage unavailable" if usage_incomplete else ""),
                 )
                 return AgentRunResult(
                     submitted=submitted_holder["value"],

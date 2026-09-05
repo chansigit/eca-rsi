@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.2 - 2026-09-05
+
+- Recover explicit Responses output-length termination with at most two fresh
+  model sessions by default (`OPENAI_AGENTS_MAX_OUTPUT_RESETS`). Preserve host
+  tool/task state and validated partial submissions; never accept truncated text.
+- Enforce one logical model-turn budget across recovery sessions with public SDK
+  hooks, retaining available usage and marking failed-provider usage incomplete.
+- Keep content-filter, unknown terminal reasons and unrelated model errors fatal.
+  This recovery is in-process only; no cross-process partial checkpoint exists.
+
 ## 0.2.1 - 2026-09-05
 
 - Paginate host text Read results with `byte_offset`/`max_bytes`; default 8 KiB,

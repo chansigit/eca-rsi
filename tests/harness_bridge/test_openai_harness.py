@@ -138,6 +138,7 @@ def test_no_submit_nudges_with_previous_response_then_accepts(monkeypatch, tmp_p
             return [{"role": "user", "content": "original history"}]
 
     async def fake_run(agent, run_input, **_kwargs):
+        await _kwargs["hooks"].on_llm_start(None, agent, None, [])
         calls.append((run_input, _kwargs))
         if len(calls) == 2:
             submit = next(tool for tool in agent.tools if tool.name == "submit_answer")
@@ -189,6 +190,7 @@ def test_server_state_can_be_disabled_for_local_history(monkeypatch, tmp_path, o
             return [{"role": "user", "content": "original history"}]
 
     async def fake_run(agent, run_input, **kwargs):
+        await kwargs["hooks"].on_llm_start(None, agent, None, [])
         calls.append((run_input, kwargs))
         if len(calls) == 2:
             submit = next(tool for tool in agent.tools if tool.name == "submit_answer")
@@ -230,6 +232,7 @@ def test_context_limit_starts_fresh_session_but_keeps_host_state(monkeypatch, tm
         ))
 
     async def fake_run(agent, run_input, **kwargs):
+        await kwargs["hooks"].on_llm_start(None, agent, None, [])
         calls.append((run_input, kwargs))
         if len(calls) == 1:
             raise BadRequestError("Total tokens of image and text exceed max message tokens")
@@ -269,6 +272,7 @@ def test_refusing_model_raises_incomplete_and_still_closes_client(monkeypatch, t
             return []
 
     async def fake_run(agent, run_input, **kwargs):
+        await kwargs["hooks"].on_llm_start(None, agent, None, [])
         return FakeResult()
 
     async def submit(args):
