@@ -1,4 +1,4 @@
-# eca-rsi — 循环改进单细胞数据质量与标注的全自动 pipeline
+# ECA-RSI: Recursive Self-Improvement for an Ensemble Cell Atlas
 
 **主线(2026-09-02 起)是 `ecarsi/` 包**:确定的计算内核(osp / msp / zmip)+ Agent SDK 窄决策 +
 自驱动循环,见下文"主线:ecarsi 包"一节。入口:
@@ -10,8 +10,122 @@ eca-rsi organize|persample|loop|serve ...                          # 分步,等�
 
 `run.sh` + `steps/*.md` 是上一代"六步 prompt 循环"(agent 自己写分析代码),完整封存在
 分支 **`primitive`**(原 main;树里的 run.sh / steps 仍在,但不再维护)。下面"上一代"一节是它的记录,
-其中的教训(特征空间每轮重算、双重计数、apply 必须执行、checkpoint 不原地覆写、release 数字锚、删除预算)
-在 ecarsi 里已从 prompt 降格为代码。
+历史任务书不能当作主线的行为保证。当前实现的计算、提交检查、细胞守恒审计和发布判据
+以 `ecarsi/` 及配套内核源码为准；主线没有照搬旧 prompt 的所有删除预算和治理条款。
+
+## 主线:ecarsi 包(2026-09-02 由 agent-sdk 分支升格为 main)
+
+确定的计算进包(osp / msp / zmip,各自独立仓库,同级目录),agent 只做窄决策
+且被 host 校验;`ecarsi/` 是 wrapper + 驱动。
+
+```
+python -m ecarsi.organize    <输入目录> <root>       # eca-pp 守门 + 分析单元规划(agent)+ 细胞守恒审计
+python -m ecarsi.persample   <unit>                 # 样本列识别(agent)+ host 子进程池并行跑 osp(每样本 subset.h5ad;QC 只此一次,doublet 只在完整样本池算)
+python -m ecarsi.loop        <unit> [--rounds N] [--cap 10] [--force-reopen]
+   round 1: ecarsi.crosssample(样本纳入 agent → msp integrate/inspect/annotate)→ ecarsi.zoomin(zmip)
+   round N: 上轮 zoomin/annotated_zmip.h5ad,先验列改名 r(N-1)_* → msp --from-h5ad → zmip
+python -m ecarsi.ledger      <unit> [round dirs]    # 逐细胞台账 cell_ledger.csv + Sankey(每步删除流进红色 sink)
+python -m ecarsi.index       <root|unit>            # 从磁盘推导落地页(每步结束也自动写)
+python -m ecarsi.serve       [dir...] [--registry F] [--port 8899] [--ngrok [--domain D]] [--auth u:p]   # 前台多数据集导航 server,无状态,Ctrl-C 即停
+                             scan-add <dir|glob>... [--name N] [--dry-run] | remove <name>... | list [--json]   # 改 registry 文件(~/.config/ecarsi/registry.json)
+                             dump [path] | reload <path> [--replace]                                            # registry 文件另存 / 合并;server 按 mtime 自动重读
+eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__main__.py);run.sh 是 primitive 分支的旧入口
+```
+
+- **release 后默认 prune**（`run` / `loop` 加 `--no-prune` 关闭）：删各轮和各样本的中间 H5AD，
+  留 `<file>.pruned` 标记；带标签的矩阵另留 `<file>.obs.parquet` 或 `<file>.obs.csv.gz`，供 ledger 读取。
+  `release/pruned.json` 记录清理；保留 `input/organized.h5ad`、`release/`、报告和表格。
+  这是保留决策历史，不是保留全部中间表达矩阵。只预览用 `eca-rsi prune <root|unit> --dry-run`。
+
+**目录结构只在 `ecarsi/layout.py` 一处定义**,各步不得自拼路径(2026-09-02 统一):
+
+```
+<root>/                     organize 的 out_root = 一个数据集一次运行;serve 投这一层
+  index.html  organize/manifest.json
+  units/<unit>/
+    index.html  progress.log  input/  persample/<sample>/
+    rounds/roundNN/{manifest.json, input.h5ad(N≥2), crosssample/, zoomin/, ledger/, stats.txt, decision.txt}
+    release/{final.h5ad, summary.md, summary.json, needs_review.md, needs_review.json, cell_ledger.csv, sankey_coarse.png, umap.json}
+```
+
+- 落地页(`ecarsi.index`)**纯从磁盘推导**(manifest / 契约文件 / stats / decision / progress.log),
+  跑到一半也能渲染(round 进行中显示到哪一步、persample 完成数);serve 每次请求根页/unit 页都现算,
+  各步结束再写一份静态页留档。内核(osp/msp/zmip)只写各自的 `report.html`,永不写 index.html。
+- release 时 `ecarsi.umapdata` 从 final.h5ad 抽 `release/umap.json`(坐标 16 位量化 + 标签索引;超过 `--max-points`=10 万时分层抽样,
+  <300 细胞的小簇全保留,图例计数仍是全量);unit 落地页用原生 JS canvas 画 coarse / fine 两个同步面板
+  (像素缓冲直写 + 基图缓存 + 网格找最近点 + 拖拽缩放时 LOD),不依赖外部库。
+- needs_review(`ecarsi.review`)按**类别**分节而非按轮:convergence → removed(低于 high 的真删,不可逆)
+  → sample_excluded → reassigned(跨轮重复的标 recurs)→ inspect_flag → lineage_skipped → low_confidence;
+  每条带 round/step/scope/cluster/细胞数/report 链接;同一记录渲染 md / json / html。
+- persample manifest 记录的 `dir` 是绝对路径,但所有读取方一律用 `layout.sample_dir()` 按 basename
+  在本 unit 的 persample/ 下定位,目录搬家不坏。
+
+- **停机只看细胞数**,标签变动不作判据(agent 措辞有随机性):给了 `--rounds N` 就按总轮数发布，允许 `--rounds 1`;
+  没给则 (1) 本轮删除比 < 1% 或删除数 < 100,或 (2) 连续三轮删除比 < 2% 即 release；自动模式首轮继续;
+  `--cap`(默认 10)是安全上限,触顶强制 release 并标记。`--force-reopen` 越过已有 release 继续开轮。
+- **生物学疑点不触发人工审批**：低 confidence、inspect flag、样本排除、reassign 等在
+  `release/needs_review.md` 汇总。执行失败、无可纳入样本或缺少必需输出仍会使单元失败，不能承诺必然发布。
+- **每次删除都逐细胞记账**:osp `qc_removed.csv`、msp `annotation_removed.csv`、zmip `zmip_removed.csv`;
+  ledger 把它们对齐成一张表,数目必须严丝合缝。
+- OSP 完整分析先按 QC 规则真实过滤；OSP 注释的 keep/flag/drop 是建议，不在该注释阶段删除。
+  MSP integrate/inspect 保留细胞，annotation 应用 preannotation、inspect drop 和 agent 删除的并集；
+  幸存者在 `annotated.h5ad`。ZMIP 进一步应用局部删除，输出 `annotated_zmip.h5ad`。
+- ZMIP 依据标签与连通性规划 lineage，默认 ≥800 细胞才下钻；各 lineage 可并发计算和注释。
+  小 lineage 保留原标签；reassign 修改标签，不在目标 lineage 重新嵌入；全局嵌入继承 MSP。
+- **单样本 / 单批次**：persample 只有一个样本时不调用纳入 agent。若多样本经纳入决策后只剩一个，
+  仍已有该次纳入决策。两种情况都由 MSP 跳过 Harmony，inspect / annotate 不把样本组成当作证据。
+  OSP 注释的 drop 仍是建议，OSP QC 过滤照常发生。
+- 环境:`HARNESS`(默认 **openai** = OpenAI Agents SDK + Ark 驱动豆包,2026-09-04 起;`deepseek` 走 dsh;`claude` 走 claude_agent_sdk,耗 Claude Code 额度)、
+  `MODEL`(默认随后端:doubao-seed-2-1-turbo-260628 / claude-sonnet-5)、`DSH_BIN`（按共享 bridge 配置）、`ARK_API_KEY`(shell 里 export)、`MSP_PYTHON` / `ZMIP_PYTHON`、`ZMIP_MIN_CELLS`;
+  `OPENAI_AGENTS_API`(`responses` 默认,`chat_completions` 仅文本兼容)、`OPENAI_AGENTS_MAX_NUDGES`(默认 2)、`OPENAI_AGENTS_MAX_CONTEXT_RESETS`(默认 2)、`OPENAI_AGENTS_SERVER_STATE`(默认 1,Responses 增量续接)、
+  `AGENT_WALL_MIN`(每次 agent 调用的墙钟预算,默认 180 分钟,所有后端都强制,超时重开一次);
+  并发池:`PERSAMPLE_PARALLEL` / `PERSAMPLE_MEM_PER_CELL_MB`(persample)、`ZMIP_PARALLEL`(zoomin)，
+  各层结合可用 CPU 和内存估算调度，具体配置以对应内核为准。
+- agent runtime 实现在独立 `agent-harness-bridge` 包;`ecarsi.harness` / `msp.harness` / `osp.harness` 只是保持旧导入路径的 identity-preserving shim。adapter 回归测试在共享包,本仓库 `tests/test_harness_sync.py` 验证 shim 身份;`resources.py` 两份仍需逐字节相同。
+- persample(2026-09-03 起)不再开 agent 驱动:host 读一次 organized.h5ad 写出每样本 `subset.h5ad`,
+  子进程池并行跑 `python -m osp`(大样本先跑),失败重试一次后记 `persample/failures.md` 继续;12 样本 Fu2022 约 5 分钟。
+- zmip plan 有 host 连通性校验:`lineage_islands.csv`(UMAP 2D kNN 连通分量)——把分开的岛并成一个 lineage 直接打回;
+  同一岛拆成多个 lineage 打回一次,agent 可带 `confirm_shared_islands: true` 重交,记入 plan 的 `host_warnings` 与 needs_review。
+- 历史测试与服务记录（使用前核对当前目录和进程）：`$SCRATCH/eca-runs/_organize_test/fu2022/fu2022-meniscus` 是旧结构的真实跑(不迁移);
+  `$SCRATCH/eca-runs/_layout_test/fu2022` 是它的 symlink 复刻(新结构,验证 index/serve 用),
+  `_layout_test/running` 是"round 3 跑到一半"的假象。直播:`eca-rsi serve scan-add <root>` 再 `eca-rsi serve --domain csj.ngrok.pizza`(一个前台进程、一条隧道,`/<name>/` 路径路由;registry 文件是唯一真相,改文件 server 自动重读,进程随时可杀可重起),
+  用户自己的 ngrok 隧道 8899 → csj.ngrok.pizza(勿动;ngrok 账号并发 endpoint 有上限,`--ngrok` 会直接报它的错)。
+
+
+## 主线检查与接口边界
+
+- 输入发现要求 ECA-PP 的 `standardize/standardized.h5ad` 和同目录 `result.json`，额外 H5AD 会被拒绝。
+  该检查不等于核验上游所有质量结论；`identify_columns/result.json` 可选，persample 的样本列优先。
+- organize 按来源审计每个细胞是否恰好分配一次；跨文件 barcode 重叠只发警告，未自动核验表达身份或去重。
+- 主线用 `eca-rsi run` 续跑；它会跳过已组织目录。不要反复调用 `organize` 来恢复整个流程。
+- 外层主要按必需文件存在跳步（部分路径也接受 `.pruned` 标记），没有整套流程的内容哈希验证。
+  新版 ZMIP 内部的输入/配置/源码身份检查只在真正调用内核时运行；外层跳过会绕开它。
+  改输入、分析参数或源码时使用新的输出根目录；不要写“任意修改后可安全续跑”。
+- 已记录 harness/model 的 manifest 在被检查时拒绝静默切换；`--allow-agent-change` 允许混跑，
+  不重算完成结果。旧 manifest 缺字段时只能警告；不能声称所有历史结果都已验证配置身份。
+- `--force-reopen` 继续已有 release，不等于 ZMIP 的 `--force`；`--rounds N` 是总轮数，要大于已完成轮数。
+- 本轮删除统计从 MSP integrated 到 ZMIP survivors，不含此前 OSP QC 和整样本排除；完整历史查 ledger。
+  达到停止阈值不证明注释准确；轮数上限或固定轮数发布应按 reason 与收敛发布区分。
+- `ecarsi.cost` 只累计捕获到的费用事件；缺失记录不能解释成免费或完整账单。
+- 新版内核的输入检查、锁和发布恢复机制不能自动视为 ECA-RSI 外层的端到端保证。
+  内核独立验证与配套版本声明也不代替更新组合后的真实运行验证。
+
+开发时从本仓库运行现有针对性检查（需要配套依赖与 pytest）：
+
+```bash
+python -m pytest -q tests/test_agent_selection.py tests/test_crosssample_cwd.py tests/test_harness_sync.py
+```
+
+纯文档修改检查 `git diff --check`、本地链接和 CLI 示例即可，无需启动模型或数据分析任务。
+安装步骤见 [INSTALL.md](INSTALL.md)，用户入口与输出语义见 [README.md](README.md)。
+
+## 环境
+
+- 集群运行前确认已有适当的计算 allocation，不把历史会话的节点状态当作当前状态。
+- `run-eca-rsi.sh` 的本机解释器候选为 `/scratch/users/chensj16/venvs/dl2025/.venv/bin/python`；
+  可用 `ECA_RSI_PYTHON` 覆盖。包版本和实际导入路径按 [INSTALL.md](INSTALL.md) 检查。
+- **本目录是开发目录:运行产物一律放仓库外**(workdir 指到如
+  `$SCRATCH/eca-runs/<数据集名>`),输入数据也不进本仓库。
 
 ## 上一代:run.sh 六步循环(分支 primitive;2026-08-25 推倒重做后;总共 ~300 行)
 
@@ -54,7 +168,7 @@ eca-rsi organize|persample|loop|serve ...                          # 分步,等�
   label_l2_changed,由 apply 写 stats.txt、runner 中继);apply 另出
   `umap_removed.png`(本轮删除红/保留浅灰,零删除也出全灰图)。
 
-## 核心设计哲学(与上一版的根本区别)
+## 上一代设计哲学（仅 primitive 历史）
 
 上一版把 compute/apply 写成固定脚本、决策格式定 schema 加 lint,结果六个
 silent bug 全部长在"规格与实现的接缝"上(记录了但没人执行、写了但从未实现)。
@@ -72,7 +186,7 @@ silent bug 全部长在"规格与实现的接缝"上(记录了但没人执行、
   none",教训);round 1 永不 release;最后一轮强制 release-with-flags。
 - 删除预算(单轮 ~10%/累计 ~30%)越线不停机,转保守:边缘删除降级为 flag。
 
-## 现状(2026-08-25)
+## 上一代运行记录与 backlog（2026-08-25 历史快照）
 
 - 两个数据集真实跑通:18_Clayton_2025(1766 细胞,Fable,3 轮收敛;数据
   后因上游丢样本弃用)与 **Fu 2022 半月板(35k 细胞,eca-pp 完整产物,
@@ -87,87 +201,3 @@ silent bug 全部长在"规格与实现的接缝"上(记录了但没人执行、
   (措辞变体覆盖未知)、强制末轮 release 与 exhausted 路径从未走过、
   checkpoint 逐轮列膨胀(35k 细胞已 791MB,大数据集需归档策略)、
   progress.log retry 事件措辞不准、"每个大谱系 release 前至少一次专属重嵌入"是否入收敛判据待用户拍板。
-
-## 环境
-
-- 本机即 Slurm 计算节点,直接跑,勿 sbatch;`claude -p` headless 已实测可用。
-- Python: `/scratch/users/chensj16/venvs/dl2025/.venv/bin/python`
-  (scanpy/harmonypy/scrublet/anndata 齐)。
-- **本目录是开发目录:运行产物一律放仓库外**(workdir 指到如
-  `$SCRATCH/eca-runs/<数据集名>`),输入数据也不进本仓库。
-
-## 主线:ecarsi 包(2026-09-02 由 agent-sdk 分支升格为 main)
-
-确定的计算进包(osp / msp / zmip,各自独立仓库,同级目录),agent 只做窄决策
-且被 host 校验;`ecarsi/` 是 wrapper + 驱动。
-
-```
-python -m ecarsi.organize    <输入目录> <root>       # eca-pp 守门 + 分析单元规划(agent)+ 细胞守恒审计
-python -m ecarsi.persample   <unit>                 # 样本列识别(agent)+ host 子进程池并行跑 osp(每样本 subset.h5ad;QC 只此一次,doublet 只在完整样本池算)
-python -m ecarsi.loop        <unit> [--rounds N] [--cap 10] [--force-reopen]
-   round 1: ecarsi.crosssample(样本纳入 agent → msp integrate/inspect/annotate)→ ecarsi.zoomin(zmip)
-   round N: 上轮 zoomin/annotated_zmip.h5ad,先验列改名 r(N-1)_* → msp --from-h5ad → zmip
-python -m ecarsi.ledger      <unit> [round dirs]    # 逐细胞台账 cell_ledger.csv + Sankey(每步删除流进红色 sink)
-python -m ecarsi.index       <root|unit>            # 从磁盘推导落地页(每步结束也自动写)
-python -m ecarsi.serve       [dir...] [--registry F] [--port 8899] [--ngrok [--domain D]] [--auth u:p]   # 前台多数据集导航 server,无状态,Ctrl-C 即停
-                             scan-add <dir|glob>... [--name N] [--dry-run] | remove <name>... | list [--json]   # 改 registry 文件(~/.config/ecarsi/registry.json)
-                             dump [path] | reload <path> [--replace]                                            # registry 文件另存 / 合并;server 按 mtime 自动重读
-eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__main__.py);run.sh 是 primitive 分支的旧入口
-```
-
-- **release 后默认 prune**(`ecarsi.prune`,`--no-prune` 关):删各轮/各样本的中间 h5ad(pbmc68k 31 GB → ~2 GB),留 `<file>.pruned` marker(契约仍算完成)和 `<file>.obs.parquet`(ledger 回退读它,force-reopen 仍能重建台账),`release/pruned.json` 记账;`input/organized.h5ad` 与 `release/` 不动。跑在 Oak 上就靠这个控容量。
-
-- **release 后默认 prune**(`ecarsi.prune`,`--no-prune` 关):删各轮/各样本的中间 h5ad(pbmc68k 31 GB → ~2 GB),留 `<file>.pruned` marker(契约仍算完成)和 `<file>.obs.parquet`(ledger 回退读它,force-reopen 仍能重建台账),`release/pruned.json` 记账;`input/organized.h5ad` 与 `release/` 不动。跑在 Oak 上就靠这个控容量。
-
-**目录结构只在 `ecarsi/layout.py` 一处定义**,各步不得自拼路径(2026-09-02 统一):
-
-```
-<root>/                     organize 的 out_root = 一个数据集一次运行;serve 投这一层
-  index.html  organize/manifest.json
-  units/<unit>/
-    index.html  progress.log  input/  persample/<sample>/
-    rounds/roundNN/{manifest.json, input.h5ad(N≥2), crosssample/, zoomin/, ledger/, stats.txt, decision.txt}
-    release/{final.h5ad, summary.md, needs_review.md, needs_review.json, cell_ledger.csv, sankey_coarse.png}
-```
-
-- 落地页(`ecarsi.index`)**纯从磁盘推导**(manifest / 契约文件 / stats / decision / progress.log),
-  跑到一半也能渲染(round 进行中显示到哪一步、persample 完成数);serve 每次请求根页/unit 页都现算,
-  各步结束再写一份静态页留档。内核(osp/msp/zmip)只写各自的 `report.html`,永不写 index.html。
-- release 时 `ecarsi.umapdata` 从 final.h5ad 抽 `release/umap.json`(坐标 16 位量化 + 标签索引;超过 `--max-points`=10 万时分层抽样,
-  <300 细胞的小簇全保留,图例计数仍是全量);unit 落地页用原生 JS canvas 画 coarse / fine 两个同步面板
-  (像素缓冲直写 + 基图缓存 + 网格找最近点 + 拖拽缩放时 LOD),不依赖外部库。
-- needs_review(`ecarsi.review`)按**类别**分节而非按轮:convergence → removed(低于 high 的真删,不可逆)
-  → sample_excluded → reassigned(跨轮重复的标 recurs)→ inspect_flag → lineage_skipped → low_confidence;
-  每条带 round/step/scope/cluster/细胞数/report 链接;同一记录渲染 md / json / html。
-- persample manifest 记录的 `dir` 是绝对路径,但所有读取方一律用 `layout.sample_dir()` 按 basename
-  在本 unit 的 persample/ 下定位,目录搬家不坏。
-
-- **停机只看细胞数**,标签变动不作判据(agent 措辞有随机性):给了 `--rounds N` 就只看轮数,跑满 N 轮;
-  没给则 (1) 本轮删除比 < 1% 或删除数 < 100,或 (2) 连续三轮删除比 < 2% 即 release;round 1 永不 release;
-  `--cap`(默认 10)是安全上限,触顶强制 release 并标记。`--force-reopen` 越过已有 release 继续开轮。
-- **绝不中途等人**:各步的疑点(低 confidence、zmip `budget_exceeded`、inspect flag、样本排除、reassign)
-  只在 `release/needs_review.md` 一次汇总;`release/{final.h5ad, summary.md, cell_ledger.csv, sankey_coarse.png}`。
-- **每次删除都逐细胞记账**:osp `qc_removed.csv`、msp `annotation_removed.csv`、zmip `zmip_removed.csv`;
-  ledger 把它们对齐成一张表,数目必须严丝合缝。
-- 真删只发生在 msp annotate 和 zmip;integrate/inspect 只提议。`integrated.h5ad` 永不改,
-  幸存者在 `annotated.h5ad` / `annotated_zmip.h5ad`。
-- zmip:lineage 由 UMAP 连通性决定(agent 必须看图;一个岛一个 lineage,状态并入所在岛),
-  ≥800 细胞才下钻;每 lineage 单 agent,可 recluster、remove、reassign;删除超 10% 触发一次复核(软预算)。
-- **单样本 / 单批次**(persample 判不出样本列 → 整文件一个样本 `all`,或纳入 agent 只留 1 个):走同一条链,
-  差别只有三处——纳入 agent 不开(直接纳入)、msp 跳过 harmony(`X_pca_harmony = X_pca`,uns 记 skipped)、
-  inspect / annotate 被告知样本组成不作证据;osp 的 drop 照旧只作证据、在 annotate 一次真删;zmip 不变。
-- 环境:`HARNESS`(默认 **openai** = OpenAI Agents SDK + Ark 驱动豆包,2026-09-04 起;`deepseek` 走 dsh;`claude` 走 claude_agent_sdk,耗 Claude Code 额度)、
-  `MODEL`(默认随后端:doubao-seed-2-1-turbo-260628 / claude-sonnet-5)、`DSH_BIN`(默认 `$SCRATCH/tools/deepseek-harness-src/apps/cli/lib/bin.js`)、`ARK_API_KEY`(shell 里 export)、`MSP_PYTHON` / `ZMIP_PYTHON`、`ZMIP_MIN_CELLS`;
-  `OPENAI_AGENTS_API`(`responses` 默认,`chat_completions` 仅文本兼容)、`OPENAI_AGENTS_MAX_NUDGES`(默认 2)、`OPENAI_AGENTS_MAX_CONTEXT_RESETS`(默认 2)、`OPENAI_AGENTS_SERVER_STATE`(默认 1,Responses 增量续接)、
-  `AGENT_WALL_MIN`(每次 agent 调用的墙钟预算,默认 180 分钟,所有后端都强制,超时重开一次);
-  并发池:`PERSAMPLE_PARALLEL` / `PERSAMPLE_MEM_PER_CELL_MB`(persample)、`ZMIP_PARALLEL` / `ZMIP_MEM_PER_CELL_MB`(zoomin),
-  默认从 affinity CPU + cgroup 内存自动定(`ecarsi.resources`,与 msp.resources 同一份拷贝)。
-- agent runtime 实现在独立 `agent-harness-bridge` 包;`ecarsi.harness` / `msp.harness` / `osp.harness` 只是保持旧导入路径的 identity-preserving shim。adapter 回归测试在共享包,本仓库 `tests/test_harness_sync.py` 验证 shim 身份;`resources.py` 两份仍需逐字节相同。
-- persample(2026-09-03 起)不再开 agent 驱动:host 读一次 organized.h5ad 写出每样本 `subset.h5ad`,
-  子进程池并行跑 `python -m osp`(大样本先跑),失败重试一次后记 `persample/failures.md` 继续;12 样本 Fu2022 约 5 分钟。
-- zmip plan 有 host 连通性校验:`lineage_islands.csv`(UMAP 2D kNN 连通分量)——把分开的岛并成一个 lineage 直接打回;
-  同一岛拆成多个 lineage 打回一次,agent 可带 `confirm_shared_islands: true` 重交,记入 plan 的 `host_warnings` 与 needs_review。
-- 测试数据:`$SCRATCH/eca-runs/_organize_test/fu2022/fu2022-meniscus` 是旧结构的真实跑(不迁移);
-  `$SCRATCH/eca-runs/_layout_test/fu2022` 是它的 symlink 复刻(新结构,验证 index/serve 用),
-  `_layout_test/running` 是"round 3 跑到一半"的假象。直播:`eca-rsi serve scan-add <root>` 再 `eca-rsi serve --domain csj.ngrok.pizza`(一个前台进程、一条隧道,`/<name>/` 路径路由;registry 文件是唯一真相,改文件 server 自动重读,进程随时可杀可重起),
-  用户自己的 ngrok 隧道 8899 → csj.ngrok.pizza(勿动;ngrok 账号并发 endpoint 有上限,`--ngrok` 会直接报它的错)。

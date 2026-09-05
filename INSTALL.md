@@ -1,133 +1,172 @@
-# 安装与依赖(eca-rsi 主线)
+# 安装与运行（ecarsi 主线）
 
-整套系统 = 一个驱动包 + 三个内核包 + 两个共享库,外加三个可选 agent runtime 与几个外部工具。
-所有 Python 包装进**同一个 venv**;内核以子进程 `python -m osp|msp|zmip` 被调用,
-所以也可以指到别的解释器(`OSP_PYTHON` / `MSP_PYTHON` / `ZMIP_PYTHON`),默认就是当前解释器。
+本文对应 2026-09-04 核对的配套源码。流程和结果说明见 [README.md](README.md)。
+ECA-PP 先独立运行；ECA-RSI 环境包含驱动包、OSP/MSP/ZMIP 三个内核和共享库。
+建议装入同一个独立环境，内核通过 `python -m osp|msp|zmip` 子进程运行。
 
-## 1. 组成与依赖关系
+## 1. 包与兼容关系
 
-```
-eca-rsi (ecarsi)  ── 驱动:organize / persample / loop / ledger / index / serve
-   │  子进程调用
-   ├── osp     每样本 QC · doublet(scanpy 内置 scrublet)· DecontX(内置)· leiden · 注释 agent
-   ├── msp     跨样本 harmony 整合 · inspect / annotate agent · 报告        ── 依赖 standissect-lite, harmonypy, torch
-   └── zmip    逐 lineage 下钻                                              ── 依赖 msp
-agent-harness-bridge ── 统一 ToolSpec/run_agent 契约与三套 adapter
-   └── deepseek(dsh) / openai(OpenAI Agents SDK + Ark) / claude(Claude Agent SDK)
-```
+下表是配套源码的版本声明，不代表包索引上同版本的文件包含全部当前修改，
+也不是完整工作流的环境锁定文件。
 
-| 包 | 仓库 | 版本 | 依赖(pyproject 声明) |
-|---|---|---|---|
-| agent-harness-bridge | 独立共享仓库,import 名 `harness_bridge` | 0.1.0 | core 无依赖;extras:`openai` / `claude` / `deepseek` / `all` |
-| ecarsi | `eca-rsi`(GitHub chansigit/eca-rsi,main) | 0.1.0 | agent-harness-bridge[all] 0.1.0,anndata,scanpy,h5py,numpy,pandas,matplotlib |
-| osp | GitHub chansigit/osp · **PyPI `osp-sc`**(`osp` 与已有 `OSP` 相似被拒,import 名仍是 `osp`) | 0.1.0 | agent-harness-bridge core,scanpy,igraph,pandas,numpy,scipy,matplotlib,scikit-learn;`[agent]` 安装 bridge 的 runtime extras |
-| msp | GitHub chansigit/msp · **PyPI `msp-sc`**(`msp` 名已被占,import 名仍是 `msp`) | 0.2.0 | agent-harness-bridge core,scanpy,anndata,igraph,**harmonypy==0.2.0**,torch,standissect-lite ≥0.2.0 等;`[agent]` 安装 bridge 的 runtime extras |
-| zmip | GitHub chansigit/zmip · PyPI `zmip` | 0.1.0 | msp ≥0.2.0,agent-harness-bridge[all] 0.1.0,scanpy,anndata,pandas,numpy,scipy,matplotlib |
-| standissect-lite | GitHub chansigit/standissect-lite · PyPI `standissect-lite` | 0.2.0 | anndata, leidenalg, python-igraph, numpy, pandas, scikit-learn |
+| 发行名 / import 名 | 源码版本 | 关键依赖与职责 |
+| --- | --- | --- |
+| `ecarsi` / `ecarsi` | 0.1.0 | 驱动；依赖 `agent-harness-bridge[all]==0.1.0`、anndata、scanpy、h5py、numpy、pandas、matplotlib |
+| `osp-sc` / `osp` | 0.1.1 | 每样本 QC、Scrublet、内置 DecontX、聚类和注释建议；`[agent]` 安装 bridge 的全部后端依赖 |
+| `msp-sc` / `msp` | 0.2.0 | 跨样本整合与审查；依赖 `harmonypy==0.2.0`、torch、`standissect-lite>=0.2.0`；`[agent]` 安装后端依赖 |
+| `zmip` / `zmip` | 0.2.0 | lineage 内重算与细化；依赖 `msp-sc>=0.2.0,<0.3` 和 `agent-harness-bridge[all]==0.1.0`，另有运行时 API 兼容检查 |
+| `agent-harness-bridge` / `harness_bridge` | 0.1.0 | core 无依赖；extras 为 `openai`、`claude`、`deepseek`、`all` |
+| `standissect-lite` / `standissect_lite` | 0.2.0 | MSP 使用的群体内部小片段检测库 |
 
-两个要点:
-
-- **PyPI 发行名带 `-sc` 后缀:`osp-sc`、`msp-sc`**(`osp` 与已有 `OSP` 相似被拒,`msp` 被无关项目占用),装完照常 `import osp` / `import msp`、`python -m osp|msp`;
-  zmip 的依赖写的就是 `msp-sc`。standissect-lite 0.2.0 也已在 PyPI(2026-09-02 起)。
-- **harmonypy 钉在 0.2.0**(torch 版,msp 校验过 Z_corr 方向)。PyPI 已有 2.0.0,未测试,不要顺手升级。
-  torch 装 CPU 版即可;有 GPU 时 harmony 自动用(`MSP_DEVICE` 可强制)。
+安装名是 `osp-sc` 和 `msp-sc`，import 和模块入口仍为 `osp` 和 `msp`。
+`ecarsi` 默认依赖不包含三套内核；其 `[kernels]` extra 声明了内核依赖，
+但仅用这些版本下限不能锁定配套源码。MSP 当前固定 `harmonypy==0.2.0`，
+不要在安装时自行替换；torch 可以使用 CPU 构建。
 
 ## 2. 前置条件
 
-| 项 | 说明 | 本机现状 |
-|---|---|---|
-| Python ≥3.10 | Sherlock:`ml python/3.12.1` | 3.12.1,venv 在 `/scratch/users/chensj16/venvs/dl2025/.venv` |
-| Claude Code CLI + 登录 | `npm i -g @anthropic-ai/claude-code`,`claude login`(OAuth,Max 订阅;不设 `ANTHROPIC_API_KEY` 就不走 API 计费) | 2.1.257,凭据在 `~/.claude/.credentials.json` |
-| claude-agent-sdk | Python 包,内部调用上面的 CLI | ≥0.2.152(当前 0.2.152) |
-| openai-agents | `HARNESS=openai` 的 Python agent loop;本项目固定版本 | 0.22.0 |
-| Ark API key | `HARNESS=openai` / 豆包鉴权,通过 `ARK_API_KEY` 提供 | shell 环境变量 |
-| eca-pp | **上游**:输入必须是 eca-pp 产物(`<样本>/standardize/standardized.h5ad` + `result.json`),organize 守门会拒绝裸 h5ad | 另一个项目 |
-| ngrok(可选) | `ecarsi.serve --ngrok` 才需要;authtoken 自备,账号并发 endpoint 上限自负 | 3.37.6,`~/local/bin/ngrok` |
-| Node ≥18(可选) | 只有画架构图的 archify skill 用 | 24.13.0(`ml nodejs`) |
-| stanhue skill(可选) | `~/.claude/skills/stanhue`,有则 UMAP 配色按空间层次分配,没有回退到默认调色板 | 已装 |
+- Python ≥3.10；旧 Linux 的原生库兼容性需要结合 h5py/HDF5 等依赖检查。
+- 默认后端 `HARNESS=openai` 使用 OpenAI Agents SDK，通过 Ark 调用豆包。
+  在环境中设置 `ARK_API_KEY`；bridge 的 OpenAI extra 固定 `openai-agents==0.22.0`。
+- 选择 `HARNESS=claude` 时才需要可用的 Claude Code 登录及 Claude Agent SDK。
+  选择 `HARNESS=deepseek` 时需要可执行的 dsh；按
+  [bridge 文档](https://github.com/chansigit/agent-harness-bridge) 配置 `DSH_BIN`。
+  dsh runtime 不随 bridge 的 Python extra 自动安装。
+- 输入必须包含 ECA-PP 的 `standardize/standardized.h5ad` 与同目录 `result.json`。
+  `identify_columns/result.json` 可选。目录约束见 [README](README.md#prepare-the-input)。
+- `ngrok` 仅在远程隧道模式需要；Node 不是分析工作流的必需依赖。
 
-## 3. 安装
+旧集群上若 dsh 报 glibc 不兼容，应使用集群提供的兼容运行环境或已验证的
+源码构建。Sherlock 可按本地环境检查 `polyfill-glibc/0.1` 模块是否适用。
 
-**只想用**(内核全在 PyPI;ecarsi 本身尚未发 PyPI,从 GitHub 装):
+## 3. 从配套源码安装
+
+当前先使用同级源码 checkout 安装共享库和内核。下面的命令适用于这些仓库
+均已放在同一父目录的情况；替换路径，并选择需要保留的提交后再安装。
+这是开发环境的安装步骤，本次文档修订没有重新执行完整环境安装。
 
 ```bash
-pip install "osp-sc[agent]" "msp-sc[agent]" zmip "ecarsi @ git+https://github.com/chansigit/eca-rsi.git"
+python -m venv /path/to/venvs/eca
+source /path/to/venvs/eca/bin/activate
+python -m pip install -U pip
+
+cd /path/to/source-checkouts
+python -m pip install \
+  -e './agent-harness-bridge[all]' \
+  -e ./standissect-lite \
+  -e './osp[agent]' \
+  -e './msp[agent]' \
+  -e ./zmip \
+  -e ./eca-rsi
 ```
 
-**开发**(全部 editable,改源码即生效):
+源码仓库位于 GitHub 的 `chansigit` 账号下：
+[eca-rsi](https://github.com/chansigit/eca-rsi)、
+[osp](https://github.com/chansigit/osp)、
+[msp](https://github.com/chansigit/msp)、
+[zmip](https://github.com/chansigit/zmip)、
+[agent-harness-bridge](https://github.com/chansigit/agent-harness-bridge)、
+[standissect-lite](https://github.com/chansigit/standissect-lite)。
+
+只需要 CPU torch 时，可在安装上面的包之前执行：
 
 ```bash
-ml python/3.12.1
-export PIP_CACHE_DIR=$SCRATCH/.pip-cache          # 别把缓存写进 $HOME
-python -m venv $SCRATCH/venvs/eca && source $SCRATCH/venvs/eca/bin/activate
-pip install -U pip
-
-cd $SCRATCH/projects
-for r in agent-harness-bridge standissect-lite osp msp zmip eca-rsi; do git clone https://github.com/chansigit/$r; done
-pip install -e "agent-harness-bridge[all]"
-pip install -e standissect-lite && pip install -e "osp[agent]" && pip install -e "msp[agent]" && pip install -e zmip && pip install -e eca-rsi
-# msp 会顺带拉 harmonypy==0.2.0 和 torch;editable 的 osp / msp 在 pip 里叫 osp-sc / msp-sc
+python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
 ```
 
-只想要 CPU torch(省几 GB):在装 msp 之前先
-`pip install torch --index-url https://download.pytorch.org/whl/cpu`。
+ZMIP 的配套源码提供独立 wheel 安装验证脚本，检查安装后的 API、依赖和测试。
+其 2026-09-04 验证记录说明，当时使用的索引未能解析要求的 harness 发行版；
+因此不能把 `pip install zmip` 当作该验证环境的复现方式。具体步骤及原生库要求见
+[ZMIP 安装说明](https://github.com/chansigit/zmip/blob/main/docs/runtime.md#install)
+和[验证记录](https://github.com/chansigit/zmip/blob/main/VALIDATION.md)。
+这些内核验证也不等于整套 ECA-RSI 在更新后的组合上已完成端到端验证。
 
-## 4. 验证
+## 4. 检查实际运行环境
+
+在准备运行分析的环境内执行：
 
 ```bash
-python - <<'EOF'
+python -m pip check
+python - <<'PY'
 import importlib
-for m in ["harness_bridge", "osp", "msp", "zmip", "standissect_lite", "claude_agent_sdk", "agents", "ecarsi"]:
-    x = importlib.import_module(m); print(f"{m:18s} {x.__file__}")
-EOF
-python -m osp --help | grep -q report-context && echo osp-ok      # 旧副本没有这个参数
-python -m msp --help >/dev/null && python -m zmip --help >/dev/null && echo msp-zmip-ok
-python -m ecarsi.serve --help >/dev/null && echo ecarsi-ok
-claude --version                                                     # SDK 靠它
+from importlib.metadata import version
+for dist, module in [
+    ('ecarsi', 'ecarsi'), ('osp-sc', 'osp'), ('msp-sc', 'msp'),
+    ('zmip', 'zmip'), ('agent-harness-bridge', 'harness_bridge'),
+    ('standissect-lite', 'standissect_lite'),
+]:
+    loaded = importlib.import_module(module)
+    print(dist, version(dist), loaded.__file__)
+PY
+python -m ecarsi --help
+python -m ecarsi run --help
+python -m osp --help
+python -m msp --help
+python -m zmip --help
 ```
 
-dsh 的官方 runtime wheel 目前针对较新的 glibc。Sherlock 上先
-`module load polyfill-glibc/0.1`,或继续把 `DSH_BIN` 指向已经验证的源码构建;
-bridge 不会在默认安装时强拉不兼容的 runtime wheel。
+editable 安装的 `__file__` 应指向预期源码目录；wheel 安装应指向对应环境的
+安装目录。检查路径是为了防止误用旧副本，不能统一要求所有安装都指向源码树。
+检查通过说明依赖和入口可用；数据处理与模型提交仍需实际运行验证。
 
-`__file__` 必须指向源码树。曾经踩过的坑:venv 里留着一份非 editable 的 osp 旧副本,
-源码改了不生效(缺 `qc_removed.csv`),`pip install -e` 会覆盖掉它。
+## 5. 运行配置
 
-## 5. 运行时环境变量
+| 配置 | 作用 / 默认值 |
+| --- | --- |
+| `HARNESS` / `--harness` | `openai`（默认）、`deepseek` 或 `claude` |
+| `MODEL` / `--model` | CLI 优先；OpenAI/dsh 默认 `doubao-seed-2-1-turbo-260628`，Claude 默认 `claude-sonnet-5` |
+| `ARK_API_KEY` / `DOUBAO_BASE_URL` | Ark 密钥 / endpoint；默认使用北京区域 `/api/v3` |
+| `OPENAI_AGENTS_API` | 默认 `responses`；`chat_completions` 是文本兼容路径，图像工具结果使用 Responses |
+| `OPENAI_AGENTS_MAX_NUDGES` | 未 submit 时在同一历史中继续提醒，默认 2 次 |
+| `OPENAI_AGENTS_MAX_CONTEXT_RESETS` | 超长上下文恢复次数上限，默认 2 次 |
+| `OPENAI_AGENTS_SERVER_STATE` | 默认 1，Responses 使用 `previous_response_id` 增量续接 |
+| `--allow-agent-change` | 显式允许被检查的 manifest 与当前 harness/model 不同；不重算已完成步骤 |
+| `OSP_PYTHON` / `MSP_PYTHON` | 内核解释器，默认当前解释器 |
+| `ZMIP_PYTHON` | 默认依次取 `MSP_PYTHON`、当前解释器 |
+| `ECA_RSI_PYTHON` | `run-eca-rsi.sh` 使用的解释器；未设时先尝试脚本内的本机 venv，再回退到 `python` |
+| `PERSAMPLE_PARALLEL` / `PERSAMPLE_MEM_PER_CELL_MB` | 每样本并发上限 / 内存估算；默认按可用 CPU 和内存调度 |
+| `ZMIP_PARALLEL` | ZMIP lineage 并发上限；设为 1 可顺序运行 |
+| `ZMIP_MIN_CELLS` | 下钻最小 lineage 细胞数，默认 800 |
+| `MSP_DEVICE` | Harmony 设备选择，默认自动，可设 `cpu` 或 `cuda` |
+| `AGENT_WALL_MIN` | 单次 agent 调用时间预算，默认 180 分钟 |
+| `AGENT_LIMIT_WAIT_MIN` / `AGENT_LIMIT_WAIT_MAX_H` | 额度等待间隔（分钟）/ 总预算（小时），默认 10 / 12 |
 
-| 变量 | 作用 | 默认 |
-|---|---|---|
-| `HARNESS` | agent 后端:`openai`(OpenAI Agents SDK + Ark + 豆包)、`deepseek`(dsh + 豆包)或 `claude` | `openai` |
-| `OPENAI_AGENTS_API` | `HARNESS=openai` 使用 `responses` 或文本兼容路径 `chat_completions`;图像工具结果需要 Responses | `responses` |
-| `OPENAI_AGENTS_MAX_NUDGES` | 模型正常结束但未 submit 时,保留同一历史继续提醒的次数 | `2` |
-| `OPENAI_AGENTS_MAX_CONTEXT_RESETS` | Ark 拒绝过长图文上下文时,保留 host 任务/提交状态并开新会话继续的上限 | `2` |
-| `OPENAI_AGENTS_SERVER_STATE` | Responses 用 `previous_response_id` 只发送每轮增量;设 `0` 则每轮重发完整本地历史 | `1` |
-| `DOUBAO_BASE_URL` / `ARK_API_KEY` | Ark OpenAI-compatible endpoint / credential | 北京 `/api/v3` / 必填 |
-| `MODEL` / `--model` | 所有 agent 调用的模型;CLI 优先;Pro 可显式选择为 `doubao-seed-2-1-pro-260628` | 随后端:`doubao-seed-2-1-turbo-260628` / `claude-sonnet-5` |
-| `--allow-agent-change` | 恢复时显式允许与 manifest 不同的 harness/model;默认拒绝静默混跑 | 关闭 |
-| `OSP_PYTHON` / `MSP_PYTHON` / `ZMIP_PYTHON` | 内核用的解释器 | 当前解释器 |
-| `ZMIP_MIN_CELLS` | zmip 下钻的最小 lineage 细胞数 | 800 |
-| `MSP_DEVICE` | harmony 设备(`cuda` / `cpu`) | 自动 |
-| `AGENT_LIMIT_WAIT_MIN` / `AGENT_LIMIT_WAIT_MAX_H` | 撞到订阅额度时的等待间隔(分钟)/ 总预算(小时) | 10 / 12 |
-| `PIP_CACHE_DIR`, `HF_HOME`, `XDG_CACHE_HOME` | 集群惯例,指到 `$SCRATCH` | — |
+后端细节由共享 bridge 管理。更换解释器时，也要在对应环境安装兼容的内核和
+bridge。并非内核的全部 CLI 参数都能经由 `eca-rsi run` 传入，以驱动的帮助为准。
 
-## 6. 一条龙
-
-装好后有一个命令 `eca-rsi`(等价 `python -m ecarsi`;仓库里的 `run-eca-rsi.sh` 是只负责挑解释器的薄壳):
+## 6. 运行、续跑和浏览
 
 ```bash
-eca-rsi run <eca-pp 输出目录> <root> [--rounds N] [--serve 8899 [--ngrok --domain …]]   # organize → 每个 unit persample → loop → 落地页
+# 已设置 ARK_API_KEY，以下路径替换为实际目录。
+eca-rsi run /path/to/eca-pp-output /path/to/eca-runs/study
 
-# harness 与 model 正交选择;Pro 更贵,默认仍是已完成端到端验证的 Turbo
-eca-rsi --harness openai --model doubao-seed-2-1-pro-260628 run <eca-pp 输出目录> <root>
-./run-eca-rsi.sh <eca-pp 输出目录> <root>                                                # 同上,不用激活 venv
+# 分步运行；organize 用于首次组织输入。
+eca-rsi organize /path/to/eca-pp-output /path/to/eca-runs/study
+eca-rsi persample /path/to/eca-runs/study/units/UNIT
+eca-rsi loop /path/to/eca-runs/study/units/UNIT --no-prune
 
-# 或者分步(每步都可续跑):
-eca-rsi organize  <eca-pp 输出目录> <root>
-eca-rsi persample <root>/units/<unit>
-eca-rsi loop      <root>/units/<unit>            # 收敛即 release
-eca-rsi serve scan-add <root 或 glob>...                       # 写进 registry 文件(~/.config/ecarsi/registry.json);remove/list/dump/reload 同理
-eca-rsi serve [--port 8899] [--ngrok --domain …] [--auth u:p]   # 前台 server,http://127.0.0.1:8899/<名>/;registry 改了自动重读;--auth 整站密码,默认不设
+# 登记并启动本地浏览服务；scan-add 更新 registry 文件。
+eca-rsi serve scan-add /path/to/eca-runs/study
+eca-rsi serve --port 8899
 ```
 
-运行产物一律放仓库外(`$SCRATCH/eca-runs/...`),本机是 Slurm 计算节点直接跑,不要 sbatch。
+`UNIT` 取自 `organize/manifest.json`。中断后使用原来的 `eca-rsi run` 命令，
+复用已组织的目录及已完成输出；不要把重新执行 `organize` 当作通用续跑方法。
+`--rounds N` 是总轮数，覆盖自动收敛规则；`--force-reopen` 越过既有 release
+继续新轮。发布默认清理中间 H5AD，要保留它们则在 `run` / `loop` 加 `--no-prune`。
+停止条件、清理范围和续跑检查边界见 [README](README.md#resume-and-storage)。
+
+默认服务地址为 `http://127.0.0.1:8899/`。registry 默认位于
+`~/.config/ecarsi/registry.json`，可通过 `XDG_CONFIG_HOME` 或 `--registry` 指定。
+已有 ngrok 配置时，可以使用：
+
+```bash
+eca-rsi serve --port 8899 --ngrok --domain YOUR_DOMAIN --auth USER:PASS
+```
+
+`eca-rsi run ... --serve 8899` 在处理结束后启动前台服务；查看进行中的结果可
+另开终端执行 `serve`。服务默认仅绑定本机，`--auth` 可为页面增加 HTTP Basic Auth。
+
+运行结果和输入均放仓库外，且输出不能嵌入 ECA-PP 输入目录。集群上先取得适当的
+CPU/内存资源；已在计算 allocation 内时可直接运行。缓存目录按集群约定配置，
+不要把特定会话的节点、CLI 版本或登录状态当作安装前提。

@@ -1,143 +1,246 @@
-# eca-rsi
+# ECA-RSI: Recursive Self-Improvement for an Ensemble Cell Atlas
 
-> **Main line (2026-09):** the `ecarsi` package — organize → persample (osp) → self-driving rounds of
-> crosssample (msp) + zoomin (zmip) → release, with landing pages and `ecarsi.serve`. Entry point: `eca-rsi run <eca-pp-dir> <root>`
-> (or `./run-eca-rsi.sh`). Install: [INSTALL.md](INSTALL.md);
-> architecture: [diagrams/architecture.html](diagrams/architecture.html); operating notes: [CLAUDE.md](CLAUDE.md).
-> The `run.sh` six-step prompt loop described below is the previous generation (branch `primitive`).
+**Iterative quality review and cell-type annotation, from standardized inputs
+to a dataset with cell-level decision records.**
 
-**An autonomous, iterative curation loop for single-cell RNA-seq data.**
-Point it at a folder of `.h5ad` files; it cleans the cells and annotates the
-cell types over multiple rounds, then releases an annotated dataset — with
-every decision, every script, and every removed cell on the record.
+ECA-RSI coordinates sample-level QC, cross-sample integration, and lineage-level
+refinement. It starts from [ECA-PP](https://github.com/chansigit/eca-pp) outputs,
+runs dedicated analysis packages, and repeats integration and refinement on
+the surviving cells until a numerical stopping rule is met. Each analysis
+unit gets an annotated H5AD, reports, a cell ledger, and unresolved questions
+for review.
+
+The current implementation is the `ecarsi` Python package. Start with
+[installation](INSTALL.md), then run:
 
 ```bash
-./run.sh <h5ad-folder> <workdir> [max_rounds]
-./run.sh <h5ad-folder> <workdir> [max_rounds] --force-reopen   # continue past a prior release
+eca-rsi run /path/to/eca-pp-output /path/to/eca-runs/study
 ```
 
-No supervision required. The loop never pauses to ask a human anything;
-whatever it cannot resolve becomes an explicit flag in the final report's
-*needs review* section instead of a blocker.
+## Why iterate?
 
-## Why a loop — the Peeling-the-Onion principle
+Feature selection and embeddings depend on the cells being analyzed. Removing
+noisy populations can change which sources of variation dominate, making
+previously obscured populations easier to examine in the next round.
 
-In single-cell QC the embedding space is not an immutable coordinate system
-but a population-dependent manifold that rescales as noisy cells are pruned:
+ECA-RSI examines the data at two scales. Cross-sample integration reveals
+recurring populations and quality patterns across samples. Recomputing features
+within a lineage exposes finer populations that may be hidden in the global
+view. The next round rebuilds the global analysis from the surviving cells'
+counts. This motivates iterative review; a stable cell count alone does not
+establish biological accuracy.
 
-- **Relativity of variance.** Highly variable genes are selected by relative
-  variance within the *current* cell pool. While damaged cells and doublets
-  are present, their technical noise monopolizes HVG selection and the top
-  principal components, hiding subtler signals and subtler artifacts.
-- **Variance reallocation under rank-limited embeddings.** A low-dimensional
-  embedding keeps only the top-ranked axes of variance. Removing the first
-  layer of salient anomalies frees the share of the variance budget they
-  occupied: the eigenstructure is recomputed, formerly subordinate directions
-  rise into the retained components, and secondary anomalies that were
-  collapsed onto the periphery of big clusters become separable for the
-  first time.
+## How the packages fit together
 
-Cleaning is therefore *inherently iterative* — exclude, re-embed, expose the
-next layer, exclude again — not because one pass was executed badly, but as a
-mathematical consequence of high-dimensional geometry. Each round of this
-pipeline re-derives HVGs, integration, clustering and evidence from scratch
-on the surviving cells, and the loop runs until convergence criteria are met
-(near-zero removals, stable labels, no actionable open items).
+| Component | Responsibility in this workflow |
+| --- | --- |
+| [ECA-PP](https://github.com/chansigit/eca-pp) | Prepare counts, gene names, species information, QC measurements, and metadata evidence. Runs before ECA-RSI. |
+| ECA-RSI (`ecarsi`) | Organize analysis units, identify sample columns, decide sample inclusion, drive rounds, and assemble releases and browser pages. |
+| [OSP](https://github.com/chansigit/osp) (`osp-sc`) | Run QC, doublet detection, contamination estimation, clustering, and annotation proposals within each sample. |
+| [MSP](https://github.com/chansigit/msp) (`msp-sc`) | Recompute the shared feature space, integrate samples, inspect populations, and apply annotations and removals. |
+| [ZMIP](https://github.com/chansigit/zmip) | Plan lineages, re-embed selected lineages, refine labels, record removals and reassignments, and merge results. |
+| [agent-harness-bridge](https://github.com/chansigit/agent-harness-bridge) | Provide the shared agent/tool interface, runtime adapters, and failure recovery. |
 
-## How it works
+The analysis packages implement computation and apply decisions. Agents inspect
+evidence and submit structured decisions through tools, with checks in the
+calling package. MSP also uses
+[standissect-lite](https://github.com/chansigit/standissect-lite) to identify
+smaller fragments within populations.
 
-Each round runs six steps. **Every step is a fresh headless agent session**
-(`claude -p`) with full tools, working in the dataset's workspace: it reads
-the state from disk, writes and runs its own analysis code, and ends by
-writing a report. The report file is the only completion contract the runner
-checks — everything else (what to compute, how to judge, what to write) is
-the agent's call, guided by a short per-step brief in [`steps/`](steps/) and
-by the governance documents.
+## Prepare the input
 
-| step | job |
-|---|---|
-| `explore` | probe the current state, plan the round. Round 1 surveys the input folder from scratch: what each file is, whether files share the same physical cells (merging those would double-count), which columns are batch vs biology |
-| `compute` | rebuild the feature space on the current cells: HVG → PCA → integration → clustering → UMAP, plus marker tables and QC evidence. Never reuses a previous round's embedding |
-| `annotate` | cell type labels with evidence: cross-sample stability over specificity over effect size over p-value; a continuum is the null hypothesis; Cell Ontology-aligned names at two granularities |
-| `qc` | quality verdicts: cells are presumed biological until proven noise; every removal must name a technical cause and defeat the plausible biological alternatives; when in doubt, flag |
-| `apply` | execute every decision on the checkpoint — labels written, flagged cells marked, removed cells actually dropped and logged per-barcode. A decision recorded but not executed is treated as the worst failure mode there is |
-| `stop` | continue or release. Release requires near-zero removals this round, labels stable against the previous round, and no actionable open items — then it exports the annotated `.h5ad`, per-cell table, UMAP figures, and a summary with a *needs review* section |
+The `run` and `organize` commands require ECA-PP products in this layout:
 
-Crash-safe by construction: re-running the same command resumes, skipping
-finished steps; the working checkpoint is only ever replaced by atomic
-rename.
+```text
+eca-pp-output/
+  source-A/
+    standardize/
+      standardized.h5ad
+      result.json
+    identify_columns/
+      result.json           # optional metadata evidence
+  source-B/
+    standardize/
+      standardized.h5ad
+      result.json
+```
 
-## Governing principles
+The input can also be a single source directory containing `standardize/`.
+Source directory names must be unique. Every H5AD discovered under the input
+must be a recognized `standardize/standardized.h5ad` with its accompanying
+`result.json`; extra H5AD files cause the input check to fail. Keep ECA-RSI
+outputs outside this input tree and outside the source repository.
 
-The loop is bound by a written constitution and rules layer (the `docs`
-symlink points to them; they live in a companion repository). The load-bearing
-articles:
+Review upstream `result.json` files before starting. The discovery check
+recognizes the file layout; it does not replace upstream quality assessment.
+ECA-PP's `identify_columns/result.json` is optional. ECA-RSI identifies the
+experimental-run sample column separately, and that choice takes precedence
+over the upstream batch designation during integration.
 
-- **Presumption of biological innocence.** An "anomalous" population is a
-  legitimate biological entity until direct technical evidence proves
-  otherwise. Low depth alone is never grounds for deletion.
-- **Asymmetry of risk.** False deletions corrupt the feature space and are
-  costly to recover from; residual noise is cheap to filter later. When in
-  doubt, flag — don't drop.
-- **Rebuttal standard for deletion.** A removal is justified not by counting
-  concurring evidence channels but by defeating the biological null: the
-  stated technical cause must explain the data at least as well as every
-  plausible biological alternative. If any biological account survives,
-  deletion is barred.
-- **Granularity alignment.** A few noisy cells inside a coherent cluster do
-  not condemn the cluster; whole-cluster removal requires a pervasive flaw.
-- **Full audit trail.** Retained/evicted counts, causes, per-barcode removal
-  logs, and every script the agents ran — a third party can reproduce every
-  decision.
-- **Stop-loss safeguards.** Per-round and cumulative removal budgets; past
-  the budget the loop turns conservative (flags instead of removals) rather
-  than stopping.
+## Run the workflow
 
-## Design stance
+Use Python 3.10 or newer with ECA-RSI, its three kernels, and the shared bridge
+installed. Follow [INSTALL.md](INSTALL.md) for installation from source and
+environment checks. Installing `ecarsi` alone does not install the kernels by
+default.
 
-An earlier version of this project fixed the computation in ~1,500 lines of
-pipeline code with schemas and linters around the agents' decisions. Its
-failure mode was instructive: every silent bug lived in the seam between
-specification and implementation — decisions that were recorded but executed
-by nothing, rules that were written but implemented nowhere. This version
-inverts the design: **the capability lives in the agents (which write and run
-their own code, kept as the audit trail), and the only fixed machinery is the
-loop skeleton and the briefs** — under 400 lines in total. The hard-won
-lessons survive as blunt sentences in the briefs rather than as code.
+The default agent backend is OpenAI Agents SDK driving Doubao through
+Volcengine Ark, with model `doubao-seed-2-1-turbo-260628`. Set `ARK_API_KEY` in
+your environment before running. Other configured backends can be selected
+with `--harness deepseek` or `--harness claude`.
 
-## Upstream: eca-pp (optional)
+```bash
+# Automatic stopping for every analysis unit.
+eca-rsi run /path/to/eca-pp-output /path/to/eca-runs/study
 
-eca-rsi pairs naturally with [eca-pp](https://github.com/chansigit/eca-pp),
-which standardizes single `.h5ad` files of unknown provenance (recovers raw
-counts, resolves species, harmonizes gene names, computes authoritative QC
-columns) and identifies the batch and cell-type columns with
-integration-trial evidence. When its outputs (`standardized.h5ad` +
-`result.json`, optionally `batch.tsv`) are present near the input files, the
-explore step reads them and skips re-deriving what upstream already settled —
-species, counts location, batch key, prior labels — and spends its probing on
-the one question eca-pp structurally cannot answer: how multiple files relate
-to each other. The two are decoupled: eca-rsi runs fine on raw folders with
-no provenance at all.
+# CLI values override HARNESS and MODEL environment variables.
+eca-rsi --harness openai --model doubao-seed-2-1-turbo-260628 \
+  run /path/to/eca-pp-output /path/to/eca-runs/study
 
-## Requirements
+# A fixed total of two rounds, retaining intermediate H5ADs.
+eca-rsi run /path/to/eca-pp-output /path/to/eca-runs/study \
+  --rounds 2 --no-prune
+```
 
-- `agent-harness-bridge` plus one configured backend: DeepSeek Harness, OpenAI Agents SDK + an Ark
-  API key, or an authenticated Claude Code CLI
-- Python with `scanpy`, `anndata`, `harmonypy`, `scrublet`
-  (path configurable via `PY=...`)
-- Backend defaults to OpenAI Agents SDK driving Doubao through Ark with
-  `doubao-seed-2-1-turbo-260628`; provide `ARK_API_KEY`. Set
-  `HARNESS=deepseek` for dsh or `HARNESS=claude` for claude_agent_sdk.
-  Override the model globally with `MODEL=<id>` or use the global CLI options
-  `--harness` and `--model`. For example, the quality-oriented, higher-cost
-  candidate is
-  `eca-rsi --harness openai --model doubao-seed-2-1-pro-260628 run ...`.
-  The shared bridge owns runtime adapters and failure recovery; this repository
-  owns the biological workflow, prompts, tools and submit validation.
+`python -m ecarsi` is equivalent to `eca-rsi`. The repository also provides
+`./run-eca-rsi.sh <input> <root>`; set `ECA_RSI_PYTHON` to select its interpreter.
+Use `eca-rsi --help` and `eca-rsi run --help` for available commands.
 
-## Caveats
+### Processing stages
 
-- Agents run with `--dangerously-skip-permissions` inside the workspace —
-  run it on machines and data you trust.
-- Token cost is real: a small dataset (~1,800 cells) converged in 3 rounds /
-  ~100 minutes of wall time, with six full agent sessions per round.
+1. **Organize.** Profile upstream files and propose analysis units using their
+   metadata, then merge or split them in code. A conservation check requires
+   each source cell to belong to exactly one analysis unit. Cross-file barcode
+   overlap produces warnings; it does not establish expression identity or
+   automatically deduplicate cells.
+2. **Per sample, once.** Identify the experimental-run column and run OSP on
+   each sample. The driver sizes concurrency from available CPUs and memory.
+   Annotation is enabled by default and required for cross-sample review.
+3. **First round.** Decide which samples enter integration, then run MSP
+   integration, inspection, and annotation, followed by ZMIP lineage refinement.
+   With one included sample, MSP skips Harmony and sample-composition evidence.
+4. **Later rounds.** Take the previous ZMIP survivors, preserve prior labels
+   under `rNN_*` columns, and rerun MSP from counts followed by ZMIP. OSP and
+   the first-round sample-inclusion decision are not repeated.
+5. **Release.** Record the stopping reason, collect review items, write the
+   final dataset and cell ledger, and update browser pages.
+
+OSP filters cells using its configured QC rules. Its annotation-stage
+keep/flag/drop proposals remain evidence for subsequent review. MSP annotation
+applies the union of preannotation candidates, inspection drop proposals, and
+annotation removals. ZMIP applies local removals and label refinements; lineages
+below its zoom threshold (default 800 cells) retain existing annotations.
+ZMIP's output inherits MSP's global embedding; global re-embedding happens in
+the next round.
+
+### Stopping rules
+
+In automatic mode, round 1 continues. From round 2, a unit releases when:
+
+- the current round removed **less than 1%** of its entering cells, **or fewer
+  than 100 cells**; or
+- the last three rounds each removed **less than 2%**.
+
+The entering count is MSP's `integrated.h5ad` and the outgoing count is ZMIP's
+`annotated_zmip.h5ad`; these round statistics exclude earlier OSP filtering
+and whole-sample exclusions. The cell ledger covers the preceding stages too.
+Label wording changes are not a stopping criterion. Unresolved biological
+questions accumulate in `needs_review` rather than prompting for approval.
+Execution failures or missing required outputs can still stop a unit.
+
+`--cap` sets the automatic-mode round limit (default 10); reaching it without
+convergence produces a forced release with a review flag. `--rounds N` overrides
+automatic stopping and releases after the specified total round count, including
+`--rounds 1`. Check the recorded reason before interpreting a release as converged.
+
+## Read the results
+
+Each analysis unit has its own release:
+
+```text
+<root>/
+  index.html
+  organize/manifest.json
+  units/<unit>/
+    index.html
+    progress.log
+    input/{organized.h5ad,manifest.json}
+    persample/{manifest.json,<sample>/...}
+    rounds/roundNN/
+      crosssample/       # MSP outputs and report
+      zoomin/            # ZMIP plan, lineage outputs, and reports
+      ledger/            # cell ledger and Sankey plots through this round
+      stats.txt
+      decision.txt
+    release/
+      final.h5ad
+      summary.md
+      summary.json
+      needs_review.md
+      needs_review.json
+      cell_ledger.csv
+      sankey_coarse.png
+      umap.json
+```
+
+`release/final.h5ad` contains surviving cells; the final broad and fine labels
+are `obs["zmip_ann_coarse"]` and `obs["zmip_ann_fine"]`. Read `summary.md` for
+round counts and stopping reasons, and `needs_review.md` for uncertain labels,
+excluded samples, reassignments, and other review items. The ledger and
+stage-specific removal CSVs record the cell-level history. Cost summaries
+include only costs reported and captured by the runtime; missing cost records
+do not mean a run was free or constitute a complete bill.
+
+To browse results, including progress from an unfinished run:
+
+```bash
+eca-rsi serve scan-add /path/to/eca-runs/study
+eca-rsi serve --port 8899
+```
+
+Open `http://127.0.0.1:8899/` on the serving machine. The server reads its dataset
+registry from `~/.config/ecarsi/registry.json` by default and picks up registry
+changes. `eca-rsi run ... --serve 8899` starts it after processing. Optional
+`--ngrok`, `--domain`, and `--auth USER:PASS` support remote access; see
+[INSTALL.md](INSTALL.md).
+
+## Resume and storage
+
+Repeat the same `eca-rsi run` command after an interruption to reuse recorded
+decisions and completed outputs. Keep the input, installed sources, and analysis
+settings fixed. ECA-RSI's outer wrappers largely check required files for
+existence; they do not provide end-to-end content validation. In particular,
+skipping a completed ZMIP directory bypasses the newer kernel's own input,
+configuration, and runtime identity checks. Use a new output root when changing
+inputs or analysis code.
+
+Modern manifests record the harness and model. Checked mismatches are rejected
+unless `--allow-agent-change` is explicitly set; older manifests can only emit
+a warning. This option permits a mixed run and does not recompute finished
+stages. `--force-reopen` continues beyond an existing release; with `--rounds N`,
+choose a total larger than the completed round count. It is not a cache reset
+or a forwarded ZMIP `--force` option.
+
+**Release normally triggers cleanup of intermediate H5ADs.** Use `--no-prune`
+on `run` or `loop` to retain them. Cleanup keeps `input/organized.h5ad`, the
+release, reports, tables, and figures. Removed H5ADs leave `.pruned` markers;
+those carrying labels also leave `.obs.parquet` or `.obs.csv.gz` tables for the
+ledger. `release/pruned.json` records the cleanup. This preserves the decision
+history, but not every intermediate expression matrix.
+
+```bash
+eca-rsi prune /path/to/eca-runs/study --dry-run
+```
+
+## Development and history
+
+See [CLAUDE.md](CLAUDE.md) for source layout, operating conventions, and targeted
+checks. The [architecture diagram](diagrams/architecture.html) illustrates the
+main package flow; consult this README and the source for current runtime and
+resume behavior.
+
+`run.sh` and `steps/*.md` belong to the previous six-step prompt loop, preserved
+on branch `primitive`. That generation used agents to write analysis scripts
+through Explore → Compute → Annotate → QC → Apply → Stop. Its commands,
+governance prompts, and timing examples do not describe the current `ecarsi`
+workflow. `attic-v01/` is an older archive.
