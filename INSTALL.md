@@ -46,7 +46,8 @@ bridge 0.2.3、OSP 0.1.2、MSP/ZMIP 0.3.3 已发布到 PyPI，并同步 GitHub R
 bridge 0.2.3 修正 0.2.2 的模块版本显示遗漏；0.2.2 的有限恢复逻辑保持不变。
 旧 OSP 0.1.1 固定 bridge 0.1.0，不能与本次组合混装。
 
-在新环境中安装 RSI 0.1.0 及本轮验证的配套版本：
+RSI 0.1.0 已发布到 GitHub Release；PyPI 因 `Too many new projects created`
+限制暂未接受首次上传。当前使用 GitHub wheel 安装 RSI，配套依赖仍来自 PyPI：
 
 ```bash
 python -m venv /path/to/venvs/eca
@@ -57,7 +58,7 @@ python -m pip install \
   'osp-sc[agent]==0.1.2' \
   'msp-sc[agent]==0.3.3' \
   'zmip==0.3.3' \
-  'ecarsi[kernels]==0.1.0'
+  'ecarsi[kernels] @ https://github.com/chansigit/eca-rsi/releases/download/v0.1.0/ecarsi-0.1.0-py3-none-any.whl'
 ```
 
 开发 RSI 时，可将最后一项替换为 `-e /path/to/source-checkouts/eca-rsi`。

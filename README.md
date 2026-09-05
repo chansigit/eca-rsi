@@ -80,10 +80,13 @@ over the upstream batch designation during integration.
 ## Run the workflow
 
 Use Python 3.10 or newer with ECA-RSI, its three kernels, and the shared bridge
-installed. Install the release with its kernels:
+installed. Version 0.1.0 is available on
+[GitHub Releases](https://github.com/chansigit/eca-rsi/releases/tag/v0.1.0).
+PyPI publication is pending a new-project creation rate limit. Install the
+GitHub wheel with its kernels:
 
 ```bash
-python -m pip install 'ecarsi[kernels]==0.1.0'
+python -m pip install 'ecarsi[kernels] @ https://github.com/chansigit/eca-rsi/releases/download/v0.1.0/ecarsi-0.1.0-py3-none-any.whl'
 ```
 
 Follow [INSTALL.md](https://github.com/chansigit/eca-rsi/blob/main/INSTALL.md)
