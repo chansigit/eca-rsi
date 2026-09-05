@@ -46,7 +46,7 @@ bridge 0.2.3、OSP 0.1.2、MSP/ZMIP 0.3.3 已发布到 PyPI，并同步 GitHub R
 bridge 0.2.3 修正 0.2.2 的模块版本显示遗漏；0.2.2 的有限恢复逻辑保持不变。
 旧 OSP 0.1.1 固定 bridge 0.1.0，不能与本次组合混装。
 
-在新环境中安装下列版本，再安装 RSI 驱动源码；替换源码路径：
+在新环境中安装 RSI 0.1.0 及本轮验证的配套版本：
 
 ```bash
 python -m venv /path/to/venvs/eca
@@ -57,9 +57,10 @@ python -m pip install \
   'osp-sc[agent]==0.1.2' \
   'msp-sc[agent]==0.3.3' \
   'zmip==0.3.3' \
-  -e /path/to/source-checkouts/eca-rsi
+  'ecarsi[kernels]==0.1.0'
 ```
 
+开发 RSI 时，可将最后一项替换为 `-e /path/to/source-checkouts/eca-rsi`。
 若同时开发内核，可改为各仓库的 editable 安装，但需保存具体源码提交。
 每阶段记录实际源码摘要，更新源码后不能默默复用旧计算目录。
 
@@ -131,7 +132,7 @@ editable 安装的 `__file__` 应指向预期源码目录；wheel 安装应指�
 | `MSP_N_PCS` / `MSP_N_TOP_GENES` / `MSP_N_NEIGHBORS` | 首轮与后续轮共同使用的整合参数 |
 | `MSP_RESOLUTIONS` / `ZMIP_RESOLUTIONS` | 空格或逗号分隔；inspect/annotate 要求包含 1 和 2 |
 | `MSP_HARMONY` / `ZMIP_HARMONY` | JSON 对象，例如 `{"theta": 1}`；参数进入运行身份 |
-| `MSP_LANGUAGE` / `ZMIP_LANGUAGE` | 内核报告和 agent 文字语言 |
+| `MSP_LANGUAGE` / `ZMIP_LANGUAGE` | 内核报告解释文字默认 `English`；仅在明确需要其他语言时覆盖。标签保持英文 |
 | `MSP_EFFORT` / `ZMIP_EFFORT` / `MSP_MAX_TURNS` / `ZMIP_MAX_TURNS` | agent 推理和预算参数 |
 | `AGENT_WALL_MIN` | 单次 agent 调用时间预算，默认 180 分钟 |
 | `AGENT_LIMIT_WAIT_MIN` / `AGENT_LIMIT_WAIT_MAX_H` | 额度等待间隔（分钟）/ 总预算（小时），默认 10 / 12 |

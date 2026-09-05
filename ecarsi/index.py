@@ -197,15 +197,15 @@ render(); let t; window.addEventListener("resize", () => { clearTimeout(t); t = 
 UMAP_JS = r"""
 (function(){
 const host = document.getElementById("umap-vis"); if (!host) return;
-const url = host.getAttribute("data-src"), status = host.querySelector(".umap-status"), row = host.querySelector(".umap-row");
+const status = host.querySelector(".umap-status"), row = host.querySelector(".umap-row");
 const tip = document.createElement("div"); tip.className = "sk-tip"; tip.style.display = "none"; document.body.appendChild(tip);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const fmt = n => n.toLocaleString();
 const GRID = 128, PAD = 12;
 let D = null, panels = [], view = {k: 1, tx: 0, ty: 0}, hoverIdx = -1, drag = null, S = 480;
 let X, Y, grid = null, raf = 0, lod = false, lodTimer = 0;
-fetch(url).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }).then(d => { D = d; init(); })
-  .catch(e => { status.textContent = "could not load " + url + " (" + e + ") — open this page through ecarsi.serve"; });
+try { D = JSON.parse(document.getElementById("umap-data").textContent); init(); }
+catch (e) { status.textContent = "Could not render embedded UMAP data (" + e + "). Regenerate this page with ecarsi.index."; }
 
 function rgba(hex){ const h = hex.replace("#", ""); const v = parseInt(h.length === 3 ? h.split("").map(c => c + c).join("") : h, 16);
   return [(v >> 16) & 255, (v >> 8) & 255, v & 255]; }
@@ -273,7 +273,10 @@ function renderBase(P){ // points → pixel buffer (no per-point canvas calls), 
   P.base.width = W; P.base.height = W;
   const bctx = P.base.getContext("2d"), img = bctx.createImageData(W, W), buf = new Uint32Array(img.data.buffer);
   buf.fill(0xffffffff);
-  const r = Math.max(1, Math.round(dpr * Math.max(1.0, Math.min(2.6, Math.sqrt(view.k))) * (D.n > 60000 ? 0.7 : 1)));
+  // Radius in CSS pixels: sparse datasets and larger panels need larger
+  // markers. Bound both density scaling and zoom to keep dense clouds legible.
+  const radius = Math.min(7, Math.max(1, Math.min(3.5, 0.16 * (S - 2 * PAD) / Math.sqrt(Math.max(1, D.n)))) * Math.sqrt(view.k));
+  const r = Math.max(1, Math.round(dpr * radius));
   const stride = lod ? Math.max(1, Math.ceil(D.n / 30000)) : 1, idx = P.idx, rgb = P.rgb, dim = 0xffeae6e3; // ABGR little-endian: #e3e6ea
   const pack = c => 0xff000000 | (c[2] << 16) | (c[1] << 8) | c[0];
   const cols = rgb.map(pack);
@@ -282,8 +285,12 @@ function renderBase(P){ // points → pixel buffer (no per-point canvas calls), 
     for (let i = 0; i < D.n; i += stride) { const c = idx[i], isF = focus !== null && c === focus; if (want !== null && isF !== want) continue;
       const x = Math.round(sx(i) * dpr), y = Math.round(sy(i) * dpr); if (x < 0 || y < 0 || x >= W || y >= W) continue;
       const col = focus !== null && !isF ? dim : (c >= 0 ? cols[c] : 0xffbbbbbb);
-      const x0 = Math.max(0, x - r + 1), x1 = Math.min(W - 1, x + r - 1), y0 = Math.max(0, y - r + 1), y1 = Math.min(W - 1, y + r - 1);
-      for (let yy = y0; yy <= y1; yy++) { let o = yy * W + x0; for (let xx = x0; xx <= x1; xx++) buf[o++] = col; } }
+      const y0 = Math.max(0, y - r), y1 = Math.min(W - 1, y + r);
+      for (let yy = y0; yy <= y1; yy++) {
+        const dx = Math.floor(Math.sqrt(r * r - (yy - y) * (yy - y)));
+        const x0 = Math.max(0, x - dx), x1 = Math.min(W - 1, x + dx);
+        let o = yy * W + x0; for (let xx = x0; xx <= x1; xx++) buf[o++] = col;
+      } }
   }
   bctx.putImageData(img, 0, 0); P.baseKey = key;
 }
@@ -598,8 +605,12 @@ def render_unit(unit: Path) -> str:
     umap_p = L.release_dir(unit) / "umap.json"
     if umap_p.is_file():
         rel = e(str(umap_p.relative_to(unit)))
+        # Script elements are raw text even with application/json. Escape '<'
+        # so labels and cell IDs cannot terminate the element with </script>.
+        data = umap_p.read_text(encoding="utf-8").replace("<", "\\u003c")
         parts.append('<section id="umap"><h2>Final UMAP <small>every released cell · coarse / fine identity · hover for the cell, click a legend entry to isolate a label</small></h2>'
-                     f'<div id="umap-vis" data-src="{rel}"><p class="umap-status">loading {rel}…</p><div class="umap-row"></div></div>'
+                     f'<div id="umap-vis"><p class="umap-status">loading {rel}… (JavaScript required)</p><div class="umap-row"></div></div>'
+                     f'<script type="application/json" id="umap-data">{data}</script>'
                      f'<script>{UMAP_JS}</script></section>')
 
     # needs review — from disk, so it exists mid-run too

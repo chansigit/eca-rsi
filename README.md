@@ -80,9 +80,15 @@ over the upstream batch designation during integration.
 ## Run the workflow
 
 Use Python 3.10 or newer with ECA-RSI, its three kernels, and the shared bridge
-installed. Follow [INSTALL.md](INSTALL.md) for installation from source and
-environment checks. Installing `ecarsi` alone does not install the kernels by
-default.
+installed. Install the release with its kernels:
+
+```bash
+python -m pip install 'ecarsi[kernels]==0.1.0'
+```
+
+Follow [INSTALL.md](https://github.com/chansigit/eca-rsi/blob/main/INSTALL.md)
+for environment checks and source installation. Installing `ecarsi` alone does
+not install the kernels by default.
 
 The default agent backend is OpenAI Agents SDK driving Doubao through
 Volcengine Ark, with model `doubao-seed-2-1-turbo-260628`. Set `ARK_API_KEY` in
@@ -203,7 +209,17 @@ stage-specific removal CSVs record the cell-level history. Cost summaries
 include only costs reported and captured by the runtime; missing cost records
 do not mean a run was free or constitute a complete bill.
 
-To browse results, including progress from an unfinished run:
+Report labels and explanatory text default to English, independently of the
+language used to discuss or launch the analysis. Other prose languages require
+an explicit configuration override.
+
+Open a unit's `index.html` directly in a browser to view its saved report.
+The final UMAP includes its plotting data in the HTML; zoom, hover and legend
+filtering work offline with JavaScript enabled. Keep the run directory together
+for links to other reports and files. To update older saved pages, run
+`python -m ecarsi.index /path/to/root-or-unit` (no analysis is rerun).
+
+To browse live progress from an unfinished run or share results over HTTP:
 
 ```bash
 eca-rsi serve scan-add /path/to/eca-runs/study

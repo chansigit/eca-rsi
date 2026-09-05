@@ -195,7 +195,7 @@ def _write_release(unit: Path, rounds: list[Path], stats: list[dict], forced: bo
                "", f"Ledger + Sankey: {L.RELEASE}/cell_ledger.csv, {L.RELEASE}/sankey_coarse.png",
                f"Flags: {L.RELEASE}/needs_review.md ({len(items)} items: "
                + ", ".join(f"{t} {n}" for _, t, n, _ in review.counts(items)) + ")",
-               "", f"Landing page: {L.INDEX} (ecarsi.index; serve with python -m ecarsi.serve)",
+               "", f"Landing page: {L.INDEX} (open directly in a browser; optional live view with python -m ecarsi.serve)",
                "", *cost.summary_md(unit)]
     (rel / "summary.md").write_text("\n".join(summary) + "\n")
     # the same facts as a small machine-readable file, so nothing downstream
