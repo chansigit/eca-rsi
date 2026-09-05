@@ -27,11 +27,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from typing import Any
 
 from ._harness_host_tools import served_tools, with_runtime_instructions
 from .harness import AgentIncompleteError, AgentRunResult, AgentTimeout, ToolSpec
+
+log = logging.getLogger(__name__)
 
 DOUBAO_BASE_URL_DEFAULT = "https://ark.cn-beijing.volces.com/api/v3"
 DEFAULT_API_MODE = "responses"
@@ -78,18 +81,18 @@ def _tool(spec: ToolSpec, submitted_holder: dict, is_submit: bool, label: str, a
             if not isinstance(arguments, dict):
                 raise TypeError(f"tool arguments must be a JSON object, got {type(arguments).__name__}")
             arg_hint = str(next(iter(arguments.values()), ""))[:80]
-            print(f"== [{label}] agent: {spec.name}({arg_hint})", flush=True)
+            log.info(f"== [{label}] agent: {spec.name}({arg_hint})")
             result = await spec.handler(arguments)
         except Exception as exc:
             message = f"{type(exc).__name__}: {exc}"
-            print(f"== [{label}] tool exception in {spec.name}: {message[:200]!r}", flush=True)
+            log.info(f"== [{label}] tool exception in {spec.name}: {message[:200]!r}")
             return ToolOutputText(
                 text=f"ERROR: {spec.name} rejected the input ({message}). Fix it and call the tool again."
             )
         is_error = bool(result.get("is_error", False))
         if is_error:
             text = " ".join(str(block.get("text", "")) for block in result.get("content", []))
-            print(f"== [{label}] tool error in {spec.name}: {text[:200]!r}", flush=True)
+            log.info(f"== [{label}] tool error in {spec.name}: {text[:200]!r}")
         if is_submit and not is_error:
             submitted_holder["value"] = result.get("_submitted", arguments)
 
@@ -273,10 +276,9 @@ async def run_agent(
                     "Tasks, and all valid partial submissions are still present. Use TaskList or the domain "
                     f"tools to recover only the evidence you still need, then finish with {submit_tool}."
                 )
-                print(
+                log.info(
                     f"== [{label}] context limit reached — continuing with a fresh model session "
                     f"({context_resets}/{max_context_resets}); host tool state retained",
-                    flush=True,
                 )
                 continue
 
@@ -291,13 +293,12 @@ async def run_agent(
                 transcript_parts.append(text)
 
             if "value" in submitted_holder:
-                print(
+                log.info(
                     f"== [{label}] HARNESS=openai api={api_mode} "
                     f"server_state={'on' if server_state else 'off'} model={model} run: "
                     f"{usage_totals['requests']} model request(s), {usage_totals['input']} input / "
                     f"{usage_totals['output']} output tokens "
                     f"({usage_totals['reasoning']} reasoning)",
-                    flush=True,
                 )
                 return AgentRunResult(
                     submitted=submitted_holder["value"],
@@ -316,10 +317,9 @@ async def run_agent(
             # of paying for a fresh run.  Bounded so a model that truly
             # refuses still surfaces as AgentIncompleteError.
             nudges += 1
-            print(
+            log.info(
                 f"== [{label}] turn ended without {submit_tool} after {turns_used} model request(s) — "
                 f"nudging the session to continue ({nudges}/{max_nudges})",
-                flush=True,
             )
             nudge_input = {
                 "role": "user",

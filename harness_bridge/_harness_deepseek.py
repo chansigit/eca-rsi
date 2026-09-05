@@ -100,6 +100,8 @@ try:
 except Exception:  # pragma: no cover - older/newer sse-starlette without the knob
     _SseAppStatus = None
 
+log = logging.getLogger(__name__)
+
 _BUILTIN_DISABLE_IDS = ("persistent-bash", "terminal-bash", "persistent-pwsh",
                          "terminal-pwsh", "str-replace-editor")
 
@@ -285,9 +287,9 @@ def _keep_session_log(dsh_home: str, cwd: str, label: str) -> None:
         dst = os.path.join(cwd, f"dsh_session_{label.replace(' ', '_').replace('/', '_')}.jsonl")
         try:
             shutil.copy(src, dst)
-            print(f"== [{label}] dsh session transcript kept at {dst}", flush=True)
+            log.info(f"== [{label}] dsh session transcript kept at {dst}")
         except OSError as e:
-            print(f"== [{label}] could not keep dsh session transcript: {e}", flush=True)
+            log.info(f"== [{label}] could not keep dsh session transcript: {e}")
 
 
 def _tool_fn(spec: ToolSpec, submitted_holder: dict, is_submit: bool, label: str):
@@ -298,18 +300,17 @@ def _tool_fn(spec: ToolSpec, submitted_holder: dict, is_submit: bool, label: str
 
     async def fn(**kwargs):
         arg_hint = str(next(iter(kwargs.values()), ""))[:80]  # same trace line as the Claude backend
-        print(f"== [{label}] agent: {spec.name}({arg_hint})", flush=True)
+        log.info(f"== [{label}] agent: {spec.name}({arg_hint})")
         try:
             result = await spec.handler(kwargs)
         except Exception as exc:
             # FastMCP turns this into an isError result the model can read;
             # log it here so the host trace shows it like the other backends
-            print(f"== [{label}] tool exception in {spec.name}: {type(exc).__name__}: {str(exc)[:200]!r}",
-                  flush=True)
+            log.info(f"== [{label}] tool exception in {spec.name}: {type(exc).__name__}: {str(exc)[:200]!r}")
             raise
         if result.get("is_error"):
             text = " ".join(str(c.get("text", "")) for c in result.get("content", []))
-            print(f"== [{label}] tool error in {spec.name}: {text[:200]!r}", flush=True)
+            log.info(f"== [{label}] tool error in {spec.name}: {text[:200]!r}")
         if is_submit and not result.get("is_error"):
             submitted_holder["value"] = result.get("_submitted", kwargs)
         content: list[types.ContentBlock] = []
@@ -415,7 +416,7 @@ def _run_sync(*, dsh_bin: str, cwd: str, dsh_home: str, provider: str, model: st
         event = n.payload.get("event") or {}
         kind = event.get("type")
         if trace:
-            print(f"== [{label}] dsh event: {kind}", flush=True)
+            log.info(f"== [{label}] dsh event: {kind}")
         if kind == "assistant/message":
             turns += 1
             if turns > max_turns:
@@ -442,8 +443,7 @@ def _run_sync(*, dsh_bin: str, cwd: str, dsh_home: str, provider: str, model: st
         if wall_seconds is not None:
             def _kill():
                 timed_out.set()
-                print(f"== [{label}] wall-clock budget of {wall_seconds / 60:g} min hit — closing dsh runtime",
-                      flush=True)
+                log.info(f"== [{label}] wall-clock budget of {wall_seconds / 60:g} min hit — closing dsh runtime")
                 harness.close()
             timers.append(threading.Timer(wall_seconds, _kill))
 
@@ -454,8 +454,8 @@ def _run_sync(*, dsh_bin: str, cwd: str, dsh_home: str, provider: str, model: st
             # views of an unrelated directory). Kill it early, retry as transient.
             if not listed.is_set():
                 no_tools.set()
-                print(f"== [{label}] dsh never requested tools/list from our MCP server within "
-                      f"{MCP_LIST_GRACE_SECONDS:g} s — closing dsh runtime", flush=True)
+                log.info(f"== [{label}] dsh never requested tools/list from our MCP server within "
+                      f"{MCP_LIST_GRACE_SECONDS:g} s — closing dsh runtime")
                 harness.close()
         timers.append(threading.Timer(MCP_LIST_GRACE_SECONDS, _check_listed))
         for t in timers:
@@ -478,8 +478,8 @@ def _run_sync(*, dsh_bin: str, cwd: str, dsh_home: str, provider: str, model: st
             while ("value" not in submitted_holder and result.finish_reason != "error"
                    and nudges < MAX_NUDGES and turns < max_turns):
                 nudges += 1
-                print(f"== [{label}] turn ended without {submit_tool} after {turns} model turn(s) — "
-                      f"nudging the session to continue ({nudges}/{MAX_NUDGES})", flush=True)
+                log.info(f"== [{label}] turn ended without {submit_tool} after {turns} model turn(s) — "
+                      f"nudging the session to continue ({nudges}/{MAX_NUDGES})")
                 result = harness.run(
                     f"Your previous turn ended without calling {submit_tool}. Continue exactly where you "
                     f"left off and finish by calling {submit_tool}.",
@@ -489,8 +489,8 @@ def _run_sync(*, dsh_bin: str, cwd: str, dsh_home: str, provider: str, model: st
                 raise AgentTimeout(f"[{label}] agent run exceeded the wall-clock budget of "
                                    f"{wall_seconds / 60:g} min (AGENT_WALL_MIN)") from None
             if no_tools.is_set():
-                print(f"== [{label}] http requests seen by our MCP server: {dict(http_trace)}\n"
-                      f"== [{label}] dsh stderr tail:\n{_stderr_tail()}", flush=True)
+                log.info(f"== [{label}] http requests seen by our MCP server: {dict(http_trace)}\n"
+                      f"== [{label}] dsh stderr tail:\n{_stderr_tail()}")
                 raise RuntimeError(f"[{label}] mcp tools never listed by dsh (mcp-client failed to attach)") from None
             if isinstance(e, _TurnsExceeded):
                 raise AgentIncompleteError(f"{e} without a successful submit call") from None
@@ -498,10 +498,10 @@ def _run_sync(*, dsh_bin: str, cwd: str, dsh_home: str, provider: str, model: st
         finally:
             for t in timers:
                 t.cancel()
-        print(f"== [{label}] dsh run: {turns} model turn(s); http requests seen by our MCP server "
-              f"(method path: [requests, responses started]): {dict(http_trace)}", flush=True)
+        log.info(f"== [{label}] dsh run: {turns} model turn(s); http requests seen by our MCP server "
+              f"(method path: [requests, responses started]): {dict(http_trace)}")
         if not listed.is_set():
-            print(f"== [{label}] dsh stderr tail:\n{_stderr_tail()}", flush=True)
+            log.info(f"== [{label}] dsh stderr tail:\n{_stderr_tail()}")
         return result
 
 
@@ -593,8 +593,8 @@ async def run_agent(
             with tempfile.NamedTemporaryFile("w", suffix=".patch.yml", dir=dsh_home, delete=False) as pf:
                 pf.write(patch_text)
                 patch_path = pf.name
-            print(f"== [{label}] HARNESS=deepseek provider={provider} model={model} "
-                  f"dsh_home={dsh_home} mcp={mcp_url}", flush=True)
+            log.info(f"== [{label}] HARNESS=deepseek provider={provider} model={model} "
+                  f"dsh_home={dsh_home} mcp={mcp_url}")
             # dsh has no pipe-buffer knob (max_buffer_size is Claude-only);
             # max_turns and the wall-clock budget are enforced in _run_sync
             _ = max_buffer_size

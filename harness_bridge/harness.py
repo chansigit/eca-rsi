@@ -27,11 +27,14 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import logging
 import os
 import re
 import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Literal, Mapping, TypeVar, cast
+
+from ._logging import ensure_logging
 
 ToolHandler = Callable[[dict], Awaitable[dict]]
 T = TypeVar("T")
@@ -42,6 +45,9 @@ BuiltinCapability = Literal["read", "glob", "grep", "tasks"]
 # --------------------------------------------------------------------------
 # Failure classes
 # --------------------------------------------------------------------------
+
+
+log = logging.getLogger(__name__)
 
 
 class AgentTimeout(RuntimeError):
@@ -96,7 +102,7 @@ def _env_float(name: str, default: float) -> float:
     try:
         return float(raw) if raw else default
     except ValueError:
-        print(f"== ignoring non-numeric {name}={raw!r}; using {default:g}", flush=True)
+        log.warning(f"== ignoring non-numeric {name}={raw!r}; using {default:g}")
         return default
 
 
@@ -136,7 +142,7 @@ async def retry_transient(coro_fn: Callable[[], Awaitable[T]], label: str) -> T:
             timeout_attempts += 1
             if timeout_attempts >= MAX_TIMEOUT_ATTEMPTS:
                 raise
-            print(f"== [{label}] {e} — one fresh attempt", flush=True)
+            log.info(f"== [{label}] {e} — one fresh attempt")
             continue
         except Exception as e:
             msg = str(e)
@@ -148,8 +154,8 @@ async def retry_transient(coro_fn: Callable[[], Awaitable[T]], label: str) -> T:
                         f"{transient_attempts} attempts: {msg}"
                     ) from None
                 wait = TRANSIENT_BACKOFF_SECONDS * transient_attempts
-                print(f"== [{label}] transient agent-startup failure (attempt {transient_attempts}/"
-                      f"{MAX_TRANSIENT_ATTEMPTS}): {msg[:160]!r} — retrying in {wait}s", flush=True)
+                log.info(f"== [{label}] transient agent-startup failure (attempt {transient_attempts}/"
+                      f"{MAX_TRANSIENT_ATTEMPTS}): {msg[:160]!r} — retrying in {wait}s")
                 await asyncio.sleep(wait)
                 continue
             if LIMIT_PATTERN.search(msg):
@@ -158,9 +164,8 @@ async def retry_transient(coro_fn: Callable[[], Awaitable[T]], label: str) -> T:
                     raise AgentLimitExhausted(
                         f"[{label}] usage limit still in force after {waited / 3600:.1f} h: {msg}"
                     ) from None
-                print(f"== [{label}] usage/rate limit (attempt {limit_attempt}): {msg[:160]!r} — "
-                      f"waiting {wait_min:.0f} min, {max_h - waited / 3600:.1f} h of wait budget left",
-                      flush=True)
+                log.info(f"== [{label}] usage/rate limit (attempt {limit_attempt}): {msg[:160]!r} — "
+                      f"waiting {wait_min:.0f} min, {max_h - waited / 3600:.1f} h of wait budget left")
                 t0 = time.time()
                 await asyncio.sleep(wait_min * 60)
                 waited += time.time() - t0
@@ -368,6 +373,7 @@ async def run_agent(
     TaskCreate/TaskUpdate/TaskList/TaskGet; the DeepSeek and OpenAI backends
     serve same-named in-memory tools so prompts stay identical). The model
     never gets write access under any backend."""
+    ensure_logging()
     config = resolve_agent_config(model=model)
     _validate_tool_table(tools, submit_tool, allowed_builtin)
     adapter = importlib.import_module(_BACKENDS[config.harness][0], __package__)

@@ -7,6 +7,7 @@ through an in-process MCP server.
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from .harness import BUILTIN_TOOL_NAMES, AgentIncompleteError, AgentRunResult, AgentTimeout, ToolSpec
 
@@ -18,6 +19,9 @@ from .harness import BUILTIN_TOOL_NAMES, AgentIncompleteError, AgentRunResult, A
 # the floor — an older install fails loudly at the first agent call instead of
 # five retries deep into a multi-hour job.
 MIN_CLAUDE_AGENT_SDK = (0, 2, 152)
+
+
+log = logging.getLogger(__name__)
 
 
 def _version_tuple(v: str) -> tuple[int, ...]:
@@ -106,8 +110,7 @@ async def run_agent(
                 # the SDK's in-process server reports this to the model as an
                 # is_error result; log it so the host trace matches the
                 # other backends
-                print(f"== [{label}] tool exception in {spec.name}: {type(exc).__name__}: {str(exc)[:200]!r}",
-                      flush=True)
+                log.info(f"== [{label}] tool exception in {spec.name}: {type(exc).__name__}: {str(exc)[:200]!r}")
                 raise
             if is_submit and not result.get("is_error"):
                 submitted_holder["value"] = result.get("_submitted", args)
@@ -148,7 +151,7 @@ async def run_agent(
             for block in message.content:
                 if isinstance(block, ToolUseBlock):
                     arg_hint = str(next(iter(block.input.values()), ""))[:80]
-                    print(f"== [{label}] agent: {block.name}({arg_hint})", flush=True)
+                    log.info(f"== [{label}] agent: {block.name}({arg_hint})")
                     pending[block.id] = block.name
         elif isinstance(message, UserMessage) and isinstance(message.content, list):
             # tool RESULTS come back as user-turn blocks; a silently failing
@@ -157,13 +160,13 @@ async def run_agent(
             for block in message.content:
                 if isinstance(block, ToolResultBlock) and block.is_error:
                     text = block.content if isinstance(block.content, str) else str(block.content)
-                    print(f"== [{label}] tool error in {pending.get(block.tool_use_id, '?')}: "
-                          f"{text[:200]!r}", flush=True)
+                    log.info(f"== [{label}] tool error in {pending.get(block.tool_use_id, '?')}: "
+                          f"{text[:200]!r}")
         elif isinstance(message, ResultMessage):
             result_text = message.result
             cost_usd = message.total_cost_usd
             if cost_usd:
-                print(f"== [{label}] agent cost: ${cost_usd:.2f}", flush=True)
+                log.info(f"== [{label}] agent cost: ${cost_usd:.2f}")
 
     if "value" not in submitted_holder:
         raise AgentIncompleteError(

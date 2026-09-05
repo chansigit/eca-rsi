@@ -17,10 +17,10 @@ validation.
 Install only the runtime you need, or all validated adapters:
 
 ```bash
-pip install 'agent-harness-bridge[openai]==0.1.0'
-pip install 'agent-harness-bridge[claude]==0.1.0'
-pip install 'agent-harness-bridge[deepseek]==0.1.0'
-pip install 'agent-harness-bridge[all]==0.1.0'
+pip install 'agent-harness-bridge[openai]==0.2.0'
+pip install 'agent-harness-bridge[claude]==0.2.0'
+pip install 'agent-harness-bridge[deepseek]==0.2.0'
+pip install 'agent-harness-bridge[all]==0.2.0'
 ```
 
 The dsh adapter also imports `deepseek_harness`. DeepSeek's current SDK
@@ -43,6 +43,26 @@ HARNESS=claude MODEL=claude-sonnet-5 python your_workflow.py
 The default remains OpenAI Agents SDK with
 `doubao-seed-2-1-turbo-260628`. Model identifiers are intentionally open
 strings rather than a hard-coded catalog.
+
+## Logging
+
+Every bridge line (`== [label] agent: tool(...)`, retries, usage limits,
+run summaries) goes through the `harness_bridge` logger family at `INFO`.
+Configure it once in your CLI entry point, together with your own logger
+families, so one stream carries one style of output:
+
+```python
+from harness_bridge import configure_logging
+
+configure_logging("myapp")            # harness_bridge + myapp -> stdout, "%(message)s"
+configure_logging("myapp", stream=sys.stderr, level="DEBUG")
+```
+
+Records are flushed one by one, so Slurm and `tee` logs stay live. If nobody
+configured logging before `run_agent` runs, the bridge attaches the same
+default handler itself (`ensure_logging`), which keeps the pre-0.2 behaviour
+of printing to stdout. Loggers keep propagating to the root logger, so
+`pytest`'s `caplog` still sees the records.
 
 ## Contract
 
