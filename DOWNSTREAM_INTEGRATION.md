@@ -343,3 +343,17 @@ SHA 与 `release-033-final/dist` 一致，simple index 可见，GitHub Release �
 成功续跑在 singlethread_resume.json。Mural 最终保留 1,124、删除 33、转移 479，
 全局 publication.complete=True。完整科学限制和逐表审查见 FINAL_ACCEPTANCE.md，
 不能将 counts/台账通过解释为所有删除或细胞标签均正确。
+
+
+### 发布后纯 PyPI 与远端 CI
+
+`final-public-033/` 对最终 live RSI pyproject 做字节一致的输入快照，front/kernels ×
+Python 3.10/3.12 四组合全部从普通 PyPI 索引解析通过；初次索引可见性延迟日志保留，
+稍后正常解析成功。四个包从 files.pythonhosted.org 实际下载到独立 target，8 个
+wheel/sdist 发布 SHA 与 release-033-final 一致，发行元数据、模块路径、check_runtime
+及 StringDtype 回归通过。实际 target 导入使用既有 Python 3.12 科学环境；本项
+Python 3.10 是依赖解析，不混称新建完整 3.10 科学环境。
+
+发布提交远端 CI 均成功：MSP6374c00 / run33968526120，ZMIP6e7e06c /
+run33968532629，包含各自 Python 3.10/3.12 测试与 wheel 导入。无需远端重跑，完整
+记录位于同目录。后续 TODO 纯文档提交已推送：MSP5141aa4、ZMIPb819ac0。
