@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import codecs
 import glob as globlib
 import os
 import re
@@ -25,7 +26,8 @@ from typing import Iterator
 
 from .harness import BUILTIN_CAPABILITIES, ToolSpec
 
-READ_MAX_BYTES = 512 * 1024
+READ_DEFAULT_BYTES = 8 * 1024
+READ_MAX_BYTES = 32 * 1024
 IMAGE_MAX_BYTES = 20 * 1024 * 1024
 SEARCH_MAX_BYTES = 256 * 1024
 SEARCH_MAX_RESULTS = 500
@@ -94,8 +96,9 @@ def _read(root: Path, args: dict) -> dict:
         path = _resolve(root, args.get("file_path"))
         if not path.is_file():
             return _err(f"not a regular file: {_display(root, path)}")
-        size = path.stat().st_size
         with path.open("rb") as fh:
+            before = os.fstat(fh.fileno())
+            size = before.st_size
             media_type = _image_type(fh.read(16))
             if media_type is not None:
                 if size > IMAGE_MAX_BYTES:
@@ -107,16 +110,42 @@ def _read(root: Path, args: dict) -> dict:
                     {"type": "image", "data": base64.b64encode(data).decode("ascii"),
                      "mimeType": media_type},
                 ]}
-            fh.seek(0)
-            data = fh.read(READ_MAX_BYTES + 1)
-        truncated = len(data) > READ_MAX_BYTES
-        data = data[:READ_MAX_BYTES]
+            offset = args.get("byte_offset", 0)
+            maximum = args.get("max_bytes", 0)
+            if type(offset) is not int or offset < 0:
+                return _err("byte_offset must be a nonnegative integer (0 starts at the beginning)")
+            if type(maximum) is not int or maximum < 0:
+                return _err("max_bytes must be a nonnegative integer (0 uses the default)")
+            maximum = min(maximum or READ_DEFAULT_BYTES, READ_MAX_BYTES)
+            if offset > size:
+                return _err(f"byte_offset {offset} is past end of file ({size} bytes)")
+            fh.seek(offset)
+            data = fh.read(maximum)
+            after = os.fstat(fh.fileno())
+            if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+                return _err("file changed during Read; retry from the beginning")
+        if offset < size and not data:
+            return _err("file ended unexpectedly during Read; retry from the beginning")
+        if offset and data and data[0] & 0xC0 == 0x80:
+            return _err("byte_offset is inside a UTF-8 character; use the previous result's next byte_offset")
         if b"\x00" in data:
             return _err(f"binary file is not a supported raster image: {_display(root, path)}")
-        body = data.decode("utf-8", errors="replace")
-        suffix = (f"\n\n[truncated after {READ_MAX_BYTES} bytes; narrow the source file before reading]"
-                  if truncated else "")
-        return _text(f"<path>{_display(root, path)}</path>\n<content>\n{body}{suffix}\n</content>")
+        # Leave an incomplete UTF-8 character for the next page, rather than
+        # corrupting it across byte boundaries. EOF still reports malformed text.
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        final = offset + len(data) >= size
+        body = decoder.decode(data, final=final)
+        consumed = len(data) - len(decoder.getstate()[0])
+        if data and consumed == 0:
+            return _err("max_bytes is too small for the next UTF-8 character; use at least 4")
+        next_offset = offset + consumed
+        suffix = (
+            f"\n\n[page truncated; next byte_offset={next_offset}, max_bytes={maximum}. "
+            "For large cell-level tables, use a targeted query or Grep instead of reading every page.]"
+            if next_offset < size else ""
+        )
+        return _text(f"<path>{_display(root, path)}</path>\n"
+                     f"<range>bytes {offset}:{next_offset} of {size}</range>\n<content>\n{body}{suffix}\n</content>")
     except (OSError, ValueError) as exc:
         return _err(str(exc))
 
@@ -248,8 +277,12 @@ def readonly_tools(cwd: str, allowed_builtin: tuple[str, ...]) -> list[ToolSpec]
         tools.append(ToolSpec(
             "Read",
             f"Read a UTF-8 text file or inspect a PNG/JPEG/WebP/GIF image. Relative paths resolve from "
-            f"the working directory {root}; paths outside it are rejected.",
-            {"file_path": str}, read,
+            f"the working directory {root}; paths outside it are rejected. Text is paginated: "
+            f"byte_offset=0 starts at the beginning; max_bytes=0 uses {READ_DEFAULT_BYTES} bytes "
+            f"(hard maximum {READ_MAX_BYTES}). Continue only if needed using the next byte_offset "
+            "shown in the result. Image reads ignore these two arguments. Prefer a targeted query "
+            "or Grep for large per-cell tables, rather than loading all their barcodes.",
+            {"file_path": str, "byte_offset": int, "max_bytes": int}, read,
         ))
     if "glob" in allowed_builtin:
         tools.append(ToolSpec(

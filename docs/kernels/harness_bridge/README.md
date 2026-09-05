@@ -17,10 +17,10 @@ validation.
 Install only the runtime you need, or all validated adapters:
 
 ```bash
-pip install 'agent-harness-bridge[openai]==0.2.0'
-pip install 'agent-harness-bridge[claude]==0.2.0'
-pip install 'agent-harness-bridge[deepseek]==0.2.0'
-pip install 'agent-harness-bridge[all]==0.2.0'
+pip install 'agent-harness-bridge[openai]==0.2.1'
+pip install 'agent-harness-bridge[claude]==0.2.1'
+pip install 'agent-harness-bridge[deepseek]==0.2.1'
+pip install 'agent-harness-bridge[all]==0.2.1'
 ```
 
 The dsh adapter also imports `deepseek_harness`. DeepSeek's current SDK
@@ -117,3 +117,17 @@ Backend-specific defenses remain adapter-local. In particular, OpenAI
 Responses continuation and context reset, Claude SDK teardown and permissions,
 and dsh MCP startup/watchdog/SSE recovery are not reduced to a lowest-common-
 denominator loop.
+
+
+### Bounded text reads (0.2.1)
+
+The host `Read` tool used by OpenAI and DeepSeek returns 8 KiB of text by default,
+with a 32 KiB hard cap. It accepts `byte_offset` and `max_bytes` (both `0` for the
+default first page); truncated results give the exact next offset. UTF-8 characters
+are preserved across page boundaries. Existing path-only handler calls still work.
+Image reads keep their existing image contract; Claude Code uses its native reader.
+
+Large cell-level CSVs should be queried or searched for specific evidence, rather
+than copied into the model context page by page. The smaller default prevents a
+single barcode ledger from consuming an entire context window; it does not guarantee
+that an arbitrarily long agent session cannot exhaust its context.

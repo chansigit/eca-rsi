@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1 (unreleased)
+
+- Paginate host text Read results with `byte_offset`/`max_bytes`; default 8 KiB,
+  maximum 32 KiB, exact UTF-8-safe continuation offsets. Preserve image and
+  working-directory confinement behavior. Addresses large barcode tables
+  exhausting model context after a single read.
+
 ## 0.2.0 - 2026-09-04
 
 - Progress lines go through `logging` (`harness_bridge` logger family)
