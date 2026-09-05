@@ -41,10 +41,11 @@ QC actions are proposals only, never auto-applied to filtering (same
 philosophy as DecontX monitoring). species/tissue context is injected by
 the caller; the package itself assumes no cell-type knowledge.
 
-Authentication depends on the selected adapter: Ark uses ``ARK_API_KEY``,
-Claude uses its CLI credentials (or ``ANTHROPIC_API_KEY``), and dsh uses its
-configured provider. Agent runtimes are optional; the rest of OSP works
-without installing ``osp-sc[agent]``.
+Authentication depends on the selected backend (``HARNESS`` / ``--harness``):
+``openai`` (the default, Doubao via Volcengine Ark) and ``deepseek`` (the dsh
+CLI with its Ark provider) read ``ARK_API_KEY``; ``claude`` uses the Claude
+CLI credentials. Agent runtimes are optional; the rest of OSP works without
+installing ``osp-sc[agent]``.
 
 Usage:
     python -m osp.annotate osp_out/FO --species mouse --tissue "bone marrow"
@@ -62,13 +63,14 @@ import operator
 import os
 from collections import Counter
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scanpy as sc
 import scipy.sparse as sp
 
 from ._io import atomic_write_h5ad, atomic_write_json, atomic_write_text
-from .cluster import (
+from .cluster import (  # importing osp.cluster also selects the Agg backend
     _UMAP_AXES_RECT,
     _UMAP_DPI,
     _UMAP_FIGSIZE,
@@ -125,7 +127,7 @@ def _gene_table(ad, genes, cluster_key):
         m = (cl == c).values
         mean = X[m].mean(axis=0)
         pct = 100 * (X[m] > 0).mean(axis=0)
-        cols[c] = [f"{mn:.2f}|{p:.0f}%" for mn, p in zip(mean, pct)]
+        cols[c] = [f"{mn:.2f}|{p:.0f}%" for mn, p in zip(mean, pct, strict=True)]
     df = pd.DataFrame(cols, index=list(found.values()))
     out = "mean lognorm expr | pct expressing, per cluster:\n" + df.to_string()
     if missing:
@@ -164,8 +166,12 @@ def _subcluster_once(ad, key, cluster, resolution, new_key):
     n_subclusters == 0 means no split happened (column removed again)."""
     parent_mask = (ad.obs[key].astype(str) == cluster).values
     sc.tl.leiden(
-        ad, restrict_to=(key, [cluster]), resolution=resolution,
-        key_added=new_key, flavor="igraph", n_iterations=2,
+        ad,
+        restrict_to=(key, [cluster]),
+        resolution=resolution,
+        key_added=new_key,
+        flavor="igraph",
+        n_iterations=2,
     )
     sub_labels = ad.obs[new_key][parent_mask].astype(str)
     subs = cluster_order(sub_labels)
@@ -252,9 +258,7 @@ def _validate_proposal(proposal, clusters, obs):
                 if not isinstance(value, str) or not value.strip():
                     problems.append(f"clusters[{index}].{field} must be a non-empty string")
             if entry.get("confidence") not in _CONFIDENCE_VALUES:
-                problems.append(
-                    f"clusters[{index}].confidence must be high|medium|low: {entry.get('confidence')!r}"
-                )
+                problems.append(f"clusters[{index}].confidence must be high|medium|low: {entry.get('confidence')!r}")
             evidence = entry.get("evidence_genes")
             if not isinstance(evidence, list) or any(
                 not isinstance(gene, str) or not gene.strip() for gene in evidence
@@ -288,9 +292,7 @@ def _validate_proposal(proposal, clusters, obs):
         if action.get("action") not in _QC_ACTIONS:
             problems.append(f'qc_action "action" must be drop|flag: {action}')
         if str(action.get("cluster")) not in cluster_set:
-            problems.append(
-                f"qc_action cluster {action.get('cluster')!r} is not a current cluster id: {action}"
-            )
+            problems.append(f"qc_action cluster {action.get('cluster')!r} is not a current cluster id: {action}")
         if action.get("reason") not in _QC_REASONS:
             problems.append(f"qc_action reason must be one of {sorted(_QC_REASONS)}: {action}")
         if not isinstance(action.get("note"), str):
@@ -329,7 +331,9 @@ def _apply_proposal(ad, key, proposal):
     obs["_ann_fine"], and obs["_qc_action"] in {keep, flag, drop} — flags
     applied first so drop wins where both match."""
     lab = ad.obs[key].astype(str)
-    ad.obs["_ann_coarse"] = lab.map({str(e["cluster"]): e["label_coarse"] for e in proposal["clusters"]}).astype("category")
+    ad.obs["_ann_coarse"] = lab.map({str(e["cluster"]): e["label_coarse"] for e in proposal["clusters"]}).astype(
+        "category"
+    )
     ad.obs["_ann_fine"] = lab.map({str(e["cluster"]): e["label_fine"] for e in proposal["clusters"]}).astype("category")
 
     action = np.array(["keep"] * ad.n_obs, dtype=object)
@@ -349,8 +353,6 @@ def _plot_annotation(ad, figdir):
     plus a custom QC-action UMAP: proposed-drop cells as large dark-red dots,
     flagged cells as large dark-yellow dots, the rest as small light-gray
     dots."""
-    import matplotlib.pyplot as plt
-
     os.makedirs(figdir, exist_ok=True)
     for col, fname in (("_ann_coarse", "umap_ann_coarse.png"), ("_ann_fine", "umap_ann_fine.png")):
         _save_single_umap(ad, col, os.path.join(figdir, fname), legend_loc="on data", legend_fontsize=5)
@@ -363,7 +365,11 @@ def _plot_annotation(ad, figdir):
     base = 120000 / ad.n_obs
     fig = plt.figure(figsize=_UMAP_FIGSIZE)
     ax = fig.add_axes(_UMAP_AXES_RECT)
-    for name, color, size in (("keep", "#d3d3d3", base), ("flag", "#b8860b", 1.5 * base), ("drop", "#8b0000", 1.5 * base)):
+    for name, color, size in (
+        ("keep", "#d3d3d3", base),
+        ("flag", "#b8860b", 1.5 * base),
+        ("drop", "#8b0000", 1.5 * base),
+    ):
         m = act == name
         if m.any():
             ax.scatter(xy[m, 0], xy[m, 1], s=size, c=color, linewidths=0, label=f"{name} (n={int(m.sum())})")
@@ -383,13 +389,15 @@ def _system_prompt(outdir, cluster_key, clusters, species, tissue, language):
         context.append(f"species: {species}")
     if tissue:
         context.append(f"tissue: {tissue}")
-    context_line = ("Context — " + ", ".join(context)) if context else (
-        "No species/tissue context was provided — infer cautiously from gene-name "
-        "casing conventions and expression profiles, and state that inference in your conclusions."
+    context_line = (
+        ("Context — " + ", ".join(context))
+        if context
+        else (
+            "No species/tissue context was provided — infer cautiously from gene-name "
+            "casing conventions and expression profiles, and state that inference in your conclusions."
+        )
     )
-    has_decontx_heatmap = os.path.isfile(
-        os.path.join(outdir, "figures", "decontx_heatmap_by_cluster.png")
-    )
+    has_decontx_heatmap = os.path.isfile(os.path.join(outdir, "figures", "decontx_heatmap_by_cluster.png"))
     required_contamination = ", and the decontx heatmap" if has_decontx_heatmap else ""
 
     return f"""You are a single-cell RNA-seq analysis expert. The current working directory is an \
@@ -407,7 +415,8 @@ What the files are:
 - figures/decontx_heatmap_by_cluster.png, decontx_top_genes_*.csv: ambient RNA when DecontX was run
 - qc_figures/*_qc_*.png, qc_figures/*_qc_overview.json: sample-level QC histograms and key numbers
 - de_top_genes_*.csv: top DE genes per cluster (pct1/pct2 = expressing fraction inside/outside the cluster)
-- cluster_summary_*.csv, paga_connectivities_*.csv, qc_summary.csv
+- cluster_summary_*.csv, paga_connectivities_*.csv, qc_summary.csv (its n_doublet rests on Scrublet's \
+automatic threshold; judge doublets from the doublet_score distribution and check_qc_scores instead)
 
 Mandatory workflow:
 1. Figures BEFORE conclusions: view at least umap_clusters, paga, every qc_violin_*{required_contamination}. \
@@ -487,7 +496,10 @@ async def _run_agent(ad, outdir, cluster_key, species, tissue, language, model, 
                 "is_error": True,
             }
         if c not in current_clusters():
-            return {"content": [{"type": "text", "text": f"unknown cluster {c!r}; current clusters: {current_clusters()}"}], "is_error": True}
+            return {
+                "content": [{"type": "text", "text": f"unknown cluster {c!r}; current clusters: {current_clusters()}"}],
+                "is_error": True,
+            }
         new_key = f"ann_sub{state['n_sub'] + 1}"
         n, text = _subcluster_once(ad, state["key"], c, res, new_key)
         if n >= 2:
@@ -509,7 +521,12 @@ async def _run_agent(ad, outdir, cluster_key, species, tissue, language, model, 
             return {"content": [{"type": "text", "text": f"JSON parse error, fix and resubmit: {e}"}], "is_error": True}
         problems = _validate_proposal(proposal, current_clusters(), ad.obs)
         if problems:
-            return {"content": [{"type": "text", "text": "validation failed, fix and resubmit:\n- " + "\n- ".join(problems)}], "is_error": True}
+            return {
+                "content": [
+                    {"type": "text", "text": "validation failed, fix and resubmit:\n- " + "\n- ".join(problems)}
+                ],
+                "is_error": True,
+            }
         proposal["cluster_key"] = state["key"]
         return {
             "content": [{"type": "text", "text": "accepted; the host will finalize the output files"}],
@@ -520,39 +537,50 @@ async def _run_agent(ad, outdir, cluster_key, species, tissue, language, model, 
         ToolSpec(
             name="check_genes",
             description="Per-cluster mean expression and expressing-cell fraction for the given genes "
-                        "(case-insensitive match against var_names). Use it to verify cell-type markers.",
-            input_schema={"genes": list}, handler=check_genes,
+            "(case-insensitive match against var_names). Use it to verify cell-type markers.",
+            input_schema={"genes": list},
+            handler=check_genes,
         ),
         ToolSpec(
             name="check_qc_scores",
             description="Per-cluster QC overview (median|p90): counts/genes/mt%/doublet/contamination/Malat1/"
-                        "dissociation stress. Use it to identify QC-driven clusters. No arguments.",
-            input_schema={}, handler=check_qc_scores,
+            "dissociation stress. Use it to identify QC-driven clusters. No arguments.",
+            input_schema={},
+            handler=check_qc_scores,
         ),
         ToolSpec(
             name="subcluster",
             description="Split one heterogeneous cluster with leiden restrict_to at the given resolution "
-                        "(0.3-1.0 typical). On success the working clustering is refined in place: new ids look "
-                        'like "5,0"/"5,1", all other clusters keep their ids, and check_genes / check_qc_scores / '
-                        "submit_annotation operate on the refined clustering from then on. Returns subcluster "
-                        "sizes and top distinguishing genes.",
-            input_schema={"cluster": str, "resolution": float}, handler=subcluster,
+            "(0.3-1.0 typical). On success the working clustering is refined in place: new ids look "
+            'like "5,0"/"5,1", all other clusters keep their ids, and check_genes / check_qc_scores / '
+            "submit_annotation operate on the refined clustering from then on. Returns subcluster "
+            "sizes and top distinguishing genes.",
+            input_schema={"cluster": str, "resolution": float},
+            handler=subcluster,
         ),
         ToolSpec(
             name="submit_annotation",
             description="Submit the final conclusions (mandatory; the run only completes after validation "
-                        "passes). proposal_json is a JSON string with this schema:\n" + _PROPOSAL_SCHEMA_DOC,
-            input_schema={"proposal_json": str}, handler=submit_annotation,
+            "passes). proposal_json is a JSON string with this schema:\n" + _PROPOSAL_SCHEMA_DOC,
+            input_schema={"proposal_json": str},
+            handler=submit_annotation,
         ),
     ]
 
     result = await run_agent(
-        tools=tools, submit_tool="submit_annotation",
+        tools=tools,
+        submit_tool="submit_annotation",
         prompt="Interpret this OSP output directory following the workflow in the system prompt "
-               "exactly, and finish by submitting via submit_annotation.",
-        system_prompt=_system_prompt(outdir, cluster_key, cluster_order(ad.obs[cluster_key].astype(str)), species, tissue, language),
-        cwd=os.path.abspath(outdir), model=model, effort=effort, max_turns=max_turns,
-        allowed_builtin=("read", "glob", "grep"), label="osp annotate",
+        "exactly, and finish by submitting via submit_annotation.",
+        system_prompt=_system_prompt(
+            outdir, cluster_key, cluster_order(ad.obs[cluster_key].astype(str)), species, tissue, language
+        ),
+        cwd=os.path.abspath(outdir),
+        model=model,
+        effort=effort,
+        max_turns=max_turns,
+        allowed_builtin=("read", "glob", "grep"),
+        label="osp annotate",
     )
 
     if result.transcript_text:
@@ -564,7 +592,9 @@ async def _run_agent(ad, outdir, cluster_key, species, tissue, language, model, 
     return result.submitted
 
 
-def propose_annotation(outdir, species=None, tissue=None, language="English", cluster_key=None, model=None, effort=None, max_turns=80):
+def propose_annotation(
+    outdir, species=None, tissue=None, language="English", cluster_key=None, model=None, effort=None, max_turns=80
+):
     """Run the annotation agent on an OSP output directory; returns the
     proposal dict (see _PROPOSAL_SCHEMA_DOC; "cluster_key" records the
     clustering the annotation refers to, which may be a subclustered
@@ -600,8 +630,9 @@ def propose_annotation(outdir, species=None, tissue=None, language="English", cl
     if os.path.isfile(proposal_path):
         os.unlink(proposal_path)
 
-    proposal = asyncio.run(_run_agent(ad, outdir, cluster_key, species, tissue, language,
-                                      model or default_model(), effort, max_turns))
+    proposal = asyncio.run(
+        _run_agent(ad, outdir, cluster_key, species, tissue, language, model or default_model(), effort, max_turns)
+    )
     if proposal is None:
         raise RuntimeError("annotation agent returned without a validated proposal")
 
@@ -625,19 +656,28 @@ if __name__ == "__main__":
     parser.add_argument("--language", default="English", help='language of the annotation output (default "English")')
     parser.add_argument("--cluster-key", default=None, help="autodetected from cluster_summary_*.csv by default")
     parser.add_argument(
-        "--model", default=None,
+        "--model",
+        default=None,
         help="model id for the selected HARNESS backend (default: MODEL env, then backend default)",
     )
     parser.add_argument(
-        "--effort", default=None, choices=["low", "medium", "high", "xhigh", "max"],
+        "--effort",
+        default=None,
+        choices=["low", "medium", "high", "xhigh", "max"],
         help="reasoning effort for models that support it",
     )
     parser.add_argument("--max-turns", type=int, default=80)
     args = parser.parse_args()
 
     proposal = propose_annotation(
-        args.outdir, species=args.species, tissue=args.tissue, language=args.language,
-        cluster_key=args.cluster_key, model=args.model, effort=args.effort, max_turns=args.max_turns,
+        args.outdir,
+        species=args.species,
+        tissue=args.tissue,
+        language=args.language,
+        cluster_key=args.cluster_key,
+        model=args.model,
+        effort=args.effort,
+        max_turns=args.max_turns,
     )
     for e in proposal["clusters"]:
         print(f"cluster {e['cluster']}: {e['label_coarse']} / {e['label_fine']} [{e['confidence']}]")

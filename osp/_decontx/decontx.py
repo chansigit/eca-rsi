@@ -10,6 +10,7 @@ distribution ``eta`` (a weighted blend of every other population), and
 estimates -- by variational EM -- a per-cell contamination fraction and
 a decontaminated count matrix.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -77,17 +78,14 @@ class DecontXResult:
     def to_dataframe(self) -> pd.DataFrame:
         """Per-cell summary table (contamination + cluster label)."""
         return pd.DataFrame(
-            {"decontX_contamination": self.contamination,
-             "decontX_clusters": self.z},
+            {"decontX_contamination": self.contamination, "decontX_clusters": self.z},
             index=self.cell_names,
         )
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         n = len(self.contamination)
         mean = float(np.mean(self.contamination))
-        return (f"DecontXResult(cells={n}, "
-                f"mean_contamination={mean:.4f}, "
-                f"batches={list(self.estimates)})")
+        return f"DecontXResult(cells={n}, mean_contamination={mean:.4f}, batches={list(self.estimates)})"
 
 
 def _process_cell_labels(z, n_cells: int) -> np.ndarray:
@@ -101,8 +99,7 @@ def _process_cell_labels(z, n_cells: int) -> np.ndarray:
         raise ValueError("'z' must not contain missing cell labels.")
     uniq = pd.unique(z)
     if len(uniq) < 2:
-        raise ValueError("DecontX needs at least 2 clusters; only "
-                         f"{len(uniq)} provided.")
+        raise ValueError(f"DecontX needs at least 2 clusters; only {len(uniq)} provided.")
     remap = {val: i + 1 for i, val in enumerate(uniq)}
     return np.array([remap[v] for v in z], dtype=int)
 
@@ -128,11 +125,21 @@ def _extract_counts(x, layer=None):
     return x, gene_names, cell_names
 
 
-def decontx(x, z=None, batch=None, background=None, max_iter: int = 500,
-            delta=(10.0, 10.0), estimate_delta: bool = True,
-            convergence: float = 0.001, iter_log_lik: int = 10,
-            seed: int | None = 12345, layer=None, copy: bool = False,
-            verbose: bool = False) -> DecontXResult:
+def decontx(
+    x,
+    z=None,
+    batch=None,
+    background=None,
+    max_iter: int = 500,
+    delta=(10.0, 10.0),
+    estimate_delta: bool = True,
+    convergence: float = 0.001,
+    iter_log_lik: int = 10,
+    seed: int | None = 12345,
+    layer=None,
+    copy: bool = False,
+    verbose: bool = False,
+) -> DecontXResult:
     """Estimate and remove ambient-RNA contamination with DecontX.
 
     Parameters
@@ -206,11 +213,7 @@ def decontx(x, z=None, batch=None, background=None, max_iter: int = 500,
 
     if isinstance(max_iter, bool) or not isinstance(max_iter, (int, np.integer)) or max_iter < 1:
         raise ValueError("'max_iter' must be a positive integer.")
-    if (
-        isinstance(iter_log_lik, bool)
-        or not isinstance(iter_log_lik, (int, np.integer))
-        or iter_log_lik < 1
-    ):
+    if isinstance(iter_log_lik, bool) or not isinstance(iter_log_lik, (int, np.integer)) or iter_log_lik < 1:
         raise ValueError("'iter_log_lik' must be a positive integer.")
     if convergence <= 0 or not np.isfinite(convergence):
         raise ValueError("'convergence' must be a finite positive number.")
@@ -220,8 +223,8 @@ def decontx(x, z=None, batch=None, background=None, max_iter: int = 500,
 
     if z is None:
         raise ValueError(
-            "'z' (cell cluster labels) is required. Cluster the cells "
-            "first, e.g. with Leiden, and pass the labels.")
+            "'z' (cell cluster labels) is required. Cluster the cells first, e.g. with Leiden, and pass the labels."
+        )
     z = np.asarray(z)
     if z.ndim != 1 or len(z) != C:
         raise ValueError("'z' must be a one-dimensional vector with one label per cell.")
@@ -231,8 +234,7 @@ def decontx(x, z=None, batch=None, background=None, max_iter: int = 500,
     if background is not None:
         background = _to_genes_by_cells_sparse(background)
         if background.shape[0] != G:
-            raise ValueError(
-                "'background' must have the same number of genes as 'x'.")
+            raise ValueError("'background' must have the same number of genes as 'x'.")
         if not np.isfinite(background.data).all() or (background.data < 0).any():
             raise ValueError("'background' must contain finite, non-negative counts.")
 
@@ -247,9 +249,13 @@ def decontx(x, z=None, batch=None, background=None, max_iter: int = 500,
     batch_index = pd.unique(batch)
 
     run_params = {
-        "max_iter": max_iter, "delta": tuple(delta),
-        "estimate_delta": estimate_delta, "convergence": convergence,
-        "iter_log_lik": iter_log_lik, "seed": seed, "batch": batch,
+        "max_iter": max_iter,
+        "delta": tuple(delta),
+        "estimate_delta": estimate_delta,
+        "convergence": convergence,
+        "iter_log_lik": iter_log_lik,
+        "seed": seed,
+        "batch": batch,
     }
 
     contamination = np.full(C, np.nan)
@@ -269,17 +275,24 @@ def decontx(x, z=None, batch=None, background=None, max_iter: int = 500,
             bg_bat = background
 
         if verbose:
-            print(f"DecontX: analysing batch '{bat}' "
-                  f"({len(sel)} cells)")
+            print(f"DecontX: analysing batch '{bat}' ({len(sel)} cells)")
 
         res = _decontx_one_batch(
-            counts_bat, z_bat, bg_bat, max_iter=max_iter, delta=delta,
-            estimate_delta=estimate_delta, convergence=convergence,
-            iter_log_lik=iter_log_lik, seed=seed, verbose=verbose)
+            counts_bat,
+            z_bat,
+            bg_bat,
+            max_iter=max_iter,
+            delta=delta,
+            estimate_delta=estimate_delta,
+            convergence=convergence,
+            iter_log_lik=iter_log_lik,
+            seed=seed,
+            verbose=verbose,
+        )
 
         native = calculate_native_matrix(
-            counts_bat, res["theta"], res["eta"], res["phi"],
-            res["z"], pseudocount=1e-20).tocoo()
+            counts_bat, res["theta"], res["eta"], res["phi"], res["z"], pseudocount=1e-20
+        ).tocoo()
         dec_rows.append(native.row)
         dec_cols.append(sel[native.col])  # map local -> global column index
         dec_vals.append(native.data)
@@ -292,10 +305,15 @@ def decontx(x, z=None, batch=None, background=None, max_iter: int = 500,
         estimates[bat] = res
 
     decontx_counts = sp.coo_matrix(
-        (np.concatenate(dec_vals) if dec_vals else np.array([]),
-         (np.concatenate(dec_rows) if dec_rows else np.array([], dtype=int),
-          np.concatenate(dec_cols) if dec_cols else np.array([], dtype=int))),
-        shape=(G, C)).tocsc()
+        (
+            np.concatenate(dec_vals) if dec_vals else np.array([]),
+            (
+                np.concatenate(dec_rows) if dec_rows else np.array([], dtype=int),
+                np.concatenate(dec_cols) if dec_cols else np.array([], dtype=int),
+            ),
+        ),
+        shape=(G, C),
+    ).tocsc()
 
     result = DecontXResult(
         contamination=contamination,
@@ -313,8 +331,7 @@ def decontx(x, z=None, batch=None, background=None, max_iter: int = 500,
         adata.obs["decontX_clusters"] = pd.Categorical(return_z)
         # AnnData layer is cells x genes -> transpose back.
         adata.layers["decontX_counts"] = result.decontx_counts.T.tocsr()
-        adata.uns["decontX"] = {"run_params": run_params,
-                                "estimates": estimates}
+        adata.uns["decontX"] = {"run_params": run_params, "estimates": estimates}
         return adata
 
     return result
@@ -327,9 +344,9 @@ def _to_genes_by_cells_sparse(counts) -> sp.csc_matrix:
     return sp.csc_matrix(np.asarray(counts, dtype=float))
 
 
-def _decontx_one_batch(counts, z, background, max_iter, delta,
-                       estimate_delta, convergence, iter_log_lik,
-                       seed, verbose):
+def _decontx_one_batch(
+    counts, z, background, max_iter, delta, estimate_delta, convergence, iter_log_lik, seed, verbose
+):
     """Run the variational-EM loop for a single batch of cells."""
     counts = counts.tocsc().astype(float)
     _, C = counts.shape
@@ -360,14 +377,21 @@ def _decontx_one_batch(counts, z, background, max_iter, delta,
     theta_prev = theta.copy()
     converged = False
     iter_count = 0
-    next_decon = {"theta": theta, "phi": phi, "eta": eta,
-                  "delta": delta, "contamination": np.zeros(C)}
+    next_decon = {"theta": theta, "phi": phi, "eta": eta, "delta": delta, "contamination": np.zeros(C)}
 
     while iter_count < max_iter and not converged:
         next_decon = decontx_em(
-            counts, counts_colsums, theta, eta, phi, z,
-            estimate_eta=estimate_eta, estimate_delta=estimate_delta,
-            delta=delta, pseudocount=1e-20)
+            counts,
+            counts_colsums,
+            theta,
+            eta,
+            phi,
+            z,
+            estimate_eta=estimate_eta,
+            estimate_delta=estimate_delta,
+            delta=delta,
+            pseudocount=1e-20,
+        )
         theta = next_decon["theta"]
         phi = next_decon["phi"]
         eta = next_decon["eta"]
@@ -380,8 +404,7 @@ def _decontx_one_batch(counts, z, background, max_iter, delta,
         iter_count += 1
 
         if iter_count % iter_log_lik == 0 or converged:
-            ll.append(decontx_loglik(counts, theta, eta, phi, z,
-                                     pseudocount=1e-20))
+            ll.append(decontx_loglik(counts, theta, eta, phi, z, pseudocount=1e-20))
             if verbose:
                 print(f"  iter {iter_count} | converge: {max_div:.4g}")
 
@@ -393,9 +416,7 @@ def _decontx_one_batch(counts, z, background, max_iter, delta,
         "contamination": next_decon["contamination"],
         "log_likelihood": ll,
     }
-    non_finite = [
-        name for name, value in fitted.items() if not np.isfinite(np.asarray(value)).all()
-    ]
+    non_finite = [name for name, value in fitted.items() if not np.isfinite(np.asarray(value)).all()]
     contamination = np.asarray(next_decon["contamination"])
     if non_finite or (contamination < 0).any() or (contamination > 1).any():
         detail = f"non-finite outputs: {non_finite}" if non_finite else "contamination outside [0, 1]"

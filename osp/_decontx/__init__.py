@@ -12,10 +12,10 @@ two-component multinomial mixture of a *native* gene distribution
 every other population). Inference is by variational EM and yields a
 per-cell contamination fraction and a decontaminated count matrix.
 
-Internal to osp -- only :func:`decontx_one_sample.qc_one_sample` (via
-``osp.qc``) calls into this subpackage; it is not part of the public
-osp API.
+Internal to osp -- only :func:`osp.qc.qc_one_sample` calls into this
+subpackage; it is not part of the public osp API.
 """
+
 from __future__ import annotations
 
 from ._core import (

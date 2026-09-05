@@ -76,6 +76,29 @@ def _mad_bounds(x, nmads):
     return med - nmads * mad, med + nmads * mad
 
 
+# Scrublet's automatic threshold is only as good as the bimodality of its
+# simulated-doublet score histogram, so the summary also reports the score
+# distribution and the share of cells above this fixed reference value.
+DOUBLET_SCORE_REFERENCE = 0.25
+
+
+def _doublet_summary(ad):
+    """Scrublet threshold plus doublet_score quantiles for the QC summary.
+
+    ``scrublet_threshold`` is ``None`` when scanpy could not find a threshold
+    (every predicted_doublet is then False regardless of the scores).
+    """
+    scores = ad.obs["doublet_score"].to_numpy(dtype=float)
+    threshold = ad.uns.get("scrublet", {}).get("threshold")
+    return {
+        "scrublet_threshold": None if threshold is None else float(threshold),
+        "median_doublet_score": float(np.median(scores)),
+        "p90_doublet_score": float(np.quantile(scores, 0.9)),
+        "p99_doublet_score": float(np.quantile(scores, 0.99)),
+        f"pct_doublet_score_above_{DOUBLET_SCORE_REFERENCE:g}": float(100 * (scores > DOUBLET_SCORE_REFERENCE).mean()),
+    }
+
+
 def _safe_expm1(value):
     """Inverse log1p for JSON summaries; ``None`` denotes an open bound."""
     if value > np.log(np.finfo(float).max):
@@ -95,12 +118,14 @@ def cluster_order(labels):
     subcluster ids like "5,0") get a natural sort on their digit runs;
     plain lexicographic is the last resort."""
     labels = list(dict.fromkeys(labels))
-    for key in (float, _natural_key):
-        try:
-            return sorted(labels, key=key)
-        except (TypeError, ValueError):
-            continue
-    return sorted(labels, key=str)
+    try:
+        return sorted(labels, key=float)
+    except (TypeError, ValueError):
+        pass
+    try:
+        return sorted(labels, key=_natural_key)
+    except TypeError:
+        return sorted(labels, key=str)
 
 
 def decontx_top_genes(ad, cluster_key=None, top_n=20, counts_layer="counts", decontx_layer="decontX_counts"):
@@ -128,9 +153,7 @@ def decontx_top_genes(ad, cluster_key=None, top_n=20, counts_layer="counts", dec
     raw = sp.csr_matrix(ad.layers.get(counts_layer, ad.X))
     decon = sp.csr_matrix(ad.layers[decontx_layer])
     if raw.shape != decon.shape:
-        raise ValueError(
-            f"raw and DecontX matrices must have the same shape, got {raw.shape} and {decon.shape}"
-        )
+        raise ValueError(f"raw and DecontX matrices must have the same shape, got {raw.shape} and {decon.shape}")
     removed = raw - decon
     removed.data = np.clip(removed.data, 0, None)  # guard against float noise going slightly negative
     removed.eliminate_zeros()
@@ -141,18 +164,20 @@ def decontx_top_genes(ad, cluster_key=None, top_n=20, counts_layer="counts", dec
         gene_removed = np.asarray(r.sum(axis=0)).ravel()
         gene_raw = np.asarray(x.sum(axis=0)).ravel()
         total = gene_removed.sum()
-        df = pd.DataFrame({
-            "gene": ad.var_names,
-            "contam_counts": gene_removed,
-            "contam_fraction_of_gene_counts": gene_removed / np.maximum(gene_raw, 1),
-            "pct_of_total_contamination": 100 * gene_removed / max(total, 1),
-        })
+        df = pd.DataFrame(
+            {
+                "gene": ad.var_names,
+                "contam_counts": gene_removed,
+                "contam_fraction_of_gene_counts": gene_removed / np.maximum(gene_raw, 1),
+                "pct_of_total_contamination": 100 * gene_removed / max(total, 1),
+            }
+        )
         return df.sort_values("contam_counts", ascending=False).head(top_n).reset_index(drop=True)
 
     global_df = _rank()
 
     per_cluster_df = None
-    if cluster_key is not None and cluster_key in ad.obs:
+    if cluster_key is not None:
         groups = ad.obs[cluster_key].astype(str)
         rows = []
         for cl in cluster_order(groups):
@@ -186,8 +211,10 @@ def _decontx_degenerate(obs):
     if len(z_counts) and z_counts.iloc[0] / len(obs) > 0.5:
         top_med = float(c[obs["decontX_clusters"] == z_counts.index[0]].median())
         if top_med > 0.9:
-            return (f"largest internal cluster holds {z_counts.iloc[0] / len(obs):.0%} "
-                    f"of cells with median contamination {top_med:.2f}")
+            return (
+                f"largest internal cluster holds {z_counts.iloc[0] / len(obs):.0%} "
+                f"of cells with median contamination {top_med:.2f}"
+            )
     return None
 
 
@@ -200,15 +227,28 @@ def _coarse_clusters_for_decontx(ad, n_top_genes=2000, n_pcs=30, resolution=1.0)
     is unidentifiable), so err on the side of more clusters. No scaling step —
     a coarse partition doesn't need it and it keeps this cheap.
     """
+    if ad.n_obs < 3 or ad.n_vars < 2:
+        raise ValueError(
+            f"DecontX needs at least 3 cells and 2 genes to derive a coarse clustering, got "
+            f"{ad.shape}; pass run_decontx=False or supply decontx_kwargs={{'z': ...}}"
+        )
     tmp = sc.AnnData(ad.X.copy(), var=pd.DataFrame(index=ad.var_names))
     sc.pp.normalize_total(tmp, target_sum=1e4)
     sc.pp.log1p(tmp)
     sc.pp.highly_variable_genes(tmp, n_top_genes=n_top_genes, flavor="seurat")
-    tmp = tmp[:, tmp.var["highly_variable"]].copy()
+    if tmp.var["highly_variable"].sum() >= 2:
+        tmp = tmp[:, tmp.var["highly_variable"]].copy()
     sc.pp.pca(tmp, n_comps=min(n_pcs, tmp.n_vars - 1, tmp.n_obs - 1), random_state=0)
     sc.pp.neighbors(tmp, n_neighbors=min(15, tmp.n_obs - 1), random_state=0)
     sc.tl.leiden(tmp, resolution=resolution, key_added="z", flavor="igraph", n_iterations=2)
-    return tmp.obs["z"].cat.codes.to_numpy()
+    z = tmp.obs["z"].cat.codes.to_numpy()
+    if len(np.unique(z)) < 2:
+        raise ValueError(
+            "the coarse Leiden clustering for DecontX found a single cluster, so the "
+            "ambient profile cannot be separated; pass run_decontx=False or supply "
+            "decontx_kwargs={'z': ...} with at least two groups"
+        )
+    return z
 
 
 # mt/ribo/hb gene names differ only in case between species (mouse
@@ -230,6 +270,7 @@ SPECIES_GENE_PATTERNS = {
 # Human gene symbols; matched case-insensitively against var_names so mouse
 # data (same symbols, different case convention) works too — genes not
 # present in a given panel are simply skipped, no guessing/expanding.
+# fmt: off
 DISSOCIATION_GENES_HS = [
     "ACTG1", "ANKRD1", "ARID5A", "ATF3", "ATF4", "BAG3", "BHLHE40",
     "CCNL1", "CCRN4L", "CEBPB", "CEBPD", "CEBPG", "CSRNP1", "CXCL1", "CYR61",
@@ -250,6 +291,7 @@ DISSOCIATION_GENES_HS = [
     "TUBB6", "UBC", "USP2", "WAC", "ZC3H12A", "ZFAND5", "ZFP36", "ZFP36L1",
     "ZFP36L2", "ZYX",
 ]
+# fmt: on
 
 
 def assert_single_sample(adata, sample_col="sample"):
@@ -261,9 +303,7 @@ def assert_single_sample(adata, sample_col="sample"):
     labels = adata.obs[sample_col]
     n_missing = int(labels.isna().sum())
     if n_missing:
-        raise ValueError(
-            f"expected every cell to have obs[{sample_col!r}], got {n_missing} missing value(s)"
-        )
+        raise ValueError(f"expected every cell to have obs[{sample_col!r}], got {n_missing} missing value(s)")
     unique = list(pd.unique(labels))
     if len(unique) != 1:
         raise ValueError(f"expected a single sample, got {len(unique)}: {unique}")
@@ -300,16 +340,21 @@ def qc_one_sample(
     inputs whose X was already normalized (same convention as
     cluster_and_deg).
 
-    Three QC layers, OR-combined (hitting any layer marks a cell low-quality):
+    Four QC flags, OR-combined (hitting any of them marks a cell low-quality):
       1. Hard thresholds: n_genes < hard_min_genes / total_counts <
          hard_min_counts / pct_counts_mt > hard_max_mt_pct
       2. Within-sample MAD outliers (default nmads=5): any of
          log1p_total_counts / log1p_n_genes_by_counts /
-         pct_counts_in_top_20_genes exceeding
+         pct_counts_in_top_20_genes exceeding median ± nmads * MAD
       3. MT% MAD outlier (default mt_nmads=3) AND pct_counts_mt > mt_soft_pct
          (so MAD doesn't fire on noise when MT% is uniformly low)
       4. With run_scrublet=True, Scrublet doublet detection (run within the
-         single sample; no batch_key needed)
+         single sample; no batch_key needed). Its predicted_doublet call rests
+         on an automatic threshold that is unreliable when the simulated score
+         histogram is not bimodal, so the summary also records the threshold
+         (``scrublet_threshold``, ``None`` when scanpy found none) and the
+         doublet_score median / p90 / p99 and the share of cells above
+         DOUBLET_SCORE_REFERENCE; trust the scores over ``n_doublet``.
 
     With run_decontx=True, DecontX (osp._decontx, a vendored pure-Python port
     of DecontX) runs additionally for ambient-RNA monitoring — monitoring/reporting only
@@ -324,9 +369,10 @@ def qc_one_sample(
     as ``decontx_z_source="leiden_fallback"`` even though it is now the normal
     path; a caller-provided ``z`` is recorded as ``"user"``. If the fit is
     still pinned near complete contamination, ``ad.uns["osp_decontx_degenerate"]
-    = True`` is set and cluster_and_deg drops the contamination column from
-    its PCA covariates. The estimates remain available for inspection rather
-    than being silently discarded.
+    = True`` is set, the summary carries ``decontx_degenerate=True`` (so the
+    report and the annotation agent can see it), and cluster_and_deg drops
+    the contamination column from its PCA covariates. The estimates remain
+    available for inspection rather than being silently discarded.
 
     Per-cell decontX_contamination is only an aggregate score; "who is
     contaminated by which genes" comes from the difference between raw counts
@@ -362,22 +408,16 @@ def qc_one_sample(
     invalid_parameters = [
         name
         for name, value in numeric_parameters.items()
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, numeric_types)
-            or not np.isfinite(value)
-            or value < 0
-        )
+        if (isinstance(value, bool) or not isinstance(value, numeric_types) or not np.isfinite(value) or value < 0)
     ]
     if invalid_parameters:
-        raise ValueError(
-            "QC thresholds must be finite non-negative numbers; invalid: "
-            + ", ".join(invalid_parameters)
-        )
+        raise ValueError("QC thresholds must be finite non-negative numbers; invalid: " + ", ".join(invalid_parameters))
 
     if species is not None:
         if species not in SPECIES_GENE_PATTERNS:
-            raise ValueError(f"unknown species {species!r}, known: {list(SPECIES_GENE_PATTERNS)}. pass mt_prefix/ribo_regex/hb_regex directly instead.")
+            raise ValueError(
+                f"unknown species {species!r}, known: {list(SPECIES_GENE_PATTERNS)}. pass mt_prefix/ribo_regex/hb_regex directly instead."
+            )
         mt_prefix, ribo_regex, hb_regex = (
             SPECIES_GENE_PATTERNS[species]["mt_prefix"],
             SPECIES_GENE_PATTERNS[species]["ribo_regex"],
@@ -414,9 +454,7 @@ def qc_one_sample(
     if ad.var["malat1"].any():
         qc_vars.append("malat1")
     top_n = min(20, ad.n_vars)
-    sc.pp.calculate_qc_metrics(
-        ad, qc_vars=qc_vars, percent_top=[top_n], log1p=True, inplace=True
-    )
+    sc.pp.calculate_qc_metrics(ad, qc_vars=qc_vars, percent_top=[top_n], log1p=True, inplace=True)
     if top_n != 20:
         # Preserve OSP's public obs/summary schema for targeted panels with
         # fewer than 20 genes: "top 20" then means every available gene.
@@ -448,9 +486,7 @@ def qc_one_sample(
     mad_genes_flag = _mad_outlier(obs["log1p_n_genes_by_counts"], nmads)
     mad_top20_flag = _mad_outlier(obs["pct_counts_in_top_20_genes"], nmads)
     mad_flag = mad_counts_flag | mad_genes_flag | mad_top20_flag
-    mt_mad_flag = _mad_outlier(obs["pct_counts_mt"], mt_nmads) & (
-        obs["pct_counts_mt"] > mt_soft_pct
-    )
+    mt_mad_flag = _mad_outlier(obs["pct_counts_mt"], mt_nmads) & (obs["pct_counts_mt"] > mt_soft_pct)
     hard_flag = (
         (obs["n_genes_by_counts"] < hard_min_genes)
         | (obs["total_counts"] < hard_min_counts)
@@ -490,8 +526,7 @@ def qc_one_sample(
             # labels. Keep the values for review, but prevent the downstream
             # PCA from treating this failed fit as a biological signal.
             print(
-                f"== decontX degenerate ({still}); "
-                "flagging uns['osp_decontx_degenerate']",
+                f"== decontX degenerate ({still}); flagging uns['osp_decontx_degenerate']",
                 flush=True,
             )
             ad.uns["osp_decontx_degenerate"] = True
@@ -523,7 +558,7 @@ def qc_one_sample(
         "sample": sample_label,
         "n_cells": ad.n_obs,
         "n_low_quality": int(low_quality.sum()),
-        "pct_low_quality": 100 * low_quality.mean(),
+        "pct_low_quality": float(100 * low_quality.mean()),
         "n_hard_fail": int(hard_flag.sum()),
         "n_mad_outlier": int(mad_flag.sum()),
         "n_mad_counts": int(mad_counts_flag.sum()),
@@ -536,11 +571,16 @@ def qc_one_sample(
         "median_pct_mt": float(np.median(obs["pct_counts_mt"])),
         "median_pct_top20": float(np.median(obs["pct_counts_in_top_20_genes"])),
     }
+    if run_scrublet:
+        # n_doublet depends on Scrublet's automatic threshold; the score
+        # distribution is the more trustworthy signal, so report both.
+        summary.update(_doublet_summary(ad))
     if run_decontx:
         summary["median_contamination"] = float(obs["decontX_contamination"].median())
         top_genes = ad.uns["decontx_top_genes"]
         summary["top_contam_gene"] = top_genes.iloc[0]["gene"] if len(top_genes) else None
         summary["decontx_z_source"] = decontx_z_source
+        summary["decontx_degenerate"] = bool(ad.uns.get("osp_decontx_degenerate", False))
     if "pct_counts_malat1" in obs:
         summary["median_pct_counts_malat1"] = float(obs["pct_counts_malat1"].median())
     if "dissociation_score" in obs:
@@ -582,8 +622,15 @@ def _annotate_threshold(ax, x, label, y_frac=0.92):
     """Write the threshold value and failing-cell count right next to the
     threshold line, so an agent doesn't have to eyeball pixel positions."""
     ax.text(
-        x, y_frac, f" {label}", transform=ax.get_xaxis_transform(),
-        color="red", fontsize=9, va="top", ha="left", rotation=0,
+        x,
+        y_frac,
+        f" {label}",
+        transform=ax.get_xaxis_transform(),
+        color="red",
+        fontsize=9,
+        va="top",
+        ha="left",
+        rotation=0,
         bbox={"boxstyle": "round", "fc": "white", "ec": "red", "alpha": 0.85, "pad": 0.2},
     )
 
@@ -619,8 +666,20 @@ def _log_bins(values, n=80):
     return np.geomspace(lo, hi, n)
 
 
-def _qc_hist(obs, col, color, sample_label, figdir, bins=80, logx=False, logy=True,
-             threshold=None, thresh_label=None, title=None, suffix=None):
+def _qc_hist(
+    obs,
+    col,
+    color,
+    sample_label,
+    figdir,
+    bins=80,
+    logx=False,
+    logy=True,
+    threshold=None,
+    thresh_label=None,
+    title=None,
+    suffix=None,
+):
     fig, ax = _new_qc_ax()
     ax.hist(obs[col], bins=bins, color=color)
     if threshold is not None:
@@ -644,21 +703,44 @@ def _plot_sample_qc(ad, sample_label, min_genes, min_counts, max_mt_pct, figdir,
     has_diss = "dissociation_score" in obs
 
     n_below_counts = int((obs["total_counts"] < min_counts).sum())
-    _qc_hist(obs, "total_counts", "#4C72B0", sample_label, figdir,
-             bins=_log_bins(obs["total_counts"]), logx=True,
-             threshold=min_counts, thresh_label=f"min={min_counts:g}\nn_fail={n_below_counts}",
-             title=f"total_counts | median={obs['total_counts'].median():.0f}")
+    _qc_hist(
+        obs,
+        "total_counts",
+        "#4C72B0",
+        sample_label,
+        figdir,
+        bins=_log_bins(obs["total_counts"]),
+        logx=True,
+        threshold=min_counts,
+        thresh_label=f"min={min_counts:g}\nn_fail={n_below_counts}",
+        title=f"total_counts | median={obs['total_counts'].median():.0f}",
+    )
 
     n_below_genes = int((obs["n_genes_by_counts"] < min_genes).sum())
-    _qc_hist(obs, "n_genes_by_counts", "#55A868", sample_label, figdir,
-             bins=_log_bins(obs["n_genes_by_counts"]), logx=True,
-             threshold=min_genes, thresh_label=f"min={min_genes:g}\nn_fail={n_below_genes}",
-             title=f"n_genes_by_counts | median={obs['n_genes_by_counts'].median():.0f}")
+    _qc_hist(
+        obs,
+        "n_genes_by_counts",
+        "#55A868",
+        sample_label,
+        figdir,
+        bins=_log_bins(obs["n_genes_by_counts"]),
+        logx=True,
+        threshold=min_genes,
+        thresh_label=f"min={min_genes:g}\nn_fail={n_below_genes}",
+        title=f"n_genes_by_counts | median={obs['n_genes_by_counts'].median():.0f}",
+    )
 
     n_above_mt = int((obs["pct_counts_mt"] > max_mt_pct).sum())
-    _qc_hist(obs, "pct_counts_mt", "#C44E52", sample_label, figdir,
-             threshold=max_mt_pct, thresh_label=f"max={max_mt_pct:g}\nn_fail={n_above_mt}",
-             title=f"pct_counts_mt | median={obs['pct_counts_mt'].median():.2f}%")
+    _qc_hist(
+        obs,
+        "pct_counts_mt",
+        "#C44E52",
+        sample_label,
+        figdir,
+        threshold=max_mt_pct,
+        thresh_label=f"max={max_mt_pct:g}\nn_fail={n_above_mt}",
+        title=f"pct_counts_mt | median={obs['pct_counts_mt'].median():.2f}%",
+    )
 
     # pct_top20 is the third metric behind the MAD-outlier rule but has no
     # hard threshold, so unlike counts/genes/mt it gets no line "for free" —
@@ -668,22 +750,39 @@ def _plot_sample_qc(ad, sample_label, min_genes, min_counts, max_mt_pct, figdir,
     top20 = obs["pct_counts_in_top_20_genes"]
     _, top20_hi = _mad_bounds(top20, nmads)
     n_above_top20 = int((top20 > top20_hi).sum())
-    _qc_hist(obs, "pct_counts_in_top_20_genes", "#DD8452", sample_label, figdir,
-             suffix="pct_top20",
-             threshold=top20_hi, thresh_label=f"MAD hi={top20_hi:.1f}\nn_fail={n_above_top20}",
-             title=f"pct_counts_in_top_20_genes | median={top20.median():.1f}%")
+    _qc_hist(
+        obs,
+        "pct_counts_in_top_20_genes",
+        "#DD8452",
+        sample_label,
+        figdir,
+        suffix="pct_top20",
+        threshold=top20_hi,
+        thresh_label=f"MAD hi={top20_hi:.1f}\nn_fail={n_above_top20}",
+        title=f"pct_counts_in_top_20_genes | median={top20.median():.1f}%",
+    )
 
     # Encode low_quality with both color AND marker shape, so an agent that
     # can only rely on color doesn't misread the plot
     low = obs["low_quality"]
     fig, ax = _new_qc_ax()
     ax.scatter(
-        obs.loc[~low, "total_counts"], obs.loc[~low, "pct_counts_mt"],
-        c="#4C72B0", s=3, alpha=0.4, marker="o", label="pass",
+        obs.loc[~low, "total_counts"],
+        obs.loc[~low, "pct_counts_mt"],
+        c="#4C72B0",
+        s=3,
+        alpha=0.4,
+        marker="o",
+        label="pass",
     )
     ax.scatter(
-        obs.loc[low, "total_counts"], obs.loc[low, "pct_counts_mt"],
-        c="#C44E52", s=10, alpha=0.9, marker="x", label="low_quality",
+        obs.loc[low, "total_counts"],
+        obs.loc[low, "pct_counts_mt"],
+        c="#C44E52",
+        s=10,
+        alpha=0.9,
+        marker="x",
+        label="low_quality",
     )
     ax.set_xscale("log")
     ax.set_xlabel("total_counts (log)")
@@ -693,17 +792,36 @@ def _plot_sample_qc(ad, sample_label, min_genes, min_counts, max_mt_pct, figdir,
     _finish_qc_plot(fig, ax, figdir, sample_label, "counts_vs_mt")
 
     if has_contam:
-        _qc_hist(obs, "decontX_contamination", "#8172B2", sample_label, figdir,
-                 suffix="decontx_contamination",
-                 title=f"decontX_contamination | median={obs['decontX_contamination'].median():.3f}")
+        _qc_hist(
+            obs,
+            "decontX_contamination",
+            "#8172B2",
+            sample_label,
+            figdir,
+            suffix="decontx_contamination",
+            title=f"decontX_contamination | median={obs['decontX_contamination'].median():.3f}",
+        )
 
     if has_malat1:
-        _qc_hist(obs, "pct_counts_malat1", "#937860", sample_label, figdir,
-                 title=f"pct_counts_malat1 | median={obs['pct_counts_malat1'].median():.2f}%")
+        _qc_hist(
+            obs,
+            "pct_counts_malat1",
+            "#937860",
+            sample_label,
+            figdir,
+            title=f"pct_counts_malat1 | median={obs['pct_counts_malat1'].median():.2f}%",
+        )
 
     if has_diss:
-        _qc_hist(obs, "dissociation_score", "#64B5CD", sample_label, figdir, logy=False,
-                 title=f"dissociation_score | median={obs['dissociation_score'].median():.3f}")
+        _qc_hist(
+            obs,
+            "dissociation_score",
+            "#64B5CD",
+            sample_label,
+            figdir,
+            logy=False,
+            title=f"dissociation_score | median={obs['dissociation_score'].median():.3f}",
+        )
 
     # Every key number readable off the plots also lands in a JSON file: an
     # agent reads this to verify/cite exact values instead of estimating from
@@ -719,6 +837,7 @@ def _plot_sample_qc(ad, sample_label, min_genes, min_counts, max_mt_pct, figdir,
             "min_n_genes": min_genes,
             "max_pct_mt": max_mt_pct,
         },
+        **({"doublet": _doublet_summary(ad)} if "doublet_score" in obs else {}),
         "n_fail_min_counts": n_below_counts,
         "n_fail_min_genes": n_below_genes,
         "n_fail_max_mt": n_above_mt,
@@ -768,9 +887,11 @@ def _plot_decontx_top_genes(ad, sample_label, figdir, top_n_plot=15):
     ax.set_title(f"{sample_label}: top {len(plot_df)} contaminating genes (decontX)")
     for y, (_, row) in enumerate(plot_df.iterrows()):
         ax.text(
-            row["contam_counts"], y,
+            row["contam_counts"],
+            y,
             f" {row['pct_of_total_contamination']:.1f}% of total contam.",
-            va="center", fontsize=8,
+            va="center",
+            fontsize=8,
         )
     fig.tight_layout()
     fig.savefig(os.path.join(figdir, f"{sample_label}_decontx_top_genes.png"), dpi=150)
@@ -794,7 +915,9 @@ def _plot_decontx_top_genes(ad, sample_label, figdir, top_n_plot=15):
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Run per-sample QC on one sample — quick trial runs / threshold tuning only")
+    parser = argparse.ArgumentParser(
+        description="Run per-sample QC on one sample — quick trial runs / threshold tuning only"
+    )
     parser.add_argument("h5ad_path")
     parser.add_argument("--sample-col", default="sample")
     parser.add_argument("--sample", required=True, help="sample name to run on its own")
@@ -809,15 +932,14 @@ if __name__ == "__main__":
             raise ValueError(f"sample column {args.sample_col!r} is not present in the input obs")
         mask = adata.obs[args.sample_col].astype(str) == args.sample
         if not mask.any():
-            raise ValueError(
-                f"sample {args.sample!r} matches no cells in obs[{args.sample_col!r}]"
-            )
+            raise ValueError(f"sample {args.sample!r} matches no cells in obs[{args.sample_col!r}]")
         sub = adata[mask].to_memory()
     finally:
         adata.file.close()
     _, summary = qc_one_sample(
         sub,
         sample_label=args.sample,
+        sample_col=args.sample_col,
         run_scrublet=not args.no_scrublet,
         run_decontx=not args.no_decontx,
         figdir=args.figdir,

@@ -1,3 +1,6 @@
+import os
+import stat
+
 import anndata as ad
 import numpy as np
 import pytest
@@ -40,3 +43,13 @@ def test_atomic_json_rejects_non_standard_nan_without_replacing_file(tmp_path):
     with pytest.raises(ValueError, match="JSON compliant"):
         atomic_write_json(path, {"value": float("nan")})
     assert path.read_text(encoding="utf-8") == '{"status": "old"}\n'
+
+
+def test_atomic_writes_honor_the_umask_instead_of_mkstemp_private_mode(tmp_path):
+    previous = os.umask(0o022)
+    try:
+        path = tmp_path / "shared.json"
+        atomic_write_json(path, {"ok": True})
+    finally:
+        os.umask(previous)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o644

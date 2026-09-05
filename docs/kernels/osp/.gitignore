@@ -25,3 +25,4 @@ diag/
 # reusable versions that this repo actually publishes
 /run_osp_sample.py
 /run_osp_liu.sbatch
+.slurm/

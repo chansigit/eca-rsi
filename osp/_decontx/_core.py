@@ -15,6 +15,7 @@ All matrices follow the R convention: ``counts`` is genes-by-cells
 (rows = genes, columns = cells); ``phi`` / ``eta`` are genes-by-clusters.
 ``z`` holds 1-based integer cluster labels (one per cell).
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -83,9 +84,18 @@ def decontx_initialize(counts, theta, z, pseudocount: float = 1e-20):
     return {"phi": phi, "eta": eta}
 
 
-def decontx_em(counts, counts_colsums, theta, eta, phi, z,
-               estimate_eta: bool = True, estimate_delta: bool = True,
-               delta=(10.0, 10.0), pseudocount: float = 1e-20):
+def decontx_em(
+    counts,
+    counts_colsums,
+    theta,
+    eta,
+    phi,
+    z,
+    estimate_eta: bool = True,
+    estimate_delta: bool = True,
+    delta=(10.0, 10.0),
+    pseudocount: float = 1e-20,
+):
     """One variational-EM update of the DecontX model.
 
     Port of the C++ ``decontXEM``. For every observed transcript the
@@ -151,8 +161,7 @@ def decontx_em(counts, counts_colsums, theta, eta, phi, z,
         theta_raw = np.column_stack([native_prop, contamination_prop])
         new_delta = fit_dirichlet(theta_raw)["alpha"]
 
-    new_theta = (native_total + new_delta[0]) / (counts_colsums
-                                                 + np.sum(new_delta))
+    new_theta = (native_total + new_delta[0]) / (counts_colsums + np.sum(new_delta))
 
     return {
         "phi": new_phi,
@@ -184,14 +193,12 @@ def decontx_loglik(counts, theta, eta, phi, z, pseudocount: float = 1e-20):
             continue
         rows = indices[start:end]
         x = data[start:end]
-        mix = (phi[rows, k] * theta[j]
-               + eta[rows, k] * (1.0 - theta[j]) + pseudocount)
+        mix = phi[rows, k] * theta[j] + eta[rows, k] * (1.0 - theta[j]) + pseudocount
         loglik += float(np.sum(x * np.log(mix)))
     return loglik
 
 
-def calculate_native_matrix(counts, theta, eta, phi, z,
-                            pseudocount: float = 1e-20) -> sp.csc_matrix:
+def calculate_native_matrix(counts, theta, eta, phi, z, pseudocount: float = 1e-20) -> sp.csc_matrix:
     """Return the decontaminated (native) count matrix.
 
     Port of the C++ ``calculateNativeMatrix``: each observed entry is
@@ -212,13 +219,9 @@ def calculate_native_matrix(counts, theta, eta, phi, z,
         if start == end:
             continue
         rows = indices[start:end]
-        p_native = np.log(phi[rows, k] + pseudocount) + np.log(theta[j]
-                                                               + pseudocount)
-        p_contam = np.log(eta[rows, k] + pseudocount) + np.log(
-            1.0 - theta[j] + pseudocount)
+        p_native = np.log(phi[rows, k] + pseudocount) + np.log(theta[j] + pseudocount)
+        p_contam = np.log(eta[rows, k] + pseudocount) + np.log(1.0 - theta[j] + pseudocount)
         normp = np.exp(p_native) / (np.exp(p_contam) + np.exp(p_native))
         out[start:end] = data[start:end] * normp
 
-    native = sp.csc_matrix((out, indices.copy(), indptr.copy()),
-                           shape=counts.shape)
-    return native
+    return sp.csc_matrix((out, indices.copy(), indptr.copy()), shape=counts.shape)

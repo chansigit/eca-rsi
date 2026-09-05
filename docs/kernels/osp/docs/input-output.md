@@ -94,7 +94,20 @@ contamination column is excluded from PCA covariates.
 The historical summary value `decontx_z_source="leiden_fallback"` denotes
 OSP's normal explicit coarse-Leiden initialization. It does not mean an
 internal initialization was attempted and failed. Caller-supplied `z`
-labels are recorded as `decontx_z_source="user"`.
+labels are recorded as `decontx_z_source="user"`. The same summary carries
+`decontx_degenerate` (`True` / `False`) so that `qc_summary.csv`, the report,
+and the annotation agent all see the degenerate flag without opening the
+H5AD.
+
+When Scrublet runs, the QC summary also carries `scrublet_threshold`
+(`None` if scanpy could not find one, in which case no cell is called a
+doublet), the `doublet_score` median, p90 and p99, and
+`pct_doublet_score_above_0.25`. Treat the score distribution, not
+`n_doublet`, as the primary doublet evidence.
+
+Leiden resolutions are keyed as floats: `resolutions=(1,)` and
+`resolutions=(1.0,)` both produce `obs["leiden_r1.0"]` and
+`cluster_summary_leiden_r1.0.csv`.
 
 ## Annotation proposals
 
@@ -152,8 +165,9 @@ agent starts. Accepted labels and actions are plotted and saved into
 a failed attempt; they are not completion signals.
 
 Core H5AD, CSV, JSON, and report writes use a sibling temporary file followed
-by replacement. H5AD writes are reopened in backed mode and shape-checked
-before replacement. This protects individual destination files against
+by replacement; the replaced file receives the permissions a plainly created
+file would get under the current umask. H5AD writes are reopened in backed
+mode and shape-checked before replacement. This protects individual destination files against
 partial writes; it does not validate every value or make the entire output
 directory atomic.
 

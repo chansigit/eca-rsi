@@ -61,8 +61,9 @@ def theme_variables(rules: list[tuple[str, str]], theme: str) -> dict[str, str]:
     for _ in range(8):  # variables may reference other variables
         changed = False
         for key, value in resolved.items():
-            new = re.sub(r"var\((--[\w-]+)(?:,\s*([^)]+))?\)",
-                         lambda m: resolved.get(m.group(1), m.group(2) or ""), value)
+            new = re.sub(
+                r"var\((--[\w-]+)(?:,\s*([^)]+))?\)", lambda m: resolved.get(m.group(1), m.group(2) or ""), value
+            )
             if new != value:
                 resolved[key], changed = new, True
         if not changed:
@@ -71,8 +72,7 @@ def theme_variables(rules: list[tuple[str, str]], theme: str) -> dict[str, str]:
 
 
 def substitute(css: str, values: dict[str, str]) -> str:
-    return re.sub(r"var\((--[\w-]+)(?:,\s*([^)]+))?\)",
-                  lambda m: values.get(m.group(1), m.group(2) or "inherit"), css)
+    return re.sub(r"var\((--[\w-]+)(?:,\s*([^)]+))?\)", lambda m: values.get(m.group(1), m.group(2) or "inherit"), css)
 
 
 def keep_rule(selector: str, svg_classes: set[str]) -> bool:
@@ -106,7 +106,7 @@ def main() -> int:
         print(f"warning: no CSS rule kept for classes {missing}", file=sys.stderr)
 
     head = svg[: svg.index(">") + 1]  # the opening <svg ...> tag
-    body = svg[len(head):]
+    body = svg[len(head) :]
     ASSETS.mkdir(exist_ok=True)
     for theme in THEMES:
         values = theme_variables(rules, theme)
@@ -115,16 +115,12 @@ def main() -> int:
         css = substitute(css, values)
         css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
         background = values.get("--bg", "#ffffff")
-        new_head = head.replace(
-            "<svg ", f'<svg xmlns="http://www.w3.org/2000/svg" data-theme="{theme}" ', 1
-        )
+        new_head = head.replace("<svg ", f'<svg xmlns="http://www.w3.org/2000/svg" data-theme="{theme}" ', 1)
         # A real rect, not a root style attribute: rasterizers such as cairosvg
         # ignore CSS backgrounds on the outermost <svg>.
         backdrop = f'<rect width="100%" height="100%" fill="{background}"/>'
         out = ASSETS / f"osp-workflow-{theme}.svg"
-        out.write_text(
-            f"{new_head}\n<style><![CDATA[\n{css}\n]]></style>\n{backdrop}{body}", encoding="utf-8"
-        )
+        out.write_text(f"{new_head}\n<style><![CDATA[\n{css}\n]]></style>\n{backdrop}{body}", encoding="utf-8")
         xml.dom.minidom.parse(str(out))  # raises if not well-formed
         print(f"{out.relative_to(ROOT)}: {out.stat().st_size} bytes")
     return 0

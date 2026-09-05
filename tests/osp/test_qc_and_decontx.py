@@ -83,7 +83,34 @@ def test_qc_decontx_kwargs_can_override_seed_and_verbosity(monkeypatch):
         decontx_kwargs={"z": [0, 0, 1, 1], "seed": 23, "verbose": True},
     )
     assert summary["decontx_z_source"] == "user"
+    assert summary["decontx_degenerate"] is False
     assert np.allclose(result.obs["decontX_contamination"], 0.1)
+
+
+def test_qc_summary_flags_a_degenerate_decontx_fit(monkeypatch):
+    data = ad.AnnData(
+        np.array([[2, 0, 1], [1, 1, 1], [0, 2, 1], [1, 0, 2]], dtype=float),
+        obs=pd.DataFrame({"sample": ["A"] * 4}),
+        var=pd.DataFrame(index=["G1", "G2", "G3"]),
+    )
+
+    def pinned_decontx(input_data, **kwargs):
+        return SimpleNamespace(
+            contamination=np.full(input_data.n_obs, 0.99),
+            z=np.asarray(kwargs["z"]),
+            decontx_counts=sp.csc_matrix(input_data.X.T * 0.01),
+        )
+
+    monkeypatch.setattr("osp._decontx.decontx", pinned_decontx)
+    result, summary = qc_one_sample(
+        data,
+        run_scrublet=False,
+        run_dissociation_score=False,
+        make_plots=False,
+        decontx_kwargs={"z": [0, 0, 1, 1]},
+    )
+    assert result.uns["osp_decontx_degenerate"] is True
+    assert summary["decontx_degenerate"] is True
 
 
 def test_log_bins_are_finite_and_increasing_for_zero_counts():
@@ -112,7 +139,7 @@ def test_decontx_rejects_invalid_per_cell_vectors_before_fitting():
     counts = np.array([[2, 1, 0], [0, 1, 3]], dtype=float)
     z = np.array([0, 0, 1])
 
-    with pytest.raises(ValueError, match="batch.*one label per cell"):
+    with pytest.raises(ValueError, match=r"batch.*one label per cell"):
         decontx(counts, z=z, batch=["A", "A"])
     with pytest.raises(ValueError, match="missing"):
         decontx(counts, z=[0, None, 1])
@@ -184,3 +211,28 @@ def test_failed_pipeline_rerun_invalidates_old_completion_markers(tmp_path):
     assert not (tmp_path / "report.html").exists()
     assert not (tmp_path / "annotation_proposal.json").exists()
     assert (tmp_path / "qc_summary.csv").exists()
+
+
+def _fake_scrublet(threshold):
+    def run(adata, **kwargs):
+        adata.obs["doublet_score"] = np.linspace(0.0, 0.6, adata.n_obs)
+        adata.obs["predicted_doublet"] = adata.obs["doublet_score"] > threshold if threshold is not None else False
+        adata.uns["scrublet"] = {} if threshold is None else {"threshold": threshold}
+
+    return run
+
+
+@pytest.mark.parametrize("threshold", [0.5, None])
+def test_qc_summary_reports_scrublet_threshold_and_score_distribution(monkeypatch, threshold):
+    monkeypatch.setattr("scanpy.pp.scrublet", _fake_scrublet(threshold))
+    data = ad.AnnData(
+        np.ones((5, 3)),
+        obs=pd.DataFrame({"sample": ["A"] * 5}),
+        var=pd.DataFrame(index=["G1", "G2", "G3"]),
+    )
+    _, summary = qc_one_sample(data, run_decontx=False, run_dissociation_score=False, make_plots=False)
+    assert summary["scrublet_threshold"] == threshold
+    assert summary["n_doublet"] == (1 if threshold else 0)
+    assert summary["median_doublet_score"] == pytest.approx(0.3)
+    assert summary["p99_doublet_score"] == pytest.approx(0.6, abs=0.03)
+    assert summary["pct_doublet_score_above_0.25"] == pytest.approx(60.0)

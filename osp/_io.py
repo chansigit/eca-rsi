@@ -14,16 +14,25 @@ from collections.abc import Callable
 from pathlib import Path
 
 
+def _default_file_mode() -> int:
+    """The mode a plainly created file would get under the current umask."""
+    umask = os.umask(0)
+    os.umask(umask)
+    return 0o666 & ~umask
+
+
 def _atomic_replace(target, writer: Callable[[Path], None]) -> None:
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=f".{target.name}.", suffix=".part", dir=target.parent
-    )
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".part", dir=target.parent)
     os.close(fd)
     tmp = Path(tmp_name)
     try:
         writer(tmp)
+        # mkstemp creates private (0600) files; the replaced destination
+        # should look like any other file the user writes, so collaborators
+        # with group access can still read the outputs.
+        os.chmod(tmp, _default_file_mode())
         os.replace(tmp, target)
     finally:
         tmp.unlink(missing_ok=True)
@@ -65,9 +74,7 @@ def atomic_write_h5ad(adata, path) -> None:
         check = ad.read_h5ad(tmp, backed="r")
         try:
             if check.shape != adata.shape:
-                raise OSError(
-                    f"H5AD validation shape mismatch: wrote {check.shape}, expected {adata.shape}"
-                )
+                raise OSError(f"H5AD validation shape mismatch: wrote {check.shape}, expected {adata.shape}")
         finally:
             check.file.close()
 

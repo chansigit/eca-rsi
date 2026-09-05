@@ -5,6 +5,7 @@ A pure-Python port of ``MCMCprecision::fit_dirichlet`` -- the fixed-point
 iteration of Minka (2000) used by R ``decontX`` to update the per-cell
 ``delta`` (theta) concentration parameters at every EM iteration.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -30,8 +31,7 @@ def inv_digamma(y: np.ndarray, iter: int = 5) -> np.ndarray:
     return x
 
 
-def dirichlet_fp(alpha: np.ndarray, logx_mean: np.ndarray,
-                 maxit: int = 100000, abstol: float = 1e-5) -> np.ndarray:
+def dirichlet_fp(alpha: np.ndarray, logx_mean: np.ndarray, maxit: int = 100000, abstol: float = 1e-5) -> np.ndarray:
     """Fixed-point iteration for Dirichlet MLE (Minka, 2000).
 
     Port of ``MCMCprecision::dirichlet_fp``.
@@ -48,8 +48,7 @@ def dirichlet_fp(alpha: np.ndarray, logx_mean: np.ndarray,
     return alpha
 
 
-def fit_dirichlet(x: np.ndarray, const: float | None = None,
-                  maxit: int = 100000, abstol: float = 0.1) -> dict:
+def fit_dirichlet(x: np.ndarray, const: float | None = None, maxit: int = 100000, abstol: float = 0.1) -> dict:
     """Estimate the parameters of a Dirichlet distribution.
 
     Pure-Python port of ``MCMCprecision::fit_dirichlet`` (Minka 2000
@@ -74,19 +73,18 @@ def fit_dirichlet(x: np.ndarray, const: float | None = None,
 
     # Heuristic starting values (method of moments).
     x_mean = np.mean(x, axis=0)
-    x_squares = np.mean(x ** 2, axis=0)
-    denom = x_squares - x_mean ** 2
+    x_squares = np.mean(x**2, axis=0)
+    denom = x_squares - x_mean**2
     with np.errstate(divide="ignore", invalid="ignore"):
         xi = (x_mean - x_squares) / denom
     alpha0 = xi * x_mean
 
     alpha = None
     try:
-        cand = dirichlet_fp(np.maximum(0.01, alpha0), logx_mean,
-                            maxit=maxit, abstol=abstol)
+        cand = dirichlet_fp(np.maximum(0.01, alpha0), logx_mean, maxit=maxit, abstol=abstol)
         if np.isfinite(cand).all() and (cand > 0).all():
             alpha = cand
-    except Exception:  # noqa: BLE001  # pragma: no cover - retry from a safer start
+    except (FloatingPointError, ValueError):  # pragma: no cover - retry from a safer start
         alpha = None
 
     if alpha is None:

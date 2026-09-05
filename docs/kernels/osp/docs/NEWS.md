@@ -3,6 +3,56 @@
 Release notes for OSP. Newest first. Install a specific version with
 `pip install "osp-sc[agent]==<version>"`.
 
+## Unreleased
+
+Fixes and clean-ups from a full project review; no output file names or
+schemas changed, apart from one new `qc_summary` key.
+
+### Fixes
+
+- Atomic writes gave every output file the private `0600` mode of the
+  temporary file they were written through; they now honor the umask so
+  collaborators with group access can read pipeline outputs again.
+- `python -m osp.qc --sample-col COLUMN` ignored the column when checking
+  the single-sample contract.
+- `generate_report` accepts `pathlib.Path` output directories.
+- The report reads JSON, notes, and context files as UTF-8, so non-ASCII
+  agent notes (for example `--language Chinese`) cannot fail on a C locale.
+- Integer resolutions (`resolutions=(1,)`) produced `leiden_r1` while the
+  primary key expected `leiden_r1.0`; resolutions are now keyed as floats,
+  duplicates are rejected, and booleans are no longer accepted as numbers.
+- The coarse Leiden clustering used to initialize DecontX now fails with a
+  clear message on inputs too small to cluster or when it finds a single
+  cluster, instead of an internal scanpy or DecontX error.
+- Reclustering also removes a stale `umap_qc_action.png`.
+
+### Report
+
+- A DecontX fit flagged as degenerate is now visible: `qc_summary` records
+  `decontx_degenerate`, and the report shows a warning banner instead of
+  the previous "compatibility field" note. The initialization source is
+  stated in one neutral sentence.
+- `qc_summary` values render as numbers (cell counts as integers, percentages
+  to four significant digits) instead of raw CSV text; large numbers no
+  longer print in scientific notation.
+- The HTML declares its language and a mobile viewport.
+- `n_doublet` depends on Scrublet's automatic threshold, which is
+  unreliable when the simulated score histogram is not bimodal. The QC
+  summary (and the `doublet` block of the QC overview JSON) now records
+  `scrublet_threshold` (`None` when scanpy found none), the `doublet_score`
+  median, p90 and p99, and `pct_doublet_score_above_0.25`, so the score
+  distribution can be read next to the call.
+
+### Tooling
+
+- `python -m osp --no-decontx` skips DecontX, matching `python -m osp.qc`.
+- Marker-gene scores are computed before `clustered.h5ad` is written, so
+  `obs["score_*"]` columns are saved rather than added only by plotting.
+- `pyproject.toml` carries the current project description, PyPI URLs and
+  classifiers, and a ruff configuration, and the code base is formatted
+  with `ruff format`; new tests cover atomic-write permissions, report
+  formatting, resolution keys, and the degenerate-DecontX summary flag.
+
 ## 0.1.1 (2026-09-04)
 
 The first update after the initial PyPI release. The pipeline's inputs,

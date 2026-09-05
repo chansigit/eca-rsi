@@ -43,6 +43,7 @@ import base64
 import glob
 import html
 import json
+import math
 import os
 
 import pandas as pd
@@ -52,9 +53,15 @@ from ._io import atomic_write_text
 # Fixed display order for the well-known QC metric suffixes — anything not
 # in this list still shows up, just after these, alphabetically.
 _QC_METRIC_ORDER = [
-    "total_counts", "n_genes_by_counts", "pct_counts_mt", "counts_vs_mt",
-    "doublet_score", "decontX_contamination", "decontx_contamination",
-    "pct_counts_malat1", "dissociation_score",
+    "total_counts",
+    "n_genes_by_counts",
+    "pct_counts_mt",
+    "counts_vs_mt",
+    "doublet_score",
+    "decontX_contamination",
+    "decontx_contamination",
+    "pct_counts_malat1",
+    "dissociation_score",
 ]
 
 
@@ -66,11 +73,35 @@ def _img_data_uri(path):
 
 
 def _fmt(v):
+    """Compact cell text: integral floats print as integers, large values
+    keep their digits (no 1.2e+04 for cell counts), tiny p-values go to
+    scientific notation, everything else to 4 significant digits."""
     if isinstance(v, float):
-        if abs(v) < 1e-3 and v != 0:
+        if math.isnan(v):
+            return ""
+        if v == int(v) and abs(v) < 1e15:
+            return str(int(v))
+        if abs(v) < 1e-3:
             return f"{v:.3e}"
+        if abs(v) >= 1e4:
+            return f"{v:.1f}"
         return f"{v:.4g}"
     return html.escape(str(v))
+
+
+def _coerce_scalar(text):
+    """CSV cell text -> int / float when it parses, else the original string;
+    qc_summary.csv holds mixed types in one column, so pandas reads it as
+    object and the numbers would otherwise render unformatted."""
+    if not isinstance(text, str):
+        return text
+    stripped = text.strip()
+    for parse in (int, float):
+        try:
+            return parse(stripped)
+        except ValueError:
+            continue
+    return text
 
 
 def _df_to_table(df, index_name=None, table_id=None):
@@ -84,13 +115,13 @@ def _df_to_table(df, index_name=None, table_id=None):
             cells += f"<td>{html.escape(str(idx))}</td>"
         cells += "".join(f"<td>{_fmt(v)}</td>" for v in row)
         rows.append(f"<tr>{cells}</tr>")
-    return f'<table{id_attr}><thead><tr>{head}</tr></thead><tbody>{"".join(rows)}</tbody></table>'
+    return f"<table{id_attr}><thead><tr>{head}</tr></thead><tbody>{''.join(rows)}</tbody></table>"
 
 
 def _kv_table(d, table_id=None):
     id_attr = f' id="{table_id}"' if table_id else ""
     rows = "".join(f"<tr><td>{html.escape(str(k))}</td><td>{_fmt(v)}</td></tr>" for k, v in d.items())
-    return f'<table{id_attr}><tbody>{rows}</tbody></table>'
+    return f"<table{id_attr}><tbody>{rows}</tbody></table>"
 
 
 def _heatmap_cell(value, vmax, decimals=2, color=(37, 99, 235)):
@@ -116,7 +147,7 @@ def _df_to_heatmap_table(df, index_name=None, table_id=None, decimals=2, color=(
         cells = f"<td>{html.escape(str(idx))}</td>" if index_name else ""
         cells += "".join(_heatmap_cell(v, vmax, decimals, color) for v in row)
         rows.append(f"<tr>{cells}</tr>")
-    return f'<table{id_attr}><thead><tr>{head}</tr></thead><tbody>{"".join(rows)}</tbody></table>'
+    return f"<table{id_attr}><thead><tr>{head}</tr></thead><tbody>{''.join(rows)}</tbody></table>"
 
 
 def _img(path, alt):
@@ -130,6 +161,7 @@ def _sort_by_metric_suffix(paths, suffix_of):
             return (0, _QC_METRIC_ORDER.index(suffix))
         except ValueError:
             return (1, suffix)
+
     return sorted(paths, key=key)
 
 
@@ -144,7 +176,7 @@ def _img_grid(paths, suffix_of, grid_id=None):
     id_attr = f' id="{grid_id}"' if grid_id else ""
     items = "".join(
         f'<figure class="grid-item">{_img(p, suffix_of(p))}'
-        f'<figcaption>{html.escape(suffix_of(p))}</figcaption></figure>'
+        f"<figcaption>{html.escape(suffix_of(p))}</figcaption></figure>"
         for p in paths
     )
     return f'<div class="grid"{id_attr}>{items}</div>'
@@ -154,8 +186,8 @@ def _read_qc_summary(outdir):
     path = os.path.join(outdir, "qc_summary.csv")
     if not os.path.exists(path):
         return None
-    s = pd.read_csv(path, index_col=0).iloc[:, 0]
-    return s.to_dict()
+    s = pd.read_csv(path, index_col=0, dtype=str, keep_default_na=False).iloc[:, 0]
+    return {key: _coerce_scalar(value) for key, value in s.items()}
 
 
 def _read_qc_stats(outdir):
@@ -168,7 +200,7 @@ def _read_qc_stats(outdir):
             f"multiple QC overview files in {outdir!r}; use one output directory per sample: "
             f"{sorted(os.path.basename(path) for path in json_paths)}"
         )
-    with open(json_paths[0]) as fh:
+    with open(json_paths[0], encoding="utf-8") as fh:
         return json.load(fh)
 
 
@@ -247,10 +279,12 @@ def _section_qc(outdir, qc_summary, qc_stats):
                 "sample's distribution shape is stressing the MAD assumption — check "
                 "which cell types are being flagged before trusting the calls.</p>"
             )
-            parts.append(_kv_table(
-                {k: f"[{v[0]:g}, {v[1]:g}]  (n_fail={n_fail.get(k, '?')})" for k, v in mad_ranges.items()},
-                table_id="qc-mad-ranges",
-            ))
+            parts.append(
+                _kv_table(
+                    {k: f"[{v[0]:g}, {v[1]:g}]  (n_fail={n_fail.get(k, '?')})" for k, v in mad_ranges.items()},
+                    table_id="qc-mad-ranges",
+                )
+            )
     return "\n".join(p for p in parts if p)
 
 
@@ -266,7 +300,7 @@ def _section_clusters(outdir, cluster_tables):
     # primary-resolution cluster UMAP and PAGA connectivity graph side by
     # side — same clusters, two views (spatial layout vs. abstracted
     # connectivity). Both saved at matching figsize/axes-rect (see
-    # qc_cluster_deg._UMAP_FIGSIZE/_UMAP_AXES_RECT) so the two panels line up.
+    # osp.cluster._UMAP_FIGSIZE/_UMAP_AXES_RECT) so the two panels line up.
     row_imgs = []
     for fname, alt, caption in [
         (f"umap_clusters_{primary_key}.png", "Clusters UMAP", f"Clusters ({primary_key})"),
@@ -280,7 +314,8 @@ def _section_clusters(outdir, cluster_tables):
 
     # any other resolutions computed (resolutions= had more than one entry)
     other_umaps = sorted(
-        p for p in glob.glob(os.path.join(outdir, "figures", "umap_clusters_*.png"))
+        p
+        for p in glob.glob(os.path.join(outdir, "figures", "umap_clusters_*.png"))
         if os.path.basename(p) != f"umap_clusters_{primary_key}.png"
     )
     if other_umaps:
@@ -308,13 +343,17 @@ def _section_qc_umap(outdir):
     parts = []
 
     umap_qc_pngs = glob.glob(os.path.join(outdir, "figures", "umap_qc_*.png"))
-    grid = _img_grid(umap_qc_pngs, lambda p: os.path.basename(p)[len("umap_qc_") : -len(".png")], grid_id="umap-qc-grid")
+    grid = _img_grid(
+        umap_qc_pngs, lambda p: os.path.basename(p)[len("umap_qc_") : -len(".png")], grid_id="umap-qc-grid"
+    )
     if grid:
         parts.append("<h3>QC metrics on UMAP</h3>")
         parts.append(grid)
 
     violin_pngs = glob.glob(os.path.join(outdir, "figures", "qc_violin_*.png"))
-    grid = _img_grid(violin_pngs, lambda p: os.path.basename(p)[len("qc_violin_") : -len(".png")], grid_id="qc-violin-grid")
+    grid = _img_grid(
+        violin_pngs, lambda p: os.path.basename(p)[len("qc_violin_") : -len(".png")], grid_id="qc-violin-grid"
+    )
     if grid:
         parts.append("<h3>QC metrics by cluster</h3>")
         parts.append(grid)
@@ -343,22 +382,31 @@ def _section_contamination(outdir, cluster_tables, qc_summary=None):
 
     parts = ['<h2 id="contamination">Ambient Contamination</h2>']
 
-    if str((qc_summary or {}).get("decontx_z_source")) == "leiden_fallback":
+    qc_summary = qc_summary or {}
+    if str(qc_summary.get("decontx_degenerate")).lower() == "true":
         parts.append(
-            '<div style="background:#fff3cd;border:1px solid #e0a800;border-radius:4px;'
-            'padding:8px 12px;margin:8px 0;">'
-            "DecontX was initialized with an explicit coarse Leiden clustering. "
-            "The compatibility field remains <code>decontx_z_source=leiden_fallback</code>, "
-            "although this is now OSP's normal initialization path. Treat the estimates "
-            "with the usual dataset-specific care."
-            "</div>"
+            '<div class="warn">DecontX fit flagged as degenerate: the estimates stayed '
+            "pinned near complete contamination, so the contamination fraction was excluded "
+            "from the PCA covariates. The values below are kept for inspection only; do not "
+            "read them as an ambient-RNA measurement.</div>"
+        )
+    z_source = qc_summary.get("decontx_z_source")
+    if z_source is not None:
+        z_text = (
+            "caller-supplied cell groups"
+            if str(z_source) == "user"
+            else "OSP's coarse Leiden clustering of this sample"
+        )
+        parts.append(
+            f'<p class="hint">DecontX was initialized with {z_text} '
+            f"(<code>decontx_z_source={html.escape(str(z_source))}</code>).</p>"
         )
 
     if sample_png or sample_csv:
         parts.append("<h3>Sample-wide</h3>")
         parts.append(
             '<p class="hint">Top genes ranked by total UMIs judged ambient RNA '
-            "(raw counts − decontX_counts, summed over all cells).</p>"
+            "(raw counts - decontX_counts, summed over all cells).</p>"
         )
         if sample_png:
             parts.append(_img(sample_png[0], "DecontX top genes"))
@@ -369,7 +417,7 @@ def _section_contamination(outdir, cluster_tables, qc_summary=None):
         parts.append("<h3>By cluster</h3>")
         parts.append(
             '<p class="hint">Fraction of each gene\'s UMIs judged ambient RNA, per cluster. '
-            "A gene that's \"contaminated\" in one cluster but not another is a strong signal "
+            'A gene that\'s "contaminated" in one cluster but not another is a strong signal '
             "it's real biology there and ambient noise elsewhere (e.g. neutrophil transcripts "
             "leaking into non-myeloid clusters).</p>"
         )
@@ -378,7 +426,7 @@ def _section_contamination(outdir, cluster_tables, qc_summary=None):
         for key, summary_df, _ in cluster_tables:
             if key not in decontx_paths:
                 continue
-            n_cells_by_cluster = dict(zip(summary_df.index.astype(str), summary_df["n_cells"]))
+            n_cells_by_cluster = dict(zip(summary_df.index.astype(str), summary_df["n_cells"], strict=True))
             decontx_df = pd.read_csv(decontx_paths[key])
             parts.append(f"<h4>{html.escape(key)}: top contaminating genes per cluster</h4>")
             parts.append(_cluster_detail_blocks(decontx_df, "cluster", n_cells_by_cluster, "contaminating genes"))
@@ -394,7 +442,7 @@ def _section_agent_annotation(outdir, proposal=None):
         path = os.path.join(outdir, "annotation_proposal.json")
         if not os.path.exists(path):
             return ""
-        with open(path) as fh:
+        with open(path, encoding="utf-8") as fh:
             proposal = json.load(fh)
 
     parts = [
@@ -430,7 +478,11 @@ def _section_agent_annotation(outdir, proposal=None):
     entries = proposal.get("clusters") or []
     if entries:
         df = pd.DataFrame(entries)
-        cols = [c for c in ("cluster", "label_coarse", "label_fine", "label", "confidence", "evidence_genes", "doubts") if c in df.columns]
+        cols = [
+            c
+            for c in ("cluster", "label_coarse", "label_fine", "label", "confidence", "evidence_genes", "doubts")
+            if c in df.columns
+        ]
         df = df[cols]
         if "evidence_genes" in df.columns:
             df["evidence_genes"] = df["evidence_genes"].map(lambda g: ", ".join(g) if isinstance(g, list) else g)
@@ -443,7 +495,9 @@ def _section_agent_annotation(outdir, proposal=None):
     legacy_qc = proposal.get("qc_recommendations") or {}
     if actions:
         adf = pd.DataFrame(actions)
-        cols = [c for c in ("cluster", "scope", "action", "metric", "op", "value", "reason", "note") if c in adf.columns]
+        cols = [
+            c for c in ("cluster", "scope", "action", "metric", "op", "value", "reason", "note") if c in adf.columns
+        ]
         parts.append("<h3>Proposed QC actions</h3>")
         parts.append(_df_to_table(adf[cols], table_id="agent-qc-flags"))
     elif legacy_qc.get("clusters_to_flag"):
@@ -463,7 +517,7 @@ def _section_agent_annotation(outdir, proposal=None):
 
     notes_path = os.path.join(outdir, "annotation_notes.md")
     if os.path.exists(notes_path):
-        with open(notes_path) as fh:
+        with open(notes_path, encoding="utf-8") as fh:
             notes = fh.read()
         parts.append(
             "<details><summary>Agent notes (full reasoning)</summary>"
@@ -479,7 +533,9 @@ def _section_cluster_identities(outdir, cluster_tables, top_n_de_display):
     parts = []
 
     marker_pngs = glob.glob(os.path.join(outdir, "figures", "umap_markers_*.png"))
-    grid = _img_grid(marker_pngs, lambda p: os.path.basename(p)[len("umap_markers_") : -len(".png")], grid_id="markers-grid")
+    grid = _img_grid(
+        marker_pngs, lambda p: os.path.basename(p)[len("umap_markers_") : -len(".png")], grid_id="markers-grid"
+    )
     if grid:
         parts.append("<h3>Marker scores on UMAP</h3>")
         parts.append(grid)
@@ -487,7 +543,7 @@ def _section_cluster_identities(outdir, cluster_tables, top_n_de_display):
     for key, summary_df, de_df in cluster_tables:
         if de_df is None:
             continue
-        n_cells_by_cluster = dict(zip(summary_df.index.astype(str), summary_df["n_cells"]))
+        n_cells_by_cluster = dict(zip(summary_df.index.astype(str), summary_df["n_cells"], strict=True))
         de_display = de_df.groupby("group", observed=True).head(top_n_de_display)
         parts.append(f"<h3>{html.escape(key)}: top DE genes per cluster</h3>")
         parts.append(_cluster_detail_blocks(de_display, "group", n_cells_by_cluster, "genes"))
@@ -522,6 +578,7 @@ summary { cursor: pointer; font-weight: 600; }
 pre.notes { white-space: pre-wrap; font-size: .85rem; background: #f7f7f7; padding: .8rem; border-radius: 6px; }
 .meta { color: #666; font-size: .9rem; margin: .2rem 0 1rem 0; }
 .hint { color: #555; font-size: .88rem; margin: .3rem 0 1rem 0; max-width: 75ch; }
+.warn { background: #fdecea; border: 1px solid #c0392b; border-radius: 4px; padding: .5rem .8rem; margin: .5rem 0; max-width: 75ch; }
 .layout { display: flex; gap: 2rem; align-items: flex-start; }
 .content { flex: 1; min-width: 0; }
 nav.toc { position: sticky; top: 1rem; z-index: 10; flex: 0 0 200px;
@@ -555,7 +612,8 @@ def _number_sections(section_htmls):
     Returns (numbered_section_htmls, toc_html).
     """
     present = [
-        (anchor, label) for anchor, label in _SECTION_LABELS.items()
+        (anchor, label)
+        for anchor, label in _SECTION_LABELS.items()
         if any(f'<h2 id="{anchor}">{label}</h2>' in s for s in section_htmls)
     ]
     numbered = {anchor: f"{i}. {label}" for i, (anchor, label) in enumerate(present, start=1)}
@@ -578,7 +636,7 @@ def report_context(outdir):
     driver via --report-context into outdir; '' when absent."""
     p = os.path.join(outdir, CONTEXT_FILE)
     if os.path.isfile(p):
-        with open(p) as f:
+        with open(p, encoding="utf-8") as f:
             return f.read().strip()
     return ""
 
@@ -600,7 +658,8 @@ def generate_report(
 
     Returns the path to the written HTML file.
     """
-    out_html = out_html or os.path.join(outdir, "report.html")
+    outdir = os.fspath(outdir)
+    out_html = os.fspath(out_html) if out_html else os.path.join(outdir, "report.html")
 
     qc_summary = _read_qc_summary(outdir)
     qc_stats = _read_qc_stats(outdir)
@@ -620,14 +679,12 @@ def generate_report(
     ]
     sections, toc = _number_sections(sections)
 
-    header = (
-        f"<h1>{html.escape(title)}</h1>"
-        f'<p class="meta">source dir: {html.escape(os.path.abspath(outdir))}</p>'
-    )
+    header = f'<h1>{html.escape(title)}</h1><p class="meta">source dir: {html.escape(os.path.abspath(outdir))}</p>'
     body = f'{header}<div class="layout">{toc}<div class="content">{"".join(sections)}</div></div>'
 
     html_doc = (
-        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>{html.escape(title)}</title><style>{CSS}</style></head>"
         f"<body>{body}</body></html>"
     )

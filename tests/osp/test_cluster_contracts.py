@@ -5,7 +5,9 @@ import pytest
 
 from osp.cluster import (
     _invalidate_stale_derived_outputs,
+    _leiden_key,
     _remove_stale_primary_tables,
+    cluster_and_deg,
     deg_two_groups,
 )
 
@@ -66,3 +68,24 @@ def test_reclustering_removes_only_stale_derived_outputs(tmp_path):
     assert not (tmp_path / "annotation_proposal.json").exists()
     assert (tmp_path / "keep.txt").exists()
     assert (figures / "unrelated.png").exists()
+
+
+def test_leiden_keys_name_integer_and_float_resolutions_alike():
+    assert _leiden_key(1) == _leiden_key(1.0) == "leiden_r1.0"
+    assert _leiden_key(np.float64(0.5)) == "leiden_r0.5"
+
+
+def test_cluster_and_deg_rejects_duplicate_and_boolean_resolutions():
+    data = ad.AnnData(np.ones((4, 3)), obs=pd.DataFrame({"sample": ["A"] * 4}))
+    with pytest.raises(ValueError, match="duplicates"):
+        cluster_and_deg(data, resolutions=(1, 1.0), primary_resolution=1, make_plots=False)
+    with pytest.raises(ValueError, match="finite non-negative"):
+        cluster_and_deg(data, resolutions=(True,), primary_resolution=True, make_plots=False)
+
+
+def test_reclustering_also_drops_the_stale_qc_action_umap(tmp_path):
+    figures = tmp_path / "figures"
+    figures.mkdir()
+    (figures / "umap_qc_action.png").touch()
+    _invalidate_stale_derived_outputs(tmp_path, figures)
+    assert not (figures / "umap_qc_action.png").exists()

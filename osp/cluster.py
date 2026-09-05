@@ -95,12 +95,25 @@ from .qc import assert_single_sample, cluster_order, decontx_top_genes, qc_one_s
 # qc_pca_covariates parameter) — whichever of these columns exist are used;
 # missing ones (e.g. run_scrublet/run_decontx skipped) are ignored.
 DEFAULT_QC_PCA_COVARIATES = (
-    "doublet_score", "total_counts", "n_genes_by_counts", "decontX_contamination",
-    "pct_counts_mt", "dissociation_score",
+    "doublet_score",
+    "total_counts",
+    "n_genes_by_counts",
+    "decontX_contamination",
+    "pct_counts_mt",
+    "dissociation_score",
 )
 
 _DEG_GROUP1 = "__osp_group1__"
 _DEG_GROUP2 = "__osp_group2__"
+
+
+def _leiden_key(resolution):
+    """obs column / file-name key for a Leiden resolution, e.g. "leiden_r1.0".
+
+    Resolutions are formatted as floats so that ``1`` and ``1.0`` name the
+    same column instead of silently producing "leiden_r1" and "leiden_r1.0".
+    """
+    return f"leiden_r{float(resolution)}"
 
 
 def _as_labels(x):
@@ -207,13 +220,24 @@ def deg_two_groups(
             raise ValueError("no highly variable genes are available for DEG")
 
     sc.tl.rank_genes_groups(
-        ad, tmp_key, groups=[_DEG_GROUP1], reference=_DEG_GROUP2,
-        method="wilcoxon", layer=layer, use_raw=False, tie_correct=tie_correct,
+        ad,
+        tmp_key,
+        groups=[_DEG_GROUP1],
+        reference=_DEG_GROUP2,
+        method="wilcoxon",
+        layer=layer,
+        use_raw=False,
+        tie_correct=tie_correct,
     )
     df = sc.get.rank_genes_groups_df(ad, group=_DEG_GROUP1)
-    df = df.rename(columns={
-        "names": "gene", "logfoldchanges": "logfc", "pvals": "pval", "pvals_adj": "pval_adj",
-    })
+    df = df.rename(
+        columns={
+            "names": "gene",
+            "logfoldchanges": "logfc",
+            "pvals": "pval",
+            "pvals_adj": "pval_adj",
+        }
+    )
 
     # scanpy's pts=True only fills pct_nz_reference when reference="rest" —
     # with an explicit reference group it's left out, so compute both
@@ -234,9 +258,11 @@ def deg_two_groups(
 
     df["high_in"] = np.where(df["logfc"] > 0, group1_label, group2_label)
     df["low_in"] = np.where(df["logfc"] > 0, group2_label, group1_label)
-    return df[["gene", "logfc", "pct1", "pct2", "pval", "pval_adj", "high_in", "low_in"]].sort_values(
-        "logfc", ascending=False
-    ).reset_index(drop=True)
+    return (
+        df[["gene", "logfc", "pct1", "pct2", "pval", "pval_adj", "high_in", "low_in"]]
+        .sort_values("logfc", ascending=False)
+        .reset_index(drop=True)
+    )
 
 
 def cluster_and_deg(
@@ -325,8 +351,7 @@ def cluster_and_deg(
     ]
     if invalid_integer_parameters:
         raise ValueError(
-            "clustering size parameters must be positive integers; invalid: "
-            + ", ".join(invalid_integer_parameters)
+            "clustering size parameters must be positive integers; invalid: " + ", ".join(invalid_integer_parameters)
         )
     if isinstance(qc_pca_covariates, str):
         raise TypeError("qc_pca_covariates must be a sequence of obs column names, not a string")
@@ -335,14 +360,19 @@ def cluster_and_deg(
     if not resolutions:
         raise ValueError("resolutions must contain at least one value")
     try:
-        invalid_resolutions = any(not np.isfinite(r) or r < 0 for r in resolutions)
+        invalid_resolutions = any(isinstance(r, bool) or not np.isfinite(r) or r < 0 for r in resolutions)
     except TypeError as error:
         raise ValueError(f"resolutions must be numeric: {resolutions}") from error
     if invalid_resolutions:
         raise ValueError(f"resolutions must contain finite non-negative values: {resolutions}")
 
-    leiden_keys = [f"leiden_r{r}" for r in resolutions]
-    primary_key = f"leiden_r{primary_resolution}"
+    leiden_keys = [_leiden_key(r) for r in resolutions]
+    if len(set(leiden_keys)) != len(leiden_keys):
+        raise ValueError(f"resolutions contain duplicates: {resolutions}")
+    try:
+        primary_key = _leiden_key(primary_resolution)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"primary_resolution must be numeric: {primary_resolution!r}") from error
     if primary_key not in leiden_keys:
         raise ValueError(f"primary_resolution={primary_resolution} is not in resolutions={resolutions}")
 
@@ -401,14 +431,13 @@ def cluster_and_deg(
     print("== neighbors (use_rep=X_pca)", flush=True)
     sc.pp.neighbors(ad, use_rep="X_pca", n_neighbors=min(n_neighbors, ad.n_obs - 1))
 
-    for res, key in zip(resolutions, leiden_keys):
+    for res, key in zip(resolutions, leiden_keys, strict=True):
         print(f"== leiden {key}", flush=True)
-        sc.tl.leiden(ad, resolution=res, key_added=key, flavor="igraph", n_iterations=2)
+        sc.tl.leiden(ad, resolution=float(res), key_added=key, flavor="igraph", n_iterations=2)
 
     if ad.obs[primary_key].nunique() < 2:
         raise ValueError(
-            f"primary clustering {primary_key!r} produced fewer than 2 clusters; "
-            "choose a higher primary_resolution"
+            f"primary clustering {primary_key!r} produced fewer than 2 clusters; choose a higher primary_resolution"
         )
 
     print("== umap", flush=True)
@@ -433,20 +462,18 @@ def cluster_and_deg(
         print(f"== decontX gene contamination by {primary_key}", flush=True)
         _, decontx_by_cluster = decontx_top_genes(ad, cluster_key=primary_key, counts_layer=counts_layer)
 
+    # Marker scores are obs columns, so compute them before clustered.h5ad is
+    # written rather than as a side effect of plotting.
+    score_cols = _score_marker_genes(ad, marker_genes)
+
     resolved_figdir = figdir or (os.path.join(outdir, "figures") if outdir else "cluster_figs")
     if outdir:
         os.makedirs(outdir, exist_ok=True)
         _invalidate_stale_derived_outputs(outdir, resolved_figdir)
         _remove_stale_primary_tables(outdir, primary_key, decontx_by_cluster is not None)
-        atomic_write_dataframe_csv(
-            de_top, os.path.join(outdir, f"de_top_genes_{primary_key}.csv"), index=False
-        )
-        atomic_write_dataframe_csv(
-            cluster_summary, os.path.join(outdir, f"cluster_summary_{primary_key}.csv")
-        )
-        atomic_write_dataframe_csv(
-            paga_df, os.path.join(outdir, f"paga_connectivities_{primary_key}.csv")
-        )
+        atomic_write_dataframe_csv(de_top, os.path.join(outdir, f"de_top_genes_{primary_key}.csv"), index=False)
+        atomic_write_dataframe_csv(cluster_summary, os.path.join(outdir, f"cluster_summary_{primary_key}.csv"))
+        atomic_write_dataframe_csv(paga_df, os.path.join(outdir, f"paga_connectivities_{primary_key}.csv"))
         if decontx_by_cluster is not None:
             atomic_write_dataframe_csv(
                 decontx_by_cluster,
@@ -457,7 +484,7 @@ def cluster_and_deg(
 
     if make_plots:
         os.makedirs(resolved_figdir, exist_ok=True)
-        _plot_cluster_overview(ad, leiden_keys, marker_genes, resolved_figdir)
+        _plot_cluster_overview(ad, leiden_keys, score_cols, resolved_figdir)
         _plot_paga(ad, resolved_figdir)
         _plot_qc_violin(ad, primary_key, resolved_figdir)
         if decontx_by_cluster is not None:
@@ -504,6 +531,7 @@ def _invalidate_stale_derived_outputs(outdir, figdir):
         "decontx_heatmap_by_cluster.png",
         "umap_markers_*.png",
         "umap_ann_*.png",
+        "umap_qc_action.png",
     )
     for directory in figure_dirs:
         for pattern in patterns:
@@ -678,8 +706,13 @@ def _paga_table(ad, cluster_key):
 
 
 QC_OVERLAY_COLS = (
-    "total_counts", "n_genes_by_counts", "pct_counts_mt", "doublet_score",
-    "decontX_contamination", "pct_counts_malat1", "dissociation_score",
+    "total_counts",
+    "n_genes_by_counts",
+    "pct_counts_mt",
+    "doublet_score",
+    "decontX_contamination",
+    "pct_counts_malat1",
+    "dissociation_score",
 )
 
 
@@ -704,7 +737,21 @@ def _plot_qc_violin(ad, cluster_key, figdir):
         plt.close(fig)
 
 
-def _plot_cluster_overview(ad, leiden_keys, marker_genes, figdir):
+def _score_marker_genes(ad, marker_genes):
+    """sc.tl.score_genes per marker set -> obs["score_{name}"]; returns the
+    columns written. Sets whose genes are all absent are skipped."""
+    score_cols = []
+    for name, genes in (marker_genes or {}).items():
+        genes_ok = [g for g in genes if g in ad.raw.var_names]
+        if not genes_ok:
+            print(f"== marker set {name!r}: none of its genes are present, skipped", flush=True)
+            continue
+        sc.tl.score_genes(ad, genes_ok, score_name=f"score_{name}", use_raw=True)
+        score_cols.append(f"score_{name}")
+    return score_cols
+
+
+def _plot_cluster_overview(ad, leiden_keys, score_cols, figdir):
     print(f"== plotting UMAP panels -> {figdir}", flush=True)
     _save_umap_panels(ad, leiden_keys, "umap_clusters", figdir, legend_loc="on data", legend_fontsize=6)
 
@@ -712,19 +759,13 @@ def _plot_cluster_overview(ad, leiden_keys, marker_genes, figdir):
     if qc_cols:
         _save_umap_panels(ad, qc_cols, "umap_qc", figdir)
 
-    if marker_genes:
-        score_cols = []
-        for name, genes in marker_genes.items():
-            genes_ok = [g for g in genes if g in ad.raw.var_names]
-            if not genes_ok:
-                continue
-            sc.tl.score_genes(ad, genes_ok, score_name=f"score_{name}", use_raw=True)
-            score_cols.append(f"score_{name}")
-        if score_cols:
-            _save_umap_panels(ad, score_cols, "umap_markers", figdir, cmap="viridis")
+    if score_cols:
+        _save_umap_panels(ad, score_cols, "umap_markers", figdir, cmap="viridis")
 
 
-def run_one_sample_pipeline(adata, sample_label=None, sample_col="sample", qc_kwargs=None, cluster_kwargs=None, outdir=None):
+def run_one_sample_pipeline(
+    adata, sample_label=None, sample_col="sample", qc_kwargs=None, cluster_kwargs=None, outdir=None
+):
     """Single-sample end-to-end: QC → keep passing cells → clustering/DEG.
 
     qc_kwargs is forwarded verbatim to osp.qc.qc_one_sample, cluster_kwargs
@@ -735,7 +776,6 @@ def run_one_sample_pipeline(adata, sample_label=None, sample_col="sample", qc_kw
     """
     qc_kwargs = dict(qc_kwargs or {})
     cluster_kwargs = dict(cluster_kwargs or {})
-    qc_kwargs.setdefault("make_plots", True)
     qc_kwargs.setdefault("sample_col", sample_col)
     cluster_kwargs.setdefault("sample_col", sample_col)
     if outdir:
@@ -749,28 +789,39 @@ def run_one_sample_pipeline(adata, sample_label=None, sample_col="sample", qc_kw
     ad_pass = ad_qc[~ad_qc.obs["low_quality"]].copy()
 
     if outdir:
-        atomic_write_dataframe_csv(
-            pd.Series(qc_summary), os.path.join(outdir, "qc_summary.csv")
-        )
+        atomic_write_dataframe_csv(pd.Series(qc_summary), os.path.join(outdir, "qc_summary.csv"))
         # per-cell ledger of everything this filter drops — the only place
         # these cells leave a trace (clustered.h5ad holds survivors only);
         # every later step (msp annotate, zmip) keeps the same kind of file
-        ledger_cols = [c for c in ("qc_reason", "qc_hard_fail", "qc_mad_outlier", "qc_mt_outlier",
-                                   "qc_doublet", "total_counts", "n_genes_by_counts", "pct_counts_mt",
-                                   "pct_counts_in_top_20_genes", "doublet_score", "decontX_contamination")
-                       if c in ad_qc.obs]
+        ledger_cols = [
+            c
+            for c in (
+                "qc_reason",
+                "qc_hard_fail",
+                "qc_mad_outlier",
+                "qc_mt_outlier",
+                "qc_doublet",
+                "total_counts",
+                "n_genes_by_counts",
+                "pct_counts_mt",
+                "pct_counts_in_top_20_genes",
+                "doublet_score",
+                "decontX_contamination",
+            )
+            if c in ad_qc.obs
+        ]
         removed = ad_qc.obs.loc[ad_qc.obs["low_quality"].values, ledger_cols].copy()
         removed.insert(0, "sample", sample_label)
         removed.index.name = "cell"
         atomic_write_dataframe_csv(removed, os.path.join(outdir, "qc_removed.csv"))
 
     if ad_pass.n_obs < 3:
-        raise ValueError(
-            f"QC retained {ad_pass.n_obs} cell(s); at least 3 are required for clustering"
-        )
+        raise ValueError(f"QC retained {ad_pass.n_obs} cell(s); at least 3 are required for clustering")
 
     print(f"== after QC: {ad_pass.shape}", flush=True)
     print("== clustering + DEG", flush=True)
-    ad_final, de_df, cluster_summary, paga_df, decontx_by_cluster = cluster_and_deg(ad_pass, outdir=outdir, **cluster_kwargs)
+    ad_final, de_df, cluster_summary, paga_df, decontx_by_cluster = cluster_and_deg(
+        ad_pass, outdir=outdir, **cluster_kwargs
+    )
 
     return ad_final, de_df, cluster_summary, paga_df, decontx_by_cluster, qc_summary
