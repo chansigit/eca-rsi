@@ -1,0 +1,56 @@
+name: Publish ecarsi 0.1.0 to PyPI
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pypi-publish
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Download verified GitHub release artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir dist
+          gh release download v0.1.0 --repo chansigit/eca-rsi --dir dist --pattern '*.whl' --pattern '*.tar.gz'
+          echo '89616fa3841f5c6f57041efb3cec0fcccadaf4d8ed0d10ad425df93d7cd39c5b  dist/ecarsi-0.1.0.tar.gz' > checksums.txt
+          echo '172246f9d381b537244819a87e30f9a6b1f6b7e812e7967abb7ad634b2b4cd51  dist/ecarsi-0.1.0-py3-none-any.whl' >> checksums.txt
+          sha256sum --check checksums.txt
+      - name: Validate metadata
+        run: |
+          python -m pip install twine
+          python -m twine check dist/*
+      - name: Upload to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
+      - name: Verify published hashes
+        run: |
+          python - <<'PY'
+          import hashlib, json, pathlib, time, urllib.request, urllib.error
+          for attempt in range(12):
+              try:
+                  with urllib.request.urlopen('https://pypi.org/pypi/ecarsi/0.1.0/json', timeout=30) as response:
+                      data = json.load(response)
+                  urls = {item['filename']: item for item in data['urls']}
+                  if all(p.name in urls for p in pathlib.Path('dist').iterdir()):
+                      break
+              except urllib.error.HTTPError as exc:
+                  if exc.code != 404:
+                      raise
+              time.sleep(5)
+          else:
+              raise RuntimeError('Published artifacts not visible on PyPI')
+          for path in pathlib.Path('dist').iterdir():
+              assert hashlib.sha256(path.read_bytes()).hexdigest() == urls[path.name]['digests']['sha256'], path.name
+          print('PyPI wheel and sdist match the verified GitHub release artifacts.')
+          PY
