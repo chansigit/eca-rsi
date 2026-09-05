@@ -229,3 +229,19 @@ RSI 运行代码保存为 `2abca32`；安装说明已改用真实存在的发布
 及真实 OpenAI 分页 smoke 已完成，最终 51 个包内 Python 文件与发布 wheel 一致。
 远端 Actions 与纯 PyPI 解析另行核对。19Liu 的较早 guarded 标注仍在运行，
 不能把包发布和本地回归当作全尺寸 ZMIP 已通过。
+
+### 新鲜依赖与大数据失败后的补充修正
+
+远端 Python 3.12 首次运行使用 Pandas 3.0.5 / AnnData 0.13.3.post0，发现 MSP 将
+字符串扩展类型排除在先验标签之外；RSI profile 也有同一判断。MSP 0.3.2（5dea759）
+已修复并发布，远端 Python 3.10/3.12 各 179 tests 通过。RSI 同类修复增加四个真实
+H5AD 回归，在隔离 Python 3.12.14 / Pandas 3.0.5 / AnnData 0.13.3.post0 环境
+全套 **129 passed / 2 skipped**，Slurm 返回码 0；正常解析安装且 pip check 无冲突。
+记录见 `pandas3-verification.json`、`pandas3-rsi-tests.log`、`pandas3-freeze.txt`。
+
+较早的 19Liu guarded annotate 最终仍失败：56 分 14 秒、峰值约 4.37 GiB；一次上下文
+重置后，provider 返回 `response.incomplete(reason=length)`。没有有效最终提案或
+annotated.h5ad，ZMIP 没有启动。失败归档见 `19liu/VALIDATION_STATUS.md`。
+正在准备 bridge 0.2.2 的精准有限恢复，再使用有状态查询和表达结果限制的新运行目录验证。
+跨进程保存部分标注需要绑定输入/配置和安全恢复协议，作为后续独立工作；不能从截断日志
+重建提案，也不通过无限重试掩盖失败。

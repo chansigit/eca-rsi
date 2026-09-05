@@ -379,3 +379,28 @@ def test_agent_can_report_unknown_without_being_pushed_to_guess(monkeypatch):
     monkeypatch.setattr("ecarsi.harness.run_agent", agent)
     assert asyncio.run(persample._identify(profile)) == decision
     assert persample._validate_sample_column(decision, profile) is not None
+
+
+@pytest.mark.parametrize("dtype", ["object", "string", "category"])
+def test_profile_preserves_low_cardinality_text_evidence(tmp_path, monkeypatch, dtype):
+    step = source(tmp_path)
+    data = ad.read_h5ad(step / "standardized.h5ad")
+    data.obs["tissue"] = pd.array(["bone", "bone", "blood", "blood", "bone", "blood"], dtype=dtype)
+    data.obs["numeric_score"] = np.array([1, 1, 2, 2, 1, 2])
+    monkeypatch.setattr(ad.settings, "allow_write_nullable_strings", True)
+    data.write_h5ad(step / "standardized.h5ad", convert_strings_to_categoricals=False)
+    units, violations = organize.find_ecapp_units(tmp_path)
+    assert not violations
+    profile = organize.profile_unit(units[0])
+    assert profile["obs_columns"]["tissue"]["value_counts"] == {"bone": 3, "blood": 3}
+    assert "value_counts" not in profile["obs_columns"]["numeric_score"]
+
+
+def test_profile_nullable_string_missing_values_do_not_hide_tissue(tmp_path, monkeypatch):
+    step = source(tmp_path)
+    data = ad.read_h5ad(step / "standardized.h5ad")
+    data.obs["tissue"] = pd.array(["bone", "bone", "blood", None, "bone", "blood"], dtype="string")
+    monkeypatch.setattr(ad.settings, "allow_write_nullable_strings", True)
+    data.write_h5ad(step / "standardized.h5ad", convert_strings_to_categoricals=False)
+    units, _ = organize.find_ecapp_units(tmp_path)
+    assert organize.profile_unit(units[0])["obs_columns"]["tissue"]["value_counts"] == {"bone": 3, "blood": 2}
