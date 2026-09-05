@@ -21,7 +21,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 dependencies = [
-    "agent-harness-bridge==0.1.0",
+    "agent-harness-bridge>=0.2.0,<0.3",
     "scanpy",
     "igraph",
     "pandas",
@@ -32,7 +32,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-agent = ["agent-harness-bridge[all]==0.1.0"]
+agent = ["agent-harness-bridge[all]>=0.2.0,<0.3"]
 test = ["pytest>=8", "ruff>=0.16"]
 
 [project.urls]
