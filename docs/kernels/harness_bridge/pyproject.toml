@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-harness-bridge"
-version = "0.2.2"
+dynamic = ["version"]
 description = "A small compatibility layer for OpenAI Agents SDK, Claude Agent SDK, and DeepSeek Harness"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -42,6 +42,9 @@ test = ["pytest>=8"]
 
 [tool.setuptools]
 packages = ["harness_bridge"]
+
+[tool.setuptools.dynamic]
+version = {attr = "harness_bridge.__version__"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

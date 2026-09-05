@@ -17,10 +17,10 @@ validation.
 Install only the runtime you need, or all validated adapters:
 
 ```bash
-pip install 'agent-harness-bridge[openai]==0.2.1'
-pip install 'agent-harness-bridge[claude]==0.2.1'
-pip install 'agent-harness-bridge[deepseek]==0.2.1'
-pip install 'agent-harness-bridge[all]==0.2.1'
+pip install 'agent-harness-bridge[openai]==0.2.3'
+pip install 'agent-harness-bridge[claude]==0.2.3'
+pip install 'agent-harness-bridge[deepseek]==0.2.3'
+pip install 'agent-harness-bridge[all]==0.2.3'
 ```
 
 The dsh adapter also imports `deepseek_harness`. DeepSeek's current SDK

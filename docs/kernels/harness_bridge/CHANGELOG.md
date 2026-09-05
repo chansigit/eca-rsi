@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.3 - 2026-09-05
+
+- Derive distribution metadata from the public module version, removing the
+  duplicated version declaration. Correct the stale module version in 0.2.2;
+  recovery and tool behavior are unchanged.
+
 ## 0.2.2 - 2026-09-05
 
 - Recover explicit Responses output-length termination with at most two fresh
