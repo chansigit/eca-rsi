@@ -4,22 +4,32 @@
 本文保留实施前的源码审查证据。用户已授权多代理协作实施，当前进度见下节及文末；
 历史欠账描述不代表当前实现仍有同样行为。
 
-## 当前实施状态
+## 当前实施状态（已完成本轮工程验收）
 
-- RSI 输入、状态、细胞台账、续跑身份及跨轮发布保护已落地；资源副本已同步。
-- 发布组合：bridge **0.2.3**、OSP **0.1.2**、MSP/ZMIP **0.3.2**，均已同步
-  PyPI 与 GitHub Release；安装命令见 [INSTALL.md](INSTALL.md)。
-- bridge 0.2.2 的 Responses 长度中断恢复、MSP/ZMIP 的有界状态/表达查询和批次删除
-  保护已测试。0.2.3 仅将版本改为单一来源，修复 0.2.2 模块仍显示 0.2.1 的打包遗漏；
-  隔离 wheel 全部 **84 tests** 通过，运行代码比较确认只有模块版本字符串变化。
-- RSI 在新鲜 Pandas 3 / AnnData 0.13 环境 **129 passed / 2 skipped**；MSP 两个
-  Python CI 环境各 **179 passed**，ZMIP **117 passed** 且 CI 通过。
-- Clayton 两轮及幂等重跑已通过，最终 850 个细胞与总台账一致；原共享 allocation
-  OOM 标记和后来独立复核返回码 0 均保留在验证记录。
-- **19Liu 全尺寸尚未验收完成**：前两次标注失败已归档；当前使用独立固定环境
-  bridge 0.2.2 / MSP、ZMIP 0.3.2 重新标注，完成后才进入全尺寸 ZMIP。
-  固定环境不因版本显示修正而更改，也不把发布或单元测试称为生物学准确性验证。
+- RSI 输入交接、状态校验、细胞台账、续跑身份及跨轮发布保护已落地，资源副本已同步。
+- 最终发布组合：bridge **0.2.3**、OSP **0.1.2**、MSP/ZMIP **0.3.3**，均已同步
+  PyPI 与 GitHub Release。安装命令见 [INSTALL.md](INSTALL.md)。
+- 最终验证：RSI **129 passed / 2 skipped**（不适用的首次发布故障注入），MSP
+  **201 passed**，ZMIP **149 passed**，bridge **84 passed**。新鲜 Pandas 3 / AnnData
+  0.13 的正常依赖安装与回归另有记录。
+- Clayton 完成两轮及幂等重跑，最终 850 个细胞与总台账一致；使用历史 PP 0.2 输入，
+  不能称为新 PP 0.5 实际转换验收。原共享 allocation OOM 标记和后来独立复核返回码 0
+  均保留，不能隐去执行边界。
+- **19Liu 全尺寸工程验收通过**：81,079 → 77,379 → **75,394**；MSP 删除 3,700，
+  ZMIP 删除 1,985、重分配 2,656。所有 X/layers/raw、细胞/基因顺序、删除/转移台账和
+  报告计数通过；恢复的 33 个细胞最终全部保留。前三谱系 21 个关键文件哈希续跑前后一致。
+- 生物学准确性未获独立验证：Myeloid 簇 23 的 15 个低置信度 other 删除、Mural 簇 8
+  的 9 个细胞及 Stromal 簇 45 的 ambient/doublet 歧义均明确保留为复核项。
+- 全尺寸后半程使用同一固定环境单线程正常续跑；最终发布的 DEG 竞态修复另在真实
+  Erythroid 数据用 8 线程通过，7 份 CSV 与单线程逐字节一致。最终报告模板和 ZMIP
+  状态查询也有独立回归；不宣称整条真实链使用最终三处补丁重新调用模型跑过。
 
+完整自足验收：
+[19Liu FINAL_ACCEPTANCE.md](/scratch/users/chensj16/eca-runs/_downstream-integration-20260905/19liu-reviewed/FINAL_ACCEPTANCE.md)。
+[独立修正版 Myeloid 报告](/scratch/users/chensj16/eca-runs/_downstream-integration-20260905/report-reviewed/Myeloid/report.html)
+补齐局部转移去向及 foreign 证据，不改写已完成运行目录。
+
+以下保留实施前证据与分阶段历史；其中“未发布”“运行中”指当时状态，以本节为准。
 
 ## 基线与结论
 
@@ -277,3 +287,59 @@ OSP 0.1.2（b1e2bdf）均已发布并同步 GitHub Release。RSI 最低版本及
 `__version__` 属性，按发行元数据记录。运行时兼容检查及 StringDtype 先验回归通过。
 此项 `--no-deps` target 安装只核对四个发行产物与导入；依赖解析由四种解析检查覆盖，
 新鲜科学栈正常安装及 pip check 的证据另见上节，不混称本项做了全新完整依赖安装。
+
+
+### 0.3.3 候选：批次伪影不能通过 other 类别绕过保护
+
+全尺寸审查发现簇 75 的 `remove_reason=other` 与明确的 batch artifact 说明不一致。
+新保护只增加明确伪影别名，不对所有 batch 提及做文本分类，也不替模型证明其他 QC 理由。
+MSP **191 tests**、ZMIP **139 tests** 通过；候选提交 MSP `7c3563c`、ZMIP `abc556d`。
+`runtime-reviewed` 冻结 bridge 0.2.3 / OSP 0.1.2 / MSP、ZMIP 0.3.3；8 个产物 twine 通过，
+51 个 Python 文件从源码、wheel 到安装目录一致。0.3.3 尚未发布，待真实验收。
+
+147 个原 inspect 批次保护细胞中，重放后保留 81，另 66 被明确 doublet 提案删除。
+直接矩阵检查确认这些相关簇的主要混合 marker 百分比真实，但其已有 doublet 阳性均为 0，
+并且 sample 与 condition 混淆；混合表达和旧 flag 不能当作独立生物学真值。
+全部 25 个原删除提案的逐簇说明、样本构成与数值 QC 见
+`19liu-final/ALL_REMOVAL_REVIEW.md`、`all_removal_evidence.json`、`protected_marker_check.json`。
+
+
+### 完成谱系审查与并行 DEG 竞态修复
+
+`19liu-reviewed` 已完成 Stromal / Myeloid / B cell：分别保留 29,520 / 24,326 /
+12,707，删除 608 / 627 / 407。Myeloid 另有 2,177 个重分配（仍保留），这是本轮全局
+标签更新，不代表转入细胞已在本轮目标谱系重新嵌入。原簇 75 恢复的 33 个细胞全部
+保留在 Stromal 簇 61。B cell 首次删除 12.2% 触发 10% 预算，模型复核后撤回
+1,198 个细胞的删除建议；预算门禁不是生物学真值。
+
+Myeloid 局部 MSP 报告遗漏 reassign_to/foreign 展示而 JSON/CSV 完整。候选模板已按
+字段存在情况补齐去向、分组计数及外来证据，重复 ID/缺台账不显示虚假数字；普通 MSP
+报告保持不变。独立修正版 `report-reviewed/Myeloid/report.html` 保留原运行目录所有
+文件，原关键报告/提案/台账 SHA 未变。报告相关 41 项及补充重复 ID 回归通过。
+
+随后 Erythroid 的 8 线程 DEG 遇到 `dictionary changed size during iteration`：
+全局任务写共享 AnnData.uns，局部任务同时深拷贝该字典。原运行按正常 CLI 在同一冻结
+环境以 MSP_MAX_THREADS=1 续跑，不修改任何身份或收据，并保存前三谱系 21 个文件哈希。
+失败状态和恢复记录分别归档，不能把单线程绕过当产品已修复。
+
+产品修复为全局 DEG 工作对象隔离可写元数据，X/raw.X 只读共享，保留 raw 基因轴和
+log1p 信息；MSP 提交 `26e65e1` 全套 **201 tests** 通过，旧实现确定性复现失败。
+真实 Erythroid 4,410 × 27,763 在修复版 8 线程下通过，7 份 CSV 与原单线程结果
+逐字节一致，输入 SHA 未变；记录见 `erythroid-deg-8threads/verification.json`。
+
+ZMIP 候选 `1f7d9b6` 新增有界 annotation_status 和动态子簇恢复提示，全套
+**149 tests** 通过。当前真实运行没有使用此工具，也没有使用新报告模板/线程修复；
+固定环境与最终候选差异单独记录，数值竞态修复有上述独立真实验收。
+
+
+### 最终发布与验收归档
+
+2026-09-05 已发布 MSP 0.3.3（6374c00）与 ZMIP 0.3.3（6e7e06c），PyPI wheel/sdist
+SHA 与 `release-033-final/dist` 一致，simple index 可见，GitHub Release 同步。
+配套 bridge 0.2.3 / OSP 0.1.2。最终 wheel 组合下 RSI **129 passed / 2 skipped**，
+实际导入路径与版本已核对，Slurm 退出码 0；记录 `release-033-final/rsi-tests.log`。
+
+最终 19Liu 状态为 `19liu-reviewed/acceptance_status.json`，原失败 status.json 保留；
+成功续跑在 singlethread_resume.json。Mural 最终保留 1,124、删除 33、转移 479，
+全局 publication.complete=True。完整科学限制和逐表审查见 FINAL_ACCEPTANCE.md，
+不能将 counts/台账通过解释为所有删除或细胞标签均正确。

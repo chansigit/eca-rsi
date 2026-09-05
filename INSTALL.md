@@ -12,8 +12,8 @@ ECA-PP 先独立运行；ECA-RSI 环境包含驱动包、OSP/MSP/ZMIP 三个内�
 | --- | --- | --- |
 | `ecarsi` / `ecarsi` | 0.1.0 | 驱动；依赖 `agent-harness-bridge[all]>=0.2.3,<0.3`、anndata、scanpy、h5py、numpy、pandas、matplotlib |
 | `osp-sc` / `osp` | 0.1.2 | 每样本 QC、Scrublet、内置 DecontX、聚类和注释建议；`[agent]` 安装 bridge 的全部后端依赖 |
-| `msp-sc` / `msp` | 0.3.2 | 跨样本整合与审查；依赖 `harmonypy>=2,<3`、`stanhue>=1.1.0`、`standissect-lite>=0.2.0`；`[agent]` 安装后端依赖 |
-| `zmip` / `zmip` | 0.3.2 | lineage 内重算与细化；依赖 `msp-sc>=0.3.2,<0.4` 和 `agent-harness-bridge[all]>=0.2.1,<0.3`，另有运行时 API 兼容检查 |
+| `msp-sc` / `msp` | 0.3.3 | 跨样本整合与审查；依赖 `harmonypy>=2,<3`、`stanhue>=1.1.0`、`standissect-lite>=0.2.0`；`[agent]` 安装后端依赖 |
+| `zmip` / `zmip` | 0.3.3 | lineage 内重算与细化；依赖 `msp-sc>=0.3.3,<0.4` 和 `agent-harness-bridge[all]>=0.2.1,<0.3`，另有运行时 API 兼容检查 |
 | `agent-harness-bridge` / `harness_bridge` | 0.2.3 | core 无依赖；extras 为 `openai`、`claude`、`deepseek`、`all` |
 | `standissect-lite` / `standissect_lite` | 0.2.0 | MSP 使用的群体内部小片段检测库 |
 
@@ -40,7 +40,7 @@ ECA-PP 先独立运行；ECA-RSI 环境包含驱动包、OSP/MSP/ZMIP 三个内�
 
 ## 3. 安装发行包与驱动源码
 
-bridge 0.2.3、OSP 0.1.2、MSP/ZMIP 0.3.2 已发布到 PyPI，并同步 GitHub Release。
+bridge 0.2.3、OSP 0.1.2、MSP/ZMIP 0.3.3 已发布到 PyPI，并同步 GitHub Release。
 八个线上文件的 SHA256 与本轮构建一致。此前 bridge 0.2.0 解析失败是索引尚未发布；
 本轮先发布依赖包，再发布内核，并在更新驱动最低版本后核对纯 PyPI 解析。
 bridge 0.2.3 修正 0.2.2 的模块版本显示遗漏；0.2.2 的有限恢复逻辑保持不变。
@@ -55,8 +55,8 @@ python -m pip install -U pip
 python -m pip install \
   'agent-harness-bridge[all]==0.2.3' \
   'osp-sc[agent]==0.1.2' \
-  'msp-sc[agent]==0.3.2' \
-  'zmip==0.3.2' \
+  'msp-sc[agent]==0.3.3' \
+  'zmip==0.3.3' \
   -e /path/to/source-checkouts/eca-rsi
 ```
 
@@ -71,7 +71,7 @@ python -m pip install \
 [agent-harness-bridge](https://github.com/chansigit/agent-harness-bridge)、
 [standissect-lite](https://github.com/chansigit/standissect-lite)。
 
-RSI 最低内核版本采用 OSP 0.1.2、MSP/ZMIP 0.3.2，bridge 最低 0.2.3。
+RSI 最低内核版本采用 OSP 0.1.2、MSP/ZMIP 0.3.3，bridge 最低 0.2.3。
 独立内核测试、wheel 导入和真实模型运行分别记录，不互相替代。
 
 ## 4. 检查实际运行环境
