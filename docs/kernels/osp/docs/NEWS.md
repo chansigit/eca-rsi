@@ -3,7 +3,7 @@
 Release notes for OSP. Newest first. Install a specific version with
 `pip install "osp-sc[agent]==<version>"`.
 
-## Unreleased
+## 0.1.2 (2026-09-05)
 
 Fixes and clean-ups from a full project review; no output file names or
 schemas changed, apart from one new `qc_summary` key.
@@ -44,6 +44,9 @@ schemas changed, apart from one new `qc_summary` key.
   distribution can be read next to the call.
 
 ### Tooling
+
+- Accept `agent-harness-bridge>=0.2.1,<0.3` in both core and agent
+  dependencies, allowing installation alongside MSP, ZMIP and RSI.
 
 - `python -m osp --no-decontx` skips DecontX, matching `python -m osp.qc`.
 - Marker-gene scores are computed before `clustered.h5ad` is written, so
