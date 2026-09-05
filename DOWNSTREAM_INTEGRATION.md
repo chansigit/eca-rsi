@@ -215,3 +215,17 @@ OSP 0.1.2 同时解决已发布 0.1.1 对 bridge 0.1 的依赖约束与新版 RS
 Python 3.10/3.12 的四种依赖解析通过，实际导入通过；51 个 Python 文件与独立
 `guarded-runtime-v2` 一致，仅依赖元数据等打包信息有变。最低版本采用 bridge 0.2.1、
 OSP 0.1.2、MSP/ZMIP 0.3.1，待逐包发布后再验证纯 PyPI 解析。
+
+
+### 发布与最终本地回归
+
+2026-09-05 已发布并同步 GitHub Release：bridge 0.2.1（47f5177）、OSP 0.1.2
+（b1e2bdf）、MSP 0.3.1（1a4660a）、ZMIP 0.3.1（a8c329c）。八个 PyPI 文件的
+SHA256 均与 `releases-final/dist` 一致，逐包记录见同目录 `*-pypi-verification.json`。
+RSI 运行代码保存为 `2abca32`；安装说明已改用真实存在的发布版本。
+
+最终 live 组合：RSI **125 passed / 2 skipped**，MSP **167 passed**，ZMIP
+**117 passed**；测试进程和 Slurm 步骤返回码均为 0。bridge 分页 **62 passed**
+及真实 OpenAI 分页 smoke 已完成，最终 51 个包内 Python 文件与发布 wheel 一致。
+远端 Actions 与纯 PyPI 解析另行核对。19Liu 的较早 guarded 标注仍在运行，
+不能把包发布和本地回归当作全尺寸 ZMIP 已通过。
