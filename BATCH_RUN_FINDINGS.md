@@ -60,9 +60,15 @@
 - **`openai.BadRequestError: ... items allowed in input` 对深轮次 organ 是否会复发未知**——`bridge-item-limit-
   context-reset` 分支的修复没有对 mca2.0/Testis、mca3.0/Liver 生效(代价太高没接线),只能等它们再次撞见同一个
   报错、且纯重投扛不过去时,才有真正的证据决定要不要付代价切分支。
-- **mca2.0/Testis 的 persample 在没有人主动改任何代码/分支的情况下被重新计算了一次**,导致 round01 的 identity
-  对不上、check_round 报错。没有查出根因(可能是很早之前某次批量操作的连带效应),当一次性事件处理掉了(trash
-  轮次重来)。如果在其他 organ 上复现,需要认真查是不是某个 worktree 或 `gen_rsi.sh` 改动带来的系统性连带效应。
+- **persample 在没有人主动改分支的情况下"自己"变了身份,复现了两次**(mca2.0/Testis、之后 mca1.1/Kidney,
+  两次都是"没在 BRIDGE_ORGANS/ECARSI_BRANCH/OSP_BRANCH 名单里的 organ,只是被加进了 HVG_ORGANS(只影响 msp),
+  结果连 persample 阶段——理论上根本不调用 msp——都报 `input, configuration or runtime changed`")。
+  Kidney 这次专门验证过一个假设:直接用 `ecarsi.run_state.runtime_identity()` 现算了一遍 ecarsi 包的
+  `source_sha256`,和 persample manifest 里记录的旧值**完全一致**,说明至少不是"改了 ecarsi 源码"这么简单的原因,
+  `BATCH_RUN_FINDINGS.md` 首次记录时的猜测(某个 worktree 改动的连带效应)大概率不对,或者不是唯一原因。
+  真正原因仍未查明(没有继续深挖 osp/harness_bridge 的哈希、`config`、`explicit_mapping` 等其他分量是否变了)。
+  两次都是当一次性事件处理掉(trash persample 重来),**如果第三次复现,值得专门花时间用上面这种"逐字段对比
+  旧 manifest vs 现算 identity"的方法把真正变化的字段找出来**,而不是继续假设"当一次性事件"。
 - **PyPI 上传 `ecarsi` 0.1.0 仍被新项目频率限制卡住**(非本轮新增,历史遗留,见 `eca-rsi-open-backlog` memory)。
 
 ## 架构/流程发现(不是这次要修的 bug,但值得未来设计时考虑)
