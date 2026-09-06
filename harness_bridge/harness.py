@@ -81,7 +81,11 @@ TRANSIENT_PATTERN = re.compile(
     r"control request timeout|broken pipe|connection reset|econnreset|epipe|"
     r"process exited unexpectedly|failed to start|connection closed|stdout closed|"
     r"transportclosed|initialize timed out|timed out waiting|mcp tools never listed|"
-    r"initial connection or tool synchronization failed",
+    r"initial connection or tool synchronization failed|"
+    # provider HTTP layer (openai SDK with max_retries=0): a slow/reset Ark
+    # request must not end the whole agent run, let alone the sample
+    r"request timed out|apitimeouterror|apiconnectionerror|connection error|"
+    r"server disconnected|remote protocol error|remoteprotocolerror|readtimeout|connecttimeout",
     re.IGNORECASE,
 )
 # ("returned an error result" used to be here for the old bundled CLI's
@@ -150,11 +154,11 @@ async def retry_transient(coro_fn: Callable[[], Awaitable[T]], label: str) -> T:
                 transient_attempts += 1
                 if transient_attempts >= MAX_TRANSIENT_ATTEMPTS:
                     raise RuntimeError(
-                        f"[{label}] transient agent-startup failure persisted after "
+                        f"[{label}] transient agent failure persisted after "
                         f"{transient_attempts} attempts: {msg}"
                     ) from None
                 wait = TRANSIENT_BACKOFF_SECONDS * transient_attempts
-                log.info(f"== [{label}] transient agent-startup failure (attempt {transient_attempts}/"
+                log.info(f"== [{label}] transient agent failure (attempt {transient_attempts}/"
                       f"{MAX_TRANSIENT_ATTEMPTS}): {msg[:160]!r} — retrying in {wait}s")
                 await asyncio.sleep(wait)
                 continue
