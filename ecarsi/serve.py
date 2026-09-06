@@ -383,10 +383,20 @@ NAV_JS = r"""
   try { const w = localStorage.getItem("ecarsi.serve.sbWidth"); if (w) setWidth(parseInt(w, 10)); } catch (e) {}
   if (resizer) {
     let dragging = false;
-    resizer.addEventListener("mousedown", ev => { dragging = true; document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none"; ev.preventDefault(); });
+    resizer.addEventListener("mousedown", ev => {
+      dragging = true; document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none";
+      // the iframe is a separate document — once the cursor crosses into it,
+      // window-level mousemove/mouseup here stop firing entirely; disabling
+      // its pointer events for the drag keeps the parent document capturing
+      frame.style.pointerEvents = "none";
+      ev.preventDefault();
+    });
     window.addEventListener("mousemove", ev => { if (!dragging) return; setWidth(ev.clientX); });
-    window.addEventListener("mouseup", () => { if (!dragging) return; dragging = false; document.body.style.cursor = ""; document.body.style.userSelect = "";
-      try { localStorage.setItem("ecarsi.serve.sbWidth", parseInt(sbEl.style.width, 10)); } catch (e) {} });
+    window.addEventListener("mouseup", () => {
+      if (!dragging) return;
+      dragging = false; document.body.style.cursor = ""; document.body.style.userSelect = ""; frame.style.pointerEvents = "";
+      try { localStorage.setItem("ecarsi.serve.sbWidth", parseInt(sbEl.style.width, 10)); } catch (e) {}
+    });
   }
   // -- bind / unbind (edit the registry file through the server) --
   function say(text, bad){ msg.textContent = text; msg.className = "callout" + (bad ? " bad" : ""); msg.style.display = "block"; }
