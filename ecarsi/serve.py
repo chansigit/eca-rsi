@@ -40,11 +40,6 @@ not involved). Default: no password, so day-to-day debugging is prompt-free.
 The navigator's Bind / Unbind buttons (POST /_bind, /_unbind) are refused
 for requests arriving through the tunnel (ngrok stamps X-Forwarded-For)
 unless a password is set; local requests always may.
-
-The navigator also shows each dataset's Slurm job (last job= in
-<root>/jobs.log, see the convention above _root_job_id; status.txt is read
-as a fallback), asked of squeue/sacct with a short cache — purely a
-display; nothing here submits anything.
 """
 
 from __future__ import annotations
@@ -57,7 +52,6 @@ import html as _h
 import http.server
 import json
 import os
-import re
 import shutil
 import signal
 import subprocess
@@ -190,127 +184,6 @@ class Registry:
             self.write_file(self.path, new)
             self._file = new
             self._stamp = None
-
-
-# ---------------------------------------------------------------- slurm jobs (display only)
-#
-# Convention: whatever submits a run appends to <root>/jobs.log, one line per
-# event, space-separated key=value tokens, every line carrying job=<slurm id>:
-#     job=41888484 node=sh04-13n32 start=2026-09-03T12:00:05-0700
-#     job=41888484 end=2026-09-03T15:24:36-0700 exit=0
-# The navigator takes the LAST job id in the file as the run's current job and
-# asks Slurm about it (squeue for queued/running, sacct for finished). The
-# older per-run status.txt (same tokens, job= only on its first line) is read
-# as a fallback so existing runs show up too. No squeue on PATH -> no column.
-
-JOBS_LOG = "jobs.log"
-_JOB_RE = re.compile(r"\bjob=(\d+)\b")
-_slurm_cache: dict = {"at": 0.0, "ids": (), "states": {}}
-_SLURM_TTL = 20.0  # s; one squeue + one sacct per page load at most this often
-
-
-def _root_job_id(root: Path) -> str | None:
-    for fname in (JOBS_LOG, "status.txt"):
-        f = root / fname
-        if f.is_file():
-            ids = _JOB_RE.findall(f.read_text())
-            if ids:
-                return ids[-1]
-    return None
-
-
-def _slurm_states(ids: list[str]) -> dict[str, dict]:
-    """{job id: {state, elapsed, node, reason}} via one squeue + one sacct, cached."""
-    ids = sorted(set(ids))
-    if not ids or not shutil.which("squeue"):
-        return {}
-    now = time.time()
-    if tuple(ids) == _slurm_cache["ids"] and now - _slurm_cache["at"] < _SLURM_TTL:
-        return _slurm_cache["states"]
-    out: dict[str, dict] = {}
-    try:
-        q = subprocess.run(
-            ["squeue", "-j", ",".join(ids), "-h", "-o", "%i|%T|%M|%N|%r"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        for line in q.stdout.splitlines():
-            jid, state, elapsed, node, reason = (line.split("|") + [""] * 5)[:5]
-            out[jid] = {
-                "state": state,
-                "elapsed": elapsed,
-                "node": node,
-                "reason": reason,
-            }
-        rest = [i for i in ids if i not in out]
-        if rest and shutil.which("sacct"):
-            a = subprocess.run(
-                [
-                    "sacct",
-                    "-j",
-                    ",".join(rest),
-                    "-X",
-                    "-n",
-                    "-P",
-                    "-o",
-                    "JobID,State,Elapsed,NodeList,ExitCode",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=20,
-            )
-            for line in a.stdout.splitlines():
-                jid, state, elapsed, node, exitcode = (line.split("|") + [""] * 5)[:5]
-                out[jid] = {
-                    "state": state.split()[0] if state else "",
-                    "elapsed": elapsed,
-                    "node": node,
-                    "reason": f"exit {exitcode}",
-                }
-    except (subprocess.TimeoutExpired, OSError) as e:
-        sys.stderr.write(f"[serve] slurm lookup failed: {e}\n")
-    _slurm_cache.update(at=now, ids=tuple(ids), states=out)
-    return out
-
-
-_JOB_CLS = {
-    "RUNNING": "running",
-    "PENDING": "running",
-    "COMPLETING": "running",
-    "CONFIGURING": "running",
-    "COMPLETED": "released",
-}
-
-
-def _job_cell(jid: str | None, st: dict | None) -> tuple[str, str]:
-    """(html, search text) for the navigator's job column."""
-    if not jid:
-        return '<span class="muted">–</span>', ""
-    if not st:
-        return (
-            f'<span class="pill neutral" title="job {jid}: not known to squeue/sacct">{jid} ?</span>',
-            jid,
-        )
-    state = st["state"] or "?"
-    cls = _JOB_CLS.get(state, "failed")
-    detail = " · ".join(
-        x
-        for x in (
-            st["elapsed"],
-            st["node"],
-            st["reason"] if state == "PENDING" or cls == "failed" else "",
-        )
-        if x and x != "None"
-    )
-    e = _h.escape
-    return (
-        f'<span class="pill {cls}" title="job {jid}{" · " + e(detail) if detail else ""}">{e(state.lower())}</span>'
-        + (
-            f' <small class="muted">{e(st["elapsed"])}</small>' if st["elapsed"] else ""
-        ),
-        f"{jid} {state.lower()} {st['node']}",
-    )
 
 
 # ---------------------------------------------------------------- navigator
@@ -534,12 +407,9 @@ def _navigator_html(items: dict[str, Path], registry_path: Path) -> str:
     / bookmarks land on the same page."""
     e = _h.escape
     rows = []
-    jids = {name: _root_job_id(p) for name, p in items.items()}
-    jstates = _slurm_states([j for j in jids.values() if j])
     for name, p in sorted(items.items()):
         st = _dataset_state(p)
         cells = index._n(st["final_cells"])
-        job_html, job_text = _job_cell(jids[name], jstates.get(jids[name] or ""))
         meta = [f'<span class="pill {st["cls"]}">{e(st["stage"])}</span>']
         if cells:
             meta.append(
@@ -547,12 +417,10 @@ def _navigator_html(items: dict[str, Path], registry_path: Path) -> str:
             )
         if st["units"] > 1:
             meta.append(f"{st['released']}/{st['units']} units")
-        if jids[name]:
-            meta.append(job_html)
         rows.append(
             f'<a class="item" href="/{e(name)}/" data-name="{e(name)}" title="{e(str(p))}" '
             f'data-cells="{st["final_cells"] or 0}" data-cls="{e(st["cls"])}" '
-            f'data-text="{e((name + " " + str(p) + " " + st["stage"] + " " + job_text).lower())}">'
+            f'data-text="{e((name + " " + str(p) + " " + st["stage"]).lower())}">'
             f'<input class="sel" type="checkbox" value="{e(name)}" title="select for unbind">'
             f'<div class="body"><div class="nm">{e(name)}</div><div class="meta">{" · ".join(meta)}</div></div></a>'
         )
