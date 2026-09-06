@@ -252,3 +252,19 @@ def test_qc_skips_scrublet_below_min_cells(monkeypatch):
     assert not calls, "scrublet must not run below MIN_CELLS_FOR_SCRUBLET"
     assert "scrublet_threshold" not in summary
     assert summary["n_doublet"] == 0
+
+
+def test_qc_skips_decontx_when_coarse_clustering_cannot_split(monkeypatch):
+    def _single_cluster(*a, **k):
+        raise ValueError("the coarse Leiden clustering for DecontX found a single cluster")
+
+    monkeypatch.setattr(qc, "_coarse_clusters_for_decontx", _single_cluster)
+    data = ad.AnnData(
+        np.array([[2, 0, 1], [1, 1, 1], [0, 2, 1], [1, 0, 2]], dtype=float),
+        obs=pd.DataFrame({"sample": ["A"] * 4}),
+        var=pd.DataFrame(index=["G1", "G2", "G3"]),
+    )
+    result, summary = qc_one_sample(data, run_scrublet=False, run_dissociation_score=False, make_plots=False)
+    assert "decontX_contamination" not in result.obs
+    assert "median_contamination" not in summary
+    assert "decontx_degenerate" not in summary

@@ -510,6 +510,7 @@ def qc_one_sample(
         doublet_flag = np.zeros(ad.n_obs, dtype=bool)
 
     decontx_z_source = None
+    res = None
     if run_decontx:
         from . import _decontx
 
@@ -522,9 +523,19 @@ def qc_one_sample(
             res = _decontx.decontx(ad, **dkw)
         else:
             # The explicit-Leiden path is OSP's standard initialization.
-            decontx_z_source = "leiden_fallback"
-            z = _coarse_clusters_for_decontx(ad)
-            res = _decontx.decontx(ad, z=z, **dkw)
+            # Same statistical floor as scrublet: DecontX needs >=2 groups to
+            # separate an ambient profile from real signal, and tiny/homogeneous
+            # samples sometimes can't even produce a coarse 2-way split.
+            try:
+                z = _coarse_clusters_for_decontx(ad)
+            except ValueError as exc:
+                print(f"== skipping decontX: {exc}", flush=True)
+                run_decontx = False
+                res = None
+            else:
+                decontx_z_source = "leiden_fallback"
+                res = _decontx.decontx(ad, z=z, **dkw)
+    if run_decontx and res is not None:
         # decontx() only writes into the AnnData with copy=True; fold the
         # returned DecontXResult in ourselves (same fields as its copy branch)
         ad.obs["decontX_contamination"] = res.contamination
