@@ -14,12 +14,20 @@ def normalize(values):
     return s.mask(s.str.lower().isin(("", "na", "n/a", "nan", "none", "null", "<na>", "missing")))
 
 
+def is_run_root(p: Path) -> bool:
+    """An ECA-RSI run root (ours or a mirror of one) is never ECA-PP input."""
+    return (p / "organize" / "manifest.json").is_file()
+
+
 def current_files(root: Path):
-    """Prune only ECA-PP's step-local .history, not arbitrary hidden dirs."""
+    """Prune only ECA-PP's step-local .history and ECA-RSI run roots (a
+    finished run mirrored back next to standardize/ must not turn its own
+    organized.h5ad / final.h5ad into "undeclared" inputs on the next run)."""
     for folder, dirs, files in os.walk(root):
         p = Path(folder)
         if p.name in ("standardize", "identify_columns") and ".history" in dirs:
             dirs.remove(".history")
+        dirs[:] = [d for d in dirs if not is_run_root(p / d)]
         for name in sorted(files):
             yield p / name
 

@@ -67,8 +67,9 @@ eca-pp-output/
 
 The input can also be a single source directory containing `standardize/`.
 Source directory names must be unique. ECA-PP's step-local `.history/` archives
-are ignored; unexpected H5AD files outside those archives cause validation to
-fail. Keep ECA-RSI outputs outside the input tree and the source repository.
+and any ECA-RSI run root (a directory holding `organize/manifest.json`, such as a
+finished run mirrored next to `standardize/`) are ignored; other unexpected H5AD
+files cause validation to fail. Keep ECA-RSI outputs outside the input tree and the source repository.
 
 Organize checks upstream status and exit codes, opens each accepted H5AD, and
 validates cell/gene IDs, dimensions, and finite nonnegative values in the
