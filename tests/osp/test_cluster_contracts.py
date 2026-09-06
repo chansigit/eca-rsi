@@ -89,3 +89,17 @@ def test_reclustering_also_drops_the_stale_qc_action_umap(tmp_path):
     (figures / "umap_qc_action.png").touch()
     _invalidate_stale_derived_outputs(tmp_path, figures)
     assert not (figures / "umap_qc_action.png").exists()
+
+
+def test_cluster_and_deg_embeds_the_three_cell_minimum():
+    """3 QC survivors is the smallest set OSP accepts; umap-learn's spectral
+    init needs > n_components+1 nodes and crashed on exactly this size
+    (tabula-muris-facs Bladder plate B002771, 2026-09-06)."""
+    rng = np.random.default_rng(0)
+    counts = rng.poisson(3.0, size=(3, 80)).astype(np.float32)
+    counts[0, :10] += 20  # give the cells some structure
+    data = ad.AnnData(counts.copy(), obs=pd.DataFrame(index=[f"c{i}" for i in range(3)]))
+    data.layers["counts"] = counts
+    result = cluster_and_deg(data, resolutions=(1.0,), primary_resolution=1.0, make_plots=False)[0]
+    assert result.obsm["X_umap"].shape == (3, 2)
+    assert np.isfinite(result.obsm["X_umap"]).all()

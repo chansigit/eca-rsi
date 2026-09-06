@@ -444,7 +444,10 @@ def cluster_and_deg(
         print(f"== {primary_key!r} is a single cluster ({ad.n_obs} cells); skipping DEG/PAGA", flush=True)
 
     print("== umap", flush=True)
-    sc.tl.umap(ad)
+    # umap-learn's spectral initialisation solves for n_components+1 = 3
+    # eigenvectors and crashes when the graph has <= 3 nodes (k >= N); a
+    # 3-cell survivor set is the smallest OSP accepts, so seed it randomly.
+    sc.tl.umap(ad, init_pos="random" if ad.n_obs <= 3 else "spectral")
 
     de_columns = ["group", "names", "scores", "logfoldchanges", "pvals", "pvals_adj", "pct1", "pct2"]
     if single_cluster:
