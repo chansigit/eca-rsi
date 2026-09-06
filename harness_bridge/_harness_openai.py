@@ -62,7 +62,9 @@ def _params_schema(spec: ToolSpec) -> dict[str, Any]:
     properties: dict[str, Any] = {}
     for name, python_type in spec.input_schema.items():
         if python_type not in _JSON_TYPES:
-            raise TypeError(f"unsupported ToolSpec input type for {spec.name}.{name}: {python_type!r}")
+            raise TypeError(
+                f"unsupported ToolSpec input type for {spec.name}.{name}: {python_type!r}"
+            )
         properties[name] = dict(_JSON_TYPES[python_type])
     return {
         "type": "object",
@@ -72,7 +74,9 @@ def _params_schema(spec: ToolSpec) -> dict[str, Any]:
     }
 
 
-def _tool(spec: ToolSpec, submitted_holder: dict, is_submit: bool, label: str, api_mode: str):
+def _tool(
+    spec: ToolSpec, submitted_holder: dict, is_submit: bool, label: str, api_mode: str
+):
     from agents import FunctionTool, ToolOutputImage, ToolOutputText
 
     async def invoke(_context, arguments_json: str):
@@ -85,7 +89,9 @@ def _tool(spec: ToolSpec, submitted_holder: dict, is_submit: bool, label: str, a
         try:
             arguments = json.loads(arguments_json)
             if not isinstance(arguments, dict):
-                raise TypeError(f"tool arguments must be a JSON object, got {type(arguments).__name__}")
+                raise TypeError(
+                    f"tool arguments must be a JSON object, got {type(arguments).__name__}"
+                )
             arg_hint = str(next(iter(arguments.values()), ""))[:80]
             log.info(f"== [{label}] agent: {spec.name}({arg_hint})")
             result = await spec.handler(arguments)
@@ -97,7 +103,9 @@ def _tool(spec: ToolSpec, submitted_holder: dict, is_submit: bool, label: str, a
             )
         is_error = bool(result.get("is_error", False))
         if is_error:
-            text = " ".join(str(block.get("text", "")) for block in result.get("content", []))
+            text = " ".join(
+                str(block.get("text", "")) for block in result.get("content", [])
+            )
             log.info(f"== [{label}] tool error in {spec.name}: {text[:200]!r}")
         if is_submit and not is_error:
             submitted_holder["value"] = result.get("_submitted", arguments)
@@ -110,14 +118,19 @@ def _tool(spec: ToolSpec, submitted_holder: dict, is_submit: bool, label: str, a
                 outputs.append(ToolOutputText(text=prefix + str(block.get("text", ""))))
             elif kind == "image":
                 if api_mode != "responses":
-                    outputs.append(ToolOutputText(
-                        text="ERROR: image tool output requires OPENAI_AGENTS_API=responses"
-                    ))
+                    outputs.append(
+                        ToolOutputText(
+                            text="ERROR: image tool output requires OPENAI_AGENTS_API=responses"
+                        )
+                    )
                     continue
                 media_type = str(block.get("mimeType") or "application/octet-stream")
-                outputs.append(ToolOutputImage(
-                    image_url=f"data:{media_type};base64,{block.get('data', '')}", detail="high"
-                ))
+                outputs.append(
+                    ToolOutputImage(
+                        image_url=f"data:{media_type};base64,{block.get('data', '')}",
+                        detail="high",
+                    )
+                )
             else:
                 raise ValueError(f"unsupported ToolSpec content block type: {kind!r}")
         return outputs or ToolOutputText(text="ERROR: tool returned no content")
@@ -164,6 +177,10 @@ def _is_context_limit_error(exc: Exception) -> bool:
         "exceed max message tokens" in text
         or "maximum context length" in text
         or "context length exceeded" in text
+        # Ark's Responses API caps total conversation items (not tokens) —
+        # e.g. "Maximum of 1000 items allowed in input." — hit by long
+        # tool-heavy sessions (many clusters/lineages) with server_state on.
+        or "items allowed in input" in text
     )
 
 
@@ -182,13 +199,16 @@ def _is_output_length_error(exc: Exception) -> bool:
     text = str(exc)
     if not text.startswith(prefix):
         return False
-    details = text[len(prefix):]
+    details = text[len(prefix) :]
     details = details.removeprefix("status=incomplete; ")
-    return re.fullmatch(
-        r"incomplete_details=(?:IncompleteDetails\(reason=['\"](?:length|max_output_tokens)['\"]\)|"
-        r"\{['\"]reason['\"]: ['\"](?:length|max_output_tokens)['\"]\})\.?",
-        details,
-    ) is not None
+    return (
+        re.fullmatch(
+            r"incomplete_details=(?:IncompleteDetails\(reason=['\"](?:length|max_output_tokens)['\"]\)|"
+            r"\{['\"]reason['\"]: ['\"](?:length|max_output_tokens)['\"]\})\.?",
+            details,
+        )
+        is not None
+    )
 
 
 def _env_int(name: str, default: int) -> int:
@@ -228,13 +248,15 @@ async def run_agent(
         raise ValueError("HARNESS=openai needs a model id (MODEL env or caller model)")
     api_mode = os.environ.get("OPENAI_AGENTS_API", DEFAULT_API_MODE).strip().lower()
     max_nudges = _env_int("OPENAI_AGENTS_MAX_NUDGES", DEFAULT_MAX_NUDGES)
-    max_context_resets = _env_int("OPENAI_AGENTS_MAX_CONTEXT_RESETS", DEFAULT_MAX_CONTEXT_RESETS)
-    max_output_resets = _env_int("OPENAI_AGENTS_MAX_OUTPUT_RESETS", DEFAULT_MAX_OUTPUT_RESETS)
-    server_state = (
-        api_mode == "responses"
-        and os.environ.get("OPENAI_AGENTS_SERVER_STATE", "1").strip().lower()
-        not in {"0", "false", "no", "off"}
+    max_context_resets = _env_int(
+        "OPENAI_AGENTS_MAX_CONTEXT_RESETS", DEFAULT_MAX_CONTEXT_RESETS
     )
+    max_output_resets = _env_int(
+        "OPENAI_AGENTS_MAX_OUTPUT_RESETS", DEFAULT_MAX_OUTPUT_RESETS
+    )
+    server_state = api_mode == "responses" and os.environ.get(
+        "OPENAI_AGENTS_SERVER_STATE", "1"
+    ).strip().lower() not in {"0", "false", "no", "off"}
     _ = max_buffer_size  # OpenAI Agents SDK does not pipe image bytes through a CLI buffer.
 
     submitted_holder: dict = {}
@@ -267,7 +289,9 @@ async def run_agent(
         model_settings=settings,
         tool_use_behavior=finish_after_valid_submit,
     )
-    workflow_name = os.environ.get("AGENT_WORKFLOW_NAME", "agent-harness-bridge").strip()
+    workflow_name = os.environ.get(
+        "AGENT_WORKFLOW_NAME", "agent-harness-bridge"
+    ).strip()
     run_config = RunConfig(
         tracing_disabled=True,
         workflow_name=f"{workflow_name} {label}".strip(),
@@ -309,7 +333,11 @@ async def run_agent(
                     if previous_response_id is not None:
                         runner_kwargs["previous_response_id"] = previous_response_id
                 result = await Runner.run(
-                    agent, run_input, max_turns=remaining, run_config=run_config, hooks=request_budget,
+                    agent,
+                    run_input,
+                    max_turns=remaining,
+                    run_config=run_config,
+                    hooks=request_budget,
                     **runner_kwargs,
                 )
             except MaxTurnsExceeded:
@@ -324,13 +352,29 @@ async def run_agent(
                     # The SDK attaches usage for completed requests to run_data.
                     # The terminal failing request has no reliable token usage.
                     usage_incomplete = True
-                    failed_usage = getattr(getattr(getattr(exc, "run_data", None), "context_wrapper", None), "usage", None)
+                    failed_usage = getattr(
+                        getattr(
+                            getattr(exc, "run_data", None), "context_wrapper", None
+                        ),
+                        "usage",
+                        None,
+                    )
                     known = {}
-                    for key, attr in (("requests", "requests"), ("input", "input_tokens"), ("output", "output_tokens")):
+                    for key, attr in (
+                        ("requests", "requests"),
+                        ("input", "input_tokens"),
+                        ("output", "output_tokens"),
+                    ):
                         value = getattr(failed_usage, attr, None)
                         known[key] = value if type(value) is int and value >= 0 else 0
-                    value = getattr(getattr(failed_usage, "output_tokens_details", None), "reasoning_tokens", None)
-                    known["reasoning"] = value if type(value) is int and value >= 0 else 0
+                    value = getattr(
+                        getattr(failed_usage, "output_tokens_details", None),
+                        "reasoning_tokens",
+                        None,
+                    )
+                    known["reasoning"] = (
+                        value if type(value) is int and value >= 0 else 0
+                    )
                     for key, value in known.items():
                         usage_totals[key] += value
                     log.info(
@@ -379,7 +423,9 @@ async def run_agent(
             usage_totals["requests"] += int(usage.requests)
             usage_totals["input"] += int(usage.input_tokens)
             usage_totals["output"] += int(usage.output_tokens)
-            usage_totals["reasoning"] += int(usage.output_tokens_details.reasoning_tokens or 0)
+            usage_totals["reasoning"] += int(
+                usage.output_tokens_details.reasoning_tokens or 0
+            )
             text = ItemHelpers.text_message_outputs(result.new_items).strip()
             if text:
                 transcript_parts.append(text)
@@ -391,7 +437,11 @@ async def run_agent(
                     f"{usage_totals['requests']} model request(s), {usage_totals['input']} input / "
                     f"{usage_totals['output']} output tokens "
                     f"({usage_totals['reasoning']} reasoning)"
-                    + ("; usage incomplete: failed-provider usage unavailable" if usage_incomplete else ""),
+                    + (
+                        "; usage incomplete: failed-provider usage unavailable"
+                        if usage_incomplete
+                        else ""
+                    ),
                 )
                 return AgentRunResult(
                     submitted=submitted_holder["value"],
