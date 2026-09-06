@@ -378,15 +378,15 @@ NAV_JS = r"""
     applySort();
   }
   // -- draggable sidebar width --
-  const sb = $("sb"), resizer = $("sb-resizer");
-  function setWidth(px){ px = Math.max(180, Math.min(720, px)); sb.style.flexBasis = px + "px"; sb.style.width = px + "px"; }
+  const sbEl = $("sb"), resizer = $("sb-resizer");
+  function setWidth(px){ px = Math.max(180, Math.min(720, px)); sbEl.style.flexBasis = px + "px"; sbEl.style.width = px + "px"; }
   try { const w = localStorage.getItem("ecarsi.serve.sbWidth"); if (w) setWidth(parseInt(w, 10)); } catch (e) {}
   if (resizer) {
     let dragging = false;
     resizer.addEventListener("mousedown", ev => { dragging = true; document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none"; ev.preventDefault(); });
     window.addEventListener("mousemove", ev => { if (!dragging) return; setWidth(ev.clientX); });
     window.addEventListener("mouseup", () => { if (!dragging) return; dragging = false; document.body.style.cursor = ""; document.body.style.userSelect = "";
-      try { localStorage.setItem("ecarsi.serve.sbWidth", parseInt(sb.style.width, 10)); } catch (e) {} });
+      try { localStorage.setItem("ecarsi.serve.sbWidth", parseInt(sbEl.style.width, 10)); } catch (e) {} });
   }
   // -- bind / unbind (edit the registry file through the server) --
   function say(text, bad){ msg.textContent = text; msg.className = "callout" + (bad ? " bad" : ""); msg.style.display = "block"; }
