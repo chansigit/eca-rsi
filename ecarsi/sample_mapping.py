@@ -68,11 +68,37 @@ def build_mapping(h5ad: Path, unit: Path | None, spec: dict | None, identify,
             cost.record(unit or h5ad.parent, f"{L.PERSAMPLE}/identify/{source}",
                         getattr(identify, "last_cost", None), "identify experiment column")
         from .persample import _validate_sample_column
-        problem = _validate_sample_column(decision, profile)
-        if problem:
-            raise ValueError(f"{source}: {problem}")
-        col = decision["sample_column"]
-        values = normalize(part[col]) if col else pd.Series("all", index=part.index)
+        derive = decision.get("derive_from_cell_id") if spec is not None else None
+        missing_as = decision.get("missing_as") if spec is not None else None
+        if derive is not None:
+            # explicit spec only: the library name lives in the original cell ID
+            # (e.g. "AdultBrain_1.<barcode>") and no obs column carries it
+            if not isinstance(derive, str) or re.compile(derive).groups != 1:
+                raise ValueError(f"{source}: derive_from_cell_id must be a regex with exactly one capture group")
+            if not str(decision.get("rationale", "")).strip():
+                raise ValueError(f"{source}: experiment decision requires a rationale")
+            decision = {**decision, "sample_column": None}
+            col = None
+        else:
+            if missing_as is not None and (not isinstance(missing_as, str) or not missing_as.strip()):
+                raise ValueError(f"{source}: missing_as must be a non-empty label")
+            problem = _validate_sample_column(decision, profile, allow_na=missing_as is not None)
+            if problem:
+                raise ValueError(f"{source}: {problem}")
+            col = decision["sample_column"]
+
+        def partition(frame, ids):
+            if derive is not None:
+                got = ids.astype(str).str.extract(derive, expand=False)
+                if got.isna().any():
+                    raise ValueError(f"{source}: derive_from_cell_id does not match {int(got.isna().sum())} cell IDs")
+                return got
+            if col is None:
+                return pd.Series("all", index=frame.index)
+            v = normalize(frame[col])
+            return v.fillna(missing_as) if missing_as is not None else v
+
+        values = partition(part, original_ids.loc[part.index])
         if values.isna().any():
             raise ValueError(f"{source}: sample partition contains missing values")
         # Full source metadata is saved before organ filtering. Check exact
@@ -83,7 +109,7 @@ def build_mapping(h5ad: Path, unit: Path | None, spec: dict | None, identify,
                 raise ValueError(f"source metadata snapshot changed: {source}")
             full = pd.read_csv(path, index_col=0, dtype=str, keep_default_na=False)
             full.index = full.index.astype(str)
-            full_values = normalize(full[col]) if col else pd.Series("all", index=full.index)
+            full_values = partition(full, full.index.to_series())
             for value in values.unique():
                 expected = set(full.index[full_values == value])
                 actual = set(original_ids.loc[values.index[values == value]])

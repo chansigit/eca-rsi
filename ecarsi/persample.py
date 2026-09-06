@@ -54,7 +54,8 @@ def profile_obs(h5ad: Path, max_levels: int = 50) -> dict:
 # ------------------------------------------------------- identify (agent)
 
 
-def _validate_sample_column(decision: dict, profile: dict, *, allow_unknown: bool = False) -> str | None:
+def _validate_sample_column(decision: dict, profile: dict, *, allow_unknown: bool = False,
+                            allow_na: bool = False) -> str | None:
     """None if valid, else a problem description (fix-and-resubmit style)."""
     if not isinstance(decision, dict) or "sample_column" not in decision:
         return "decision must contain sample_column"
@@ -72,9 +73,10 @@ def _validate_sample_column(decision: dict, profile: dict, *, allow_unknown: boo
         return f"picked obs column {col!r}, which does not exist"
     if info["n_unique"] < 1:
         return f"sample column {col!r} has {info['n_unique']} levels — implausible for 10x runs"
-    if info.get("n_na", 0) > 0:
+    if info.get("n_na", 0) > 0 and not allow_na:
         # a column that leaves cells unassigned is not a partition: those
-        # cells would become a bogus "nan" sample (the silent-garbage trap)
+        # cells would become a bogus "nan" sample (the silent-garbage trap);
+        # an explicit sample-map may opt in with missing_as
         return f"sample column {col!r} leaves {info['n_na']} cells NA — not a valid partition"
     return None
 
