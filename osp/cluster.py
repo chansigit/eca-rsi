@@ -435,27 +435,37 @@ def cluster_and_deg(
         print(f"== leiden {key}", flush=True)
         sc.tl.leiden(ad, resolution=float(res), key_added=key, flavor="igraph", n_iterations=2)
 
-    if ad.obs[primary_key].nunique() < 2:
-        raise ValueError(
-            f"primary clustering {primary_key!r} produced fewer than 2 clusters; choose a higher primary_resolution"
-        )
+    # A single leiden community is a legitimate outcome for a small/homogeneous
+    # sample — DEG and PAGA compare clusters against each other, so with only
+    # one there is nothing to compare against; skip both rather than forcing
+    # a split via a higher resolution.
+    single_cluster = ad.obs[primary_key].nunique() < 2
+    if single_cluster:
+        print(f"== {primary_key!r} is a single cluster ({ad.n_obs} cells); skipping DEG/PAGA", flush=True)
 
     print("== umap", flush=True)
     sc.tl.umap(ad)
 
-    print(f"== rank_genes_groups on {primary_key}", flush=True)
-    sc.tl.rank_genes_groups(ad, primary_key, method="wilcoxon", use_raw=True, pts=True)
-    de_df = sc.get.rank_genes_groups_df(ad, group=None)
-    # pct1/pct2 = fraction of cells expressing (non-zero) the gene inside this
-    # cluster / in all other cells; column names match deg_two_groups' output
-    de_df = de_df.rename(columns={"pct_nz_group": "pct1", "pct_nz_reference": "pct2"})
-    de_top = de_df.groupby("group", observed=True).head(top_n_de).reset_index(drop=True)
+    de_columns = ["group", "names", "scores", "logfoldchanges", "pvals", "pvals_adj", "pct1", "pct2"]
+    if single_cluster:
+        de_top = pd.DataFrame(columns=de_columns)
+    else:
+        print(f"== rank_genes_groups on {primary_key}", flush=True)
+        sc.tl.rank_genes_groups(ad, primary_key, method="wilcoxon", use_raw=True, pts=True)
+        de_df = sc.get.rank_genes_groups_df(ad, group=None)
+        # pct1/pct2 = fraction of cells expressing (non-zero) the gene inside this
+        # cluster / in all other cells; column names match deg_two_groups' output
+        de_df = de_df.rename(columns={"pct_nz_group": "pct1", "pct_nz_reference": "pct2"})
+        de_top = de_df.groupby("group", observed=True).head(top_n_de).reset_index(drop=True)
 
     cluster_summary = _cluster_summary_table(ad, primary_key)
 
-    print(f"== paga on {primary_key}", flush=True)
-    sc.tl.paga(ad, groups=primary_key)
-    paga_df = _paga_table(ad, primary_key)
+    if single_cluster:
+        paga_df = pd.DataFrame(columns=["group1", "group2", "connectivity"])
+    else:
+        print(f"== paga on {primary_key}", flush=True)
+        sc.tl.paga(ad, groups=primary_key)
+        paga_df = _paga_table(ad, primary_key)
 
     decontx_by_cluster = None
     if "decontX_counts" in ad.layers:
@@ -485,7 +495,8 @@ def cluster_and_deg(
     if make_plots:
         os.makedirs(resolved_figdir, exist_ok=True)
         _plot_cluster_overview(ad, leiden_keys, score_cols, resolved_figdir)
-        _plot_paga(ad, resolved_figdir)
+        if not single_cluster:
+            _plot_paga(ad, resolved_figdir)
         _plot_qc_violin(ad, primary_key, resolved_figdir)
         if decontx_by_cluster is not None:
             _plot_decontx_cluster_heatmap(ad, primary_key, decontx_by_cluster, counts_layer, resolved_figdir)

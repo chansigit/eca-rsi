@@ -309,6 +309,12 @@ def assert_single_sample(adata, sample_col="sample"):
         raise ValueError(f"expected a single sample, got {len(unique)}: {unique}")
 
 
+# scrublet simulates a doublet distribution from the sample itself; below
+# this many cells that distribution is not statistically meaningful (plate
+# wells this small have been observed to have scrublet flag every cell)
+MIN_CELLS_FOR_SCRUBLET = 100
+
+
 def qc_one_sample(
     adata,
     sample_label=None,
@@ -493,8 +499,12 @@ def qc_one_sample(
         | (obs["pct_counts_mt"] > hard_max_mt_pct)
     ).values
 
+    if run_scrublet and ad.n_obs < MIN_CELLS_FOR_SCRUBLET:
+        print(f"== skipping scrublet: {ad.n_obs} cell(s) < {MIN_CELLS_FOR_SCRUBLET}", flush=True)
+        run_scrublet = False
     if run_scrublet:
-        sc.pp.scrublet(ad)
+        n_prin_comps = min(30, ad.n_obs - 1, ad.n_vars - 1)
+        sc.pp.scrublet(ad, n_prin_comps=max(1, n_prin_comps))
         doublet_flag = ad.obs["predicted_doublet"].astype(bool).values
     else:
         doublet_flag = np.zeros(ad.n_obs, dtype=bool)

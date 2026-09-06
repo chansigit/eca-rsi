@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 import scipy.sparse as sp
 
+from osp import qc
 from osp._decontx.decontx import decontx
 from osp.cluster import run_one_sample_pipeline
 from osp.qc import (
@@ -225,6 +226,7 @@ def _fake_scrublet(threshold):
 @pytest.mark.parametrize("threshold", [0.5, None])
 def test_qc_summary_reports_scrublet_threshold_and_score_distribution(monkeypatch, threshold):
     monkeypatch.setattr("scanpy.pp.scrublet", _fake_scrublet(threshold))
+    monkeypatch.setattr(qc, "MIN_CELLS_FOR_SCRUBLET", 0)  # below-threshold gate is covered separately
     data = ad.AnnData(
         np.ones((5, 3)),
         obs=pd.DataFrame({"sample": ["A"] * 5}),
@@ -236,3 +238,17 @@ def test_qc_summary_reports_scrublet_threshold_and_score_distribution(monkeypatc
     assert summary["median_doublet_score"] == pytest.approx(0.3)
     assert summary["p99_doublet_score"] == pytest.approx(0.6, abs=0.03)
     assert summary["pct_doublet_score_above_0.25"] == pytest.approx(60.0)
+
+
+def test_qc_skips_scrublet_below_min_cells(monkeypatch):
+    calls = []
+    monkeypatch.setattr("scanpy.pp.scrublet", lambda *a, **k: calls.append(1))
+    data = ad.AnnData(
+        np.ones((5, 3)),
+        obs=pd.DataFrame({"sample": ["A"] * 5}),
+        var=pd.DataFrame(index=["G1", "G2", "G3"]),
+    )
+    _, summary = qc_one_sample(data, run_decontx=False, run_dissociation_score=False, make_plots=False)
+    assert not calls, "scrublet must not run below MIN_CELLS_FOR_SCRUBLET"
+    assert "scrublet_threshold" not in summary
+    assert summary["n_doublet"] == 0
