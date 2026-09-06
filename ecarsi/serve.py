@@ -441,7 +441,7 @@ def _navigator_html(items: dict[str, Path], registry_path: Path) -> str:
         '<div class="sb-head">'
         '<div class="ttl"><span>Datasets <small><span id="nav-n">0</span></small></span>'
         '<button class="icon" id="sb-toggle" title="hide sidebar">&#9776;</button></div>'
-        '<input id="nav-q" type="search" placeholder="search name / path / stage / job…" autocomplete="off">'
+        '<input id="nav-q" type="search" placeholder="search name / path / stage…" autocomplete="off">'
         '<div class="sort-row"><span>sort</span><select id="nav-sort">'
         '<option value="name">name</option><option value="cells">cells</option>'
         '<option value="status">status</option></select></div>'
