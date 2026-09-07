@@ -43,13 +43,15 @@ ZMIP_CONTRACT = L.ZMIP_CONTRACT
 
 
 def zmip_command(py: str, h5ad: Path, outdir: Path, model: str, min_cells: str | None,
-                 context: str | None = None) -> str:
+                 context: str | None = None, design: str | None = None) -> str:
     cmd = [py, "-m", "zmip", str(h5ad), "--outdir", str(outdir), "--model", model]
     cmd += D.options("zmip")
     if min_cells and not os.environ.get("ZMIP_MIN_CELLS"):
         cmd += ["--min-cells", str(min_cells)]
     if context:
         cmd += ["--report-context", context]
+    if design:
+        cmd += ["--design-context", design]
     return " ".join(shlex.quote(c) for c in cmd)
 
 
@@ -84,9 +86,10 @@ def main(argv: list[str]) -> int:
     zdir = L.zoomin_dir(out_root)
     py = os.environ.get("ZMIP_PYTHON") or os.environ.get("MSP_PYTHON") or sys.executable
     from . import model
+    from .design import design_text
 
     cmd = zmip_command(py, idir / "annotated.h5ad", zdir, model(), os.environ.get("ZMIP_MIN_CELLS"),
-                       L.report_context(unit, out_root))
+                       L.report_context(unit, out_root), design_text(unit))
     print(f"[zmip] {cmd}")
     if list((idir / ".msp-state").glob("*.pending")):
         raise ValueError("MSP has an unfinished step")

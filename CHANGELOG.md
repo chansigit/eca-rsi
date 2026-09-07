@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Derive a study-design text per unit (`ecarsi.design`: obs columns constant within each sample)
+  and pass it to MSP and ZMIP as `--design-context` in every round. Agent context only; not part of run identity.
+
 ## 0.1.0 — 2026-09-05
 
 Initial PyPI release of the ECA-RSI workflow driver.

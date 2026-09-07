@@ -157,6 +157,10 @@ it is not the current full-workflow dependency list.
 3. **First round.** Decide which samples enter integration, then run MSP
    integration, inspection, and annotation, followed by ZMIP lineage refinement.
    With one included sample, MSP skips Harmony and sample-composition evidence.
+   Obs columns that are constant within every sample but differ across samples
+   (e.g. FACS `subtissue`, `mouse.id`) are passed to the MSP/ZMIP agents as
+   `--design-context`, so a sample-confined cluster is judged against the study
+   design rather than as a batch artefact; preview with `python -m ecarsi.design <unit>`.
 4. **Later rounds.** Take the previous ZMIP survivors, preserve prior labels
    under `rNN_*` columns, and rerun MSP from counts followed by ZMIP. OSP and
    the first-round sample-inclusion decision are not repeated.

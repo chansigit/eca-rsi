@@ -269,15 +269,19 @@ async def _propose(inventories: list[dict]) -> dict:
 
 
 def msp_command(py: str, inputs: list[str], batch_col: str, outdir: Path,
-                species: str | None, model: str, context: str | None = None) -> str:
+                species: str | None, model: str, context: str | None = None,
+                design: str | None = None) -> str:
     """Full msp chain; --annotate implies --inspect. msp skips steps whose
-    contract files exist, so this same command is also the resume command."""
+    contract files exist, so this same command is also the resume command.
+    context/design are agent text, not run identity (see downstream.prepare)."""
     cmd = [py, "-m", "msp", *inputs, "--batch-col", batch_col, "--outdir", str(outdir),
            "--annotate", "--model", model]
     if species:
         cmd += ["--species", species]
     if context:
         cmd += ["--report-context", context]
+    if design:
+        cmd += ["--design-context", design]
     cmd += D.options("msp")
     return " ".join(shlex.quote(c) for c in cmd)
 
@@ -373,7 +377,10 @@ def main(argv: list[str]) -> int:
         finally:
             data.file.close()
     idir = L.crosssample_dir(out_root)
-    cmd = msp_command(py, inputs, batch_col, idir, species, selected_model, L.report_context(unit, out_root))
+    from .design import design_text
+
+    cmd = msp_command(py, inputs, batch_col, idir, species, selected_model, L.report_context(unit, out_root),
+                      design_text(unit))
     print(f"[msp] {cmd}")
 
     # msp's report reads sample_decisions.csv if present — write it before

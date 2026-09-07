@@ -117,6 +117,9 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
 - MSP/ZMIP 使用 0.3 系列，Harmony 2 为 CPU 实现，无需 torch/MSP_DEVICE；RSI 资源副本已同步。
 - `MSP_BATCH_COL` 可显式选择校正列，完整 OSP 实验内必须只有一个值；默认仍为 `eca_sample_id`，
   不自动推断 biological condition 应被校正，不将校正分组用于重切 OSP 实验池。
+- `ecarsi.design` 从 organized.h5ad 的 obs 推导 study design（每样本内恒定、跨样本变化的列，如 FACS 的 `subtissue` / `mouse.id`），
+  以 `--design-context` 原文交给 MSP/ZMIP 的 inspect/annotate agent（含 round N≥2 与 zoomin）；只是 agent 上下文，
+  与 `--report-context` 一样不进 run identity。`python -m ecarsi.design <unit>` 预览文本。
 - 新版内核的输入检查、锁和发布恢复机制不能自动视为 ECA-RSI 外层的端到端保证。
   内核独立验证与配套版本声明也不代替更新组合后的真实运行验证。
 

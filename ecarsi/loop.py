@@ -135,13 +135,15 @@ def _prepare_input(prev_h5ad: Path, out_h5ad: Path, prev_round: int) -> None:
 
 
 def _run_msp_from_h5ad(py: str, h5ad: Path, outdir: Path, batch_col: str, species: str | None, model: str,
-                       context: str | None = None) -> int:
+                       context: str | None = None, design: str | None = None) -> int:
     cmd = [py, "-m", "msp", "--from-h5ad", str(h5ad), "--batch-col", batch_col, "--outdir", str(outdir),
            "--annotate", "--model", model]
     if species:
         cmd += ["--species", species]
     if context:
         cmd += ["--report-context", context]
+    if design:
+        cmd += ["--design-context", design]
     cmd += D.options("msp")
     cmd_s = " ".join(shlex.quote(c) for c in cmd)
     print(f"[msp] {cmd_s}", flush=True)
@@ -314,8 +316,10 @@ def main(argv: list[str]) -> int:
                 _prepare_input(src, inp, n - 1)
                 write_json(receipt, {"source": source_identity, "input": file_identity(inp)})
                 _log(unit, f"round {n} input prepared from round {n - 1} ({_n_obs(inp)} cells)")
+            from .design import design_text
+
             ret = _run_msp_from_h5ad(py, inp, L.crosssample_dir(rdir), man["batch_col"], man.get("species"), model(),
-                                     L.report_context(unit, rdir))
+                                     L.report_context(unit, rdir), design_text(unit))
             if ret != 0:
                 _log(unit, f"round {n} msp failed rc={ret}")
                 return ret
