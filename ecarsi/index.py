@@ -497,7 +497,8 @@ def unit_state(unit: Path) -> dict:
     released = (rel / "summary.md").is_file()
     log = L.read_log(unit)
     last = log[-1] if log else None
-    failed = bool(last) and "failed" in last[1]
+    # "persample complete: N experiments; 0 failed" is the success line, not a failure
+    failed = bool(last) and "failed" in last[1] and not last[1].startswith("persample complete")
     if failed:
         stage, cls = f"failed — {last[1]}", "failed"
     elif last and last[1].startswith("paused by loop_control"):

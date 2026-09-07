@@ -3,7 +3,7 @@ carries no h5ad, and the page there has to say the same thing as at the run root
 import json
 
 from ecarsi import layout as L
-from ecarsi.index import _round_step, rounds_state
+from ecarsi.index import _round_step, rounds_state, unit_state
 
 
 def _touch(d, *names):
@@ -45,3 +45,12 @@ def test_round_input_cells_come_from_the_progress_log(tmp_path):
         "2026-09-06 21:24:30 round 2 input prepared from round 1 (34684 cells)\n")
     (r,) = rounds_state(unit)
     assert r["step"] == "crosssample · integrate" and r["n_in"] == 34684
+
+
+def test_persample_success_line_is_not_a_failure(tmp_path):
+    unit = tmp_path / "unit"
+    unit.mkdir()
+    (unit / L.PROGRESS).write_text("2026-09-07 12:38:29 persample complete: 2 experiments; 0 failed\n")
+    assert unit_state(unit)["stage_class"] != "failed"
+    (unit / L.PROGRESS).write_text("2026-09-07 12:38:29 persample failed: 2 experiments; 1 failed\n")
+    assert unit_state(unit)["stage_class"] == "failed"
