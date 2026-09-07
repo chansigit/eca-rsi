@@ -244,3 +244,58 @@
   12 个:Brain_Myeloid、Brain_Non-Myeloid、Fat、Heart、Large_Intestine、Liver、Lung、Marrow、Pancreas、Skin、Thymus 以及
   Heart 的 subtissue 实为心腔而非门,按同一规则也归 mouse),其余 8 个保持按板校正(板 = 鼠)。v1 的 map 随 v1 运行进了 trash。
   这些 map 尚未真实跑过(没有第三遍计划),只是配置示例。
+
+## 后记 2026-09-07 03:xx–12:xx:容器环境验证 + 新四批(tabula-muris-senis-drop/facs、tome-mouse、brickman-mouse)
+
+容器验证用 calico-aging(kidney 7.7k / lung 20.8k / spleen 26.8k,eca-pp 完整、非 MCA/TM)。三个器官最终在容器里完整
+release(persample、MSP、ZMIP、release、prune、mirror 全程),但前两次尝试各暴露一个环境问题:
+
+- **镜像里没有 `git`**:ecarsi 0.2.0 的 `source_provenance()` 在 persample 崩(`[Errno 2] ... 'git'`)。ecarsi 0.2.1 把
+  provenance 的 commit 查询改成可选(OSError → null);身份本来就不用它。教训:容器里任何 shell-out(git、node)都必须可选。
+- **容器装到了 pandas 3.0.5**:Copy-on-Write 常开,`Series.values` 返回只读数组,osp `_apply_proposal` 的 `mask &= ...`
+  在 cells 级 QC 动作上抛 "output array is read-only"。四个包的测试套件在 pandas 3 下**全部通过**,说明测试覆盖不到 CoW
+  和默认 str dtype 这类行为变化。修法两头:osp 0.1.4(`.to_numpy(copy=True)` + 在 pandas 2 下打开 `mode.copy_on_write`
+  的回归测试)和容器 `build.sh` 固定 `pandas<3`(就地降到 2.3.3,与 dl2025 一致,所有已发布的器官都在这个版本上跑的)。
+  容器与 dl2025 其余差异(scanpy 1.12.4 / igraph 1.0 / leidenalg 0.12 / scipy 1.18 / sklearn 1.9 / numba 0.67)没再出问题。
+- **效率**:容器只加速纯计算步(scrublet 精确 kNN 9 s 对 29 s),而一轮 60 分钟里计算只占一成多(calico spleen 第 1 轮:
+  integrate 5.5 min,inspect agent 9.6 min,annotate agent 17 min,ZMIP ~25 min),同规模器官的轮次时长与 dl2025 批次同区间。
+  收益是可复现、不再依赖 numpy BLAS 补丁,不是墙钟。Ark 429 过载今晚 17 次 / 1547 次 agent 调用(1.1%),全部一次重试成功,
+  与上一批(21 / 1582)持平。
+
+新四批 60 个器官(LANES=60,05:1x 提交)第一小时的失败按根因分四类,加两个部署失误:
+
+1. **规模(tome MOCA 阶段)**:E10.5–E13.5(26.5–45.5 万细胞,sci-RNA-seq3 整期一个样本,TOME 导出没有 embryo 列)在
+   OSP QC 被 OOM 杀(exit -9,158–240G)。E9.5(11.1 万)峰值 57 GiB,所以需求超线性。`gen_rsi.sh` 把 ≥20 万细胞路由到
+   `-p bigmem`(mem = 20 + 1.05 GB/千细胞:E11.5 497G/31 核;1 天墙钟,超时重 sbatch 续跑)。normal 的 `--qos=long`
+   每人只给 32 核 / 4 个作业,用不上。E8.5b(15.4 万,139G)在 normal 活了下来。
+2. **合并版 atlas 的 cell ID 两种格式(senis-drop)**:作者把 Tabula Muris 3 月龄数据(`10X_P4_4_<bc>-1`,channel 在前缀)
+   和 18/21/24 月龄数据(`<bc>-1-<channel>-i-j`,channel 是拼接后缀)拼在一起,没留 channel 列。后缀正则漏掉 11 个器官的
+   老格式细胞(Bladder 2498/8945),persample 拒绝。改成单捕获组的合并正则
+   `^(?:[ACGT]+-1-)?((?:\d+-\d+-\d+)|10X_P\d+_\d+)(?:_[ACGT]+-1)?$`(16 个器官 100%)。已过 persample 的 5 个器官 map 不动
+   (改 map 会使 persample 身份失效)。
+3. **msp 潜伏 bug:obs 里有 `cell` 列**:`integrate/outliers.py` 用 `pd.DataFrame(index=ad.obs_names)` 建表再
+   `df.index.name = "cell"`,pandas 的 Index 对象是共享的,`ad.obs.index` 一起被改名;TMS 自带作者的 `cell` 列(老格式全名,
+   与 index 不同),anndata 两个版本都拒写 `integrated.h5ad`("index.name ('cell') is also used by a column")。此前 130 多个
+   器官没有一个带 `cell` 列。senis-facs 之所以先 release 了 18 个,是因为 `--no-scrublet --no-decontx` 下没有
+   `doublet_score / decontX_contamination`,outlier 函数在改名前就返回了;drop 有这两个指标才触发。修法:`ad.obs_names.copy()`
+   + 回归测试(去掉修正即失败),放在 worktree `$SCRATCH/worktrees/msp-obs-index-name`(分支 obs-index-name,d7cae35,
+   容器里全套测试通过),**只**通过 senis 两批 sbatch 的 `export PYTHONPATH=<worktree>` 生效。原因:`downstream.verify()`
+   在阶段结束时重算 `kernel_runtime`,改主 checkout 的 msp 会让当时正在 crosssample/zoomin 里的 calico/tome 作业以
+   "runtime changed during computation" 失败;身份只比内容,以后主线合并同一内容后 senis 已封存的阶段仍然有效。
+4. **OSP 最小样本(senis-facs Thymus)**:板 B001256 只有 2 个孔,两个都过 QC,`cluster` 要求 ≥3 抛 ValueError;ecarsi 把它归为
+   `qc_too_few_survivors` 却只把 `qc_zero_survivors` 当空样本 → persample 硬失败。临时用 map 的 `exclude_cells`
+   (`where: {cell: [两个孔]}`,reason `plate_below_osp_minimum`,进 needs_review)。**backlog**:OSP 在 <3 存活时把存活细胞
+   追加进 `qc_removed.csv`(reason `too_few_survivors`),ecarsi 把 `qc_too_few_survivors` 也当空样本;需要 osp+ecarsi 同改,
+   等没有作业处于 persample 时再做(persample 身份含 osp 源码)。
+5. **部署失误 A:apptainer 1.5 剥掉 PYTHONPATH**。senis 重提后 drop 器官仍从 `projects/msp` 导入(traceback 路径),
+   worktree 修复没生效。我此前的验证是假阳性:在 worktree 目录里跑 `python -c`,cwd 在 sys.path 最前。
+   `APPTAINERENV_PYTHONPATH` 能透传,包装器 `venvs/eca-ct/python` 现在显式转发;从 `/tmp` 重验:父进程、子进程、
+   `ecarsi.downstream runtime msp` 探针都取 worktree。顺带发现 sbatch 会继承提交 shell 里 module 加的 PYTHONPATH
+   (py-cupy、x11),以前被 apptainer 剥掉反而安全,模板现在 `unset PYTHONPATH` 再按需 export。
+6. **部署失误 B:整批重提没跳过已 release 的器官**(直接循环 sbatch 而不是 submit.sh),10 个多余作业已取消;
+   released 单元被重跑也无害(loop 见到 release 直接退出,scratch 已清)。
+7. 会话在用户睡后被挂起了约 5 小时(06:2x 的取消/重提实际 11:1x 才执行),期间 senis 作业各自撞死在 3.,没有其他损失。
+
+辅助脚本(`_eca-rsi-jobs/`):`scan_status.sh <batch>...`(每器官一行:RELEASED / R jobid / end= exit=N + 最后一行 progress)、
+`register_serve.sh <batch>...`(幂等 scan-add,命名 `<batch>-<organ>`)。`tracker_rsi.py` 改按 `eca_pp_output_dir` 匹配行
+(h5ad 文件名 ≠ 器官目录名:`tms-drop-Bladder.h5ad`、`seurat_object_E3.5.h5ad`)。

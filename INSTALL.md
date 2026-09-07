@@ -11,7 +11,7 @@ ECA-PP 先独立运行；ECA-RSI 环境包含驱动包、OSP/MSP/ZMIP 三个内�
 | 发行名 / import 名 | 源码版本 | 关键依赖与职责 |
 | --- | --- | --- |
 | `ecarsi` / `ecarsi` | 0.2.0 | 驱动；依赖 `agent-harness-bridge[all]>=0.2.4,<0.3`、anndata、scanpy、h5py、numpy、pandas、matplotlib |
-| `osp-sc` / `osp` | 0.1.3 | 每样本 QC、Scrublet、内置 DecontX、聚类和注释建议；`[agent]` 安装 bridge 的全部后端依赖 |
+| `osp-sc` / `osp` | 0.1.4 | 每样本 QC、Scrublet、内置 DecontX、聚类和注释建议；`[agent]` 安装 bridge 的全部后端依赖 |
 | `msp-sc` / `msp` | 0.3.4 | 跨样本整合与审查；依赖 `harmonypy>=2,<3`、`stanhue>=1.1.0`、`standissect-lite>=0.2.0`；`[agent]` 安装后端依赖 |
 | `zmip` / `zmip` | 0.3.4 | lineage 内重算与细化；依赖 `msp-sc>=0.3.3,<0.4` 和 `agent-harness-bridge[all]>=0.2.1,<0.3`，另有运行时 API 兼容检查 |
 | `agent-harness-bridge` / `harness_bridge` | 0.2.4 | core 无依赖；extras 为 `openai`、`claude`、`deepseek`、`all` |
@@ -40,7 +40,7 @@ ECA-PP 先独立运行；ECA-RSI 环境包含驱动包、OSP/MSP/ZMIP 三个内�
 
 ## 3. 安装发行包与驱动源码
 
-**2026-09-07 起的 0.2.0 组合（ecarsi 0.2.0、osp 0.1.3、msp/zmip 0.3.4、bridge 0.2.4）只打了 GitHub tag，尚未上传 PyPI**：
+**2026-09-07 起的 0.2.0 组合（ecarsi 0.2.1、osp 0.1.4、msp/zmip 0.3.4、bridge 0.2.4）只打了 GitHub tag，尚未上传 PyPI**：
 按第 2 节从五个源码 checkout（或对应 tag）`pip install -e` 安装即可；改动版本号后要重新 `pip install -e --no-deps`，
 `runtime_identity()` 才能读到新的 `importlib.metadata` 版本。下面的 PyPI 说明仍描述 0.1.0 组合。
 
@@ -92,6 +92,8 @@ ECA_RSI_PYTHON="apptainer-wrapper"   # 一个 exec apptainer exec --bind /scratc
 ```
 
 已建好的一套在 `/scratch/users/chensj16/venvs/eca-ct/`（`README.md`、`build.sh`、`validate.sh`、`python` 包装脚本）。
+
+**pandas 固定在 `<3`**：容器里不加约束会装到 pandas 3（Copy-on-Write 常开，`Series.values` 返回只读数组），2026-09-07 第一次真实运行（calico-aging）就在 osp 的 cells 级 QC 动作上崩了（osp 0.1.4 修正了这一处，但 pandas 3 的其余行为变化——默认 str dtype 等——没有经过测试覆盖）。目前所有发布过的运行都在 pandas 2.3 上完成，`build.sh` 已固定 `"pandas<3"`。
 若同时开发内核，可改为各仓库的 editable 安装，但需保存具体源码提交。
 每阶段记录实际源码摘要，更新源码后不能默默复用旧计算目录。
 
