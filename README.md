@@ -40,6 +40,7 @@ establish biological accuracy.
 | [MSP](https://github.com/chansigit/msp) (`msp-sc`) | Recompute the shared feature space, integrate samples, inspect populations, and apply annotations and removals. |
 | [ZMIP](https://github.com/chansigit/zmip) | Plan lineages, re-embed selected lineages, refine labels, record removals and reassignments, and merge results. |
 | [agent-harness-bridge](https://github.com/chansigit/agent-harness-bridge) | Provide the shared agent/tool interface, runtime adapters, and failure recovery. |
+| [eca-grain](https://github.com/chansigit/eca-grain) (`eca-grain`) | After release: aggregate a unit into audited grains (metacell-style, one pass, every cell on the ledger) for downstream work such as GRN inference. Does not modify the release. |
 
 The analysis packages implement computation and apply decisions. Agents inspect
 evidence and submit structured decisions through tools, with checks in the
