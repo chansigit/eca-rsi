@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import numpy as np
 import scipy.sparse as sp
+from numba import get_num_threads, njit, prange
 
 from ._dirichlet import fit_dirichlet
 
@@ -32,10 +33,75 @@ __all__ = [
 
 
 def _as_csc(counts) -> sp.csc_matrix:
-    """Return ``counts`` as a float CSC sparse matrix (genes x cells)."""
+    """Return ``counts`` as a float64 CSC sparse matrix (genes x cells);
+    already-conforming input is returned as is (no copy per EM iteration)."""
+    if sp.isspmatrix_csc(counts) and counts.dtype == np.float64:
+        return counts
     if sp.issparse(counts):
-        return counts.tocsc().astype(float)
-    return sp.csc_matrix(np.asarray(counts, dtype=float))
+        return counts.tocsc().astype(np.float64)
+    return sp.csc_matrix(np.asarray(counts, dtype=np.float64))
+
+
+# The per-cell loops below are the whole cost of DecontX (a 19k-cell sample
+# spent 76 of its 86 s in decontx_em's Python loop). They are plain sparse
+# column sweeps, so numba compiles them to native loops with identical
+# arithmetic; the numpy versions stay as the reference the tests compare to.
+@njit(cache=True, parallel=True)
+def _em_sweep(indptr, indices, data, phi, eta, theta, z, pseudocount, new_phi, native_total, n_chunks):
+    # cells are split into contiguous chunks, one per thread; each chunk
+    # accumulates into its own phi slab so no two threads touch the same
+    # entry, then the slabs are summed in a fixed order (deterministic)
+    C = theta.shape[0]
+    G, K = new_phi.shape
+    slabs = np.zeros((n_chunks, G, K))
+    step = (C + n_chunks - 1) // n_chunks
+    for c in prange(n_chunks):
+        for j in range(c * step, min((c + 1) * step, C)):
+            k = z[j] - 1
+            tj = theta[j] + pseudocount
+            cj = 1.0 - theta[j] + pseudocount
+            acc = 0.0
+            for p in range(indptr[j], indptr[j + 1]):
+                i = indices[p]
+                p_native = (phi[i, k] + pseudocount) * tj
+                p_contam = (eta[i, k] + pseudocount) * cj
+                px = p_native / (p_native + p_contam) * data[p]
+                slabs[c, i, k] += px
+                acc += px
+            native_total[j] = acc
+    for c in range(n_chunks):
+        new_phi += slabs[c]
+
+
+@njit(cache=True, parallel=True)
+def _loglik_sweep(indptr, indices, data, phi, eta, theta, z, pseudocount, n_chunks):
+    C = theta.shape[0]
+    partial = np.zeros(n_chunks)
+    step = (C + n_chunks - 1) // n_chunks
+    for c in prange(n_chunks):
+        acc = 0.0
+        for j in range(c * step, min((c + 1) * step, C)):
+            k = z[j] - 1
+            tj = theta[j]
+            cj = 1.0 - theta[j]
+            for p in range(indptr[j], indptr[j + 1]):
+                i = indices[p]
+                acc += data[p] * np.log(phi[i, k] * tj + eta[i, k] * cj + pseudocount)
+        partial[c] = acc
+    return partial.sum()
+
+
+@njit(cache=True, parallel=True)
+def _native_sweep(indptr, indices, data, phi, eta, theta, z, pseudocount, out):
+    for j in prange(theta.shape[0]):
+        k = z[j] - 1
+        lt = np.log(theta[j] + pseudocount)
+        lc = np.log(1.0 - theta[j] + pseudocount)
+        for p in range(indptr[j], indptr[j + 1]):
+            i = indices[p]
+            pn = np.exp(np.log(phi[i, k] + pseudocount) + lt)
+            pc = np.exp(np.log(eta[i, k] + pseudocount) + lc)
+            out[p] = data[p] * (pn / (pc + pn))
 
 
 def decontx_initialize(counts, theta, z, pseudocount: float = 1e-20):
@@ -127,21 +193,8 @@ def decontx_em(
 
     new_phi = np.zeros((G, K), dtype=float)
     native_total = np.zeros(C, dtype=float)
-
-    indptr, indices, data = counts.indptr, counts.indices, counts.data
-    for j in range(C):
-        k = z[j] - 1
-        start, end = indptr[j], indptr[j + 1]
-        if start == end:
-            continue
-        rows = indices[start:end]
-        x = data[start:end]
-        p_native = (phi[rows, k] + pseudocount) * (theta[j] + pseudocount)
-        p_contam = (eta[rows, k] + pseudocount) * (1.0 - theta[j] + pseudocount)
-        normp = p_native / (p_native + p_contam)
-        px = normp * x
-        np.add.at(new_phi[:, k], rows, px)
-        native_total[j] = px.sum()
+    _em_sweep(counts.indptr, counts.indices, counts.data, np.ascontiguousarray(phi), np.ascontiguousarray(eta),
+              theta, z, float(pseudocount), new_phi, native_total, get_num_threads())
 
     if estimate_eta:
         phi_rowsum = new_phi.sum(axis=1)
@@ -184,18 +237,8 @@ def decontx_loglik(counts, theta, eta, phi, z, pseudocount: float = 1e-20):
     eta = np.asarray(eta, dtype=float)
     z = np.asarray(z, dtype=int)
 
-    loglik = 0.0
-    indptr, indices, data = counts.indptr, counts.indices, counts.data
-    for j in range(counts.shape[1]):
-        k = z[j] - 1
-        start, end = indptr[j], indptr[j + 1]
-        if start == end:
-            continue
-        rows = indices[start:end]
-        x = data[start:end]
-        mix = phi[rows, k] * theta[j] + eta[rows, k] * (1.0 - theta[j]) + pseudocount
-        loglik += float(np.sum(x * np.log(mix)))
-    return loglik
+    return float(_loglik_sweep(counts.indptr, counts.indices, counts.data, np.ascontiguousarray(phi),
+                               np.ascontiguousarray(eta), theta, z, float(pseudocount), get_num_threads()))
 
 
 def calculate_native_matrix(counts, theta, eta, phi, z, pseudocount: float = 1e-20) -> sp.csc_matrix:
@@ -205,7 +248,7 @@ def calculate_native_matrix(counts, theta, eta, phi, z, pseudocount: float = 1e-
     scaled by its variational native responsibility ``normp``. Values
     may be non-integer; round for integer counts.
     """
-    counts = _as_csc(counts).copy()
+    counts = _as_csc(counts)
     theta = np.asarray(theta, dtype=float)
     phi = np.asarray(phi, dtype=float)
     eta = np.asarray(eta, dtype=float)
@@ -213,15 +256,6 @@ def calculate_native_matrix(counts, theta, eta, phi, z, pseudocount: float = 1e-
 
     indptr, indices, data = counts.indptr, counts.indices, counts.data
     out = data.copy()
-    for j in range(counts.shape[1]):
-        k = z[j] - 1
-        start, end = indptr[j], indptr[j + 1]
-        if start == end:
-            continue
-        rows = indices[start:end]
-        p_native = np.log(phi[rows, k] + pseudocount) + np.log(theta[j] + pseudocount)
-        p_contam = np.log(eta[rows, k] + pseudocount) + np.log(1.0 - theta[j] + pseudocount)
-        normp = np.exp(p_native) / (np.exp(p_contam) + np.exp(p_native))
-        out[start:end] = data[start:end] * normp
-
+    _native_sweep(indptr, indices, data, np.ascontiguousarray(phi), np.ascontiguousarray(eta), theta, z,
+                  float(pseudocount), out)
     return sp.csc_matrix((out, indices.copy(), indptr.copy()), shape=counts.shape)
