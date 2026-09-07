@@ -87,6 +87,7 @@ ul.warn{margin:.3rem 0 0 1.2rem;padding:0}
 .sk-tip .m{color:#b8c0c8}
 svg.sk{display:block;max-width:100%}svg.sk .sk-stage{font-size:12px;font-weight:600;fill:#1f2328}
 svg.sk .sk-label{font-size:10.5px;fill:#1f2328}svg.sk .sk-label.rm{fill:#7a1f16}
+svg.sk .sk-label.mid{font-weight:600;paint-order:stroke;stroke:#fff;stroke-width:3px;stroke-linejoin:round}
 svg.sk .sk-flow{opacity:.45;transition:opacity .12s}svg.sk .sk-node{stroke:#fff;stroke-width:.5;cursor:pointer}
 svg.sk.dim .sk-flow{opacity:.07}svg.sk.dim .sk-flow.hi{opacity:.85}
 details summary{cursor:pointer;list-style:none}details summary::-webkit-details-marker{display:none}
@@ -168,7 +169,8 @@ function render(){
     gFlows.appendChild(path); paths.push(path); f.el = path; });
   // bars + labels
   const gBars = mk("g", {}); svg.appendChild(gBars);
-  const minLabel = 0.012 * D.total, last = nS - 1;
+  const minLabel = 0.012 * D.total, bigLabel = 0.08 * D.total, last = nS - 1;
+  const colGap = nS === 1 ? innerW : (innerW - barW) / (nS - 1), roomy = colGap >= 220;
   D.nodes.forEach(n => { const x = colX(n.stage);
     const r = mk("rect", {x, y: n.y, width: barW, height: Math.max(n.h, 0.8), fill: color(n), class: "sk-node"});
     const stageTotal = byStage[n.stage].reduce((a, b) => a + b.count, 0);
@@ -182,9 +184,15 @@ function render(){
         + (ins ? `<br><span class="m">from:</span><br>${ins}` : "") + (outs ? `<br><span class="m">to:</span><br>${outs}` : "")); });
     r.addEventListener("mouseleave", () => { unfocus(); hideTip(); });
     gBars.appendChild(r);
-    if (n.count >= minLabel) { const right = n.stage === last;
-      const t = mk("text", {x: right ? x + barW + 6 : x - 6, y: n.y + n.h / 2 + 4, "text-anchor": right ? "start" : "end",
-                            class: "sk-label" + (n.removed ? " rm" : "")});
+    // labels: every readable node in the first and last column (outside the drawing). In
+    // between, all of them only when the columns are far apart; otherwise just the big ones
+    // (≥ 8 % of input), centred on the bar with a white halo — the rest is one hover away.
+    const right = n.stage === last, edge = n.stage === 0 || right;
+    const show = n.count >= minLabel && (edge || roomy || (n.count >= bigLabel && colGap >= 90));
+    if (show) { const mid = !edge && !roomy;
+      const t = mk("text", {x: mid ? x + barW / 2 : (right ? x + barW + 6 : x - 6), y: n.y + n.h / 2 + 4,
+                            "text-anchor": mid ? "middle" : (right ? "start" : "end"),
+                            class: "sk-label" + (n.removed ? " rm" : "") + (mid ? " mid" : "")});
       t.textContent = `${n.name} (${fmt(n.count)})`; gBars.appendChild(t); } });
   el.appendChild(svg);
   function focus(src, dst){ svg.classList.add("dim"); D.flows.forEach(f => f.el.classList.toggle("hi", f.src === src && f.dst === dst)); }
