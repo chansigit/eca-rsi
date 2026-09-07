@@ -13,7 +13,7 @@ import sys
 import threading
 
 from . import layout as L
-from .run_state import digest, file_identity, read_json, write_json, writer_lock
+from .run_state import digest, file_identity, read_json, source_provenance, write_json, writer_lock
 
 STATE = '.rsi-stage.json'
 _HELD = set()
@@ -54,7 +54,7 @@ def runtime(kernel):
         if spec is None or spec.origin is None:
             raise ValueError(f'{name} is unavailable in {sys.executable}')
         root = Path(spec.origin).parent
-        sources[name] = {'path': str(root.resolve()), 'digest': digest({
+        sources[name] = {'digest': digest({  # content only; path/commit go to provenance
             str(p.relative_to(root)): file_identity(p) for p in sorted(root.rglob('*'))
             if p.suffix in {'.py', '.md', '.json'} and '__pycache__' not in p.parts})}
     packages = {}
@@ -134,7 +134,7 @@ def prepare(py, kernel, inputs, outdir, config):
             _check_files(outdir, old['validation']['outputs'])
     elif any((outdir / f).exists() for f in (*L.MSP_CONTRACT, *L.ZMIP_CONTRACT)):
         raise ValueError('legacy downstream outputs have no RSI identity; use a new output directory')
-    write_json(path, {'identity': identity, 'agent': stage_agent(kernel), 'state': 'running'})
+    write_json(path, {'identity': identity, 'provenance': source_provenance(), 'agent': stage_agent(kernel), 'state': 'running'})
     return identity
 
 
@@ -283,7 +283,8 @@ def verify(py, kernel, inputs, outdir, identity=None):
         if kernel_runtime(py, kernel) != identity['runtime']:
             raise ValueError('downstream runtime changed during computation')
         from . import agent_config
-        write_json(Path(outdir) / STATE, {'identity': identity, 'agent': stage_agent(kernel), 'state': 'complete', 'validation': validation})
+        write_json(Path(outdir) / STATE, {'identity': identity, 'provenance': source_provenance(), 'agent': stage_agent(kernel),
+                                          'state': 'complete', 'validation': validation})
     return validation
 
 

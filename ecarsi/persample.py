@@ -20,7 +20,7 @@ from pathlib import Path
 
 from . import cost
 from . import layout as L
-from .run_state import digest, file_identity, read_json, write_json, writer_lock
+from .run_state import digest, file_identity, read_json, source_provenance, write_json, writer_lock
 from .sample_mapping import SAMPLE_KEY, build_mapping, mapping_identity, obs_profile
 from .osp_contract import INPUT_CELLS, REQUEST, is_done, is_empty, is_finished
 
@@ -435,7 +435,7 @@ def _run(args, unit, h5ad, out, bare):
                         "value": e["value"], "n_cells": e["n_cells"],
                         "context": None if bare else L.report_context(unit)}
     man = {"schema_version": 2, "state": old.get("state", "planned") if old else "planned", "h5ad": str(h5ad), **agent_config(),
-           "input_identity": identity, "metadata_identity": metadata, "runtime": runtime, "config": config,
+           "input_identity": identity, "metadata_identity": metadata, "runtime": runtime, "provenance": source_provenance(), "config": config,
            "sample_column": SAMPLE_KEY, "sample_mapping": decision, "explicit_mapping": old["explicit_mapping"] if old else explicit,
            "mapping_identity": mapping_identity(table), "identity": run_identity,
            "species": config["species"], "tissue": config["tissue"], "annotate": config["annotate"],
