@@ -48,6 +48,7 @@ from __future__ import annotations
 import argparse
 import base64
 import glob as _glob
+import gzip
 import hmac
 import html as _h
 import http.server
@@ -321,6 +322,53 @@ def _dataset_state(root: Path) -> dict:
         return {**blank, "stage": f"unreadable: {e}", "cls": "failed"}
 
 
+class StateCache:
+    """dataset_state() of every registered root, refreshed by a background
+    thread. The fleet pages (`/`, `/_home`) need all of them: ~90 stat/open
+    per dataset, and a cold Lustre metadata op costs ~8 ms on Oak (measured
+    2026-09-07: 167 datasets = 15k ops = 0.4 s warm, minutes cold — and the
+    mirror writes of running jobs keep invalidating the client cache). So the
+    warmer pays that cost off the request path every `ttl` seconds and the
+    pages read the last result; dataset / unit pages are still rendered live."""
+
+    def __init__(self, registry: Registry, ttl: float = 60.0):
+        self._registry, self._ttl = registry, ttl
+        self._states: dict[Path, tuple[float, dict]] = {}
+        self._lock = threading.Lock()
+
+    def get(self, root: Path) -> dict:
+        with self._lock:
+            hit = self._states.get(root)
+        if hit and time.time() - hit[0] < 3 * self._ttl:  # warmer alive → never older than ttl; 3x = it died, recompute
+            return hit[1]
+        return self._put(root)
+
+    def _put(self, root: Path) -> dict:
+        st = _dataset_state(root)
+        with self._lock:
+            self._states[root] = (time.time(), st)
+        return st
+
+    def refresh(self) -> None:
+        roots = set(self._registry.snapshot().values())
+        for root in roots:
+            self._put(root)
+        with self._lock:
+            for gone in set(self._states) - roots:
+                del self._states[gone]
+
+    def start(self) -> None:
+        def loop():
+            while True:
+                try:
+                    self.refresh()
+                except Exception as e:  # keep warming; a request falls back to a live read after 3*ttl
+                    sys.stderr.write(f"[serve] state warmer: {e}\n")
+                time.sleep(self._ttl)
+
+        threading.Thread(target=loop, daemon=True, name="state-warmer").start()
+
+
 NAV_CSS = """
 html,body{height:100%}body{display:flex;overflow:hidden}
 aside.sb{width:360px;flex:0 0 360px;background:var(--card);border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0;position:relative}
@@ -365,7 +413,7 @@ a.icon{text-decoration:none}
 """
 
 
-def _navigator_html(items: dict[str, Path], registry_path: Path) -> str:
+def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_state) -> str:
     """Shell: datasets grouped by collection down the left, the selected
     dataset's own pages (root landing page -> its units -> ...) in an iframe on
     the right. The iframe keeps the address in the hash (#/<name>/...), so
@@ -373,7 +421,7 @@ def _navigator_html(items: dict[str, Path], registry_path: Path) -> str:
     e = _h.escape
     groups: dict[str, list[str]] = {}
     for name, p in sorted(items.items()):
-        st = _dataset_state(p)
+        st = state(p)
         coll = index.collection_of(p) or "other"
         short = name[len(coll) + 1:] if name.startswith(coll + "-") else name
         cells = index._n(st["final_cells"])
@@ -461,13 +509,13 @@ HOME_JS = r"""
 """
 
 
-def _home_html(items: dict[str, Path]) -> str:
+def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
     """Overview: what this site is, fleet numbers, and a filterable, sortable
     table of every dataset. This is the page `/` opens."""
     import time
 
     e = _h.escape
-    states = {name: (_dataset_state(p), p) for name, p in items.items()}
+    states = {name: (state(p), p) for name, p in items.items()}
     by = lambda c: sum(1 for s, _ in states.values() if s["cls"] == c)  # noqa: E731
     cells_in = sum(s["n_input"] or 0 for s, _ in states.values())
     cells_out = sum(s["final_cells"] or 0 for s, _ in states.values() if s["cls"] == "released")
@@ -542,9 +590,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     self.path are recomputed per request, which is safe — translate_path
     reads them fresh on every call, not cached from __init__)."""
 
-    def __init__(self, *a, registry: Registry, auth: str | None = None, **kw):
+    def __init__(self, *a, registry: Registry, auth: str | None = None, states: StateCache | None = None, **kw):
         self._registry = registry
         self._auth = auth  # "user:pass" -> HTTP basic auth enforced here, on every request; None = open
+        self._state = states.get if states else _dataset_state  # fleet pages: cached states when a warmer runs
         super().__init__(
             *a, **kw
         )  # directory defaults to cwd; do_GET always overrides it before use
@@ -584,9 +633,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def _send(self, code: int, body: bytes, ctype: str) -> None:
         self.send_response(code)
         self.send_header("Content-Type", ctype)
+        if len(body) > 1024 and "gzip" in self.headers.get("Accept-Encoding", ""):
+            body = gzip.compress(body, 5)  # rendered pages are 80-450 KB of HTML and compress ~5x; matters through the tunnel
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except BrokenPipeError:
+            pass  # the visitor reloaded or left while we were rendering; not worth a traceback in the log
 
     def _json(self, code: int, obj: dict) -> None:
         self._send(code, json.dumps(obj).encode(), "application/json")
@@ -639,11 +695,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._demand_auth()
         raw = self.path.split("?", 1)[0]
         if raw == "/_home":
-            return self._html(_home_html(self._registry.snapshot()))
+            return self._html(_home_html(self._registry.snapshot(), self._state))
         parts = [p for p in raw.split("/") if p]
         if not parts:
             return self._html(
-                _navigator_html(self._registry.snapshot(), self._registry.path)
+                _navigator_html(self._registry.snapshot(), self._registry.path, self._state)
             )
         name = parts[0]
         root = self._registry.get(name)
@@ -764,8 +820,10 @@ def cmd_serve(args: argparse.Namespace) -> int:
         extra[p.name] = p
     registry = Registry(reg_path, extra)
     items = registry.snapshot()
+    states = StateCache(registry)
+    states.start()
     httpd = http.server.ThreadingHTTPServer(
-        (args.bind, args.port), partial(Handler, registry=registry, auth=args.auth)
+        (args.bind, args.port), partial(Handler, registry=registry, auth=args.auth, states=states)
     )
     print(
         f"[serve] navigator on http://{args.bind}:{args.port}/  ({len(items)} dataset(s); registry {reg_path}"
