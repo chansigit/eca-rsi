@@ -62,6 +62,31 @@ python -m pip install \
 ```
 
 开发 RSI 时，可将最后一项替换为 `-e /path/to/source-checkouts/eca-rsi`。
+
+**numpy 必须是带 BLAS 的二进制 wheel。** glibc 2.17 的机器（Sherlock 的 CentOS 7）装不上 numpy ≥2.3 的
+manylinux_2_28 wheel，pip/uv 会退回源码编译且找不到 BLAS，矩阵乘会慢 100 倍以上而不报错
+（2026-09-06 实测：源码编译的 numpy 2.3.4 dgemm 0.8 Gflop/s，numpy 2.2.6 wheel 172 Gflop/s）。
+这类机器上固定 `numpy<2.3`（`python -m pip install "numpy==2.2.6" --only-binary=:all:`），装完核对：
+
+```bash
+python -c "import numpy as np; np.show_config()" | grep -A2 "blas:"   # 必须有 found: true
+python -c "import numpy as np, time; x=np.random.rand(4000,4000); t=time.perf_counter(); x@x; print(time.perf_counter()-t)"   # 应 < 1 s
+```
+
+**更省事的做法是 Apptainer 容器**（Sherlock 节点自带 apptainer）：用原样的 `python:3.12-slim` 镜像
+（Debian 13，glibc 2.41）在容器里建 venv，所有包都能装官方 manylinux wheel（numpy/scipy 自带 OpenBLAS，
+DYNAMIC_ARCH 在 Intel/AMD 节点上各自选内核），宿主机的 glibc 版本不再相关：
+
+```bash
+apptainer pull python312-slim.sif docker://python:3.12-slim          # 一次
+apptainer exec --bind /scratch,/oak,/home python312-slim.sif bash -c '
+  python -m venv $SCRATCH/venvs/eca-ct/.venv && $SCRATCH/venvs/eca-ct/.venv/bin/pip install \
+    -e ".../agent-harness-bridge[all]" -e ".../osp[agent]" -e ".../msp[agent]" -e ".../zmip" -e ".../eca-rsi" pyarrow scikit-image'   # scikit-image: scanpy 的 scrublet 自动阈值需要，osp 未声明
+# 之后一律通过容器调用这个 venv（wheel 按 glibc 2.41 装的，宿主机直接跑不了）：
+ECA_RSI_PYTHON="apptainer-wrapper"   # 一个 exec apptainer exec --bind /scratch,/oak,/home <sif> <venv>/bin/python "$@" 的脚本
+```
+
+已建好的一套在 `/scratch/users/chensj16/venvs/eca-ct/`（`README.md`、`build.sh`、`validate.sh`、`python` 包装脚本）。
 若同时开发内核，可改为各仓库的 editable 安装，但需保存具体源码提交。
 每阶段记录实际源码摘要，更新源码后不能默默复用旧计算目录。
 
