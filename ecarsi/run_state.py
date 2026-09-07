@@ -75,9 +75,25 @@ def runtime_identity() -> dict:
         folder = Path(spec.origin).parent
         files = sorted(p for p in folder.rglob("*") if p.suffix in (".py", ".md", ".json") and "__pycache__" not in p.parts)
         source = digest({str(p.relative_to(folder)): file_identity(p) for p in files})
+        # content only: the checkout path and git commit are provenance (see
+        # source_provenance), not identity — a doc-only commit or the same
+        # source at another path must not invalidate a resume
+        result["packages"][module] = {"version": importlib.metadata.version(dist), "source_sha256": source}
+    return result
+
+
+def source_provenance(modules=("ecarsi", "osp", "msp", "zmip", "harness_bridge")) -> dict:
+    """Where each importable package came from (path + git HEAD), for humans
+    reading a manifest. Recorded next to the identity, never compared."""
+    import importlib.util
+    import subprocess
+
+    result = {}
+    for module in modules:
+        spec = importlib.util.find_spec(module)
+        if spec is None or spec.origin is None:
+            continue
+        folder = Path(spec.origin).parent
         git = subprocess.run(["git", "-C", str(folder), "rev-parse", "HEAD"], capture_output=True, text=True)
-        result["packages"][module] = {
-            "version": importlib.metadata.version(dist), "path": str(folder.resolve()),
-            "commit": git.stdout.strip() if git.returncode == 0 else None, "source_sha256": source,
-        }
+        result[module] = {"path": str(folder.resolve()), "commit": git.stdout.strip() if git.returncode == 0 else None}
     return result

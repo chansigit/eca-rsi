@@ -4,8 +4,8 @@
 自驱动循环,见下文"主线:ecarsi 包"一节。入口:
 
 ```bash
-eca-rsi run <eca-pp 输出目录> <root> [--rounds N] [--serve 8899]   # = organize → 每 unit persample → loop → 落地页;./run-eca-rsi.sh 是薄壳
-eca-rsi organize|persample|loop|serve ...                          # 分步,等价 python -m ecarsi.<step>
+eca-rsi run <eca-pp 输出目录> <root> [--rounds N] [--mirror DIR] [--serve 8899]   # = organize → 每 unit persample → loop → 落地页;./run-eca-rsi.sh 是薄壳
+eca-rsi organize|persample|loop|serve ...                          # 分步,等价 python -m ecarsi.<step>;organize/persample/loop 也收 --mirror DIR
 ```
 
 `run.sh` + `steps/*.md` 是上一代"六步 prompt 循环"(agent 自己写分析代码),完整封存在
@@ -25,7 +25,7 @@ python -m ecarsi.loop        <unit> [--rounds N] [--cap 10] [--force-reopen]
    round 1: ecarsi.crosssample(样本纳入 agent → msp integrate/inspect/annotate)→ ecarsi.zoomin(zmip)
    round N: 上轮 zoomin/annotated_zmip.h5ad,先验列改名 r(N-1)_* → msp --from-h5ad → zmip
 python -m ecarsi.ledger      <unit> [round dirs]    # 逐细胞台账 cell_ledger.csv + Sankey(每步删除流进红色 sink)
-python -m ecarsi.index       <root|unit>            # 从磁盘推导落地页(每步结束也自动写)
+python -m ecarsi.index       <root|unit>            # 从磁盘推导落地页(每步结束也自动写;配了 mirror 就顺手同步一次)
 python -m ecarsi.serve       [dir...] [--registry F] [--port 8899] [--ngrok [--domain D]] [--auth u:p]   # 前台多数据集导航 server,无状态,Ctrl-C 即停
                              scan-add <dir|glob>... [--name N] [--dry-run] | remove <name>... | list [--json]   # 改 registry 文件(~/.config/ecarsi/registry.json)
                              dump [path] | reload <path> [--replace]                                            # registry 文件另存 / 合并;server 按 mtime 自动重读
@@ -41,7 +41,7 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
 
 ```
 <root>/                     organize 的 out_root = 一个数据集一次运行;serve 投这一层
-  index.html  organize/manifest.json
+  index.html  organize/manifest.json  mirror.json(--mirror 的目标目录,ecarsi.mirror)
   units/<unit>/
     index.html  progress.log  input/  persample/<sample>/
     rounds/roundNN/{manifest.json, input.h5ad(N≥2), crosssample/, zoomin/, ledger/, stats.txt, decision.txt}
@@ -59,10 +59,22 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
   每条带 round/step/scope/cluster/细胞数/report 链接;同一记录渲染 md / json / html。
 - persample manifest 记录的 `dir` 是绝对路径,但所有读取方一律用 `layout.sample_dir()` 按 basename
   在本 unit 的 persample/ 下定位,目录搬家不坏。
+- **`--mirror DIR`(`ecarsi.mirror`)**:root 在 scratch、长期目录(Oak)给 serve 看时用。目标记在 `<root>/mirror.json`,
+  续跑和单步不必再传。每次写落地页(`index.write_all`:organize 完成、persample 每个样本完成、每轮各阶段、release)
+  都把整个 root 的**轻量文件**(html / md / json / txt / log / png / svg / `.pruned`、≤1 MiB 的 csv;永不 h5ad / parquet / csv.gz /
+  大表 / 点目录)增量拷到 DIR(size+mtime 相同就不动,copy2 保留 mtime,先写临时名再 `os.replace`);release 且 prune 之后
+  全量同步(含 final.h5ad、organized.h5ad、台账)并删掉 DIR 里该 unit 子树下 root 已没有的文件——只在 `units/<unit>/` 之内,别处不碰。
+  mirror 只写不读,失败只在 stdout + progress.log 记一行 warning,不让步骤失败。落地页页脚 `run state updated <t>` 取自
+  progress.log / manifest / stats / decision 等状态文件的最新 mtime,拷贝保留 mtime,所以 serve 直接投 DIR 时也能看出新鲜度;
+  DIR 里的 mirror.json 指向自身时页脚标 `a mirror copy of <source>`。`eca-rsi index <root>` 可手工再同步一次。
 
 - **停机只看细胞数**,标签变动不作判据(agent 措辞有随机性):给了 `--rounds N` 就按总轮数发布，允许 `--rounds 1`;
   没给则 (1) 本轮删除比 < 1% 或删除数 < 100,或 (2) 连续三轮删除比 < 2% 即 release；自动模式首轮继续;
   `--cap`(默认 10)是安全上限,触顶强制 release 并标记。`--force-reopen` 越过已有 release 继续开轮。
+- **手动挡**:`<unit>/loop_control.json` 在每个轮次边界重读(唯一做决定的时刻),可在跑的过程中编辑:
+  `cap`(改安全上限)、`rounds`(固定总轮数)、`extra_rounds_after_convergence`(收敛后再跑 n 轮)、
+  `stop_after_round`(该轮后暂停:退出码 3,不 release,重跑续上)。每次覆盖写 progress.log 并进该轮 stats 的 reason;
+  文件不合法只记录不生效。轮次循环是 while,上限每轮重算。
 - **生物学疑点不触发人工审批**：低 confidence、inspect flag、样本排除、reassign 等在
   `release/needs_review.md` 汇总。执行失败、无可纳入样本或缺少必需输出仍会使单元失败，不能承诺必然发布。
 - **每次删除都逐细胞记账**:osp `qc_removed.csv`、msp `annotation_removed.csv`、zmip `zmip_removed.csv`;
@@ -105,6 +117,8 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
 - crosssample/zoomin/loop 通过 `downstream.py` 校验输入内容、实际解释器/源码、计算参数和输出；
   `unit_lock` 覆盖整个下游写入，MSP pending 与 ZMIP publication 凭证不能被文件跳步绕过。
   counts 使用 HDF5 直接分块比较，不能用 AnnData backed 模式假设 layers 不占内存。
+- 运行身份只比内容:`runtime_identity()` / `downstream.runtime()` 记录各包版本 + 源码摘要;checkout 路径和 git HEAD
+  另存为 `provenance`(persample manifest 与各阶段 `.rsi-stage.json`),只供追溯,不参与比对。改文档提交、同一源码换 worktree 路径都不影响续跑。
 - `release_state.py` 在暂存目录生成完整 release 和收据，再可恢复地切换目录；入口先恢复中断发布。
   重开保留旧 round decision，只新增轮次；已有 release 无收据仅可浏览，计算用新目录。
   `--allow-agent-change` 不覆盖新版 persample 严格身份要求；下游 agent 预算变化不使计算身份失效。
@@ -115,6 +129,16 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
 - MSP/ZMIP 使用 0.3 系列，Harmony 2 为 CPU 实现，无需 torch/MSP_DEVICE；RSI 资源副本已同步。
 - `MSP_BATCH_COL` 可显式选择校正列，完整 OSP 实验内必须只有一个值；默认仍为 `eca_sample_id`，
   不自动推断 biological condition 应被校正，不将校正分组用于重切 OSP 实验池。
+- sample map 的两个声明式细胞策略（`ecarsi/policies.py`，见 FRONT_INTEGRATION.md）：`exclude_cells`
+  （`where` 精确匹配 / `blank` 所列列全缺失；切 OSP subset 之前执行；未知列报错、命中 0 细胞记 warning；
+  每个细胞写 `persample/excluded_cells.csv`，ledger 记 `removed:persample-policy:<reason>`，守恒检查含此项，
+  needs_review 有 `policy_excluded` 节；规则进映射身份）和 `batch_key`（host 校验每个 OSP 实验内恒定、NA 忽略并按实验回填、
+  ≥2 值；crosssample 作 MSP batch 列，`selection: sample_map`；`MSP_BATCH_COL` 仍优先，二者冲突报错）。
+  无 map 时样本列 agent 可提 `exclude_cells` 提案（host 用 obs 当场校验，≤ 来源一半），`batch_key` 只由 agent **推荐**进
+  needs_review，从不自动应用。FACS 例：blank `mouse.id`+`subtissue`+`cell_ontology_class` → `upstream_qc_blank`，`batch_key: mouse.id`。
+- `ecarsi.design` 从 organized.h5ad 的 obs 推导 study design（每样本内恒定、跨样本变化的列，如 FACS 的 `subtissue` / `mouse.id`），
+  以 `--design-context` 原文交给 MSP/ZMIP 的 inspect/annotate agent（含 round N≥2 与 zoomin）；只是 agent 上下文，
+  与 `--report-context` 一样不进 run identity。`python -m ecarsi.design <unit>` 预览文本。
 - 新版内核的输入检查、锁和发布恢复机制不能自动视为 ECA-RSI 外层的端到端保证。
   内核独立验证与配套版本声明也不代替更新组合后的真实运行验证。
 

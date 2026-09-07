@@ -6,12 +6,13 @@ served as-is (ecarsi.serve) and rendered from disk alone (ecarsi.index):
 
     <root>/                                  organize's out_root = one dataset run
       index.html                             root landing page (ecarsi.index)
+      mirror.json                            where --mirror copies this root (ecarsi.mirror)
       organize/manifest.json                 detection, profiles, plan, audit
       units/<unit>/
         index.html                           unit landing page (ecarsi.index)
         progress.log                         every event of every step
         input/{organized.h5ad, manifest.json}
-        persample/{manifest.json, <sample>/…}            osp, once
+        persample/{manifest.json, excluded_cells.csv, <sample>/…}   osp, once
         rounds/roundNN/
           manifest.json                      round 1: inclusion decision + batch key
           input.h5ad                         round >= 2: previous survivors, r(N-1)_* priors
@@ -51,6 +52,9 @@ MANIFEST = "manifest.json"
 RUN_STATE = "run_state.json"
 UPSTREAM = "upstream"
 SAMPLE_MAPPING = "sample_mapping.csv.gz"
+MIRROR = "mirror.json"
+LOOP_CONTROL = "loop_control.json"  # <unit>/: manual overrides the loop reads at every round boundary
+EXCLUDED_CELLS = "excluded_cells.csv"  # persample/: cells a sample-map policy dropped before OSP (ledger source)
 
 # step contracts — a step is complete when every file exists
 PS_CONTRACT = ("report.html", "clustered.h5ad")
@@ -62,6 +66,15 @@ MSP_CONTRACT = ("integrated.h5ad", "report.html", "inspection_proposal.json",
                 "annotation_proposal.json", "annotated.h5ad")
 ZMIP_CONTRACT = ("zmip_plan.json", "annotated_zmip.h5ad", "report.html")
 ZMIP_LINEAGE_CONTRACT = ("annotation_proposal.json", "annotated.h5ad", "report.html")
+# What a landing page may rely on to tell a step is finished: only the light
+# files a --mirror copy carries (never an h5ad), one per step, all written at
+# that step's end. Computation keeps validating against the full contracts.
+PS_LIGHT = ("report.html", "qc_summary.csv")
+PS_ANNOTATE_LIGHT = PS_LIGHT + ("annotation_proposal.json",)
+MSP_INTEGRATED_LIGHT = ("integration_summary.csv",)
+MSP_LIGHT = ("inspection_proposal.json", "annotation_proposal.json", "annotation_removed.csv", "report.html")
+ZMIP_LIGHT = ("zmip_plan.json", "zmip_removed.csv", "report.html")
+ZMIP_LINEAGE_LIGHT = ("annotation_proposal.json", "report.html")
 
 
 # ---------------------------------------------------------------- root / unit
@@ -94,6 +107,16 @@ def units(root: Path) -> list[Path]:
 def root_of(unit: Path) -> Path | None:
     """The dataset root a unit lives in (None for a unit run outside a root)."""
     return unit.parent.parent if unit.parent.name == UNITS else None
+
+
+def base_of(target: Path) -> Path:
+    """The tree one run of one dataset occupies: the root, or a bare unit
+    run outside any root. This is what ecarsi.mirror copies as a whole."""
+    return target if is_root(target) else (root_of(target) or target) if is_unit(target) else target
+
+
+def mirror_file(base: Path) -> Path:
+    return base / MIRROR
 
 
 # ---------------------------------------------------------------- unit parts

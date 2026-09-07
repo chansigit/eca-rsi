@@ -23,6 +23,15 @@ deliberately NOT a criterion):
                      release so the loop cannot run forever.
 The loop never stops for a human: doubts accumulate as flags and are
 reported once, in release/needs_review.{md,json} (ecarsi.review).
+
+Manual overrides — <unit>/loop_control.json, re-read at every round
+boundary (the only moment a decision is made), so it can be edited while a
+round is running and takes effect when that round ends:
+    {"cap": 12,                            # raise/lower the safety cap
+     "rounds": 8,                          # or fix the total like --rounds
+     "extra_rounds_after_convergence": 2,  # keep going n rounds past the stop rule
+     "stop_after_round": 9}                # pause (exit 3, no release) after round 9; re-run to continue
+Every override is logged and written into that round's stats reason.
 --force-reopen continues past an existing release (the superseded round's
 decision becomes 'continue').
 
@@ -48,7 +57,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import cost, crosssample, prune, review, zoomin
+from . import cost, crosssample, mirror, prune, review, zoomin
 from . import downstream as D
 from . import release_state as R
 from .run_state import file_identity, read_json, write_json
@@ -63,23 +72,83 @@ PLATEAU_ROUNDS = 3
 DEFAULT_CAP = 10           # safety ceiling in auto mode (forced, flagged release)
 
 
-def decide(n: int, stats: list[dict], rounds: int | None, cap: int) -> tuple[str, str]:
-    """(decision, reason) after round n; stats includes round n."""
+def decide(n: int, stats: list[dict], rounds: int | None, cap: int, extra: int = 0) -> tuple[str, str]:
+    """(decision, reason) after round n; stats includes round n. `extra` keeps
+    the loop going that many rounds past the convergence rule (counted through
+    the recorded reasons, so it survives a resume); the cap still wins."""
     st = stats[-1]
     if rounds is not None:
         return ("release", f"fixed --rounds {rounds}") if n >= rounds else ("continue", f"--rounds {rounds}")
     if n == 1:
         return "continue", "round 1 never releases"
-    if st["frac"] < RELEASE_FRAC or st["removed"] < RELEASE_MIN_REMOVED:
-        return "release", (f"removed {100 * st['frac']:.2f}% < {100 * RELEASE_FRAC:.0f}%" if st["frac"] < RELEASE_FRAC
-                           else f"removed {st['removed']} cells < {RELEASE_MIN_REMOVED}")
-    last = stats[-PLATEAU_ROUNDS:]
-    if len(last) == PLATEAU_ROUNDS and all(x["frac"] < PLATEAU_FRAC for x in last):
-        fracs = ", ".join(f"{100 * x['frac']:.2f}%" for x in last)
-        return "release", f"last {PLATEAU_ROUNDS} rounds each removed < {100 * PLATEAU_FRAC:.0f}% ({fracs})"
     if n >= cap:
         return "release", f"FORCED: safety cap {cap} rounds reached"
-    return "continue", f"removed {100 * st['frac']:.2f}% ({st['removed']} cells)"
+    converged = None
+    if st["frac"] < RELEASE_FRAC or st["removed"] < RELEASE_MIN_REMOVED:
+        converged = (f"removed {100 * st['frac']:.2f}% < {100 * RELEASE_FRAC:.0f}%" if st["frac"] < RELEASE_FRAC
+                     else f"removed {st['removed']} cells < {RELEASE_MIN_REMOVED}")
+    else:
+        last = stats[-PLATEAU_ROUNDS:]
+        if len(last) == PLATEAU_ROUNDS and all(x["frac"] < PLATEAU_FRAC for x in last):
+            fracs = ", ".join(f"{100 * x['frac']:.2f}%" for x in last)
+            converged = f"last {PLATEAU_ROUNDS} rounds each removed < {100 * PLATEAU_FRAC:.0f}% ({fracs})"
+    if converged is None:
+        return "continue", f"removed {100 * st['frac']:.2f}% ({st['removed']} cells)"
+    done = sum(1 for x in stats[:-1] if str(x.get("reason", "")).startswith("converged"))
+    if done < extra:
+        return "continue", f"converged ({converged}); extra round {done + 1}/{extra}"
+    return "release", converged + (f"; +{extra} extra round(s) done" if extra else "")
+
+
+CONTROL_KEYS = {"cap": int, "rounds": int, "extra_rounds_after_convergence": int, "stop_after_round": int}
+
+
+def read_control(unit: Path) -> dict:
+    """<unit>/loop_control.json, validated; a bad file is reported and ignored
+    (never fails a run). Values: cap/rounds/stop_after_round >= 1,
+    extra_rounds_after_convergence >= 0, rounds may be null."""
+    p = unit / L.LOOP_CONTROL
+    if not p.is_file():
+        return {}
+    try:
+        raw = json.loads(p.read_text())
+        if not isinstance(raw, dict):
+            raise ValueError("not a JSON object")
+        out = {}
+        for key, value in raw.items():
+            if key not in CONTROL_KEYS:
+                raise ValueError(f"unknown key {key!r} (allowed: {', '.join(CONTROL_KEYS)})")
+            if value is None:
+                if key == "rounds":
+                    out[key] = None
+                continue
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"{key} must be an integer")
+            low = 0 if key == "extra_rounds_after_convergence" else 1
+            if value < low:
+                raise ValueError(f"{key} must be >= {low}")
+            out[key] = value
+        return out
+    except (OSError, ValueError) as exc:
+        _log(unit, f"loop_control.json ignored: {exc}")
+        return {}
+
+
+def _controls(unit: Path, args, seen: dict) -> tuple[int | None, int, int, int | None]:
+    """(rounds, cap, extra, stop_after) for the next decision: CLI values
+    overridden by loop_control.json; each change is logged once."""
+    ctl = read_control(unit)
+    rounds = ctl["rounds"] if "rounds" in ctl else args.rounds
+    cap = ctl.get("cap", args.cap)
+    extra = ctl.get("extra_rounds_after_convergence", 0)
+    stop_after = ctl.get("stop_after_round")
+    now = {"rounds": rounds, "cap": cap, "extra_rounds_after_convergence": extra, "stop_after_round": stop_after}
+    base = {"rounds": args.rounds, "cap": args.cap, "extra_rounds_after_convergence": 0, "stop_after_round": None}
+    for key, value in now.items():
+        if seen.get(key, base[key]) != value:
+            _log(unit, f"loop_control: {key} {seen.get(key, base[key])} -> {value}")
+    seen.update(now)
+    return rounds, cap, extra, stop_after
 
 
 PREV_COLS = ("msp_ann_cluster", "msp_ann_coarse", "msp_ann_fine", "msp_ann_action",
@@ -135,13 +204,15 @@ def _prepare_input(prev_h5ad: Path, out_h5ad: Path, prev_round: int) -> None:
 
 
 def _run_msp_from_h5ad(py: str, h5ad: Path, outdir: Path, batch_col: str, species: str | None, model: str,
-                       context: str | None = None) -> int:
+                       context: str | None = None, design: str | None = None) -> int:
     cmd = [py, "-m", "msp", "--from-h5ad", str(h5ad), "--batch-col", batch_col, "--outdir", str(outdir),
            "--annotate", "--model", model]
     if species:
         cmd += ["--species", species]
     if context:
         cmd += ["--report-context", context]
+    if design:
+        cmd += ["--design-context", design]
     cmd += D.options("msp")
     cmd_s = " ".join(shlex.quote(c) for c in cmd)
     print(f"[msp] {cmd_s}", flush=True)
@@ -229,11 +300,15 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--force-reopen", action="store_true", help="continue past an existing release")
     ap.add_argument("--no-prune", action="store_true",
                     help="keep every round's intermediate h5ads after release (default: ecarsi.prune drops them)")
+    ap.add_argument("--mirror", metavar="DIR",
+                    help="keep a copy of the run root here: light files after every stage, everything at release (ecarsi.mirror)")
     args = ap.parse_args(argv)
     unit = Path(args.unit).resolve()
     if not L.is_unit(unit):
         print(f"[loop] {unit} is not a unit dir (no {L.INPUT}/organized.h5ad)")
         return 2
+    if args.mirror:
+        mirror.configure(L.base_of(unit), args.mirror)
     L.rounds_root(unit).mkdir(exist_ok=True)
 
     R.recover(unit)
@@ -246,10 +321,12 @@ def main(argv: list[str]) -> int:
             if not args.no_prune:
                 prune.prune_unit(unit)
                 D.seal_release(unit, L.rounds(unit))
+            mirror.sync(unit, full=True)
             print(f"[loop] already released: {summary} (use --force-reopen to continue)")
             return 0
         published_rounds = int(read_json(L.release_dir(unit) / "summary.json")["rounds"])
-        limit = args.rounds if args.rounds is not None else args.cap
+        c_rounds, c_cap, _, _ = _controls(unit, args, {})
+        limit = c_rounds if c_rounds is not None else c_cap
         if limit <= published_rounds:
             raise ValueError("force-reopen requires a round limit greater than the published history")
         superseded = True
@@ -260,20 +337,25 @@ def main(argv: list[str]) -> int:
     py = os.environ.get("MSP_PYTHON", sys.executable)
     rounds: list[Path] = []
     stats: list[dict] = []
-    last_round = args.rounds if args.rounds is not None else args.cap
-    for n in range(1, last_round + 1):
+    seen_controls: dict = {}
+    decision = None
+    n = 0
+    while True:  # the limits are re-read every round, so loop_control.json can move them while we run
+        n += 1
+        c_rounds, c_cap, c_extra, c_stop = _controls(unit, args, seen_controls)
+        if n > (c_rounds if c_rounds is not None else c_cap):
+            break
         rdir = L.round_dir(unit, n)
-        rdir.mkdir(exist_ok=True)
-        rounds.append(rdir)
         dec_p, st_p = rdir / L.DECISION, rdir / L.STATS
         if dec_p.is_file() and st_p.is_file():
+            rounds.append(rdir)
             if not superseded or n > published_rounds:
                 D.check_round(rdir)
             st = read_stats(st_p)
             st.setdefault("elapsed_s", _elapsed_from_log(unit, n))
             stats.append(st)
             if "reason" not in st:  # stats.txt from before reasons were recorded
-                st["reason"] = decide(n, stats, args.rounds, args.cap)[1]
+                st["reason"] = decide(n, stats, c_rounds, c_cap, c_extra)[1]
             decision = dec_p.read_text().strip()
             _log(unit, f"round {n} already decided: {decision} (resume)")
             if decision == "release" and not (superseded and n == len(stats)):
@@ -282,6 +364,12 @@ def main(argv: list[str]) -> int:
                 # Keep historical decisions immutable; reopening adds a new round.
                 _log(unit, f"round {n} historical release retained; continuing (--force-reopen)")
             continue
+        if c_stop is not None and n > c_stop:
+            _log(unit, f"paused by loop_control after round {c_stop}; re-run to continue")
+            write_all(unit)
+            return 3
+        rdir.mkdir(exist_ok=True)
+        rounds.append(rdir)
 
         _log(unit, f"round {n} start")
         write_all(unit)
@@ -314,8 +402,10 @@ def main(argv: list[str]) -> int:
                 _prepare_input(src, inp, n - 1)
                 write_json(receipt, {"source": source_identity, "input": file_identity(inp)})
                 _log(unit, f"round {n} input prepared from round {n - 1} ({_n_obs(inp)} cells)")
+            from .design import design_text
+
             ret = _run_msp_from_h5ad(py, inp, L.crosssample_dir(rdir), man["batch_col"], man.get("species"), model(),
-                                     L.report_context(unit, rdir))
+                                     L.report_context(unit, rdir), design_text(unit))
             if ret != 0:
                 _log(unit, f"round {n} msp failed rc={ret}")
                 return ret
@@ -332,7 +422,8 @@ def main(argv: list[str]) -> int:
         st = {"n_in": n_in, "n_out": n_out, "removed": removed, "frac": frac,
               "elapsed_s": round(time.time() - t0, 1)}
         stats.append(st)
-        decision, reason = decide(n, stats, args.rounds, args.cap)
+        c_rounds, c_cap, c_extra, c_stop = _controls(unit, args, seen_controls)  # edits made during the round count now
+        decision, reason = decide(n, stats, c_rounds, c_cap, c_extra)
         st["decision"], st["reason"] = decision, reason
         _write_stats(st_p, st)
         _log(unit, f"round {n} stats removed={removed}/{n_in} ({100 * frac:.2f}%) decision={decision} "
@@ -343,12 +434,18 @@ def main(argv: list[str]) -> int:
         write_all(unit)
         if decision == "release":
             break
+        if c_stop is not None and n >= c_stop:
+            _log(unit, f"paused by loop_control after round {n}; re-run to continue")
+            return 3
 
+    if decision != "release":
+        raise ValueError("loop ended without a release decision (round limit below the completed history?)")
     forced = str(stats[-1].get("reason", "")).startswith("FORCED")
     _release(unit, rounds, stats, forced, superseded)
     if not args.no_prune:
         prune.prune_unit(unit)
     D.seal_release(unit, rounds)
+    mirror.sync(unit, full=True)  # the whole unit incl. h5ads; drops what prune removed from the copy
     print(f"[done] {summary}")
     return 0
 

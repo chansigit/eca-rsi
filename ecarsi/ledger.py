@@ -9,7 +9,7 @@ ONE table — one row per cell that entered persample — with a column group
 per stage:
 
     cell, sample
-    osp_status  (kept | removed:<qc_reason>)                osp_coarse, osp_fine
+    osp_status  (kept | removed:<qc_reason> | removed:persample-policy:<reason>)   osp_coarse, osp_fine
     rNN_msp_status  (kept | excluded-sample | removed:<source>)   rNN_msp_coarse, rNN_msp_fine
     rNN_zmip_status (kept | not-zoomed | removed:<source>)        rNN_zmip_lineage, rNN_zmip_coarse, rNN_zmip_fine
 
@@ -41,6 +41,8 @@ from matplotlib.patches import PathPatch
 from matplotlib.path import Path as MPath
 
 from . import layout as L
+from . import policies as P
+from .osp_contract import is_empty
 
 REMOVED_PREFIX = "removed:"
 OTHER_MIN_FRAC = 0.01  # labels below this share of a stage are pooled into "other"
@@ -137,7 +139,10 @@ def _persample_frames(unit: Path) -> list[pd.DataFrame]:
         raise ValueError("duplicate persample manifest samples/directories")
     for item in entries:
         d = L.sample_dir(unit, item)
-        o = _obs(d / "clustered.h5ad", ["_ann_coarse", "_ann_fine"])
+        if is_empty(d, item.get("identity")):
+            o = pd.DataFrame({c: pd.Series(dtype=str) for c in ("_ann_coarse", "_ann_fine")})
+        else:
+            o = _obs(d / "clustered.h5ad", ["_ann_coarse", "_ann_fine"])
         r = _table(d / "qc_removed.csv", ["cell", "qc_reason"])
         if r["qc_reason"].eq("").any():
             raise ValueError(f"missing QC removal reason: {d}")
@@ -161,6 +166,14 @@ def _persample_frames(unit: Path) -> list[pd.DataFrame]:
                                     "osp_status": REMOVED_PREFIX + r["qc_reason"]}, index=r.index))
     if not frames:
         raise ValueError(f"no persample outputs under {L.persample_root(unit)}")
+    policy = L.persample_root(unit) / L.EXCLUDED_CELLS
+    if policy.is_file():
+        # sample-map exclude_cells: dropped before any OSP subset, reason per cell
+        gone = _table(policy, ["cell", "reason"])
+        if gone["reason"].eq("").any():
+            raise ValueError(f"missing exclusion reason: {policy}")
+        frames.append(pd.DataFrame({"sample": "", "osp_status": REMOVED_PREFIX + P.STEP + ":" + gone["reason"]},
+                                   index=gone.index))
     all_ids = pd.concat(frames).index
     actual = _cell_ids(all_ids, "persample ledger")
     if _obs_source(L.input_h5ad(unit)) is not None:
@@ -398,10 +411,10 @@ def draw_sankey(ledger: pd.DataFrame, stages: list[tuple[str, str | None, str]],
                 dst_off[d] += h
                 _bezier(ax, x_pos[i] + bar_w, -y0a, -(y0a + h), x_pos[i + 1], -y1a, -(y1a + h),
                         color(d) if d.startswith("removed:") else color(s_))
-    for i, (name, _, _) in enumerate(stages):
-        ax.text(x_pos[i] + bar_w / 2, 0.03, name, ha="center", va="bottom", fontsize=11, fontweight="bold")
+    for i, (name, _, _) in enumerate(stages):  # vertical, so many rounds of "round N · msp/zmip" never collide
+        ax.text(x_pos[i] + bar_w / 2, 0.03, name, ha="center", va="bottom", rotation=90, fontsize=11, fontweight="bold")
     ax.set_xlim(-0.9, x_pos[-1] + bar_w + 0.9)
-    ax.set_ylim(-1.15, 0.08)
+    ax.set_ylim(-1.15, 0.06 + 0.03 * max(len(name) for name, _, _ in stages))
     ax.axis("off")
     ax.set_title(title, fontsize=12)
     fig.tight_layout()

@@ -38,14 +38,19 @@ OVER_BUDGET_FRAC = 0.10  # per-round removal budget the loop treats as "too much
 
 KINDS: list[tuple[str, str, str]] = [
     ("upstream_review", "Input and per-sample review",
-     "Upstream quality flags and OSP execution or QC warnings; see persample/needs_review.json."),
+     "Upstream quality flags, OSP execution or QC warnings and advisory batch-key recommendations "
+     "(never applied); see persample/needs_review.json."),
+    ("policy_excluded", "Cells excluded before OSP by policy",
+     "Declarative exclude_cells rules of the sample map (or an agent proposal the host validated the same way), "
+     "applied before any QC. Every cell is in persample/excluded_cells.csv and the ledger (step persample-policy)."),
     ("convergence", "Loop convergence",
      "The loop did not stop on its own, or a round removed more than the per-round budget."),
     ("removed", "Cells removed below high confidence",
      "Irreversible. Each row is a cluster an agent deleted with medium/low confidence, or a lineage whose "
      "zoom-in removal exceeded the soft budget after a forced second look."),
     ("sample_excluded", "Samples excluded from integration",
-     "Whole samples the inclusion agent kept out. They stay on disk untouched (persample/)."),
+     "Whole samples the inclusion agent kept out, or that OSP QC emptied (step persample). "
+     "They stay on disk untouched (persample/)."),
     ("reassigned", "Clusters moved between lineages",
      "Zoom-in reassignments. The same population moving every round means the coarse label upstream is unstable."),
     ("inspect_flag", "Inspection flags",
@@ -224,6 +229,23 @@ def collect(unit: Path, rounds: list[Path], stats: list[dict], forced: bool) -> 
             items.append(Item("upstream_review", 0, entry["step"], scope=entry["source"],
                               note=json.dumps(entry["detail"], ensure_ascii=False),
                               link=f"{L.PERSAMPLE}/needs_review.md"))
+    ps = L.persample_manifest(unit)
+    if ps.is_file():
+        man = _json(ps)
+        sizes = {s["value"]: int(s.get("n_cells", 0)) for s in man.get("samples", [])}
+        for rule in (man.get("sample_mapping") or {}).get("exclude_cells", []):
+            cond = ("blank in all of " + ", ".join(rule["blank"]) if "blank" in rule
+                    else " and ".join(f"{c} in {v}" for c, v in rule["where"].items()))
+            items.append(Item("policy_excluded", 0, "persample", scope=rule["reason"], n_cells=rule["n_cells"],
+                              label=cond, action="exclude",
+                              note=f"[proposed by {rule['proposed_by']}] " + rule["rationale"]
+                                   + (f" — WARNING: {rule['warning']}" if rule.get("warning") else ""),
+                              link=f"{L.PERSAMPLE}/{L.EXCLUDED_CELLS}"))
+        for value in man.get("empty_samples", []):
+            items.append(Item("sample_excluded", 0, "persample", scope=value, n_cells=sizes.get(value, 0),
+                              action="exclude",
+                              note="no cell passed OSP QC — empty sample, never offered to the inclusion agent; "
+                                   "every cell is in its qc_removed.csv with a reason"))
     for i, (rdir, st) in enumerate(zip(rounds, stats), 1):
         items += _loop_items(i, st, forced, last=(i == len(stats)))
         items += _crosssample_items(i, L.crosssample_dir(rdir), unit)
@@ -304,26 +326,29 @@ def to_markdown(items: list[Item], unit_name: str, n_rounds: int) -> str:
     return "\n".join(lines)
 
 
+# colour of a category's card: bad = irreversible, warn = changed the input set or labels, info = advisory
+KIND_TONE = {"convergence": "bad", "removed": "bad", "sample_excluded": "warn", "reassigned": "warn",
+             "policy_excluded": "warn", "upstream_review": "info", "inspect_flag": "info", "plan_warning": "info"}
+
+
 def to_html(items: list[Item], base: str = "") -> str:
-    """HTML fragment (sections + tables) with report links; `base` prefixes
-    the unit-relative links (e.g. 'units/x/' on the root page)."""
-    cs = counts(items)
-    if not cs:
+    """HTML fragment: one card per non-empty category (coloured left border,
+    count in the heading, one table); `base` prefixes the unit-relative links
+    (e.g. 'units/x/' on the root page)."""
+    if not items:
         return '<p class="empty">Nothing to review.</p>'
     e = _h.escape
-    out = ['<div class="cards review-cards">']
-    out += [f'<a class="card kind-{k}" href="#review-{k}"><span class="num">{n}</span>'
-            f'<span class="lbl">{e(t)}</span><span class="sub">{f"{c:,} cells" if c else "&nbsp;"}</span></a>'
-            for k, t, n, c in cs]
-    out.append("</div>")
+    out = []
     for kind, title, desc in KINDS:
         sel = [it for it in items if it.kind == kind]
         if not sel:
             continue
         rows = [_row(it) for it in sel]
         used = _used_cols(rows)
-        out.append(f'<h3 id="review-{kind}" class="kind-{kind}">{e(title)} <span class="count">{len(sel)}</span></h3>'
-                   f'<p class="desc">{e(desc)}</p><div class="wrap"><table class="review"><thead><tr>'
+        n_cells = sum(it.n_cells or 0 for it in sel)
+        out.append(f'<div class="rv-group tone-{KIND_TONE.get(kind, "none")}" id="review-{kind}"><h3>{e(title)} '
+                   f'<span class="count">{len(sel)}</span>' + (f'<span class="cells">{n_cells:,} cells</span>' if n_cells else "")
+                   + f'</h3><p class="desc">{e(desc)}</p><div class="wrap"><table class="review"><thead><tr>'
                    + "".join(f"<th>{e(_COLS[j])}</th>" for j in used) + "<th></th></tr></thead><tbody>")
         for it, r in zip(sel, rows):
             cells = []
@@ -339,9 +364,9 @@ def to_html(items: list[Item], base: str = "") -> str:
                 else:
                     cell = e(val)
                 cells.append(f'<td class="c-{col.replace(" ", "-")}">{cell}</td>')
-            link = f'<a class="rep" href="{e(base + it.link)}">report ↗</a>' if it.link else ""
+            link = f'<a class="rep" href="{e(base + it.link)}">report</a>' if it.link else ""
             out.append(f"<tr>{''.join(cells)}<td>{link}</td></tr>")
-        out.append("</tbody></table></div>")
+        out.append("</tbody></table></div></div>")
     return "\n".join(out)
 
 

@@ -3,13 +3,16 @@
     python -m ecarsi.crosssample <unit_dir> [round_dir]
 
 Round 1 of the loop; standalone it writes <unit>/rounds/round01 (the loop
-passes the round dir explicitly). Runs after ecarsi.persample (which must have completed WITH annotation for
-every sample — hard prerequisite). Stages:
+passes the round dir explicitly). Runs after ecarsi.persample (which must have finished WITH annotation for
+every sample — hard prerequisite; a sample emptied by OSP QC counts as
+finished and is excluded before inclusion). Stages:
 
   1. RESOLVE (code): samples, batch key, species from persample's manifest.
-     The batch key is persample's sample column — when eca-pp's
-     identify_columns designated a different batch column, persample wins
-     and the eca-pp designation is archived alongside for the audit trail.
+     The batch key is MSP_BATCH_COL if set, else the sample map's declared
+     batch_key (persample validated it constant per experiment), else
+     persample's sample column; env and map disagreeing is an error. Nothing
+     is inferred. When eca-pp's identify_columns designated a different
+     batch column, that designation is archived alongside for the audit trail.
   2. INCLUDE (agent, structured output; skipped when there is exactly one
      sample — it is included as is): reads every sample's QC summary,
      annotation proposal AND its UMAP/QC figures; proposes which samples
@@ -56,7 +59,7 @@ from pathlib import Path
 
 from . import downstream as D
 from .run_state import file_identity, read_json, write_json
-from .osp_contract import is_done
+from .osp_contract import is_empty, is_finished
 from . import cost
 from . import layout as L
 
@@ -113,7 +116,7 @@ def load_persample(unit: Path) -> dict:
     for s in man["samples"]:  # located under this unit, whatever the manifest recorded
         s["dir"] = str(L.sample_dir(unit, s))
     incomplete = [s["value"] for s in man["samples"]
-                  if not is_done(Path(s["dir"]), True, s.get("identity"))]
+                  if not is_finished(Path(s["dir"]), True, s.get("identity"))]
     if incomplete:
         raise SystemExit(
             "persample (with annotation) is a hard prerequisite; incomplete samples: "
@@ -143,6 +146,19 @@ def ecapp_batch_designations(unit: Path) -> dict:
             if isinstance(batch, dict):
                 out[u["name"]] = batch
     return out
+
+
+def resolve_batch_col(ps: dict) -> tuple[str, dict]:
+    """(batch column, integration policy) — explicit env > sample map > experiment column."""
+    experiment_col = ps["sample_column"] or "sample"
+    map_key = ((ps.get("sample_mapping") or {}).get("batch_key") or {}).get("column")
+    env_key = os.environ.get("MSP_BATCH_COL")
+    if env_key and map_key and env_key != map_key:
+        raise ValueError(f"MSP_BATCH_COL={env_key!r} contradicts the sample map's batch_key {map_key!r}; unset one")
+    batch_col = env_key or map_key or experiment_col
+    selection = "explicit" if env_key else "sample_map" if map_key else "compatibility_default"
+    return batch_col, {"experiment_column": experiment_col, "batch_col": batch_col,
+                       "correction": "harmony_if_multiple_batch_values", "selection": selection}
 
 
 # ---------------------------------------------------------------- include
@@ -268,15 +284,19 @@ async def _propose(inventories: list[dict]) -> dict:
 
 
 def msp_command(py: str, inputs: list[str], batch_col: str, outdir: Path,
-                species: str | None, model: str, context: str | None = None) -> str:
+                species: str | None, model: str, context: str | None = None,
+                design: str | None = None) -> str:
     """Full msp chain; --annotate implies --inspect. msp skips steps whose
-    contract files exist, so this same command is also the resume command."""
+    contract files exist, so this same command is also the resume command.
+    context/design are agent text, not run identity (see downstream.prepare)."""
     cmd = [py, "-m", "msp", *inputs, "--batch-col", batch_col, "--outdir", str(outdir),
            "--annotate", "--model", model]
     if species:
         cmd += ["--species", species]
     if context:
         cmd += ["--report-context", context]
+    if design:
+        cmd += ["--design-context", design]
     cmd += D.options("msp")
     return " ".join(shlex.quote(c) for c in cmd)
 
@@ -297,11 +317,8 @@ def main(argv: list[str]) -> int:
     out_root = Path(args.out).resolve() if args.out else L.round_dir(unit, 1)
     # a null sample column means persample ran the whole file as one sample;
     # osp then labels every cell obs["sample"] = "all", which is the batch key
-    experiment_col = ps["sample_column"] or "sample"
-    batch_col = os.environ.get("MSP_BATCH_COL") or experiment_col
-    policy = {"experiment_column": experiment_col, "batch_col": batch_col,
-              "correction": "harmony_if_multiple_batch_values",
-              "selection": "explicit" if os.environ.get("MSP_BATCH_COL") else "compatibility_default"}
+    batch_col, policy = resolve_batch_col(ps)
+    print(f"[batch] correcting by {batch_col!r} ({policy['selection']})")
     species = ps.get("species")
 
     ecapp = ecapp_batch_designations(unit)
@@ -312,6 +329,16 @@ def main(argv: list[str]) -> int:
 
     evidence = {s["value"]: {"identity": s["identity"], "state": file_identity(Path(s["dir"]) / L.RUN_STATE)}
                 for s in ps["samples"]}
+    # samples whose OSP QC removed every cell have no clustered.h5ad and are
+    # excluded here, before the inclusion agent — every one of their cells
+    # is already accounted for in that sample's qc_removed.csv
+    empty = [s for s in ps["samples"] if is_empty(Path(s["dir"]), s["identity"])]
+    offered = [s for s in ps["samples"] if s not in empty]
+    for s in empty:
+        print(f"[exclude] {s['value']}: no cell passed OSP QC (empty sample; {s['n_cells']} cells in qc_removed.csv)")
+    if not offered:
+        print("[fail] every sample is empty after OSP QC")
+        return 4
     mpath = out_root / "manifest.json"
     if mpath.is_file():
         with open(mpath) as f:
@@ -322,7 +349,7 @@ def main(argv: list[str]) -> int:
         decision = man["inclusion"]
         print("[include] reusing recorded inclusion decision")
     else:
-        inventories = [_sample_inventory(s) for s in ps["samples"]]
+        inventories = [_sample_inventory(s) for s in offered]
         decision = propose_inclusion(inventories)
         cost.record(unit, f"{out_root.name}/inclusion", getattr(propose_inclusion, "last_cost", None), "sample inclusion")
         man = {
@@ -334,11 +361,12 @@ def main(argv: list[str]) -> int:
             "ecapp_batch_designations": ecapp,
             "inclusion": decision,
             "inclusion_evidence": evidence,
+            "empty_samples": [s["value"] for s in empty],
         }
         out_root.mkdir(parents=True, exist_ok=True)
         write_json(mpath, man)
 
-    validate_inclusion(decision, [s["value"] for s in ps["samples"]])
+    validate_inclusion(decision, [s["value"] for s in offered])
     by_val = {s["value"]: s for s in ps["samples"]}
     included = [e["sample"] for e in decision["samples"] if e["include"]]
     excluded = [(e["sample"], e["reason"]) for e in decision["samples"] if not e["include"]]
@@ -361,7 +389,10 @@ def main(argv: list[str]) -> int:
         finally:
             data.file.close()
     idir = L.crosssample_dir(out_root)
-    cmd = msp_command(py, inputs, batch_col, idir, species, selected_model, L.report_context(unit, out_root))
+    from .design import design_text
+
+    cmd = msp_command(py, inputs, batch_col, idir, species, selected_model, L.report_context(unit, out_root),
+                      design_text(unit))
     print(f"[msp] {cmd}")
 
     # msp's report reads sample_decisions.csv if present — write it before

@@ -67,8 +67,9 @@ eca-pp-output/
 
 The input can also be a single source directory containing `standardize/`.
 Source directory names must be unique. ECA-PP's step-local `.history/` archives
-are ignored; unexpected H5AD files outside those archives cause validation to
-fail. Keep ECA-RSI outputs outside the input tree and the source repository.
+and any ECA-RSI run root (a directory holding `organize/manifest.json`, such as a
+finished run mirrored next to `standardize/`) are ignored; other unexpected H5AD
+files cause validation to fail. Keep ECA-RSI outputs outside the input tree and the source repository.
 
 Organize checks upstream status and exit codes, opens each accepted H5AD, and
 validates cell/gene IDs, dimensions, and finite nonnegative values in the
@@ -83,6 +84,37 @@ within each source. Two sources both using `sample=S1` remain separate OSP
 inputs. A technical batch column is not automatically an experimental sample
 column; explicit sample mappings are supported. See
 [FRONT_INTEGRATION.md](FRONT_INTEGRATION.md) for mapping formats.
+
+A sample map can also declare two cell policies that the host applies
+deterministically and never infers (`ecarsi/policies.py`):
+
+```json
+{
+  "sources": {"Lung": {"sample_column": "plate.barcode", "rationale": "Smart-seq2 plate = library"}},
+  "exclude_cells": [
+    {"blank": ["mouse.id", "subtissue", "cell_ontology_class"],
+     "reason": "upstream_qc_blank",
+     "rationale": "wells the authors' QC dropped; metadata left blank ('missing')"}
+  ],
+  "batch_key": "mouse.id"
+}
+```
+
+`exclude_cells` rules (`where`: exact string match, AND across columns;
+`blank`: missing-family value in every listed column) drop cells before any
+OSP subset is cut. An unknown column is an error; a rule matching no cell is
+a recorded warning. Every excluded cell is listed in
+`persample/excluded_cells.csv` with its reason and appears in the cell ledger
+as `removed:persample-policy:<reason>`; the release's `needs_review` lists
+each rule under "Cells excluded before OSP by policy". `batch_key` names the
+obs column Harmony corrects by instead of the experiment (for plate = mouse x
+FACS gate designs, the mouse); the host requires it to be constant within
+every experiment (blank cells ignored, then filled with their experiment's
+value in the OSP subset) and to take at least two values. `MSP_BATCH_COL`
+still wins; a value contradicting the map is an error. Without a map, the
+sample-column agent may propose exclusion rules, validated exactly like user
+rules and recorded as `proposed_by: agent`; a batch-key *recommendation* from
+the study design goes to `needs_review` only.
 
 ## Run the workflow
 
@@ -116,6 +148,9 @@ eca-rsi --harness openai --model doubao-seed-2-1-turbo-260628 \
 # A fixed total of two rounds, retaining intermediate H5ADs.
 eca-rsi run /path/to/eca-pp-output /path/to/eca-runs/study \
   --rounds 2 --no-prune
+
+# Run on fast scratch, keep a browsable copy on long-term storage.
+eca-rsi run /path/to/eca-pp-output $SCRATCH/eca-runs/study --mirror $OAK/eca-results/study
 ```
 
 `python -m ecarsi` is equivalent to `eca-rsi`. The repository also provides
@@ -156,6 +191,10 @@ it is not the current full-workflow dependency list.
 3. **First round.** Decide which samples enter integration, then run MSP
    integration, inspection, and annotation, followed by ZMIP lineage refinement.
    With one included sample, MSP skips Harmony and sample-composition evidence.
+   Obs columns that are constant within every sample but differ across samples
+   (e.g. FACS `subtissue`, `mouse.id`) are passed to the MSP/ZMIP agents as
+   `--design-context`, so a sample-confined cluster is judged against the study
+   design rather than as a batch artefact; preview with `python -m ecarsi.design <unit>`.
 4. **Later rounds.** Take the previous ZMIP survivors, preserve prior labels
    under `rNN_*` columns, and rerun MSP from counts followed by ZMIP. OSP and
    the first-round sample-inclusion decision are not repeated.
@@ -235,8 +274,10 @@ Each analysis unit has its own release:
 `release/final.h5ad` contains surviving cells; the final broad and fine labels
 are `obs["zmip_ann_coarse"]` and `obs["zmip_ann_fine"]`. Read `summary.md` for
 round counts and stopping reasons, and `needs_review.md` for uncertain labels,
-excluded samples, reassignments, and other review items. The ledger and
-stage-specific removal CSVs record the cell-level history. Cost summaries
+policy-excluded cells, excluded samples, reassignments, and other review
+items. The ledger and stage-specific removal CSVs (`persample/excluded_cells.csv`,
+OSP `qc_removed.csv`, MSP `annotation_removed.csv`, ZMIP `zmip_removed.csv`)
+record the cell-level history. Cost summaries
 include only costs reported and captured by the runtime; missing cost records
 do not mean a run was free or constitute a complete bill.
 
@@ -263,6 +304,19 @@ registry from `~/.config/ecarsi/registry.json` by default and picks up registry
 changes. `eca-rsi run ... --serve 8899` starts it after processing. Optional
 `--ngrok`, `--domain`, and `--auth USER:PASS` support remote access; see
 [INSTALL.md](INSTALL.md).
+
+When the run directory lives on fast, purged scratch and the server reads a
+long-term directory, pass `--mirror DIR` (to `run`, or to `organize`,
+`persample`, `loop`; it is remembered in `<root>/mirror.json`, so resumed steps
+keep mirroring). After every landing-page update the light files of the run
+root — pages, `progress.log`, manifests, `stats.txt` / `decision.txt`, markdown,
+reports, figures, small tables — are copied incrementally to DIR; at release
+(after cleanup) the whole root is copied, including `final.h5ad`,
+`input/organized.h5ad`, and ledgers, and files that cleanup removed are deleted
+from DIR's copy of that unit only. Every page's footer shows `run state updated
+<time>` (the newest state file), so a viewer of DIR knows how fresh it is; a
+served DIR is also labelled a mirror copy of its source. Mirroring never reads
+DIR and never fails a step: a failed copy is a warning in `progress.log`.
 
 ## Resume and storage
 
