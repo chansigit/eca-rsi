@@ -12,7 +12,8 @@ The server runs in the foreground (Ctrl-C stops it and its ngrok tunnel);
 put it in nohup / tmux / an sbatch yourself if you want it in the
 background — nothing here manages processes. Every dataset (an organize
 root or a single unit, see ecarsi.layout) is served under its own name,
-`/<name>/...`; `/` is a navigator page listing them all. Landing pages are
+`/<name>/...`; `/` is the navigator (sidebar grouped by collection) opening
+on an overview page that lists them all. Landing pages are
 rendered from the run directory on every request (ecarsi.index), so a run
 that is still going shows its current stage; the server never writes into
 a dataset directory.
@@ -193,11 +194,12 @@ NAV_JS = r"""
   const $ = id => document.getElementById(id);
   const items = [...document.querySelectorAll("#sb-list .item")], frame = $("frame"), crumb = $("crumb"), open = $("open"),
         q = $("nav-q"), n = $("nav-n"), msg = $("nav-msg"), empty = $("empty"), home = $("home-item"),
-        sort = $("nav-sort"), list = $("sb-list");
+        sort = $("nav-sort"), groups = [...document.querySelectorAll("#sb-list details.group")];
   const names = new Set(items.map(i => i.dataset.name));
   // -- sidebar <-> main pane --
   function mark(name){ items.forEach(i => i.classList.toggle("active", i.dataset.name === name));
-    if (home) home.classList.toggle("active", name === "__home__"); }
+    if (home) home.classList.toggle("active", name === "__home__");
+    const cur = items.find(i => i.dataset.name === name); if (cur) { const g = cur.closest("details.group"); if (g) g.open = true; } }
   function show(path){ if (empty) empty.style.display = "none"; frame.style.display = ""; if (frameUrl() !== path) frame.src = path; }
   function frameUrl(){ try { return frame.contentWindow.location.pathname; } catch (e) { return null; } }
   function fromHash(){
@@ -208,16 +210,14 @@ NAV_JS = r"""
     const p = frameUrl(); if (!p) return;
     if (p === "/_home") {
       if (location.hash !== "#/__home__") history.replaceState(null, "", "#/__home__");
-      try { localStorage.setItem("ecarsi.serve.last", "/_home"); } catch (e) {}
-      mark(null); crumb.textContent = "overview"; open.href = "/_home";
-      try { document.title = frame.contentDocument.title || "ecarsi serve"; } catch (e) {}
+      mark("__home__"); crumb.textContent = "overview"; open.href = "/_home";
+      try { document.title = frame.contentDocument.title || "ECA-RSI runs"; } catch (e) {}
       return;
     }
     const m = p.match(/^\/([^/]+)\//); if (!m) return;
     if (location.hash !== "#" + p) history.replaceState(null, "", "#" + p);
-    try { localStorage.setItem("ecarsi.serve.last", p); } catch (e) {}
     mark(m[1]); crumb.textContent = decodeURIComponent(p); open.href = p;
-    try { document.title = frame.contentDocument.title || "ecarsi serve"; } catch (e) {}
+    try { document.title = frame.contentDocument.title || "ECA-RSI runs"; } catch (e) {}
   });
   window.addEventListener("hashchange", () => { const p = fromHash(); if (p) show(p); });
   items.forEach(i => i.addEventListener("click", ev => { if (ev.target.closest("input.sel")) return; ev.preventDefault(); show("/" + i.dataset.name + "/"); }));
@@ -225,12 +225,13 @@ NAV_JS = r"""
   $("sb-toggle").addEventListener("click", () => document.body.classList.toggle("sb-hidden"));
   $("sb-show").addEventListener("click", () => document.body.classList.remove("sb-hidden"));
   $("reload").addEventListener("click", () => { try { frame.contentWindow.location.reload(); } catch (e) { frame.src = frame.src; } });
-  // -- search --
+  // -- search (a group folds away when none of its datasets match; it opens while a query is typed) --
   function apply(){ const t = q.value.trim().toLowerCase(); let k = 0;
     for (const i of items) { const hit = !t || i.dataset.text.includes(t); i.style.display = hit ? "" : "none"; k += hit; }
+    for (const g of groups) { const any = [...g.querySelectorAll(".item")].some(i => i.style.display !== "none"); g.style.display = any ? "" : "none"; if (t && any) g.open = true; }
     n.textContent = t ? `${k} / ${items.length}` : `${items.length}`; }
   q.addEventListener("input", apply); apply();
-  // -- sort (name / cells / status) --
+  // -- sort (name / cells / status), within each collection --
   const STATUS_RANK = {released: 0, running: 1, neutral: 2, failed: 3};
   function applySort(){
     const mode = sort ? sort.value : "name";
@@ -242,7 +243,7 @@ NAV_JS = r"""
       }
       return a.dataset.name.localeCompare(b.dataset.name);
     });
-    for (const i of sorted) list.appendChild(i);
+    for (const i of sorted) i.parentElement.appendChild(i);
     try { localStorage.setItem("ecarsi.serve.sort", mode); } catch (e) {}
   }
   if (sort) {
@@ -252,7 +253,7 @@ NAV_JS = r"""
   }
   // -- draggable sidebar width --
   const sbEl = $("sb"), resizer = $("sb-resizer");
-  function setWidth(px){ px = Math.max(180, Math.min(720, px)); sbEl.style.flexBasis = px + "px"; sbEl.style.width = px + "px"; }
+  function setWidth(px){ px = Math.max(240, Math.min(720, px)); sbEl.style.flexBasis = px + "px"; sbEl.style.width = px + "px"; }
   try { const w = localStorage.getItem("ecarsi.serve.sbWidth"); if (w) setWidth(parseInt(w, 10)); } catch (e) {}
   if (resizer) {
     let dragging = false;
@@ -272,7 +273,7 @@ NAV_JS = r"""
     });
   }
   // -- bind / unbind (edit the registry file through the server) --
-  function say(text, bad){ msg.textContent = text; msg.className = "callout" + (bad ? " bad" : ""); msg.style.display = "block"; }
+  function say(text, bad){ msg.textContent = text; msg.className = "callout" + (bad ? " tone-bad" : ""); msg.style.display = "block"; }
   async function post(url, body){
     const r = await fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
     let j; try { j = await r.json(); } catch (e) { j = {ok: false, error: r.status + " " + r.statusText}; }
@@ -301,129 +302,94 @@ NAV_JS = r"""
     if (j.ok) { const cur = fromHash(); if (cur && sel.includes(cur.split("/")[1])) location.hash = ""; location.reload(); }
     else { ub.disabled = false; say("unbind failed: " + j.error, true); } });
   sync();
-  // -- initial pane -- default is a dataset; home is only reached by explicit
-  // navigation (hash) or by having been the last page in this browser
-  let first = fromHash();
-  if (!first) { try { const l = localStorage.getItem("ecarsi.serve.last"); if (l && (l === "/_home" || names.has(l.split("/")[1]))) first = l; } catch (e) {} }
-  if (!first && items.length) first = "/" + items[0].dataset.name + "/";
-  if (first) show(first); else { frame.style.display = "none"; if (empty) empty.style.display = ""; }
+  // -- initial pane: the address in the hash, else the overview --
+  const first = fromHash() || "/_home";
+  if (items.length || first === "/_home") show(first); else { frame.style.display = "none"; if (empty) empty.style.display = ""; }
 })();
 """
 
 
 def _dataset_state(root: Path) -> dict:
     """Per-dataset summary read from disk (ecarsi.index), for the navigator / list."""
+    blank = {"units": 0, "released": 0, "n_input": None, "final_cells": None, "rounds": 0, "species": "",
+             "finished": None, "updated": None}
     if not root.is_dir():
-        return {
-            "units": 0,
-            "released": 0,
-            "n_input": None,
-            "final_cells": None,
-            "stage": "missing on disk",
-            "cls": "failed",
-        }
+        return {**blank, "stage": "missing on disk", "cls": "failed"}
     try:
-        units = [root] if L.is_unit(root) else L.units(root)
-        states = [index.unit_state(u) for u in units]
+        return index.dataset_state(root)
     except Exception as e:  # a broken run dir must not take the navigator down
-        return {
-            "units": 0,
-            "released": 0,
-            "n_input": None,
-            "final_cells": None,
-            "stage": f"unreadable: {e}",
-            "cls": "failed",
-        }
-    released = sum(1 for s in states if s["released"])
-    final = [s["final_cells"] for s in states if s["final_cells"] is not None]
-    n_in = [s["n_input"] for s in states if s["n_input"] is not None]
-    if not states:
-        stage, cls = "no units", "neutral"
-    elif released == len(states):
-        stage, cls = "released", "released"
-    elif any(s["stage_class"] == "failed" for s in states):
-        stage, cls = "failed", "failed"
-    else:
-        stage, cls = (
-            states[0]["stage"]
-            if len(states) == 1
-            else f"{released}/{len(states)} released",
-            "running",
-        )
-    return {
-        "units": len(states),
-        "released": released,
-        "n_input": sum(n_in) if n_in else None,
-        "final_cells": sum(final) if final else None,
-        "stage": stage,
-        "cls": cls,
-    }
+        return {**blank, "stage": f"unreadable: {e}", "cls": "failed"}
 
 
 NAV_CSS = """
 html,body{height:100%}body{display:flex;overflow:hidden}
-aside.sb{width:300px;flex:0 0 300px;background:#f9fafb;border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0;position:relative}
+aside.sb{width:360px;flex:0 0 360px;background:var(--card);border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0;position:relative}
 .sb-resizer{position:absolute;top:0;right:-3px;width:6px;height:100%;cursor:col-resize;z-index:6}
 .sb-resizer:hover,.sb-resizer:active{background:var(--accent);opacity:.3}
-.sb-head{padding:.8rem .8rem .4rem;display:flex;flex-direction:column;gap:.5rem}
-.sb-head .ttl{display:flex;align-items:center;justify-content:space-between;font-weight:650;font-size:.95rem}
-.sb-head .ttl small{color:var(--muted);font-weight:400;font-size:.8rem}
-.sb-head input{width:100%;font:inherit;font-size:.9rem;padding:.4rem .7rem;border:1px solid var(--line);border-radius:8px;background:#fff}
-.sb-head .sort-row{display:flex;align-items:center;gap:.4rem;font-size:.78rem;color:var(--muted)}
-.sb-head select{font:inherit;font-size:.82rem;padding:.25rem .4rem;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink)}
-.home-item{margin:.2rem .5rem 0}
-.sb-list{flex:1;overflow-y:auto;padding:.2rem .5rem .5rem}
-.item{display:flex;align-items:center;gap:.45rem;padding:.45rem .55rem;border-radius:8px;cursor:pointer;color:var(--ink);text-decoration:none}
-.item:hover{background:#eef0f3;text-decoration:none}.item.active{background:#e3e7ff}
-.item .body{min-width:0;flex:1}
-.item .nm{font-weight:600;font-size:.92rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.item .meta{font-size:.76rem;color:var(--muted);display:flex;gap:.35rem;align-items:center;flex-wrap:wrap;margin-top:.1rem}
-.item .meta .pill{font-size:.72rem;padding:.1em .55em}
+.sb-head{padding:var(--s2) var(--s2) var(--s1);display:flex;flex-direction:column;gap:var(--s1);border-bottom:1px solid var(--line)}
+.sb-head .brand{display:flex;align-items:center;justify-content:space-between;gap:var(--s1)}
+.sb-head .brand b{font-size:var(--t5)}.sb-head .brand small{color:var(--muted);font-size:var(--t3);font-weight:400;margin-left:.4em}
+.sb-head input[type=search]{width:100%;font:inherit;font-size:var(--t3);padding:8px 12px;border:1px solid var(--line-strong);border-radius:var(--r);background:var(--card)}
+.sb-head .sort-row{display:flex;align-items:center;gap:var(--s1);font-size:var(--t3);color:var(--muted)}
+.sb-head select{font:inherit;font-size:var(--t3);padding:4px 8px;border:1px solid var(--line-strong);border-radius:6px;background:var(--card);color:var(--ink)}
+.sb-list{flex:1;overflow-y:auto;padding:var(--s1)}
+details.group{margin-bottom:4px}details.group>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:var(--s1);padding:8px 10px;border-radius:var(--r);font-size:var(--t3);font-weight:650;color:var(--muted)}
+details.group>summary::-webkit-details-marker{display:none}details.group>summary::before{content:"";width:0;height:0;border:5px solid transparent;border-left-color:currentColor;margin-right:2px;transition:transform .1s}
+details.group[open]>summary::before{transform:rotate(90deg)}details.group>summary:hover{background:var(--none-bg)}
+details.group>summary .gn{margin-left:auto;font-weight:400;font-variant-numeric:tabular-nums}
+.items{padding-left:var(--s1)}
+.item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:var(--r);color:var(--ink);text-decoration:none;font-size:var(--t3)}
+.item:hover{background:var(--none-bg)}.item.active{background:var(--accent-bg);color:var(--accent-ink);font-weight:600}
+.item .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item .cells{color:var(--muted);font-variant-numeric:tabular-nums;font-size:var(--t2);white-space:nowrap}
 .item input.sel{margin:0;flex:0 0 auto;opacity:0;transition:opacity .1s}
 .item:hover input.sel,aside.selecting input.sel,.item input.sel:checked{opacity:1}
-.sb-foot{padding:.6rem .8rem;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:.5rem}
-.sb-foot .row{display:flex;gap:.5rem}
-.sb-foot .reg{font:.72rem ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--muted);word-break:break-all}
-main{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg)}
-.mbar{display:flex;align-items:center;gap:.6rem;padding:.4rem .8rem;border-bottom:1px solid var(--line);background:#fff;font-size:.85rem;color:var(--muted);min-height:2.4rem}
-.mbar #crumb{flex:1;font:.82rem ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.home-item{margin:var(--s1) var(--s2) 0}
+.sb-foot{padding:var(--s1) var(--s2) var(--s2);border-top:1px solid var(--line);display:flex;flex-direction:column;gap:var(--s1)}
+.sb-foot .row{display:flex;gap:var(--s1)}
+.sb-foot .reg{font:var(--t1) var(--mono);color:var(--muted);word-break:break-all}
+main.shell{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg)}
+.mbar{display:flex;align-items:center;gap:var(--s1);padding:6px var(--s2);border-bottom:1px solid var(--line);background:var(--card);font-size:var(--t3);color:var(--muted);min-height:2.75rem}
+.mbar #crumb{flex:1;font:var(--t2) var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 iframe{flex:1;border:0;width:100%;background:var(--bg)}
-#empty{padding:2rem;max-width:70ch}
-.btn{font:inherit;font-weight:600;padding:.4rem .9rem;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
+#empty{padding:var(--s4);max-width:70ch}
+.btn{font:inherit;font-size:var(--t3);font-weight:600;padding:6px 14px;border-radius:var(--r);border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
 .btn:disabled{opacity:.45;cursor:default}.btn.danger{background:var(--bad);border-color:var(--bad)}
-.btn.plain{background:var(--card);color:var(--ink);border-color:var(--line)}.btn.sm{padding:.25rem .6rem;font-size:.82rem}
-.icon{background:none;border:0;cursor:pointer;color:var(--muted);font-size:1.1rem;padding:.1rem .35rem;border-radius:6px}.icon:hover{background:#eef0f3}
+.btn.plain{background:var(--card);color:var(--ink);border-color:var(--line-strong)}
+.icon{background:none;border:0;cursor:pointer;color:var(--muted);font-size:var(--t5);padding:2px 8px;border-radius:6px;line-height:1}.icon:hover{background:var(--none-bg)}
+a.icon{text-decoration:none}
 #sb-show{display:none}body.sb-hidden aside.sb{display:none}body.sb-hidden #sb-show{display:inline-block}
-#bind-form{margin:0;font-size:.85rem}#bind-form input{width:100%;font:.85em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:.4rem .6rem;border:1px solid var(--line);border-radius:6px;margin:.2rem 0}
-#nav-msg{margin:0;font-size:.82rem}
+#bind-form{margin:0}#bind-form input{width:100%;font:var(--t3) var(--mono);padding:6px 10px;border:1px solid var(--line-strong);border-radius:6px;margin:4px 0}
+#bind-form p{margin:var(--s1) 0;color:var(--muted)}
 @media (max-width:760px){aside.sb{position:fixed;inset:0 auto 0 0;z-index:5;box-shadow:0 0 0 100vw rgba(0,0,0,.25)}}
 """
 
 
 def _navigator_html(items: dict[str, Path], registry_path: Path) -> str:
-    """ChatGPT-style shell: datasets down the left, the selected dataset's own
-    pages (root landing page -> its units -> ...) in an iframe on the right.
-    The iframe keeps the address in the hash (#/<name>/...), so reload / back
-    / bookmarks land on the same page."""
+    """Shell: datasets grouped by collection down the left, the selected
+    dataset's own pages (root landing page -> its units -> ...) in an iframe on
+    the right. The iframe keeps the address in the hash (#/<name>/...), so
+    reload / back / bookmarks land on the same page; `/` opens the overview."""
     e = _h.escape
-    rows = []
+    groups: dict[str, list[str]] = {}
     for name, p in sorted(items.items()):
         st = _dataset_state(p)
+        coll = index.collection_of(p) or "other"
+        short = name[len(coll) + 1:] if name.startswith(coll + "-") else name
         cells = index._n(st["final_cells"])
-        meta = [f'<span class="pill {st["cls"]}">{e(st["stage"])}</span>']
-        if cells:
-            meta.append(
-                f"<b>{cells}</b> cells" + ("" if st["cls"] == "released" else " so far")
-            )
-        if st["units"] > 1:
-            meta.append(f"{st['released']}/{st['units']} units")
-        rows.append(
-            f'<a class="item" href="/{e(name)}/" data-name="{e(name)}" title="{e(str(p))}" '
+        groups.setdefault(coll, []).append(
+            f'<a class="item" href="/{e(name)}/" data-name="{e(name)}" title="{e(name)} · {e(st["stage"])} · {e(str(p))}" '
             f'data-cells="{st["final_cells"] or 0}" data-cls="{e(st["cls"])}" '
-            f'data-text="{e((name + " " + str(p) + " " + st["stage"]).lower())}">'
-            f'<input class="sel" type="checkbox" value="{e(name)}" title="select for unbind">'
-            f'<div class="body"><div class="nm">{e(name)}</div><div class="meta">{" · ".join(meta)}</div></div></a>'
+            f'data-text="{e((name + " " + coll + " " + str(p) + " " + st["stage"]).lower())}">'
+            f'<input class="sel" type="checkbox" value="{e(name)}" aria-label="select {e(name)} for unbind">'
+            f'<span class="dot {e(st["cls"])}" title="{e(st["stage"])}"></span>'
+            f'<span class="nm">{e(short)}</span>'
+            + (f'<span class="cells">{cells}</span>' if cells else "") + "</a>"
         )
+    rows = "".join(
+        f'<details class="group" open><summary>{e(coll)}<span class="gn">{len(rs)}</span></summary><div class="items">{"".join(rs)}</div></details>'
+        for coll, rs in sorted(groups.items())
+    )
     hint = (
         "A bindable directory is an eca-rsi <b>organize root</b> (contains <code>organize/manifest.json</code> or a "
         "<code>units/</code> dir — e.g. <code>&lt;dataset&gt;/rsi</code>, the <code>&lt;root&gt;</code> you gave "
@@ -431,112 +397,128 @@ def _navigator_html(items: dict[str, Path], registry_path: Path) -> str:
         "<code>input/manifest.json</code> — e.g. <code>&lt;root&gt;/units/&lt;unit&gt;</code>). "
         "Absolute path on the server host; a raw eca-pp <code>standardize/</code> dir or a bare h5ad is not bindable."
     )
-    sidebar_rows = (
-        "".join(rows)
-        if rows
-        else '<p class="muted" style="padding:.5rem">nothing bound yet</p>'
-    )
+    empty_note = '<p class="muted" style="padding:8px">nothing bound yet</p>'
     sidebar = (
-        '<aside class="sb" id="sb"><div class="sb-resizer" id="sb-resizer" title="drag to resize"></div>'
+        '<aside class="sb" id="sb" aria-label="datasets"><div class="sb-resizer" id="sb-resizer" title="drag to resize"></div>'
         '<div class="sb-head">'
-        '<div class="ttl"><span>Datasets <small><span id="nav-n">0</span></small></span>'
-        '<button class="icon" id="sb-toggle" title="hide sidebar">&#9776;</button></div>'
-        '<input id="nav-q" type="search" placeholder="search name / path / stage…" autocomplete="off">'
-        '<div class="sort-row"><span>sort</span><select id="nav-sort">'
+        f'<div class="brand"><span><b>ECA-RSI runs</b><small><span id="nav-n">{len(items)}</span> datasets</small></span>'
+        '<button class="icon" id="sb-toggle" title="hide sidebar" aria-label="hide sidebar">&#9776;</button></div>'
+        '<input id="nav-q" type="search" placeholder="Filter datasets…" aria-label="filter datasets" autocomplete="off">'
+        '<div class="sort-row"><label for="nav-sort">sort</label><select id="nav-sort">'
         '<option value="name">name</option><option value="cells">cells</option>'
         '<option value="status">status</option></select></div>'
         "</div>"
-        '<a class="item home-item" id="home-item" href="/_home" data-name="__home__" title="overview">'
-        '<span style="width:1.1em;text-align:center">&#8962;</span>'
-        '<div class="body"><div class="nm">Overview</div></div></a>'
-        f'<div class="sb-list" id="sb-list">{sidebar_rows}</div>'
+        '<a class="item home-item" id="home-item" href="/_home" data-name="__home__">'
+        '<span class="nm"><b>Overview</b> · all datasets</span></a>'
+        f'<div class="sb-list" id="sb-list">{rows or empty_note}</div>'
         '<div class="sb-foot">'
-        '<div class="row"><button id="bind-open" class="btn sm">+ Bind…</button><button id="unbind-go" class="btn sm danger" disabled>Unbind…</button></div>'
+        '<div class="row"><button id="bind-open" class="btn plain">+ Bind…</button><button id="unbind-go" class="btn danger" disabled>Unbind…</button></div>'
         '<div id="bind-form" class="callout" style="display:none"><b>Directory to bind</b>'
-        '<input id="bind-path" type="text" placeholder="/oak/…/<dataset>/rsi" autocomplete="off" spellcheck="false">'
-        '<input id="bind-name" type="text" placeholder="name (default: directory basename)" autocomplete="off">'
-        f'<p class="desc" style="margin:.3rem 0">{hint}</p>'
-        '<div class="row"><button id="bind-go" class="btn sm">Bind</button><button id="bind-cancel" class="btn sm plain">Cancel</button></div></div>'
-        '<div id="nav-msg" class="callout" style="display:none"></div>'
+        '<input id="bind-path" type="text" placeholder="/oak/…/<dataset>/rsi" aria-label="directory path" autocomplete="off" spellcheck="false">'
+        '<input id="bind-name" type="text" placeholder="name (default: directory basename)" aria-label="name" autocomplete="off">'
+        f"<p>{hint}</p>"
+        '<div class="row"><button id="bind-go" class="btn">Bind</button><button id="bind-cancel" class="btn plain">Cancel</button></div></div>'
+        '<div id="nav-msg" class="callout" style="display:none" role="status"></div>'
         f'<div class="reg" title="registry file: bind/unbind edit it; nothing in the run directories is touched">{e(str(registry_path))}</div>'
         "</div></aside>"
     )
     main = (
-        '<main><div class="mbar"><button class="icon" id="sb-show" title="show sidebar">&#9776;</button>'
-        '<span id="crumb"></span><button class="icon" id="reload" title="reload page">&#8635;</button>'
-        '<a id="open" href="/" target="_blank" title="open in a new tab">&#8599;</a></div>'
+        '<main class="shell"><div class="mbar"><button class="icon" id="sb-show" title="show sidebar" aria-label="show sidebar">&#9776;</button>'
+        '<span id="crumb"></span><button class="icon" id="reload" title="reload page" aria-label="reload page">&#8635;</button>'
+        '<a class="icon" id="open" href="/" target="_blank" title="open in a new tab" aria-label="open in a new tab">&#8599;</a></div>'
         '<iframe id="frame" name="frame" title="dataset"></iframe>'
-        '<div id="empty" style="display:none"><h2>Nothing bound yet</h2><p class="desc">Use <b>+ Bind…</b> in the sidebar or, on the server host, '
+        '<div id="empty" style="display:none"><h2>Nothing bound yet</h2><p>Use <b>+ Bind…</b> in the sidebar or, on the server host, '
         "<code>eca-rsi serve scan-add &lt;dir-or-glob&gt;</code>. The server picks up registry changes on the next request.</p>"
-        f'<p class="desc">{hint}</p></div></main>'
+        f"<p>{hint}</p></div></main>"
     )
     return (
         '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width,initial-scale=1"><title>ecarsi serve</title>'
+        '<meta name="viewport" content="width=device-width,initial-scale=1"><title>ECA-RSI runs</title>'
         f"<style>{index.CSS}{NAV_CSS}</style></head><body>{sidebar}{main}<script>{NAV_JS}</script></body></html>"
     )
 
 
-HOME_CSS = """
-body{margin:0;background:var(--bg)}
-.home{max-width:64ch;margin:3.5rem auto;padding:0 1.5rem}
-.home .logo{display:flex;align-items:center;gap:.7rem;margin-bottom:.3rem}
-.home .logo .mark{width:2.4rem;height:2.4rem;border-radius:9px;background:linear-gradient(135deg,var(--accent),#7c86ff);
-  color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1.15rem;flex:0 0 auto}
-.home .logo h1{margin:0;font-size:1.5rem}
-.home .tag{color:var(--muted);margin:.1rem 0 1.6rem}
-.home .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:.7rem;margin-bottom:1.6rem}
-.home .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:.7rem .9rem}
-.home .stat .v{font-size:1.5rem;font-weight:700}
-.home .stat .k{font-size:.78rem;color:var(--muted)}
-.home ul{padding-left:1.2rem;color:var(--muted);font-size:.9rem;line-height:1.7}
-.home a{color:var(--accent)}
+HOME_JS = r"""
+(function(){
+  const q = document.getElementById("ds-q"), table = document.getElementById("ds-table"), n = document.getElementById("ds-n");
+  if (!q || !table) return;
+  const body = table.tBodies[0], rows = [...body.rows];
+  function filter(){ const t = q.value.trim().toLowerCase(); let k = 0;
+    for (const r of rows) { const hit = !t || r.dataset.text.includes(t); r.hidden = !hit; k += hit; }
+    n.textContent = (t ? k + " of " + rows.length : rows.length) + " datasets"; }
+  q.addEventListener("input", filter); filter();
+  // sortable columns: click a header; numbers start descending, text ascending; click again to flip
+  const ths = [...table.tHead.rows[0].cells]; let col = -1, asc = true;
+  ths.forEach((th, i) => { const b = th.querySelector("button"); if (!b) return;
+    b.addEventListener("click", () => {
+      const num = th.hasAttribute("data-num");
+      asc = col === i ? !asc : !num; col = i;
+      const key = r => { const c = r.cells[i], v = c.dataset.v !== undefined ? c.dataset.v : c.textContent.trim(); return num ? (Number(v) || 0) : v.toLowerCase(); };
+      rows.sort((a, b) => { const x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : 0) * (asc ? 1 : -1); });
+      for (const r of rows) body.appendChild(r);
+      ths.forEach((h, j) => h.setAttribute("aria-sort", j === i ? (asc ? "ascending" : "descending") : "none")); }); });
+})();
 """
 
 
 def _home_html(items: dict[str, Path]) -> str:
-    """Built-in overview page (logo + fleet summary) shown instead of any one
-    dataset — reached via the Overview item in the sidebar, never the default."""
+    """Overview: what this site is, fleet numbers, and a filterable, sortable
+    table of every dataset. This is the page `/` opens."""
+    import time
+
     e = _h.escape
-    states = {name: _dataset_state(p) for name, p in items.items()}
-    released = sum(1 for s in states.values() if s["cls"] == "released")
-    running = sum(1 for s in states.values() if s["cls"] == "running")
-    failed = sum(1 for s in states.values() if s["cls"] == "failed")
-    total_cells = sum(
-        s["final_cells"] or 0 for s in states.values() if s["cls"] == "released"
-    )
-    stats = [
-        (str(len(items)), "datasets"),
-        (str(released), "released"),
-        (str(running), "in progress"),
-        (str(failed), "failed"),
-        (index._n(total_cells) or "0", "cells released"),
-    ]
-    stat_html = "".join(
-        f'<div class="stat"><div class="v">{e(v)}</div><div class="k">{e(k)}</div></div>'
-        for v, k in stats
-    )
+    states = {name: (_dataset_state(p), p) for name, p in items.items()}
+    by = lambda c: sum(1 for s, _ in states.values() if s["cls"] == c)  # noqa: E731
+    cells_in = sum(s["n_input"] or 0 for s, _ in states.values())
+    cells_out = sum(s["final_cells"] or 0 for s, _ in states.values() if s["cls"] == "released")
+    stats = [(str(len(items)), "datasets", ""), (str(by("released")), "released", "released"),
+             (str(by("running")), "running", "running"), (str(by("failed")), "failed", "failed"),
+             (index._n(cells_in) or "0", "cells in", ""), (index._n(cells_out) or "0", "cells released", "")]
+    stat_html = "".join(f'<div class="stat"><span class="v{" st " + c if c and int(v) else ""}">{e(v)}</span><span class="k">{e(k)}</span></div>'
+                        for v, k, c in stats)
+    rank = {"released": 0, "running": 1, "neutral": 2, "failed": 3}
+    rows = []
+    for name, (s, p) in sorted(states.items()):
+        coll = index.collection_of(p)
+        rows.append(
+            f'<tr data-text="{e((name + " " + coll + " " + s["species"] + " " + s["stage"]).lower())}">'
+            f'<td><a href="/{e(name)}/"><b>{e(name)}</b></a></td><td>{e(coll)}</td><td>{e(s["species"])}</td>'
+            f'<td class="num" data-v="{s["n_input"] or 0}">{index._n(s["n_input"])}</td>'
+            f'<td class="num" data-v="{s["final_cells"] or 0}">{index._n(s["final_cells"])}</td>'
+            f'<td class="num" data-v="{s["rounds"]}">{s["rounds"] or ""}</td>'
+            f'<td data-v="{rank.get(s["cls"], 9)}"><span class="pill {e(s["cls"])}">{e(s["stage"])}</span></td>'
+            f'<td class="num" data-v="{s["updated"] or 0}">{index._when(s["updated"])}</td></tr>')
+    def th(t, num=False):
+        attrs = ' class="r" data-num' if num else ""
+        return f'<th{attrs} aria-sort="none"><button type="button">{t}</button></th>'
+    table = ('<div class="wrap"><table id="ds-table"><thead><tr>' + th("dataset") + th("collection") + th("species")
+             + th("cells in", True) + th("cells out", True) + th("rounds", True) + th("status", True) + th("last updated", True)
+             + f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div>' if rows
+             else '<p class="empty">No dataset is bound yet. Use <b>+ Bind…</b> in the sidebar or <code>eca-rsi serve scan-add</code> on the server host.</p>')
     return (
         '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width,initial-scale=1"><title>ecarsi serve</title>'
-        f'<style>{index.CSS}{HOME_CSS}</style></head><body><div class="home">'
-        '<div class="logo"><div class="mark">RSI</div><h1>ecarsi serve</h1></div>'
-        '<p class="tag">Recursive Self-Improvement for an Ensemble Cell Atlas — one navigator over every '
-        "eca-rsi run's landing pages, rendered live from disk.</p>"
-        f'<div class="stats">{stat_html}</div>'
-        "<ul>"
-        "<li>Pick a dataset in the left sidebar to open its landing page — a run still in progress shows its current stage.</li>"
-        "<li>Drag the sidebar's right edge to resize it; the width is remembered.</li>"
-        "<li>Sort the list by name, cell count, or status with the dropdown above it.</li>"
-        "<li><b>+ Bind…</b> registers a new run directory; the registry file is the single source of truth.</li>"
-        "</ul></div></body></html>"
+        '<meta name="viewport" content="width=device-width,initial-scale=1"><title>ECA-RSI runs — overview</title>'
+        f'<style>{index.CSS}</style></head><body><main class="page">'
+        '<header class="hero"><div class="title"><h1>ECA-RSI runs</h1></div>'
+        '<p class="sub" style="max-width:80ch;margin-top:8px">Recursive self-improving annotation of single-cell atlases. Each dataset below was '
+        "processed per sample (QC, clustering), integrated across samples and annotated in rounds by agents, with low-quality cells removed "
+        "until the loop converged. A dataset page shows the numbers, the rounds, the final UMAP with coarse and fine labels, "
+        "the cell-identity Sankey, the review items and where the result files live.</p>"
+        '<p class="next">Pick a dataset in the table or the sidebar. Green = released, amber = still running, red = failed.</p></header>'
+        f'<div class="glance">{stat_html}</div>'
+        f'<section class="block" id="datasets"><h2>Datasets <span class="count" id="ds-n">{len(rows)} datasets</span></h2>'
+        '<p class="lede">Cells in is the number of cells the run started from; cells out is what the release keeps. Click a column header to sort.</p>'
+        '<div class="toolbar"><label for="ds-q">Filter</label><input id="ds-q" type="search" placeholder="name, collection, species, status…" autocomplete="off"></div>'
+        f"{table}</section>"
+        f'<footer>rendered {time.strftime("%Y-%m-%d %H:%M:%S")} by ecarsi serve from the registry · reload for the current state</footer>'
+        f"</main><script>{HOME_JS}</script></body></html>"
     )
 
 
 # ---------------------------------------------------------------- handler
 
 
-def _render_index(root: Path, sub: str) -> str | None:
+def _render_index(root: Path, sub: str, name: str | None = None) -> str | None:
     """HTML for a landing page rendered from disk right now, or None if the
     request isn't for one. Never writes into the dataset directory (the
     pipeline steps write their own static index.html for offline use)."""
@@ -546,11 +528,11 @@ def _render_index(root: Path, sub: str) -> str | None:
     elif parts and not sub.endswith("/"):
         return None  # a file, not a directory landing page
     if L.is_unit(root):
-        return index.render_unit(root) if not parts else None
+        return index.render_unit(root, name) if not parts else None
     if not parts:
-        return index.render_root(root)
+        return index.render_root(root, name)
     if len(parts) == 2 and parts[0] == L.UNITS and L.is_unit(root / L.UNITS / parts[1]):
-        return index.render_unit(root / L.UNITS / parts[1])
+        return index.render_unit(root / L.UNITS / parts[1], name)
     return None
 
 
@@ -693,7 +675,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 raw + "/"
             )  # ourselves, not SimpleHTTPRequestHandler: its redirect would drop the /<name> prefix
         try:
-            page = _render_index(root, sub)
+            page = _render_index(root, sub, name)
         except Exception as e:  # a broken page must not take the server down; fall back to the static file
             sys.stderr.write(f"[serve] live render failed for {name}{sub}: {e}\n")
             page = None
