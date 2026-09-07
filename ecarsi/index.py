@@ -381,6 +381,7 @@ def persample_state(unit: Path) -> dict:
         samples.append({"name": d.name, "value": s["value"], "n_cells": s["n_cells"], "dir": d,
                         "done": done or empty, "empty": empty, "report": (d / "report.html").is_file()})
     return {"manifest": bool(man), "sample_column": man.get("sample_column"), "species": man.get("species"),
+            "n_excluded": sum(r["n_cells"] for r in (man.get("sample_mapping") or {}).get("exclude_cells", [])),
             "samples": samples, "n_done": sum(s["done"] for s in samples), "n": len(samples),
             "done": bool(samples) and all(s["done"] for s in samples)}
 
@@ -581,7 +582,9 @@ def render_unit(unit: Path) -> str:
                     f'<td class="l">{status_pill}</td>'
                     f'<td class="l why-cell">{dpill}</td><td class="l">{link}</td></tr>')
     parts.append(f'<section id="samples"><h2>Samples <small>osp runs once per sample · {ps["n_done"]}/{ps["n"]} done'
-                 + (f' · sample column <code>{e(str(ps["sample_column"]))}</code>' if ps["sample_column"] else "") + "</small></h2>"
+                 + (f' · sample column <code>{e(str(ps["sample_column"]))}</code>' if ps["sample_column"] else "")
+                 + (f' · {ps["n_excluded"]:,} cells excluded before OSP by sample-map policy (<a href="{L.PERSAMPLE}/{L.EXCLUDED_CELLS}">excluded_cells.csv</a>)'
+                    if ps.get("n_excluded") else "") + "</small></h2>"
                  + ('<div class="wrap"><table><thead><tr><th>sample</th><th>input cells</th><th class="l">osp</th><th class="l">integration</th>'
                     f'<th class="l">report</th></tr></thead><tbody>{"".join(prow)}</tbody></table></div>'
                     if prow else '<p class="empty">persample has not started</p>') + "</section>")

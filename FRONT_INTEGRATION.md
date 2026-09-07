@@ -78,6 +78,50 @@ OSP 子集才新增 `eca_sample_id`，不覆写原始 `sample` 列。
 若完整来源 obs 表明该实验还有细胞在另一个组织单元，拒绝在局部池独立运行 QC。
 当前不实现跨器官共享的实验级 QC；完整实验池含义仍依赖输入数据与明确实验信息。
 
+## 细胞策略：`exclude_cells` 与 `batch_key`
+
+映射文件另有两个顶层键，都是**声明式**的：host 确定性地执行并逐细胞记账，不做自动推断
+（`ecarsi/policies.py`；未知顶层键报错）。Tabula Muris FACS 的例子：
+
+```json
+{
+  "sources": {"Lung": {"sample_column": "plate.barcode", "rationale": "Smart-seq2 plate = library"}},
+  "exclude_cells": [
+    {"blank": ["mouse.id", "subtissue", "cell_ontology_class"],
+     "reason": "upstream_qc_blank",
+     "rationale": "作者 QC 丢弃的 well 只剩空 metadata（eca-pp 改写成 'missing'）；下游 91% 会再次被删"}
+  ],
+  "batch_key": "mouse.id"
+}
+```
+
+`exclude_cells`：规则列表，在 organize→persample 交接处、切任何 OSP subset 之前按顺序应用（先命中的规则记账）。
+
+- `{"where": {"<列>": ["值", ...]}, "reason", "rationale"}`：原始字符串精确匹配（去首尾空白），多列取 AND；
+  字面量 `"missing"` 匹配 `"missing"`。
+- `{"blank": ["列1", "列2", ...], "reason", "rationale"}`：所列**全部**列都属缺失家族
+  （空串 / NA / nan / none / null / missing，同 `upstream.normalize`）。
+- `reason` 是 slug（`[a-z0-9_-]`，≤40，列表内唯一），`rationale` 非空。**未知列报错**；**匹配 0 细胞只记 warning**
+  （同一份映射可能共用于多个器官），写进 manifest 与 needs_review；某来源被删空报错。
+- 被删细胞留在 `persample/sample_mapping.csv.gz`（`excluded_reason` 列，`eca_sample_id` 为空）并单独写
+  `persample/excluded_cells.csv`（cell, source_unit, source_cell_id, reason, proposed_by）；ledger 把它们记为
+  `osp_status = removed:persample-policy:<reason>`，细胞守恒检查要求 OSP 幸存 + OSP QC 删除 + policy 删除 = organized 输入。
+  release 的 needs_review 以 `policy_excluded` 一节按规则列出数量与 rationale。
+- 规则进入映射身份：表里的 `excluded_reason` 列改变 `mapping_identity`，映射文件本身进 `explicit_mapping`；
+  改规则 = 新输出目录。样本列的 NA 检查在排除之后进行（FACS 空 well 的 `plate.barcode` 也空，排除后该列即完整分区）。
+
+`batch_key`：Harmony 校正列（默认仍是 `eca_sample_id`）。host 校验它是 organized.h5ad 的 obs 列，在**每个** OSP 实验内恒定
+（缺失家族按 NA 忽略；一个实验里出现两个非 NA 值报错；整个实验全 NA 报错），且单元内 ≥2 个取值。
+每样本常量写进该样本的 OSP subset（NA 细胞随其实验），记录在 `sample_mapping.batch_key`
+（`column` / `of_sample` / `n_filled`）。crosssample 以此作 MSP `--batch-col`，round manifest 的
+`integration_policy.selection = "sample_map"`；显式 `MSP_BATCH_COL` 仍优先（`explicit`），与映射声明不一致则报错。
+
+没有映射文件时（agent 识别样本列的路径），样本列 agent 可以在提交里附带同形状的 `exclude_cells` 提案；
+host 用当前来源的 obs 当场校验（列存在、命中 ≥1 细胞、不超过来源一半，`policies.AGENT_EXCLUDE_MAX_FRAC`），
+不合格就要求重交，合格后照用户规则执行并记 `proposed_by: "agent"`。若未声明 `batch_key` 而 study design
+（`ecarsi.design`：每样本恒定的列）有 ≥2 列，host 另发一次小的 agent 调用**推荐** `batch_key`，
+只写进 `persample/needs_review` 与 manifest 的 `batch_key_recommendation`，绝不应用；该调用失败不影响 persample。
+
 ## OSP 配置与状态
 
 ```bash

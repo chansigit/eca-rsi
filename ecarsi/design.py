@@ -35,7 +35,8 @@ def sample_of_cells(unit: Path, obs: pd.DataFrame) -> pd.Series | None:
         from .sample_mapping import SAMPLE_KEY
 
         table = pd.read_csv(mapping, index_col=0, dtype=str, keep_default_na=False)
-        return table[SAMPLE_KEY].reindex(obs.index)
+        sample = table[SAMPLE_KEY].reindex(obs.index)
+        return sample.mask(sample.eq(""))  # policy-excluded cells belong to no sample
     if mp.is_file():
         with open(mp) as f:
             col = json.load(f).get("sample_column")

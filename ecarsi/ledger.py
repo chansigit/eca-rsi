@@ -9,7 +9,7 @@ ONE table — one row per cell that entered persample — with a column group
 per stage:
 
     cell, sample
-    osp_status  (kept | removed:<qc_reason>)                osp_coarse, osp_fine
+    osp_status  (kept | removed:<qc_reason> | removed:persample-policy:<reason>)   osp_coarse, osp_fine
     rNN_msp_status  (kept | excluded-sample | removed:<source>)   rNN_msp_coarse, rNN_msp_fine
     rNN_zmip_status (kept | not-zoomed | removed:<source>)        rNN_zmip_lineage, rNN_zmip_coarse, rNN_zmip_fine
 
@@ -41,6 +41,7 @@ from matplotlib.patches import PathPatch
 from matplotlib.path import Path as MPath
 
 from . import layout as L
+from . import policies as P
 from .osp_contract import is_empty
 
 REMOVED_PREFIX = "removed:"
@@ -165,6 +166,14 @@ def _persample_frames(unit: Path) -> list[pd.DataFrame]:
                                     "osp_status": REMOVED_PREFIX + r["qc_reason"]}, index=r.index))
     if not frames:
         raise ValueError(f"no persample outputs under {L.persample_root(unit)}")
+    policy = L.persample_root(unit) / L.EXCLUDED_CELLS
+    if policy.is_file():
+        # sample-map exclude_cells: dropped before any OSP subset, reason per cell
+        gone = _table(policy, ["cell", "reason"])
+        if gone["reason"].eq("").any():
+            raise ValueError(f"missing exclusion reason: {policy}")
+        frames.append(pd.DataFrame({"sample": "", "osp_status": REMOVED_PREFIX + P.STEP + ":" + gone["reason"]},
+                                   index=gone.index))
     all_ids = pd.concat(frames).index
     actual = _cell_ids(all_ids, "persample ledger")
     if _obs_source(L.input_h5ad(unit)) is not None:

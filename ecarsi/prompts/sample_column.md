@@ -46,3 +46,17 @@ Guidance:
 Return only the structured result: `sample_column` (obs column name, or
 null), `confirmed_single` (required when null), and `rationale` (2-3 sentences
 citing the levels and upstream evidence you relied on).
+
+## Optional: exclude_cells
+
+If a block of cells is unanalysable on metadata alone — typically cells whose
+replicate/annotation columns are ALL blank ("missing", "", NA) while the rest
+of the source is annotated (the authors' QC dropped those wells and left their
+metadata empty) — you may add `exclude_cells`: a list of rules, each
+`{"blank": ["col", ...], "reason": "slug", "rationale": "..."}` (blank in ALL
+listed columns) or `{"where": {"col": ["value", ...]}, "reason", "rationale"}`
+(exact string match, AND across columns). The host applies them before any QC,
+records every excluded cell, and rejects a rule that matches no cell or more
+than half of the source. Judge `sample_column` on the remaining cells. Never
+exclude on biology (cell types, conditions) or on QC metrics — that is what
+the pipeline is for.

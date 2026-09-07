@@ -125,6 +125,13 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
 - MSP/ZMIP 使用 0.3 系列，Harmony 2 为 CPU 实现，无需 torch/MSP_DEVICE；RSI 资源副本已同步。
 - `MSP_BATCH_COL` 可显式选择校正列，完整 OSP 实验内必须只有一个值；默认仍为 `eca_sample_id`，
   不自动推断 biological condition 应被校正，不将校正分组用于重切 OSP 实验池。
+- sample map 的两个声明式细胞策略（`ecarsi/policies.py`，见 FRONT_INTEGRATION.md）：`exclude_cells`
+  （`where` 精确匹配 / `blank` 所列列全缺失；切 OSP subset 之前执行；未知列报错、命中 0 细胞记 warning；
+  每个细胞写 `persample/excluded_cells.csv`，ledger 记 `removed:persample-policy:<reason>`，守恒检查含此项，
+  needs_review 有 `policy_excluded` 节；规则进映射身份）和 `batch_key`（host 校验每个 OSP 实验内恒定、NA 忽略并按实验回填、
+  ≥2 值；crosssample 作 MSP batch 列，`selection: sample_map`；`MSP_BATCH_COL` 仍优先，二者冲突报错）。
+  无 map 时样本列 agent 可提 `exclude_cells` 提案（host 用 obs 当场校验，≤ 来源一半），`batch_key` 只由 agent **推荐**进
+  needs_review，从不自动应用。FACS 例：blank `mouse.id`+`subtissue`+`cell_ontology_class` → `upstream_qc_blank`，`batch_key: mouse.id`。
 - `ecarsi.design` 从 organized.h5ad 的 obs 推导 study design（每样本内恒定、跨样本变化的列，如 FACS 的 `subtissue` / `mouse.id`），
   以 `--design-context` 原文交给 MSP/ZMIP 的 inspect/annotate agent（含 round N≥2 与 zoomin）；只是 agent 上下文，
   与 `--report-context` 一样不进 run identity。`python -m ecarsi.design <unit>` 预览文本。

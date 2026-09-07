@@ -38,7 +38,11 @@ OVER_BUDGET_FRAC = 0.10  # per-round removal budget the loop treats as "too much
 
 KINDS: list[tuple[str, str, str]] = [
     ("upstream_review", "Input and per-sample review",
-     "Upstream quality flags and OSP execution or QC warnings; see persample/needs_review.json."),
+     "Upstream quality flags, OSP execution or QC warnings and advisory batch-key recommendations "
+     "(never applied); see persample/needs_review.json."),
+    ("policy_excluded", "Cells excluded before OSP by policy",
+     "Declarative exclude_cells rules of the sample map (or an agent proposal the host validated the same way), "
+     "applied before any QC. Every cell is in persample/excluded_cells.csv and the ledger (step persample-policy)."),
     ("convergence", "Loop convergence",
      "The loop did not stop on its own, or a round removed more than the per-round budget."),
     ("removed", "Cells removed below high confidence",
@@ -229,6 +233,14 @@ def collect(unit: Path, rounds: list[Path], stats: list[dict], forced: bool) -> 
     if ps.is_file():
         man = _json(ps)
         sizes = {s["value"]: int(s.get("n_cells", 0)) for s in man.get("samples", [])}
+        for rule in (man.get("sample_mapping") or {}).get("exclude_cells", []):
+            cond = ("blank in all of " + ", ".join(rule["blank"]) if "blank" in rule
+                    else " and ".join(f"{c} in {v}" for c, v in rule["where"].items()))
+            items.append(Item("policy_excluded", 0, "persample", scope=rule["reason"], n_cells=rule["n_cells"],
+                              label=cond, action="exclude",
+                              note=f"[proposed by {rule['proposed_by']}] " + rule["rationale"]
+                                   + (f" — WARNING: {rule['warning']}" if rule.get("warning") else ""),
+                              link=f"{L.PERSAMPLE}/{L.EXCLUDED_CELLS}"))
         for value in man.get("empty_samples", []):
             items.append(Item("sample_excluded", 0, "persample", scope=value, n_cells=sizes.get(value, 0),
                               action="exclude",
