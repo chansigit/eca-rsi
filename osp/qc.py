@@ -507,7 +507,11 @@ def qc_one_sample(
         run_scrublet = False
     if run_scrublet:
         n_prin_comps = min(30, ad.n_obs - 1, ad.n_vars - 1)
-        sc.pp.scrublet(ad, n_prin_comps=max(1, n_prin_comps))
+        # Exact kNN (sklearn) instead of pynndescent: the approximate index
+        # cost 131 of scrublet's 169 s on a 19k-cell sample, 55 s of it numba
+        # JIT that every OSP subprocess repeats, and exact neighbours are the
+        # better estimate anyway (scores may differ marginally from approx).
+        sc.pp.scrublet(ad, n_prin_comps=max(1, n_prin_comps), use_approx_neighbors=False)
         doublet_flag = ad.obs["predicted_doublet"].astype(bool).values
     else:
         doublet_flag = np.zeros(ad.n_obs, dtype=bool)
