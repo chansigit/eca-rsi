@@ -1,8 +1,8 @@
 """eca-rsi — the one entry point of the main line.
 
-    eca-rsi [--harness BACKEND] [--model MODEL] run <eca-pp-dir> <root> [--rounds N] [--cap 10] [--serve [PORT]]
-    eca-rsi organize  <eca-pp-dir> <root>
-    eca-rsi persample <unit> [...]           eca-rsi loop   <unit> [...]
+    eca-rsi [--harness BACKEND] [--model MODEL] run <eca-pp-dir> <root> [--rounds N] [--cap 10] [--mirror DIR] [--serve [PORT]]
+    eca-rsi organize  <eca-pp-dir> <root> [--mirror DIR]
+    eca-rsi persample <unit> [...]           eca-rsi loop   <unit> [...]      (both also take --mirror DIR)
     eca-rsi crosssample <unit> [round_dir]   eca-rsi zoomin <unit> [round_dir]
     eca-rsi ledger    <unit> [round dirs]    eca-rsi index  <root|unit>
     eca-rsi prune     <root|unit> [--dry-run]  (runs by itself after every release unless --no-prune)
@@ -15,7 +15,10 @@
 rounds until the cell count converges) → release; with --serve it finally
 adds <root> to the serve registry and serves it (and everything else in the
 registry) in the foreground at http://127.0.0.1:PORT/<root-name>/ (add
---ngrok to publish; Ctrl-C to stop).
+--ngrok to publish; Ctrl-C to stop). --mirror DIR keeps a copy of <root>
+on long-term storage: light files (pages, logs, manifests, reports, figures)
+after every step, everything at release (ecarsi.mirror); DIR is remembered
+in <root>/mirror.json, so resumes and single steps keep mirroring.
 Every step resumes, so re-running the same command after an interruption
 continues where it stopped. `python -m ecarsi ...` is the same thing.
 The global --harness and --model options may appear before or after the
@@ -52,6 +55,7 @@ def run(argv: list[str]) -> int:
     ap.add_argument("--cap", type=int, default=None, help="loop safety cap (default 10)")
     ap.add_argument("--force-reopen", action="store_true", help="continue past an existing release")
     ap.add_argument("--no-prune", action="store_true", help="keep intermediate round h5ads after release (default: prune them)")
+    ap.add_argument("--mirror", metavar="DIR", help="keep a copy of <root> here: light files after every step, all of it at release")
     ap.add_argument("--serve", nargs="?", const=8899, type=int, default=None, metavar="PORT",
                     help="after the run, add <root> to the serve registry and serve (foreground) on this port (default 8899)")
     ap.add_argument("--ngrok", action="store_true", help="with --serve: also open an ngrok tunnel")
@@ -59,6 +63,8 @@ def run(argv: list[str]) -> int:
     ap.add_argument("--auth", default=None, help="with --serve: web-level password USER:PASS")
     a = ap.parse_args(argv)
     root = Path(a.root).resolve()
+    if a.mirror:
+        _module("mirror").configure(root, a.mirror)  # remembered in <root>/mirror.json; every step reads it there
 
     organize_args = [a.input, str(root)]
     if a.plan_json:

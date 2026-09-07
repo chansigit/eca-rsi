@@ -48,7 +48,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import cost, crosssample, prune, review, zoomin
+from . import cost, crosssample, mirror, prune, review, zoomin
 from . import downstream as D
 from . import release_state as R
 from .run_state import file_identity, read_json, write_json
@@ -231,11 +231,15 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--force-reopen", action="store_true", help="continue past an existing release")
     ap.add_argument("--no-prune", action="store_true",
                     help="keep every round's intermediate h5ads after release (default: ecarsi.prune drops them)")
+    ap.add_argument("--mirror", metavar="DIR",
+                    help="keep a copy of the run root here: light files after every stage, everything at release (ecarsi.mirror)")
     args = ap.parse_args(argv)
     unit = Path(args.unit).resolve()
     if not L.is_unit(unit):
         print(f"[loop] {unit} is not a unit dir (no {L.INPUT}/organized.h5ad)")
         return 2
+    if args.mirror:
+        mirror.configure(L.base_of(unit), args.mirror)
     L.rounds_root(unit).mkdir(exist_ok=True)
 
     R.recover(unit)
@@ -248,6 +252,7 @@ def main(argv: list[str]) -> int:
             if not args.no_prune:
                 prune.prune_unit(unit)
                 D.seal_release(unit, L.rounds(unit))
+            mirror.sync(unit, full=True)
             print(f"[loop] already released: {summary} (use --force-reopen to continue)")
             return 0
         published_rounds = int(read_json(L.release_dir(unit) / "summary.json")["rounds"])
@@ -353,6 +358,7 @@ def main(argv: list[str]) -> int:
     if not args.no_prune:
         prune.prune_unit(unit)
     D.seal_release(unit, rounds)
+    mirror.sync(unit, full=True)  # the whole unit incl. h5ads; drops what prune removed from the copy
     print(f"[done] {summary}")
     return 0
 

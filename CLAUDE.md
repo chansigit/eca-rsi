@@ -4,8 +4,8 @@
 自驱动循环,见下文"主线:ecarsi 包"一节。入口:
 
 ```bash
-eca-rsi run <eca-pp 输出目录> <root> [--rounds N] [--serve 8899]   # = organize → 每 unit persample → loop → 落地页;./run-eca-rsi.sh 是薄壳
-eca-rsi organize|persample|loop|serve ...                          # 分步,等价 python -m ecarsi.<step>
+eca-rsi run <eca-pp 输出目录> <root> [--rounds N] [--mirror DIR] [--serve 8899]   # = organize → 每 unit persample → loop → 落地页;./run-eca-rsi.sh 是薄壳
+eca-rsi organize|persample|loop|serve ...                          # 分步,等价 python -m ecarsi.<step>;organize/persample/loop 也收 --mirror DIR
 ```
 
 `run.sh` + `steps/*.md` 是上一代"六步 prompt 循环"(agent 自己写分析代码),完整封存在
@@ -25,7 +25,7 @@ python -m ecarsi.loop        <unit> [--rounds N] [--cap 10] [--force-reopen]
    round 1: ecarsi.crosssample(样本纳入 agent → msp integrate/inspect/annotate)→ ecarsi.zoomin(zmip)
    round N: 上轮 zoomin/annotated_zmip.h5ad,先验列改名 r(N-1)_* → msp --from-h5ad → zmip
 python -m ecarsi.ledger      <unit> [round dirs]    # 逐细胞台账 cell_ledger.csv + Sankey(每步删除流进红色 sink)
-python -m ecarsi.index       <root|unit>            # 从磁盘推导落地页(每步结束也自动写)
+python -m ecarsi.index       <root|unit>            # 从磁盘推导落地页(每步结束也自动写;配了 mirror 就顺手同步一次)
 python -m ecarsi.serve       [dir...] [--registry F] [--port 8899] [--ngrok [--domain D]] [--auth u:p]   # 前台多数据集导航 server,无状态,Ctrl-C 即停
                              scan-add <dir|glob>... [--name N] [--dry-run] | remove <name>... | list [--json]   # 改 registry 文件(~/.config/ecarsi/registry.json)
                              dump [path] | reload <path> [--replace]                                            # registry 文件另存 / 合并;server 按 mtime 自动重读
@@ -41,7 +41,7 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
 
 ```
 <root>/                     organize 的 out_root = 一个数据集一次运行;serve 投这一层
-  index.html  organize/manifest.json
+  index.html  organize/manifest.json  mirror.json(--mirror 的目标目录,ecarsi.mirror)
   units/<unit>/
     index.html  progress.log  input/  persample/<sample>/
     rounds/roundNN/{manifest.json, input.h5ad(N≥2), crosssample/, zoomin/, ledger/, stats.txt, decision.txt}
@@ -59,6 +59,14 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
   每条带 round/step/scope/cluster/细胞数/report 链接;同一记录渲染 md / json / html。
 - persample manifest 记录的 `dir` 是绝对路径,但所有读取方一律用 `layout.sample_dir()` 按 basename
   在本 unit 的 persample/ 下定位,目录搬家不坏。
+- **`--mirror DIR`(`ecarsi.mirror`)**:root 在 scratch、长期目录(Oak)给 serve 看时用。目标记在 `<root>/mirror.json`,
+  续跑和单步不必再传。每次写落地页(`index.write_all`:organize 完成、persample 每个样本完成、每轮各阶段、release)
+  都把整个 root 的**轻量文件**(html / md / json / txt / log / png / svg / `.pruned`、≤1 MiB 的 csv;永不 h5ad / parquet / csv.gz /
+  大表 / 点目录)增量拷到 DIR(size+mtime 相同就不动,copy2 保留 mtime,先写临时名再 `os.replace`);release 且 prune 之后
+  全量同步(含 final.h5ad、organized.h5ad、台账)并删掉 DIR 里该 unit 子树下 root 已没有的文件——只在 `units/<unit>/` 之内,别处不碰。
+  mirror 只写不读,失败只在 stdout + progress.log 记一行 warning,不让步骤失败。落地页页脚 `run state updated <t>` 取自
+  progress.log / manifest / stats / decision 等状态文件的最新 mtime,拷贝保留 mtime,所以 serve 直接投 DIR 时也能看出新鲜度;
+  DIR 里的 mirror.json 指向自身时页脚标 `a mirror copy of <source>`。`eca-rsi index <root>` 可手工再同步一次。
 
 - **停机只看细胞数**,标签变动不作判据(agent 措辞有随机性):给了 `--rounds N` 就按总轮数发布，允许 `--rounds 1`;
   没给则 (1) 本轮删除比 < 1% 或删除数 < 100,或 (2) 连续三轮删除比 < 2% 即 release；自动模式首轮继续;

@@ -6,6 +6,7 @@ served as-is (ecarsi.serve) and rendered from disk alone (ecarsi.index):
 
     <root>/                                  organize's out_root = one dataset run
       index.html                             root landing page (ecarsi.index)
+      mirror.json                            where --mirror copies this root (ecarsi.mirror)
       organize/manifest.json                 detection, profiles, plan, audit
       units/<unit>/
         index.html                           unit landing page (ecarsi.index)
@@ -51,6 +52,7 @@ MANIFEST = "manifest.json"
 RUN_STATE = "run_state.json"
 UPSTREAM = "upstream"
 SAMPLE_MAPPING = "sample_mapping.csv.gz"
+MIRROR = "mirror.json"
 
 # step contracts — a step is complete when every file exists
 PS_CONTRACT = ("report.html", "clustered.h5ad")
@@ -94,6 +96,16 @@ def units(root: Path) -> list[Path]:
 def root_of(unit: Path) -> Path | None:
     """The dataset root a unit lives in (None for a unit run outside a root)."""
     return unit.parent.parent if unit.parent.name == UNITS else None
+
+
+def base_of(target: Path) -> Path:
+    """The tree one run of one dataset occupies: the root, or a bare unit
+    run outside any root. This is what ecarsi.mirror copies as a whole."""
+    return target if is_root(target) else (root_of(target) or target) if is_unit(target) else target
+
+
+def mirror_file(base: Path) -> Path:
+    return base / MIRROR
 
 
 # ---------------------------------------------------------------- unit parts

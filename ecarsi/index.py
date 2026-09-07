@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 from . import layout as L
-from . import review
+from . import mirror, review
 
 CSS = """
 :root{--bg:#f4f5f7;--card:#fff;--ink:#1f2328;--muted:#656d76;--line:#e6e8eb;--accent:#3b5bdb;
@@ -624,7 +624,7 @@ def render_unit(unit: Path) -> str:
                  + '<span class="hint">' + ("everything the agents were unsure about or the host overrode; nothing here stopped the loop"
                                             if s["released"] else "so far — the loop is still running") + " · click to expand</span></summary>"
                  + '<div class="details-body">' + review.to_html(items) + "</div></details></section>")
-    return _page(f"{s['name']} — unit of {root.name} · eca-rsi" if root else f"{s['name']} — eca-rsi unit",
+    return _page(f"{s['name']} — unit of {root.name} · eca-rsi" if root else f"{s['name']} — eca-rsi unit", unit,
                  "".join(parts))
 
 
@@ -661,16 +661,38 @@ def render_root(root: Path) -> str:
                     f'<tbody>{"".join(rows)}</tbody></table></div>' if rows else '<p class="empty">no units yet</p>') + "</section>")
     if om:
         parts.append(f'<p class="muted">organize plan and cell-conservation audit: <a href="{L.ORGANIZE}/{L.MANIFEST}">{L.ORGANIZE}/{L.MANIFEST}</a></p>')
-    return _page(f"{root.name} — eca-rsi run", "".join(parts))
+    return _page(f"{root.name} — eca-rsi run", root, "".join(parts))
 
 
-def _page(title: str, body: str) -> str:
+# the files a page is derived from: their newest mtime is "when the run state
+# last changed" — and, since ecarsi.mirror copies with mtimes, how fresh a copy is
+STATE_GLOBS = (L.PROGRESS, f"{L.UNITS}/*/{L.PROGRESS}", f"{L.ORGANIZE}/{L.MANIFEST}", f"{L.INPUT}/{L.MANIFEST}",
+               f"{L.PERSAMPLE}/{L.MANIFEST}", f"{L.PERSAMPLE}/*/{L.RUN_STATE}", f"{L.ROUNDS}/*/{L.MANIFEST}",
+               f"{L.ROUNDS}/*/{L.STATS}", f"{L.ROUNDS}/*/{L.DECISION}", f"{L.RELEASE}/summary.json", f"{L.RELEASE}/pruned.json")
+
+
+def state_mtime(d: Path) -> float | None:
+    ts = []
+    for g in STATE_GLOBS:
+        for p in d.glob(g):
+            try:
+                ts.append(p.stat().st_mtime)
+            except OSError:
+                pass  # vanished between glob and stat
+    return max(ts) if ts else None
+
+
+def _page(title: str, where: Path, body: str) -> str:
     import time
 
-    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    fmt = "%Y-%m-%d %H:%M:%S"
+    src = mirror.copy_notice(where)
+    origin = f"a mirror copy of {_h.escape(src)}" if src else "the run directory"
+    t = state_mtime(where)
+    updated = f" · run state updated {time.strftime(fmt, time.localtime(t))}" if t else ""
     return (f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
             f"<title>{_h.escape(title)}</title><style>{CSS}</style></head><body><div class=\"page\">{body}"
-            f'<footer>rendered {stamp} from the run directory by ecarsi.index · reload for the current state</footer></div></body></html>')
+            f'<footer>rendered {time.strftime(fmt)} from {origin} by ecarsi.index{updated} · reload for the current state</footer></div></body></html>')
 
 
 # ---------------------------------------------------------------- writers
@@ -705,6 +727,7 @@ def write_all(target: Path) -> list[Path]:
         written.append(write_root_index(target))
     else:
         raise SystemExit(f"{target} is neither an organize root nor a unit dir")
+    mirror.sync(target)  # no-op without <root>/mirror.json; a failure is a warning
     return written
 
 

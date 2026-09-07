@@ -88,11 +88,15 @@ def main(argv: list[str]) -> int:
     ap.add_argument("input")
     ap.add_argument("out")
     ap.add_argument("--plan-json", help="explicit analysis-unit plan; skips the planning agent")
+    ap.add_argument("--mirror", metavar="DIR", help="keep a light copy of <out-root> here after every step (ecarsi.mirror)")
     args = ap.parse_args(argv)
     root, out_root = Path(args.input).resolve(), Path(args.out).resolve()
     if not root.is_dir() or out_root == root or root in out_root.parents:
         print("input must exist and output must be outside the input tree")
         return 3
+    if args.mirror:
+        from .mirror import configure
+        configure(out_root, args.mirror)
     try:
         with writer_lock(out_root / L.ORGANIZE / ".writer.lock"):
             units, violations = find_ecapp_units(root)

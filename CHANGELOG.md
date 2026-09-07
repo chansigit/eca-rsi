@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `--mirror DIR` on `run` / `organize` / `persample` / `loop` (`ecarsi.mirror`): remembered in `<root>/mirror.json`;
+  light files copied to DIR after every landing-page write, the whole root at release (with pruned files removed
+  from DIR's copy of that unit only). Page footers carry a `run state updated <time>` stamp derived from state-file mtimes.
 - Derive a study-design text per unit (`ecarsi.design`: obs columns constant within each sample)
   and pass it to MSP and ZMIP as `--design-context` in every round. Agent context only; not part of run identity.
 

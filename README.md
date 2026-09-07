@@ -117,6 +117,9 @@ eca-rsi --harness openai --model doubao-seed-2-1-turbo-260628 \
 # A fixed total of two rounds, retaining intermediate H5ADs.
 eca-rsi run /path/to/eca-pp-output /path/to/eca-runs/study \
   --rounds 2 --no-prune
+
+# Run on fast scratch, keep a browsable copy on long-term storage.
+eca-rsi run /path/to/eca-pp-output $SCRATCH/eca-runs/study --mirror $OAK/eca-results/study
 ```
 
 `python -m ecarsi` is equivalent to `eca-rsi`. The repository also provides
@@ -268,6 +271,19 @@ registry from `~/.config/ecarsi/registry.json` by default and picks up registry
 changes. `eca-rsi run ... --serve 8899` starts it after processing. Optional
 `--ngrok`, `--domain`, and `--auth USER:PASS` support remote access; see
 [INSTALL.md](INSTALL.md).
+
+When the run directory lives on fast, purged scratch and the server reads a
+long-term directory, pass `--mirror DIR` (to `run`, or to `organize`,
+`persample`, `loop`; it is remembered in `<root>/mirror.json`, so resumed steps
+keep mirroring). After every landing-page update the light files of the run
+root — pages, `progress.log`, manifests, `stats.txt` / `decision.txt`, markdown,
+reports, figures, small tables — are copied incrementally to DIR; at release
+(after cleanup) the whole root is copied, including `final.h5ad`,
+`input/organized.h5ad`, and ledgers, and files that cleanup removed are deleted
+from DIR's copy of that unit only. Every page's footer shows `run state updated
+<time>` (the newest state file), so a viewer of DIR knows how fresh it is; a
+served DIR is also labelled a mirror copy of its source. Mirroring never reads
+DIR and never fails a step: a failed copy is a warning in `progress.log`.
 
 ## Resume and storage
 

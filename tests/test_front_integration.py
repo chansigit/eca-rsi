@@ -236,7 +236,7 @@ def test_resume_identity_and_failed_drive_are_not_masked(tmp_path, monkeypatch):
     args = [str(h5), str(out), "--sample-column", "sample", "--no-annotate"]
     assert persample.main(args + ["--plan-only"]) == 0
     driven = []
-    def failed_with_files(entries, *args):
+    def failed_with_files(entries, *args, **kwargs):
         driven.append(True)
         return entries
     monkeypatch.setattr(persample, "drive", failed_with_files)

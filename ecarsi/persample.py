@@ -355,9 +355,13 @@ def main(argv: list[str]) -> int:
     group.add_argument("--single-sample", action="store_true", help="explicitly confirm one complete experiment")
     group.add_argument("--sample-map", help="JSON source decisions and explicit cross-source merges")
     ap.add_argument("--plan-only", action="store_true")
+    ap.add_argument("--mirror", metavar="DIR", help="keep a light copy of the run root here after every sample (ecarsi.mirror)")
     args = ap.parse_args(argv)
     unit = Path(args.unit).resolve()
     bare = unit.suffix == ".h5ad"
+    if args.mirror and not bare:
+        from .mirror import configure
+        configure(L.base_of(unit), args.mirror)
     h5ad = unit if bare else L.input_h5ad(unit)
     out = Path(args.out).resolve() if args.out else (h5ad.parent / L.PERSAMPLE if bare else L.persample_root(unit))
     try:
@@ -454,7 +458,7 @@ def _run(args, unit, h5ad, out, bare):
         man["state"] = "running"
         write_json(path, man)
         write_subsets(h5ad, table, pending)
-        failed = drive(pending, out, config["annotate"])
+        failed = drive(pending, out, config["annotate"], on_done=None if bare else lambda e, took: _pages(unit))
     missing = [e["value"] for e in entries if not is_finished(Path(e["outdir"]), config["annotate"], e["identity"])]
     man["state"] = "failed" if failed or missing else "complete"
     man["failed_samples"] = sorted(set(missing) | {e["value"] for e in failed})
@@ -467,6 +471,15 @@ def _run(args, unit, h5ad, out, bare):
         write_all(unit)
     print(f"[persample] {man['state']}: {len(entries)} samples; failures={man['failed_samples']}")
     return 1 if failed or missing else 0
+
+
+def _pages(unit: Path) -> None:
+    """Landing pages (+ mirror) after each sample; a page problem must not stop the pool."""
+    try:
+        from .index import write_all
+        write_all(unit)
+    except Exception as exc:
+        print(f"[persample] landing page not updated: {exc}", flush=True)
 
 
 def _write_review(unit, out, man, bare):
