@@ -181,6 +181,19 @@ def test_transient_failures_retry_with_linear_backoff(instant_sleep):
     assert instant_sleep == [20, 40]
 
 
+def test_ark_gateway_400_and_5xx_are_retried_as_transient(instant_sleep):
+    # Seen after multi-PNG Read turns: Ark answers with a non-JSON 400 body,
+    # so the openai client's message is the bare text (no "Error code:" prefix,
+    # no request id). Same payload succeeds on replay, so it must not end the run.
+    attempt, calls = _failing([
+        RuntimeError("Error when parsing request"),
+        RuntimeError("Error code: 500 - {'error': {'code': 'InternalServiceError', 'message': 'x'}}"),
+    ], then="ok")
+    assert asyncio.run(retry_transient(attempt, "t")) == "ok"
+    assert calls["n"] == 3
+    assert instant_sleep == [20, 40]
+
+
 def test_transient_failures_give_up_after_the_attempt_budget(instant_sleep):
     attempt, calls = _failing([RuntimeError("process exited unexpectedly")] * 10)
     with pytest.raises(RuntimeError, match="persisted after 5 attempts"):

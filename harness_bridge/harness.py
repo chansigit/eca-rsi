@@ -86,7 +86,13 @@ TRANSIENT_PATTERN = re.compile(
     # provider HTTP layer (openai SDK with max_retries=0): a slow/reset Ark
     # request must not end the whole agent run, let alone the sample
     r"request timed out|apitimeouterror|apiconnectionerror|connection error|"
-    r"server disconnected|remote protocol error|remoteprotocolerror|readtimeout|connecttimeout",
+    r"server disconnected|remote protocol error|remoteprotocolerror|readtimeout|connecttimeout|"
+    # Ark gateway/server-side hiccups: a bare non-JSON 400 "Error when parsing
+    # request" (no error code or request id, unlike every API validation error)
+    # right after a multi-image tool-result upload, and HTTP 500
+    # InternalServiceError. Both are rare, the identical payload succeeds on
+    # replay, and the SDK will not replay a previous_response_id request itself.
+    r"error when parsing request|internalservererror|internalserviceerror",
     re.IGNORECASE,
 )
 # ("returned an error result" used to be here for the old bundled CLI's
