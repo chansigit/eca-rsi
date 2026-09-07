@@ -104,6 +104,9 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
   `$SCRATCH/eca-runs/_layout_test/fu2022` 是它的 symlink 复刻(新结构,验证 index/serve 用),
   `_layout_test/running` 是"round 3 跑到一半"的假象。直播:`eca-rsi serve scan-add <root>` 再 `eca-rsi serve --domain csj.ngrok.pizza`(一个前台进程、一条隧道,`/<name>/` 路径路由;registry 文件是唯一真相,改文件 server 自动重读,进程随时可杀可重起),
   用户自己的 ngrok 隧道 8899 → csj.ngrok.pizza(勿动;ngrok 账号并发 endpoint 有上限,`--ngrok` 会直接报它的错)。
+- serve 的 fleet 页(`/`、`/_home`)从 `StateCache` 后台线程(每 60 s 预算全部数据集 `dataset_state`)读内存,数据集页 / unit 页仍现算;
+  渲染页按 Accept-Encoding gzip。根因是 Oak 冷元数据 8 ms/次 × 每页 15k 次(2026-09-07,分支 `serve-state-cache`;合并前从 worktree 起:
+  `PYTHONPATH=$SCRATCH/worktrees/eca-rsi-serve-cache python -m ecarsi serve ...`)。
 
 
 ## 主线检查与接口边界
@@ -161,6 +164,9 @@ python -m pytest -q tests/test_downstream.py tests/test_downstream_state.py test
   可用 `ECA_RSI_PYTHON` 覆盖。包版本和实际导入路径按 [INSTALL.md](INSTALL.md) 检查。
 - **本目录是开发目录:运行产物一律放仓库外**(workdir 指到如
   `$SCRATCH/eca-runs/<数据集名>`),输入数据也不进本仓库。
+- **批次跑着时四个主 checkout 的包目录是只读的**(`chmod -R a-w projects/{eca-rsi/ecarsi,osp/osp,msp/msp,zmip/zmip}`,2026-09-07 起):
+  `runtime_identity()` / `downstream.runtime()` 哈希包内全部 .py/.md/.json(含 serve.py 这类与计算无关的文件),主 checkout 上任何改动都会让
+  正在 verify 的阶段失败(tome E9.5 round 3 zoomin 因此重算过)。改代码走 worktree + PYTHONPATH,批次结束再 `chmod -R u+w` 并合并。
 
 ## 上一代:run.sh 六步循环(分支 primitive;2026-08-25 推倒重做后;总共 ~300 行)
 

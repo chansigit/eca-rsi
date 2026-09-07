@@ -299,3 +299,18 @@ release(persample、MSP、ZMIP、release、prune、mirror 全程),但前两次�
 辅助脚本(`_eca-rsi-jobs/`):`scan_status.sh <batch>...`(每器官一行:RELEASED / R jobid / end= exit=N + 最后一行 progress)、
 `register_serve.sh <batch>...`(幂等 scan-add,命名 `<batch>-<organ>`)。`tracker_rsi.py` 改按 `eca_pp_output_dir` 匹配行
 (h5ad 文件名 ≠ 器官目录名:`tms-drop-Bladder.h5ad`、`seurat_object_E3.5.h5ad`)。
+
+7. **serve 经隧道"刷新后半天不动"**:根因不是 ngrok。navigator(`/`)和它 iframe 里的 `/_home` 各对 167 个数据集逐个
+   `dataset_state()`(persample manifest + 每样本 run_state + 每轮 manifest/stats/decision + progress.log + STATE_GLOBS),
+   一次 ≈ 15,400 次 stat/open/scandir;Oak(Lustre)元数据操作热缓存 0.12 ms、冷缓存实测 8.4 ms,所以热时 0.43 s、冷时按分钟计;
+   正在跑的作业每步 mirror 写 Oak 又不断让本节点的客户端缓存失效,于是"总是慢"。修复(分支 `serve-state-cache`,
+   worktree `$SCRATCH/worktrees/eca-rsi-serve-cache`,87a8c16):`StateCache` 后台线程每 60 s 预算全部数据集状态,fleet 页读内存
+   (warmer 停摆 3 个周期才回退现算),数据集页 / unit 页仍现算;`_send` 对 >1 KB 的渲染页按 Accept-Encoding 做 gzip
+   (navigator 129 KB → 17 KB,unit 页 450 KB → 160 KB);访客中途刷新的 BrokenPipe 不再打 traceback。
+   效果:`/` 本地 430 ms → 5 ms,经隧道 0.2 s。
+8. **部署失误 C(我的):在主 checkout 上改 `ecarsi/serve.py` 杀掉了 tome E9.5 的 round 3 zoomin。** `runtime_identity()` /
+   `downstream.runtime()` 哈希 `ecarsi/` 包内全部 .py/.md/.json,与计算无关的 serve.py 也算。补丁在主 checkout 上停留 2 分钟
+   (12:09:27–12:11:32),E9.5(42331855)round 3 zoomin 恰在 12:09:56 做 `verify` → "downstream runtime changed during
+   computation",exit 1;该阶段(约 1.5 h ZMIP + agent)重算,已重提 42366353(sealed 阶段按内容身份仍有效,主 checkout 已 `git checkout` 还原)。
+   26 个在 persample 的 senis unit 逐样本核对 run_state 身份,无错位。措施:四个主 checkout 的包目录 `chmod -R a-w`
+   (`projects/{eca-rsi/ecarsi,osp/osp,msp/msp,zmip/zmip}`),批次跑完再 `chmod -R u+w`;代码改动一律 worktree + PYTHONPATH。
