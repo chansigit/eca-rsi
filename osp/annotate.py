@@ -344,7 +344,7 @@ def _apply_proposal(ad, key, proposal):
         for a in proposal.get("qc_actions", []):
             if a["action"] != verb:
                 continue
-            mask = (lab == str(a["cluster"])).values
+            mask = (lab == str(a["cluster"])).to_numpy(copy=True)  # pandas 3 CoW: .values is read-only
             if a["scope"] == "cells":
                 mask &= _OPS[a["op"]](ad.obs[a["metric"]].to_numpy(dtype=float), float(a["value"]))
             action[mask] = verb

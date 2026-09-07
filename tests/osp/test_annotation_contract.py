@@ -158,3 +158,27 @@ def test_failed_agent_rerun_does_not_leave_old_completion_marker(tmp_path, monke
     with pytest.raises(RuntimeError, match="provider failed"):
         annotate.propose_annotation(tmp_path, model="test-model")
     assert not proposal_path.exists()
+
+
+def test_apply_proposal_cells_scope_under_copy_on_write():
+    """pandas 3 (Copy-on-Write) hands out read-only arrays from .values; the
+    cells-scope mask must be a private copy or `mask &= ...` raises."""
+    import contextlib
+
+    import anndata
+    import pandas as pd
+
+    from osp.annotate import _apply_proposal
+
+    obs = pd.DataFrame({"leiden": pd.Categorical(["0", "0", "1", "1"]), "pct_counts_mt": [1.0, 30.0, 2.0, 40.0]},
+                       index=list("abcd"))
+    ad = anndata.AnnData(X=np.zeros((4, 2), dtype=np.float32), obs=obs)
+    proposal = {
+        "clusters": [{"cluster": "0", "label_coarse": "A", "label_fine": "a"},
+                     {"cluster": "1", "label_coarse": "B", "label_fine": "b"}],
+        "qc_actions": [{"cluster": "0", "action": "drop", "scope": "cells", "metric": "pct_counts_mt", "op": ">", "value": 20}],
+    }
+    cow = pd.option_context("mode.copy_on_write", True) if int(pd.__version__.split(".")[0]) < 3 else contextlib.nullcontext()
+    with cow:
+        _apply_proposal(ad, "leiden", proposal)
+    assert list(ad.obs["_qc_action"]) == ["keep", "drop", "keep", "keep"]
