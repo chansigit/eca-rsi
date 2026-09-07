@@ -65,6 +65,15 @@ MSP_CONTRACT = ("integrated.h5ad", "report.html", "inspection_proposal.json",
                 "annotation_proposal.json", "annotated.h5ad")
 ZMIP_CONTRACT = ("zmip_plan.json", "annotated_zmip.h5ad", "report.html")
 ZMIP_LINEAGE_CONTRACT = ("annotation_proposal.json", "annotated.h5ad", "report.html")
+# What a landing page may rely on to tell a step is finished: only the light
+# files a --mirror copy carries (never an h5ad), one per step, all written at
+# that step's end. Computation keeps validating against the full contracts.
+PS_LIGHT = ("report.html", "qc_summary.csv")
+PS_ANNOTATE_LIGHT = PS_LIGHT + ("annotation_proposal.json",)
+MSP_INTEGRATED_LIGHT = ("integration_summary.csv",)
+MSP_LIGHT = ("inspection_proposal.json", "annotation_proposal.json", "annotation_removed.csv", "report.html")
+ZMIP_LIGHT = ("zmip_plan.json", "zmip_removed.csv", "report.html")
+ZMIP_LINEAGE_LIGHT = ("annotation_proposal.json", "report.html")
 
 
 # ---------------------------------------------------------------- root / unit

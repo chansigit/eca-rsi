@@ -18,6 +18,7 @@ from __future__ import annotations
 import csv
 import html as _h
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -367,7 +368,7 @@ def persample_state(unit: Path) -> dict:
     samples = []
     for s in man.get("samples", []):
         d = L.sample_dir(unit, s)
-        contract = L.PS_ANNOTATE_CONTRACT if man.get("annotate", True) else L.PS_CONTRACT
+        contract = L.PS_ANNOTATE_LIGHT if man.get("annotate", True) else L.PS_LIGHT  # light: renders from a mirror
         done = L.complete(d, contract)
         if man.get("schema_version") == 2:
             # Display the recorded validation; actual resume rehashes and
@@ -387,20 +388,22 @@ def persample_state(unit: Path) -> dict:
 
 
 def _round_step(rdir: Path) -> str:
-    """What a round without a decision is currently doing, from its contracts."""
+    """What a round without a decision is currently doing, from the light
+    step markers only — the page must say the same thing on a --mirror copy,
+    which carries no h5ad."""
     cdir, zdir = L.crosssample_dir(rdir), L.zoomin_dir(rdir)
-    if not L.complete(cdir, L.MSP_CONTRACT):
-        if not (cdir / "integrated.h5ad").is_file():
+    if not L.complete(cdir, L.MSP_LIGHT):
+        if not L.complete(cdir, L.MSP_INTEGRATED_LIGHT):
             return "crosssample · integrate" if (cdir.is_dir() or (rdir / L.ROUND_INPUT).is_file()) else "starting"
         if not (cdir / "inspection_proposal.json").is_file():
             return "crosssample · inspect"
         return "crosssample · annotate"
-    if not L.complete(zdir, L.ZMIP_CONTRACT):
+    if not L.complete(zdir, L.ZMIP_LIGHT):
         plan = _json(zdir / "zmip_plan.json")
         if not plan:
             return "zoomin · plan"
         zoomed = [ln["name"] for ln in plan["lineages"] if ln["zoom"]]
-        done = [n for n in zoomed if L.complete(L.lineage_dir(zdir, n), L.ZMIP_LINEAGE_CONTRACT)]
+        done = [n for n in zoomed if L.complete(L.lineage_dir(zdir, n), L.ZMIP_LINEAGE_LIGHT)]
         return f"zoomin · lineages {len(done)}/{len(zoomed)}"
     if not (L.ledger_dir(rdir) / "cell_ledger.csv").is_file():
         return "ledger"
@@ -421,10 +424,24 @@ def rounds_state(unit: Path) -> list[dict]:
             r["decision"] = dec_p.read_text().strip()
         else:
             r["step"] = _round_step(rdir)
-            if (cdir / "integrated.h5ad").is_file():
-                r["n_in"] = _n_obs(cdir / "integrated.h5ad")
+            n_in = _round_input_cells(unit, n)  # from progress.log, so a mirror copy knows it too
+            if n_in is None and (cdir / "integrated.h5ad").is_file():
+                n_in = _n_obs(cdir / "integrated.h5ad")
+            if n_in is not None:
+                r["n_in"] = n_in
         out.append(r)
     return out
+
+
+def _round_input_cells(unit: Path, n: int) -> int | None:
+    """Cells entering round n, as the loop logged it ('round N input prepared
+    from round M (X cells)'); round 1 has no such line."""
+    pat = re.compile(rf"^round {n} input prepared from round \d+ \((\d+) cells\)")
+    for _, event in reversed(L.read_log(unit)):
+        m = pat.match(event)
+        if m:
+            return int(m.group(1))
+    return None
 
 
 def unit_state(unit: Path) -> dict:
