@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.4 - 2026-09-07
+
+- Every log line is time-stamped and every application tool call is timed (slow-call lines + per-run summary);
+  `harness_bridge.logtimes` derives stage and tool durations from such a log.
+- Recognize Ark's item-count limit ("Maximum of 1000 items allowed in input") as a recoverable context-limit error.
+- Retry provider connection/request timeouts, Ark's non-JSON 400 "Error when parsing request" and 5xx
+  InternalServiceError as transient failures.
+
 ## 0.2.3 - 2026-09-05
 
 - Derive distribution metadata from the public module version, removing the

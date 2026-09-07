@@ -38,4 +38,4 @@ __all__ = [
     "wall_seconds",
 ]
 
-__version__ = "0.2.3"
+__version__ = "0.2.4"
