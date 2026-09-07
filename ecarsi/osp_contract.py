@@ -91,6 +91,41 @@ def output_identities(outdir: Path, annotate: bool) -> dict:
     return {name: file_identity(outdir / name) for name in names}
 
 
+EMPTY_KIND = "qc_zero_survivors"
+
+
+def is_empty(outdir: Path, identity: str | None = None) -> bool:
+    """True when OSP QC removed every cell of this sample: the worker stops
+    before clustering (nothing to cluster), but the sample is fully
+    accounted for — every input cell sits in qc_removed.csv with a reason —
+    so it counts as finished, not failed. Such a sample has no clustered.h5ad
+    and is never offered to the inclusion agent."""
+    try:
+        import pandas as pd
+
+        state = read_json(outdir / L.RUN_STATE)
+        if state.get("state") != "failed" or state.get("failure_kind") != EMPTY_KIND:
+            return False
+        if identity is not None and state.get("identity") != identity:
+            return False
+        qc = pd.read_csv(outdir / "qc_summary.csv", index_col=0, dtype=str).iloc[:, 0]
+        n = int(qc["n_cells"])
+        if n < 1 or int(qc["n_low_quality"]) != n:
+            return False
+        expected = pd.read_csv(outdir / INPUT_CELLS, dtype=str, keep_default_na=False)["cell_id"]
+        removed = pd.read_csv(outdir / "qc_removed.csv", dtype=str, keep_default_na=False)
+        if "cell" not in removed or "qc_reason" not in removed or removed["qc_reason"].eq("").any():
+            return False
+        return len(expected) == n and set(removed["cell"]) == set(expected) and not removed["cell"].duplicated().any()
+    except (OSError, ValueError, KeyError, TypeError, IndexError):
+        return False
+
+
+def is_finished(outdir: Path, annotate: bool = False, identity: str | None = None) -> bool:
+    """Complete with outputs, or complete-and-empty (see is_empty)."""
+    return is_done(outdir, annotate, identity) or is_empty(outdir, identity)
+
+
 def is_done(outdir: Path, annotate: bool = False, identity: str | None = None) -> bool:
     try:
         state = read_json(outdir / L.RUN_STATE)

@@ -56,7 +56,7 @@ from pathlib import Path
 
 from . import downstream as D
 from .run_state import file_identity, read_json, write_json
-from .osp_contract import is_done
+from .osp_contract import is_done, is_empty
 from . import cost
 from . import layout as L
 
@@ -312,6 +312,16 @@ def main(argv: list[str]) -> int:
 
     evidence = {s["value"]: {"identity": s["identity"], "state": file_identity(Path(s["dir"]) / L.RUN_STATE)}
                 for s in ps["samples"]}
+    # samples whose OSP QC removed every cell have no clustered.h5ad and are
+    # excluded here, before the inclusion agent — every one of their cells
+    # is already accounted for in that sample's qc_removed.csv
+    empty = [s for s in ps["samples"] if is_empty(Path(s["dir"]), s["identity"])]
+    offered = [s for s in ps["samples"] if s not in empty]
+    for s in empty:
+        print(f"[exclude] {s['value']}: no cell passed OSP QC (empty sample; {s['n_cells']} cells in qc_removed.csv)")
+    if not offered:
+        print("[fail] every sample is empty after OSP QC")
+        return 4
     mpath = out_root / "manifest.json"
     if mpath.is_file():
         with open(mpath) as f:
@@ -322,7 +332,7 @@ def main(argv: list[str]) -> int:
         decision = man["inclusion"]
         print("[include] reusing recorded inclusion decision")
     else:
-        inventories = [_sample_inventory(s) for s in ps["samples"]]
+        inventories = [_sample_inventory(s) for s in offered]
         decision = propose_inclusion(inventories)
         cost.record(unit, f"{out_root.name}/inclusion", getattr(propose_inclusion, "last_cost", None), "sample inclusion")
         man = {
@@ -334,11 +344,12 @@ def main(argv: list[str]) -> int:
             "ecapp_batch_designations": ecapp,
             "inclusion": decision,
             "inclusion_evidence": evidence,
+            "empty_samples": [s["value"] for s in empty],
         }
         out_root.mkdir(parents=True, exist_ok=True)
         write_json(mpath, man)
 
-    validate_inclusion(decision, [s["value"] for s in ps["samples"]])
+    validate_inclusion(decision, [s["value"] for s in offered])
     by_val = {s["value"]: s for s in ps["samples"]}
     included = [e["sample"] for e in decision["samples"] if e["include"]]
     excluded = [(e["sample"], e["reason"]) for e in decision["samples"] if not e["include"]]

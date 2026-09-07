@@ -41,6 +41,7 @@ from matplotlib.patches import PathPatch
 from matplotlib.path import Path as MPath
 
 from . import layout as L
+from .osp_contract import is_empty
 
 REMOVED_PREFIX = "removed:"
 OTHER_MIN_FRAC = 0.01  # labels below this share of a stage are pooled into "other"
@@ -137,7 +138,10 @@ def _persample_frames(unit: Path) -> list[pd.DataFrame]:
         raise ValueError("duplicate persample manifest samples/directories")
     for item in entries:
         d = L.sample_dir(unit, item)
-        o = _obs(d / "clustered.h5ad", ["_ann_coarse", "_ann_fine"])
+        if is_empty(d, item.get("identity")):
+            o = pd.DataFrame({c: pd.Series(dtype=str) for c in ("_ann_coarse", "_ann_fine")})
+        else:
+            o = _obs(d / "clustered.h5ad", ["_ann_coarse", "_ann_fine"])
         r = _table(d / "qc_removed.csv", ["cell", "qc_reason"])
         if r["qc_reason"].eq("").any():
             raise ValueError(f"missing QC removal reason: {d}")

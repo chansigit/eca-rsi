@@ -22,7 +22,7 @@ from . import cost
 from . import layout as L
 from .run_state import digest, file_identity, read_json, write_json, writer_lock
 from .sample_mapping import SAMPLE_KEY, build_mapping, mapping_identity, obs_profile
-from .osp_contract import INPUT_CELLS, REQUEST, is_done
+from .osp_contract import INPUT_CELLS, REQUEST, is_done, is_empty, is_finished
 
 SAMPLE_COL_SCHEMA = {
     "type": "object",
@@ -290,6 +290,14 @@ def drive(pending: list[dict], out_root: Path, annotate: bool, on_done=None) -> 
                 (outdir / "compute_state.json").unlink(missing_ok=True)
                 if on_done:
                     on_done(e, took)
+            elif is_empty(outdir, e.get("identity")):
+                # QC removed every cell: nothing to cluster, nothing lost —
+                # all of them are in qc_removed.csv with a reason
+                print(f"[drive] {value}: no cell passed OSP QC after {took:.1f} min — kept as an empty sample "
+                      f"({e['n_cells']} cells, all in qc_removed.csv); not offered to integration", flush=True)
+                (outdir / SUBSET_FILE).unlink(missing_ok=True)
+                if on_done:
+                    on_done(e, took)
             elif (attempts[value] < 2 and (outdir / L.RUN_STATE).is_file()
                   and read_json(outdir / L.RUN_STATE).get("retryable") is True):
                 print(f"[drive] {value} FAILED (exit {rc}) after {took:.1f} min — retrying once", flush=True)
@@ -440,16 +448,17 @@ def _run(args, unit, h5ad, out, bare):
         for e in entries:
             print(f"[plan] {e['value']} ({e['n_cells']} cells): {shlex.join(e['command'])}")
         return 0
-    pending = [e for e in entries if not is_done(Path(e["outdir"]), config["annotate"], e["identity"])]
+    pending = [e for e in entries if not is_finished(Path(e["outdir"]), config["annotate"], e["identity"])]
     failed = []
     if pending:
         man["state"] = "running"
         write_json(path, man)
         write_subsets(h5ad, table, pending)
         failed = drive(pending, out, config["annotate"])
-    missing = [e["value"] for e in entries if not is_done(Path(e["outdir"]), config["annotate"], e["identity"])]
+    missing = [e["value"] for e in entries if not is_finished(Path(e["outdir"]), config["annotate"], e["identity"])]
     man["state"] = "failed" if failed or missing else "complete"
     man["failed_samples"] = sorted(set(missing) | {e["value"] for e in failed})
+    man["empty_samples"] = sorted(e["value"] for e in entries if is_empty(Path(e["outdir"]), e["identity"]))
     write_json(path, man)
     _write_review(unit, out, man, bare)
     if not bare:

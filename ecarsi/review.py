@@ -45,7 +45,8 @@ KINDS: list[tuple[str, str, str]] = [
      "Irreversible. Each row is a cluster an agent deleted with medium/low confidence, or a lineage whose "
      "zoom-in removal exceeded the soft budget after a forced second look."),
     ("sample_excluded", "Samples excluded from integration",
-     "Whole samples the inclusion agent kept out. They stay on disk untouched (persample/)."),
+     "Whole samples the inclusion agent kept out, or that OSP QC emptied (step persample). "
+     "They stay on disk untouched (persample/)."),
     ("reassigned", "Clusters moved between lineages",
      "Zoom-in reassignments. The same population moving every round means the coarse label upstream is unstable."),
     ("inspect_flag", "Inspection flags",
@@ -224,6 +225,15 @@ def collect(unit: Path, rounds: list[Path], stats: list[dict], forced: bool) -> 
             items.append(Item("upstream_review", 0, entry["step"], scope=entry["source"],
                               note=json.dumps(entry["detail"], ensure_ascii=False),
                               link=f"{L.PERSAMPLE}/needs_review.md"))
+    ps = L.persample_manifest(unit)
+    if ps.is_file():
+        man = _json(ps)
+        sizes = {s["value"]: int(s.get("n_cells", 0)) for s in man.get("samples", [])}
+        for value in man.get("empty_samples", []):
+            items.append(Item("sample_excluded", 0, "persample", scope=value, n_cells=sizes.get(value, 0),
+                              action="exclude",
+                              note="no cell passed OSP QC — empty sample, never offered to the inclusion agent; "
+                                   "every cell is in its qc_removed.csv with a reason"))
     for i, (rdir, st) in enumerate(zip(rounds, stats), 1):
         items += _loop_items(i, st, forced, last=(i == len(stats)))
         items += _crosssample_items(i, L.crosssample_dir(rdir), unit)

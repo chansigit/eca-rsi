@@ -377,8 +377,9 @@ def persample_state(unit: Path) -> dict:
                     and state.get("identity") == s.get("identity")
                     and s["value"] not in man.get("failed_samples", [])
                     and all((d / f).is_file() for f in L.PS_QC_CONTRACT))
+        empty = s["value"] in man.get("empty_samples", [])  # QC removed every cell; finished without outputs
         samples.append({"name": d.name, "value": s["value"], "n_cells": s["n_cells"], "dir": d,
-                        "done": done, "report": (d / "report.html").is_file()})
+                        "done": done or empty, "empty": empty, "report": (d / "report.html").is_file()})
     return {"manifest": bool(man), "sample_column": man.get("sample_column"), "species": man.get("species"),
             "samples": samples, "n_done": sum(s["done"] for s in samples), "n": len(samples),
             "done": bool(samples) and all(s["done"] for s in samples)}
@@ -573,7 +574,8 @@ def render_unit(unit: Path) -> str:
         if dec == "exclude" and d.get("reason"):  # reason folded behind a red "?" — click opens, click again closes (CSS-only <details>)
             dpill += (f'<details class="why"><summary title="why excluded?">?</summary>'
                       f'<div class="why-body"><b>{e(smp["name"])} excluded:</b> {e(d["reason"])}</div></details>')
-        status_pill = ('<span class="pill released">done</span>' if smp["done"]
+        status_pill = ('<span class="pill exclude" title="OSP QC removed every cell; see qc_removed.csv">empty</span>'
+                       if smp.get("empty") else '<span class="pill released">done</span>' if smp["done"]
                        else '<span class="pill running">pending</span>')
         prow.append(f'<tr><td>{e(smp["name"])}</td><td class="num">{_n(smp["n_cells"])}</td>'
                     f'<td class="l">{status_pill}</td>'
