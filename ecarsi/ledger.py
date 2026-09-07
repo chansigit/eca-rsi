@@ -411,10 +411,10 @@ def draw_sankey(ledger: pd.DataFrame, stages: list[tuple[str, str | None, str]],
                 dst_off[d] += h
                 _bezier(ax, x_pos[i] + bar_w, -y0a, -(y0a + h), x_pos[i + 1], -y1a, -(y1a + h),
                         color(d) if d.startswith("removed:") else color(s_))
-    for i, (name, _, _) in enumerate(stages):
-        ax.text(x_pos[i] + bar_w / 2, 0.03, name, ha="center", va="bottom", fontsize=11, fontweight="bold")
+    for i, (name, _, _) in enumerate(stages):  # vertical, so many rounds of "round N · msp/zmip" never collide
+        ax.text(x_pos[i] + bar_w / 2, 0.03, name, ha="center", va="bottom", rotation=90, fontsize=11, fontweight="bold")
     ax.set_xlim(-0.9, x_pos[-1] + bar_w + 0.9)
-    ax.set_ylim(-1.15, 0.08)
+    ax.set_ylim(-1.15, 0.06 + 0.03 * max(len(name) for name, _, _ in stages))
     ax.axis("off")
     ax.set_title(title, fontsize=12)
     fig.tight_layout()

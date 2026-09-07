@@ -130,7 +130,9 @@ function hideTip(){ tip.style.display = "none"; }
 
 function render(){
   el.innerHTML = "";
-  const nS = D.stages.length, W = Math.max(el.clientWidth, 700), H = 620, top = 34, bottom = 14;
+  // stage titles stand vertical (rotated -90°) so ten rounds of "round N · msp / zmip" never collide
+  const nS = D.stages.length, W = Math.max(el.clientWidth, 700), bottom = 14;
+  const top = 16 + Math.max(...D.stages.map(s => s.length)) * 6.6, H = 620 + top - 34;
   const padL = 150, padR = 150, barW = 14, gap = 3;
   const innerW = W - padL - padR, colX = i => padL + (nS === 1 ? 0 : i * (innerW - barW) / (nS - 1));
   const byStage = D.stages.map(() => []);
@@ -142,8 +144,8 @@ function render(){
   svg.setAttribute("width", W); svg.setAttribute("height", H); svg.setAttribute("class", "sk");
   const mk = (t, a) => { const e = document.createElementNS(ns, t); for (const k in a) e.setAttribute(k, a[k]); return e; };
   // stage titles
-  D.stages.forEach((t, i) => { const x = colX(i) + barW / 2;
-    const tx = mk("text", {x, y: 18, "text-anchor": "middle", class: "sk-stage"}); tx.textContent = t; svg.appendChild(tx); });
+  D.stages.forEach((t, i) => { const x = colX(i) + barW / 2 + 4, y = top - 8;
+    const tx = mk("text", {x, y, transform: `rotate(-90 ${x} ${y})`, "text-anchor": "start", class: "sk-stage"}); tx.textContent = t; svg.appendChild(tx); });
   // flows (drawn first, under the bars)
   const gFlows = mk("g", {}); svg.appendChild(gFlows);
   const flowsBySrc = {}, flowsByDst = {};
