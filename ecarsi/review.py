@@ -326,26 +326,29 @@ def to_markdown(items: list[Item], unit_name: str, n_rounds: int) -> str:
     return "\n".join(lines)
 
 
+# colour of a category's card: bad = irreversible, warn = changed the input set or labels, info = advisory
+KIND_TONE = {"convergence": "bad", "removed": "bad", "sample_excluded": "warn", "reassigned": "warn",
+             "policy_excluded": "warn", "upstream_review": "info", "inspect_flag": "info", "plan_warning": "info"}
+
+
 def to_html(items: list[Item], base: str = "") -> str:
-    """HTML fragment (sections + tables) with report links; `base` prefixes
-    the unit-relative links (e.g. 'units/x/' on the root page)."""
-    cs = counts(items)
-    if not cs:
+    """HTML fragment: one card per non-empty category (coloured left border,
+    count in the heading, one table); `base` prefixes the unit-relative links
+    (e.g. 'units/x/' on the root page)."""
+    if not items:
         return '<p class="empty">Nothing to review.</p>'
     e = _h.escape
-    out = ['<div class="cards review-cards">']
-    out += [f'<a class="card kind-{k}" href="#review-{k}"><span class="num">{n}</span>'
-            f'<span class="lbl">{e(t)}</span><span class="sub">{f"{c:,} cells" if c else "&nbsp;"}</span></a>'
-            for k, t, n, c in cs]
-    out.append("</div>")
+    out = []
     for kind, title, desc in KINDS:
         sel = [it for it in items if it.kind == kind]
         if not sel:
             continue
         rows = [_row(it) for it in sel]
         used = _used_cols(rows)
-        out.append(f'<h3 id="review-{kind}" class="kind-{kind}">{e(title)} <span class="count">{len(sel)}</span></h3>'
-                   f'<p class="desc">{e(desc)}</p><div class="wrap"><table class="review"><thead><tr>'
+        n_cells = sum(it.n_cells or 0 for it in sel)
+        out.append(f'<div class="rv-group tone-{KIND_TONE.get(kind, "none")}" id="review-{kind}"><h3>{e(title)} '
+                   f'<span class="count">{len(sel)}</span>' + (f'<span class="cells">{n_cells:,} cells</span>' if n_cells else "")
+                   + f'</h3><p class="desc">{e(desc)}</p><div class="wrap"><table class="review"><thead><tr>'
                    + "".join(f"<th>{e(_COLS[j])}</th>" for j in used) + "<th></th></tr></thead><tbody>")
         for it, r in zip(sel, rows):
             cells = []
@@ -361,9 +364,9 @@ def to_html(items: list[Item], base: str = "") -> str:
                 else:
                     cell = e(val)
                 cells.append(f'<td class="c-{col.replace(" ", "-")}">{cell}</td>')
-            link = f'<a class="rep" href="{e(base + it.link)}">report ↗</a>' if it.link else ""
+            link = f'<a class="rep" href="{e(base + it.link)}">report</a>' if it.link else ""
             out.append(f"<tr>{''.join(cells)}<td>{link}</td></tr>")
-        out.append("</tbody></table></div>")
+        out.append("</tbody></table></div></div>")
     return "\n".join(out)
 
 
