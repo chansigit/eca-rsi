@@ -3,8 +3,9 @@
     python -m ecarsi.crosssample <unit_dir> [round_dir]
 
 Round 1 of the loop; standalone it writes <unit>/rounds/round01 (the loop
-passes the round dir explicitly). Runs after ecarsi.persample (which must have completed WITH annotation for
-every sample — hard prerequisite). Stages:
+passes the round dir explicitly). Runs after ecarsi.persample (which must have finished WITH annotation for
+every sample — hard prerequisite; a sample emptied by OSP QC counts as
+finished and is excluded before inclusion). Stages:
 
   1. RESOLVE (code): samples, batch key, species from persample's manifest.
      The batch key is persample's sample column — when eca-pp's
@@ -56,7 +57,7 @@ from pathlib import Path
 
 from . import downstream as D
 from .run_state import file_identity, read_json, write_json
-from .osp_contract import is_done, is_empty
+from .osp_contract import is_empty, is_finished
 from . import cost
 from . import layout as L
 
@@ -113,7 +114,7 @@ def load_persample(unit: Path) -> dict:
     for s in man["samples"]:  # located under this unit, whatever the manifest recorded
         s["dir"] = str(L.sample_dir(unit, s))
     incomplete = [s["value"] for s in man["samples"]
-                  if not is_done(Path(s["dir"]), True, s.get("identity"))]
+                  if not is_finished(Path(s["dir"]), True, s.get("identity"))]
     if incomplete:
         raise SystemExit(
             "persample (with annotation) is a hard prerequisite; incomplete samples: "

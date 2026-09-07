@@ -55,3 +55,22 @@ def test_ledger_accounts_for_an_empty_sample(tmp_path):
     assert sorted(frames.index) == ["c1", "c2", "d1", "d2", "d3"]
     assert (frames.loc[["d1", "d2", "d3"], "osp_status"] == "removed:hard_threshold").all()
     assert (frames.loc[["c1", "c2"], "osp_status"] == "kept").all()
+
+
+def test_crosssample_prerequisite_accepts_an_empty_sample(tmp_path):
+    """load_persample gates the loop on every sample being finished; an
+    empty sample has no annotation outputs but is finished (Fat v2 plate
+    MAA000873 failed the loop entry here)."""
+    from ecarsi.crosssample import load_persample
+
+    unit = tmp_path / "unit"
+    empty = L.persample_root(unit) / "S2-bbbb"
+    _empty_sample(empty, ["d1", "d2", "d3"], identity="id-2")
+    L.persample_manifest(unit).write_text(json.dumps({
+        "schema_version": 2, "state": "complete", "failed_samples": [], "empty_samples": ["S2"],
+        "samples": [{"value": "S2", "dir": str(empty), "n_cells": 3, "identity": "id-2"}]}))
+    man = load_persample(unit)
+    assert [s["value"] for s in man["samples"]] == ["S2"]
+    _empty_sample(empty, ["d1", "d2", "d3"], identity="stale")  # identity mismatch is still incomplete
+    with pytest.raises(SystemExit, match="incomplete samples: S2"):
+        load_persample(unit)
