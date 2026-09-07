@@ -40,11 +40,6 @@ not involved). Default: no password, so day-to-day debugging is prompt-free.
 The navigator's Bind / Unbind buttons (POST /_bind, /_unbind) are refused
 for requests arriving through the tunnel (ngrok stamps X-Forwarded-For)
 unless a password is set; local requests always may.
-
-The navigator also shows each dataset's Slurm job (last job= in
-<root>/jobs.log, see the convention above _root_job_id; status.txt is read
-as a fallback), asked of squeue/sacct with a short cache — purely a
-display; nothing here submits anything.
 """
 
 from __future__ import annotations
@@ -57,7 +52,6 @@ import html as _h
 import http.server
 import json
 import os
-import re
 import shutil
 import signal
 import subprocess
@@ -80,10 +74,13 @@ def default_registry() -> Path:
 
 # ---------------------------------------------------------------- registry
 
+
 def _check_dataset(path: Path) -> Path:
     path = Path(path)
     if not (L.is_root(path) or L.is_unit(path)):
-        raise ValueError(f"{path} is neither an organize root nor a unit dir (see ecarsi.layout)")
+        raise ValueError(
+            f"{path} is neither an organize root nor a unit dir (see ecarsi.layout)"
+        )
     return path
 
 
@@ -114,8 +111,12 @@ class Registry:
     def write_file(path: Path, items: dict[str, Path]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps({k: str(v) for k, v in sorted(items.items())}, indent=2) + "\n")
-        os.replace(tmp, path)  # atomic: a concurrent server never sees a half-written file
+        tmp.write_text(
+            json.dumps({k: str(v) for k, v in sorted(items.items())}, indent=2) + "\n"
+        )
+        os.replace(
+            tmp, path
+        )  # atomic: a concurrent server never sees a half-written file
 
     def _load_if_changed(self) -> None:
         try:
@@ -128,7 +129,9 @@ class Registry:
         try:
             self._file = self.read_file(self.path) if stamp else {}
         except (ValueError, OSError) as e:
-            sys.stderr.write(f"[serve] registry {self.path} unreadable, keeping last good list: {e}\n")
+            sys.stderr.write(
+                f"[serve] registry {self.path} unreadable, keeping last good list: {e}\n"
+            )
             return
         self._stamp = stamp
 
@@ -136,7 +139,10 @@ class Registry:
     def snapshot(self) -> dict[str, Path]:
         with self._lock:
             self._load_if_changed()
-            return {**self._file, **self._extra}  # this process's own dirs win on a name clash
+            return {
+                **self._file,
+                **self._extra,
+            }  # this process's own dirs win on a name clash
 
     def get(self, name: str) -> Path | None:
         return self.snapshot().get(name)
@@ -150,7 +156,9 @@ class Registry:
             self._load_if_changed()
             existing = self._file.get(name) or self._extra.get(name)
             if not force and existing is not None and existing != path:
-                raise ValueError(f"name {name!r} already bound to {existing} — use --name to disambiguate or remove it first")
+                raise ValueError(
+                    f"name {name!r} already bound to {existing} — use --name to disambiguate or remove it first"
+                )
             new = dict(self._file)
             new[name] = path
             self.write_file(self.path, new)
@@ -163,87 +171,19 @@ class Registry:
             self._load_if_changed()
             missing = [n for n in names if n not in self._file]
             if missing:
-                raise ValueError("nothing bound as " + ", ".join(repr(m) for m in missing)
-                                 + ("" if not any(n in self._extra for n in missing)
-                                    else " (given on the serve command line, not in the registry file)"))
+                raise ValueError(
+                    "nothing bound as "
+                    + ", ".join(repr(m) for m in missing)
+                    + (
+                        ""
+                        if not any(n in self._extra for n in missing)
+                        else " (given on the serve command line, not in the registry file)"
+                    )
+                )
             new = {k: v for k, v in self._file.items() if k not in names}
             self.write_file(self.path, new)
             self._file = new
             self._stamp = None
-
-
-# ---------------------------------------------------------------- slurm jobs (display only)
-#
-# Convention: whatever submits a run appends to <root>/jobs.log, one line per
-# event, space-separated key=value tokens, every line carrying job=<slurm id>:
-#     job=41888484 node=sh04-13n32 start=2026-09-03T12:00:05-0700
-#     job=41888484 end=2026-09-03T15:24:36-0700 exit=0
-# The navigator takes the LAST job id in the file as the run's current job and
-# asks Slurm about it (squeue for queued/running, sacct for finished). The
-# older per-run status.txt (same tokens, job= only on its first line) is read
-# as a fallback so existing runs show up too. No squeue on PATH -> no column.
-
-JOBS_LOG = "jobs.log"
-_JOB_RE = re.compile(r"\bjob=(\d+)\b")
-_slurm_cache: dict = {"at": 0.0, "ids": (), "states": {}}
-_SLURM_TTL = 20.0  # s; one squeue + one sacct per page load at most this often
-
-
-def _root_job_id(root: Path) -> str | None:
-    for fname in (JOBS_LOG, "status.txt"):
-        f = root / fname
-        if f.is_file():
-            ids = _JOB_RE.findall(f.read_text())
-            if ids:
-                return ids[-1]
-    return None
-
-
-def _slurm_states(ids: list[str]) -> dict[str, dict]:
-    """{job id: {state, elapsed, node, reason}} via one squeue + one sacct, cached."""
-    ids = sorted(set(ids))
-    if not ids or not shutil.which("squeue"):
-        return {}
-    now = time.time()
-    if tuple(ids) == _slurm_cache["ids"] and now - _slurm_cache["at"] < _SLURM_TTL:
-        return _slurm_cache["states"]
-    out: dict[str, dict] = {}
-    try:
-        q = subprocess.run(["squeue", "-j", ",".join(ids), "-h", "-o", "%i|%T|%M|%N|%r"],
-                           capture_output=True, text=True, timeout=15)
-        for line in q.stdout.splitlines():
-            jid, state, elapsed, node, reason = (line.split("|") + [""] * 5)[:5]
-            out[jid] = {"state": state, "elapsed": elapsed, "node": node, "reason": reason}
-        rest = [i for i in ids if i not in out]
-        if rest and shutil.which("sacct"):
-            a = subprocess.run(["sacct", "-j", ",".join(rest), "-X", "-n", "-P", "-o", "JobID,State,Elapsed,NodeList,ExitCode"],
-                               capture_output=True, text=True, timeout=20)
-            for line in a.stdout.splitlines():
-                jid, state, elapsed, node, exitcode = (line.split("|") + [""] * 5)[:5]
-                out[jid] = {"state": state.split()[0] if state else "", "elapsed": elapsed, "node": node, "reason": f"exit {exitcode}"}
-    except (subprocess.TimeoutExpired, OSError) as e:
-        sys.stderr.write(f"[serve] slurm lookup failed: {e}\n")
-    _slurm_cache.update(at=now, ids=tuple(ids), states=out)
-    return out
-
-
-_JOB_CLS = {"RUNNING": "running", "PENDING": "running", "COMPLETING": "running", "CONFIGURING": "running",
-            "COMPLETED": "released"}
-
-
-def _job_cell(jid: str | None, st: dict | None) -> tuple[str, str]:
-    """(html, search text) for the navigator's job column."""
-    if not jid:
-        return '<span class="muted">–</span>', ""
-    if not st:
-        return f'<span class="pill neutral" title="job {jid}: not known to squeue/sacct">{jid} ?</span>', jid
-    state = st["state"] or "?"
-    cls = _JOB_CLS.get(state, "failed")
-    detail = " · ".join(x for x in (st["elapsed"], st["node"], st["reason"] if state == "PENDING" or cls == "failed" else "") if x and x != "None")
-    e = _h.escape
-    return (f'<span class="pill {cls}" title="job {jid}{" · " + e(detail) if detail else ""}">{e(state.lower())}</span>'
-            + (f' <small class="muted">{e(st["elapsed"])}</small>' if st["elapsed"] else ""),
-            f"{jid} {state.lower()} {st['node']}")
 
 
 # ---------------------------------------------------------------- navigator
@@ -251,16 +191,28 @@ def _job_cell(jid: str | None, st: dict | None) -> tuple[str, str]:
 NAV_JS = r"""
 (function(){
   const $ = id => document.getElementById(id);
-  const items = [...document.querySelectorAll(".item")], frame = $("frame"), crumb = $("crumb"), open = $("open"),
-        q = $("nav-q"), n = $("nav-n"), msg = $("nav-msg"), empty = $("empty");
+  const items = [...document.querySelectorAll("#sb-list .item")], frame = $("frame"), crumb = $("crumb"), open = $("open"),
+        q = $("nav-q"), n = $("nav-n"), msg = $("nav-msg"), empty = $("empty"), home = $("home-item"),
+        sort = $("nav-sort"), list = $("sb-list");
   const names = new Set(items.map(i => i.dataset.name));
   // -- sidebar <-> main pane --
-  function mark(name){ items.forEach(i => i.classList.toggle("active", i.dataset.name === name)); }
+  function mark(name){ items.forEach(i => i.classList.toggle("active", i.dataset.name === name));
+    if (home) home.classList.toggle("active", name === "__home__"); }
   function show(path){ if (empty) empty.style.display = "none"; frame.style.display = ""; if (frameUrl() !== path) frame.src = path; }
   function frameUrl(){ try { return frame.contentWindow.location.pathname; } catch (e) { return null; } }
-  function fromHash(){ const m = location.hash.replace(/^#/, "").match(/^\/([^/]+)\/(.*)$/); return m && names.has(m[1]) ? "/" + m[1] + "/" + m[2] : null; }
+  function fromHash(){
+    const h = location.hash.replace(/^#/, "");
+    if (h === "/__home__") return "/_home";
+    const m = h.match(/^\/([^/]+)\/(.*)$/); return m && names.has(m[1]) ? "/" + m[1] + "/" + m[2] : null; }
   frame.addEventListener("load", () => {
     const p = frameUrl(); if (!p) return;
+    if (p === "/_home") {
+      if (location.hash !== "#/__home__") history.replaceState(null, "", "#/__home__");
+      try { localStorage.setItem("ecarsi.serve.last", "/_home"); } catch (e) {}
+      mark(null); crumb.textContent = "overview"; open.href = "/_home";
+      try { document.title = frame.contentDocument.title || "ecarsi serve"; } catch (e) {}
+      return;
+    }
     const m = p.match(/^\/([^/]+)\//); if (!m) return;
     if (location.hash !== "#" + p) history.replaceState(null, "", "#" + p);
     try { localStorage.setItem("ecarsi.serve.last", p); } catch (e) {}
@@ -269,6 +221,7 @@ NAV_JS = r"""
   });
   window.addEventListener("hashchange", () => { const p = fromHash(); if (p) show(p); });
   items.forEach(i => i.addEventListener("click", ev => { if (ev.target.closest("input.sel")) return; ev.preventDefault(); show("/" + i.dataset.name + "/"); }));
+  if (home) home.addEventListener("click", ev => { ev.preventDefault(); show("/_home"); });
   $("sb-toggle").addEventListener("click", () => document.body.classList.toggle("sb-hidden"));
   $("sb-show").addEventListener("click", () => document.body.classList.remove("sb-hidden"));
   $("reload").addEventListener("click", () => { try { frame.contentWindow.location.reload(); } catch (e) { frame.src = frame.src; } });
@@ -277,6 +230,47 @@ NAV_JS = r"""
     for (const i of items) { const hit = !t || i.dataset.text.includes(t); i.style.display = hit ? "" : "none"; k += hit; }
     n.textContent = t ? `${k} / ${items.length}` : `${items.length}`; }
   q.addEventListener("input", apply); apply();
+  // -- sort (name / cells / status) --
+  const STATUS_RANK = {released: 0, running: 1, neutral: 2, failed: 3};
+  function applySort(){
+    const mode = sort ? sort.value : "name";
+    const sorted = [...items].sort((a, b) => {
+      if (mode === "cells") return (Number(b.dataset.cells) || 0) - (Number(a.dataset.cells) || 0);
+      if (mode === "status") {
+        const r = (STATUS_RANK[a.dataset.cls] ?? 9) - (STATUS_RANK[b.dataset.cls] ?? 9);
+        return r !== 0 ? r : a.dataset.name.localeCompare(b.dataset.name);
+      }
+      return a.dataset.name.localeCompare(b.dataset.name);
+    });
+    for (const i of sorted) list.appendChild(i);
+    try { localStorage.setItem("ecarsi.serve.sort", mode); } catch (e) {}
+  }
+  if (sort) {
+    try { const s = localStorage.getItem("ecarsi.serve.sort"); if (s) sort.value = s; } catch (e) {}
+    sort.addEventListener("change", applySort);
+    applySort();
+  }
+  // -- draggable sidebar width --
+  const sbEl = $("sb"), resizer = $("sb-resizer");
+  function setWidth(px){ px = Math.max(180, Math.min(720, px)); sbEl.style.flexBasis = px + "px"; sbEl.style.width = px + "px"; }
+  try { const w = localStorage.getItem("ecarsi.serve.sbWidth"); if (w) setWidth(parseInt(w, 10)); } catch (e) {}
+  if (resizer) {
+    let dragging = false;
+    resizer.addEventListener("mousedown", ev => {
+      dragging = true; document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none";
+      // the iframe is a separate document — once the cursor crosses into it,
+      // window-level mousemove/mouseup here stop firing entirely; disabling
+      // its pointer events for the drag keeps the parent document capturing
+      frame.style.pointerEvents = "none";
+      ev.preventDefault();
+    });
+    window.addEventListener("mousemove", ev => { if (!dragging) return; setWidth(ev.clientX); });
+    window.addEventListener("mouseup", () => {
+      if (!dragging) return;
+      dragging = false; document.body.style.cursor = ""; document.body.style.userSelect = ""; frame.style.pointerEvents = "";
+      try { localStorage.setItem("ecarsi.serve.sbWidth", parseInt(sbEl.style.width, 10)); } catch (e) {}
+    });
+  }
   // -- bind / unbind (edit the registry file through the server) --
   function say(text, bad){ msg.textContent = text; msg.className = "callout" + (bad ? " bad" : ""); msg.style.display = "block"; }
   async function post(url, body){
@@ -307,9 +301,10 @@ NAV_JS = r"""
     if (j.ok) { const cur = fromHash(); if (cur && sel.includes(cur.split("/")[1])) location.hash = ""; location.reload(); }
     else { ub.disabled = false; say("unbind failed: " + j.error, true); } });
   sync();
-  // -- initial pane --
+  // -- initial pane -- default is a dataset; home is only reached by explicit
+  // navigation (hash) or by having been the last page in this browser
   let first = fromHash();
-  if (!first) { try { const l = localStorage.getItem("ecarsi.serve.last"); if (l && names.has(l.split("/")[1])) first = l; } catch (e) {} }
+  if (!first) { try { const l = localStorage.getItem("ecarsi.serve.last"); if (l && (l === "/_home" || names.has(l.split("/")[1]))) first = l; } catch (e) {} }
   if (!first && items.length) first = "/" + items[0].dataset.name + "/";
   if (first) show(first); else { frame.style.display = "none"; if (empty) empty.style.display = ""; }
 })();
@@ -319,12 +314,26 @@ NAV_JS = r"""
 def _dataset_state(root: Path) -> dict:
     """Per-dataset summary read from disk (ecarsi.index), for the navigator / list."""
     if not root.is_dir():
-        return {"units": 0, "released": 0, "n_input": None, "final_cells": None, "stage": "missing on disk", "cls": "failed"}
+        return {
+            "units": 0,
+            "released": 0,
+            "n_input": None,
+            "final_cells": None,
+            "stage": "missing on disk",
+            "cls": "failed",
+        }
     try:
         units = [root] if L.is_unit(root) else L.units(root)
         states = [index.unit_state(u) for u in units]
     except Exception as e:  # a broken run dir must not take the navigator down
-        return {"units": 0, "released": 0, "n_input": None, "final_cells": None, "stage": f"unreadable: {e}", "cls": "failed"}
+        return {
+            "units": 0,
+            "released": 0,
+            "n_input": None,
+            "final_cells": None,
+            "stage": f"unreadable: {e}",
+            "cls": "failed",
+        }
     released = sum(1 for s in states if s["released"])
     final = [s["final_cells"] for s in states if s["final_cells"] is not None]
     n_in = [s["n_input"] for s in states if s["n_input"] is not None]
@@ -335,18 +344,34 @@ def _dataset_state(root: Path) -> dict:
     elif any(s["stage_class"] == "failed" for s in states):
         stage, cls = "failed", "failed"
     else:
-        stage, cls = states[0]["stage"] if len(states) == 1 else f"{released}/{len(states)} released", "running"
-    return {"units": len(states), "released": released, "n_input": sum(n_in) if n_in else None,
-            "final_cells": sum(final) if final else None, "stage": stage, "cls": cls}
+        stage, cls = (
+            states[0]["stage"]
+            if len(states) == 1
+            else f"{released}/{len(states)} released",
+            "running",
+        )
+    return {
+        "units": len(states),
+        "released": released,
+        "n_input": sum(n_in) if n_in else None,
+        "final_cells": sum(final) if final else None,
+        "stage": stage,
+        "cls": cls,
+    }
 
 
 NAV_CSS = """
 html,body{height:100%}body{display:flex;overflow:hidden}
-aside.sb{width:300px;flex:0 0 300px;background:#f9fafb;border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0}
+aside.sb{width:300px;flex:0 0 300px;background:#f9fafb;border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0;position:relative}
+.sb-resizer{position:absolute;top:0;right:-3px;width:6px;height:100%;cursor:col-resize;z-index:6}
+.sb-resizer:hover,.sb-resizer:active{background:var(--accent);opacity:.3}
 .sb-head{padding:.8rem .8rem .4rem;display:flex;flex-direction:column;gap:.5rem}
 .sb-head .ttl{display:flex;align-items:center;justify-content:space-between;font-weight:650;font-size:.95rem}
 .sb-head .ttl small{color:var(--muted);font-weight:400;font-size:.8rem}
 .sb-head input{width:100%;font:inherit;font-size:.9rem;padding:.4rem .7rem;border:1px solid var(--line);border-radius:8px;background:#fff}
+.sb-head .sort-row{display:flex;align-items:center;gap:.4rem;font-size:.78rem;color:var(--muted)}
+.sb-head select{font:inherit;font-size:.82rem;padding:.25rem .4rem;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink)}
+.home-item{margin:.2rem .5rem 0}
 .sb-list{flex:1;overflow-y:auto;padding:.2rem .5rem .5rem}
 .item{display:flex;align-items:center;gap:.45rem;padding:.45rem .55rem;border-radius:8px;cursor:pointer;color:var(--ink);text-decoration:none}
 .item:hover{background:#eef0f3;text-decoration:none}.item.active{background:#e3e7ff}
@@ -382,35 +407,49 @@ def _navigator_html(items: dict[str, Path], registry_path: Path) -> str:
     / bookmarks land on the same page."""
     e = _h.escape
     rows = []
-    jids = {name: _root_job_id(p) for name, p in items.items()}
-    jstates = _slurm_states([j for j in jids.values() if j])
     for name, p in sorted(items.items()):
         st = _dataset_state(p)
         cells = index._n(st["final_cells"])
-        job_html, job_text = _job_cell(jids[name], jstates.get(jids[name] or ""))
         meta = [f'<span class="pill {st["cls"]}">{e(st["stage"])}</span>']
         if cells:
-            meta.append(f'<b>{cells}</b> cells' + ("" if st["cls"] == "released" else " so far"))
+            meta.append(
+                f"<b>{cells}</b> cells" + ("" if st["cls"] == "released" else " so far")
+            )
         if st["units"] > 1:
-            meta.append(f'{st["released"]}/{st["units"]} units')
-        if jids[name]:
-            meta.append(job_html)
-        rows.append(f'<a class="item" href="/{e(name)}/" data-name="{e(name)}" title="{e(str(p))}" '
-                    f'data-text="{e((name + " " + str(p) + " " + st["stage"] + " " + job_text).lower())}">'
-                    f'<input class="sel" type="checkbox" value="{e(name)}" title="select for unbind">'
-                    f'<div class="body"><div class="nm">{e(name)}</div><div class="meta">{" · ".join(meta)}</div></div></a>')
-    hint = ("A bindable directory is an eca-rsi <b>organize root</b> (contains <code>organize/manifest.json</code> or a "
-            "<code>units/</code> dir — e.g. <code>&lt;dataset&gt;/rsi</code>, the <code>&lt;root&gt;</code> you gave "
-            "<code>eca-rsi run</code>) or a single <b>unit</b> (contains <code>input/organized.h5ad</code> or "
-            "<code>input/manifest.json</code> — e.g. <code>&lt;root&gt;/units/&lt;unit&gt;</code>). "
-            "Absolute path on the server host; a raw eca-pp <code>standardize/</code> dir or a bare h5ad is not bindable.")
-    sidebar_rows = "".join(rows) if rows else '<p class="muted" style="padding:.5rem">nothing bound yet</p>'
+            meta.append(f"{st['released']}/{st['units']} units")
+        rows.append(
+            f'<a class="item" href="/{e(name)}/" data-name="{e(name)}" title="{e(str(p))}" '
+            f'data-cells="{st["final_cells"] or 0}" data-cls="{e(st["cls"])}" '
+            f'data-text="{e((name + " " + str(p) + " " + st["stage"]).lower())}">'
+            f'<input class="sel" type="checkbox" value="{e(name)}" title="select for unbind">'
+            f'<div class="body"><div class="nm">{e(name)}</div><div class="meta">{" · ".join(meta)}</div></div></a>'
+        )
+    hint = (
+        "A bindable directory is an eca-rsi <b>organize root</b> (contains <code>organize/manifest.json</code> or a "
+        "<code>units/</code> dir — e.g. <code>&lt;dataset&gt;/rsi</code>, the <code>&lt;root&gt;</code> you gave "
+        "<code>eca-rsi run</code>) or a single <b>unit</b> (contains <code>input/organized.h5ad</code> or "
+        "<code>input/manifest.json</code> — e.g. <code>&lt;root&gt;/units/&lt;unit&gt;</code>). "
+        "Absolute path on the server host; a raw eca-pp <code>standardize/</code> dir or a bare h5ad is not bindable."
+    )
+    sidebar_rows = (
+        "".join(rows)
+        if rows
+        else '<p class="muted" style="padding:.5rem">nothing bound yet</p>'
+    )
     sidebar = (
-        '<aside class="sb" id="sb"><div class="sb-head">'
+        '<aside class="sb" id="sb"><div class="sb-resizer" id="sb-resizer" title="drag to resize"></div>'
+        '<div class="sb-head">'
         '<div class="ttl"><span>Datasets <small><span id="nav-n">0</span></small></span>'
         '<button class="icon" id="sb-toggle" title="hide sidebar">&#9776;</button></div>'
-        '<input id="nav-q" type="search" placeholder="search name / path / stage / job…" autocomplete="off"></div>'
-        f'<div class="sb-list">{sidebar_rows}</div>'
+        '<input id="nav-q" type="search" placeholder="search name / path / stage…" autocomplete="off">'
+        '<div class="sort-row"><span>sort</span><select id="nav-sort">'
+        '<option value="name">name</option><option value="cells">cells</option>'
+        '<option value="status">status</option></select></div>'
+        "</div>"
+        '<a class="item home-item" id="home-item" href="/_home" data-name="__home__" title="overview">'
+        '<span style="width:1.1em;text-align:center">&#8962;</span>'
+        '<div class="body"><div class="nm">Overview</div></div></a>'
+        f'<div class="sb-list" id="sb-list">{sidebar_rows}</div>'
         '<div class="sb-foot">'
         '<div class="row"><button id="bind-open" class="btn sm">+ Bind…</button><button id="unbind-go" class="btn sm danger" disabled>Unbind…</button></div>'
         '<div id="bind-form" class="callout" style="display:none"><b>Directory to bind</b>'
@@ -420,7 +459,7 @@ def _navigator_html(items: dict[str, Path], registry_path: Path) -> str:
         '<div class="row"><button id="bind-go" class="btn sm">Bind</button><button id="bind-cancel" class="btn sm plain">Cancel</button></div></div>'
         '<div id="nav-msg" class="callout" style="display:none"></div>'
         f'<div class="reg" title="registry file: bind/unbind edit it; nothing in the run directories is touched">{e(str(registry_path))}</div>'
-        '</div></aside>'
+        "</div></aside>"
     )
     main = (
         '<main><div class="mbar"><button class="icon" id="sb-show" title="show sidebar">&#9776;</button>'
@@ -428,7 +467,7 @@ def _navigator_html(items: dict[str, Path], registry_path: Path) -> str:
         '<a id="open" href="/" target="_blank" title="open in a new tab">&#8599;</a></div>'
         '<iframe id="frame" name="frame" title="dataset"></iframe>'
         '<div id="empty" style="display:none"><h2>Nothing bound yet</h2><p class="desc">Use <b>+ Bind…</b> in the sidebar or, on the server host, '
-        '<code>eca-rsi serve scan-add &lt;dir-or-glob&gt;</code>. The server picks up registry changes on the next request.</p>'
+        "<code>eca-rsi serve scan-add &lt;dir-or-glob&gt;</code>. The server picks up registry changes on the next request.</p>"
         f'<p class="desc">{hint}</p></div></main>'
     )
     return (
@@ -438,7 +477,64 @@ def _navigator_html(items: dict[str, Path], registry_path: Path) -> str:
     )
 
 
+HOME_CSS = """
+body{margin:0;background:var(--bg)}
+.home{max-width:64ch;margin:3.5rem auto;padding:0 1.5rem}
+.home .logo{display:flex;align-items:center;gap:.7rem;margin-bottom:.3rem}
+.home .logo .mark{width:2.4rem;height:2.4rem;border-radius:9px;background:linear-gradient(135deg,var(--accent),#7c86ff);
+  color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1.15rem;flex:0 0 auto}
+.home .logo h1{margin:0;font-size:1.5rem}
+.home .tag{color:var(--muted);margin:.1rem 0 1.6rem}
+.home .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:.7rem;margin-bottom:1.6rem}
+.home .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:.7rem .9rem}
+.home .stat .v{font-size:1.5rem;font-weight:700}
+.home .stat .k{font-size:.78rem;color:var(--muted)}
+.home ul{padding-left:1.2rem;color:var(--muted);font-size:.9rem;line-height:1.7}
+.home a{color:var(--accent)}
+"""
+
+
+def _home_html(items: dict[str, Path]) -> str:
+    """Built-in overview page (logo + fleet summary) shown instead of any one
+    dataset — reached via the Overview item in the sidebar, never the default."""
+    e = _h.escape
+    states = {name: _dataset_state(p) for name, p in items.items()}
+    released = sum(1 for s in states.values() if s["cls"] == "released")
+    running = sum(1 for s in states.values() if s["cls"] == "running")
+    failed = sum(1 for s in states.values() if s["cls"] == "failed")
+    total_cells = sum(
+        s["final_cells"] or 0 for s in states.values() if s["cls"] == "released"
+    )
+    stats = [
+        (str(len(items)), "datasets"),
+        (str(released), "released"),
+        (str(running), "in progress"),
+        (str(failed), "failed"),
+        (index._n(total_cells) or "0", "cells released"),
+    ]
+    stat_html = "".join(
+        f'<div class="stat"><div class="v">{e(v)}</div><div class="k">{e(k)}</div></div>'
+        for v, k in stats
+    )
+    return (
+        '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1"><title>ecarsi serve</title>'
+        f'<style>{index.CSS}{HOME_CSS}</style></head><body><div class="home">'
+        '<div class="logo"><div class="mark">RSI</div><h1>ecarsi serve</h1></div>'
+        '<p class="tag">Recursive Self-Improvement for an Ensemble Cell Atlas — one navigator over every '
+        "eca-rsi run's landing pages, rendered live from disk.</p>"
+        f'<div class="stats">{stat_html}</div>'
+        "<ul>"
+        "<li>Pick a dataset in the left sidebar to open its landing page — a run still in progress shows its current stage.</li>"
+        "<li>Drag the sidebar's right edge to resize it; the width is remembered.</li>"
+        "<li>Sort the list by name, cell count, or status with the dropdown above it.</li>"
+        "<li><b>+ Bind…</b> registers a new run directory; the registry file is the single source of truth.</li>"
+        "</ul></div></body></html>"
+    )
+
+
 # ---------------------------------------------------------------- handler
+
 
 def _render_index(root: Path, sub: str) -> str | None:
     """HTML for a landing page rendered from disk right now, or None if the
@@ -467,7 +563,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *a, registry: Registry, auth: str | None = None, **kw):
         self._registry = registry
         self._auth = auth  # "user:pass" -> HTTP basic auth enforced here, on every request; None = open
-        super().__init__(*a, **kw)  # directory defaults to cwd; do_GET always overrides it before use
+        super().__init__(
+            *a, **kw
+        )  # directory defaults to cwd; do_GET always overrides it before use
 
     def _authorized(self) -> bool:
         """Web-level password (--auth). Checked by the server itself, so it
@@ -486,7 +584,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def _demand_auth(self) -> None:
         self.send_response(401)
-        self.send_header("WWW-Authenticate", 'Basic realm="ecarsi serve", charset="UTF-8"')
+        self.send_header(
+            "WWW-Authenticate", 'Basic realm="ecarsi serve", charset="UTF-8"'
+        )
         self.send_header("Content-Length", "0")
         self.end_headers()
 
@@ -519,7 +619,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path not in ("/_bind", "/_unbind"):
             return self.send_error(404)
         if not self._admin_allowed():
-            return self._json(403, {"ok": False, "error": "admin actions are refused through the public tunnel unless the server was started with --auth"})
+            return self._json(
+                403,
+                {
+                    "ok": False,
+                    "error": "admin actions are refused through the public tunnel unless the server was started with --auth",
+                },
+            )
         try:
             n = int(self.headers.get("Content-Length") or 0)
             req = json.loads(self.rfile.read(n) or b"{}")
@@ -550,9 +656,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if not self._authorized():
             return self._demand_auth()
         raw = self.path.split("?", 1)[0]
+        if raw == "/_home":
+            return self._html(_home_html(self._registry.snapshot()))
         parts = [p for p in raw.split("/") if p]
         if not parts:
-            return self._html(_navigator_html(self._registry.snapshot(), self._registry.path))
+            return self._html(
+                _navigator_html(self._registry.snapshot(), self._registry.path)
+            )
         name = parts[0]
         root = self._registry.get(name)
         if root is None:
@@ -560,12 +670,28 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # must be latin-1 — anything fancier (em dash, etc.) belongs in
             # `explain` (the body) instead, or send_error raises and the
             # connection dies with an empty reply, no 404 at all
-            return self.send_error(404, "unknown dataset", explain=f"no dataset bound as {name!r}; see the navigator at /")
+            return self.send_error(
+                404,
+                "unknown dataset",
+                explain=f"no dataset bound as {name!r}; see the navigator at /",
+            )
         if not root.is_dir():
-            return self.send_error(404, "dataset missing", explain=f"{root} (bound as {name!r}) is not on disk any more")
-        sub = "/" + "/".join(parts[1:]) + ("/" if raw.endswith("/") and len(parts) > 1 else "")
-        if not raw.endswith("/") and (len(parts) == 1 or (root / sub.lstrip("/")).is_dir()):
-            return self._redirect(raw + "/")  # ourselves, not SimpleHTTPRequestHandler: its redirect would drop the /<name> prefix
+            return self.send_error(
+                404,
+                "dataset missing",
+                explain=f"{root} (bound as {name!r}) is not on disk any more",
+            )
+        sub = (
+            "/"
+            + "/".join(parts[1:])
+            + ("/" if raw.endswith("/") and len(parts) > 1 else "")
+        )
+        if not raw.endswith("/") and (
+            len(parts) == 1 or (root / sub.lstrip("/")).is_dir()
+        ):
+            return self._redirect(
+                raw + "/"
+            )  # ourselves, not SimpleHTTPRequestHandler: its redirect would drop the /<name> prefix
         try:
             page = _render_index(root, sub)
         except Exception as e:  # a broken page must not take the server down; fall back to the static file
@@ -588,14 +714,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
 # ---------------------------------------------------------------- ngrok
 
+
 def start_ngrok(port: int, domain: str | None) -> tuple[subprocess.Popen, str]:
     exe = shutil.which("ngrok")
     if not exe:
-        raise SystemExit("ngrok not found on PATH — install it and add your authtoken (ngrok config add-authtoken …)")
+        raise SystemExit(
+            "ngrok not found on PATH — install it and add your authtoken (ngrok config add-authtoken …)"
+        )
     cmd = [exe, "http", str(port), "--log", "stdout", "--log-format", "json"]
     if domain:
         cmd += ["--domain", domain]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+    )
     url, deadline = None, time.time() + 30
     assert proc.stdout is not None
     while time.time() < deadline:
@@ -614,13 +745,16 @@ def start_ngrok(port: int, domain: str | None) -> tuple[subprocess.Popen, str]:
             raise SystemExit(f"ngrok failed: {ev.get('err') or ev.get('msg')}")
     if url is None:
         proc.terminate()
-        raise SystemExit("ngrok did not report a tunnel within 30 s (see its output above)")
+        raise SystemExit(
+            "ngrok did not report a tunnel within 30 s (see its output above)"
+        )
     # keep draining so the pipe never fills
     threading.Thread(target=lambda: [None for _ in proc.stdout], daemon=True).start()  # type: ignore[union-attr]
     return proc, url
 
 
 # ---------------------------------------------------------------- serve (foreground)
+
 
 def cmd_serve(args: argparse.Namespace) -> int:
     reg_path = Path(args.registry).expanduser().resolve()
@@ -633,16 +767,26 @@ def cmd_serve(args: argparse.Namespace) -> int:
             print(f"[serve] {e}")
             return 2
         if p.name in extra and extra[p.name] != p:
-            print(f"[serve] two command-line dirs both named {p.name!r}: {extra[p.name]} and {p} — put one in the registry under another name")
+            print(
+                f"[serve] two command-line dirs both named {p.name!r}: {extra[p.name]} and {p} — put one in the registry under another name"
+            )
             return 2
         extra[p.name] = p
     registry = Registry(reg_path, extra)
     items = registry.snapshot()
-    httpd = http.server.ThreadingHTTPServer((args.bind, args.port),
-                                          partial(Handler, registry=registry, auth=args.auth))
-    print(f"[serve] navigator on http://{args.bind}:{args.port}/  ({len(items)} dataset(s); registry {reg_path}"
-          + (f", {len(extra)} from the command line)" if extra else ")")
-          + (f"  [password-protected, user {args.auth.split(':', 1)[0]!r}]" if args.auth else "  [no password]"), flush=True)
+    httpd = http.server.ThreadingHTTPServer(
+        (args.bind, args.port), partial(Handler, registry=registry, auth=args.auth)
+    )
+    print(
+        f"[serve] navigator on http://{args.bind}:{args.port}/  ({len(items)} dataset(s); registry {reg_path}"
+        + (f", {len(extra)} from the command line)" if extra else ")")
+        + (
+            f"  [password-protected, user {args.auth.split(':', 1)[0]!r}]"
+            if args.auth
+            else "  [no password]"
+        ),
+        flush=True,
+    )
     for name, p in sorted(items.items()):
         print(f"  /{name}/  {p}", flush=True)
 
@@ -672,7 +816,21 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
 # ---------------------------------------------------------------- registry commands
 
-GENERIC_DIR_NAMES = {"rsi", "root", "run", "runs", "out", "output", "results", "eca-rsi", "ecarsi", "eca-pp", "units", "data", "sc"}
+GENERIC_DIR_NAMES = {
+    "rsi",
+    "root",
+    "run",
+    "runs",
+    "out",
+    "output",
+    "results",
+    "eca-rsi",
+    "ecarsi",
+    "eca-pp",
+    "units",
+    "data",
+    "sc",
+}
 
 
 def _scan_names(dirs: list[Path], taken: dict[str, Path]) -> dict[Path, str]:
@@ -683,15 +841,22 @@ def _scan_names(dirs: list[Path], taken: dict[str, Path]) -> dict[Path, str]:
     qualified by one more component, symmetrically (Brain across three
     collections becomes mca1.1-Brain / mca2.0-Brain / mca3.0-Brain, not
     Brain / Brain-rsi / eca-pp-Brain)."""
-    comps = {d: [c for c in d.parts[1:] if c not in GENERIC_DIR_NAMES] or [d.name] for d in dirs}
+    comps = {
+        d: [c for c in d.parts[1:] if c not in GENERIC_DIR_NAMES] or [d.name]
+        for d in dirs
+    }
     depth = {d: 1 for d in dirs}
-    name = lambda d: "-".join(comps[d][-depth[d]:])
+    name = lambda d: "-".join(comps[d][-depth[d] :])
     while True:
         by: dict[str, list[Path]] = {}
         for d in dirs:
             by.setdefault(name(d), []).append(d)
-        clash = [d for n, ds in by.items() for d in ds
-                 if len(ds) > 1 or (n in taken and taken[n] != d)]
+        clash = [
+            d
+            for n, ds in by.items()
+            for d in ds
+            if len(ds) > 1 or (n in taken and taken[n] != d)
+        ]
         clash = [d for d in clash if depth[d] < len(comps[d])]  # can't qualify further
         if not clash:
             return {d: name(d) for d in dirs}
@@ -701,7 +866,13 @@ def _scan_names(dirs: list[Path], taken: dict[str, Path]) -> dict[Path, str]:
 
 def cmd_scan_add(args: argparse.Namespace) -> int:
     reg = Registry(Path(args.registry).expanduser().resolve())
-    matches = sorted({Path(m).resolve() for pat in args.glob for m in _glob.glob(os.path.expandvars(os.path.expanduser(pat)))})
+    matches = sorted(
+        {
+            Path(m).resolve()
+            for pat in args.glob
+            for m in _glob.glob(os.path.expandvars(os.path.expanduser(pat)))
+        }
+    )
     if not matches:
         print("[serve] nothing matched")
         return 1
@@ -725,7 +896,9 @@ def cmd_scan_add(args: argparse.Namespace) -> int:
     for d in skipped:
         print(f"  skip   {d}  (not an organize root / unit)")
     if not plan:
-        print(f"[serve] nothing new to add ({len(matches)} matched, {len(skipped)} skipped, {len(matches) - len(skipped)} already in)")
+        print(
+            f"[serve] nothing new to add ({len(matches)} matched, {len(skipped)} skipped, {len(matches) - len(skipped)} already in)"
+        )
         return 0
     n_ok = 0
     for name, d in plan:
@@ -782,7 +955,9 @@ def cmd_dump(args: argparse.Namespace) -> int:
         return 0
     out = Path(args.path).expanduser().resolve()
     Registry.write_file(out, items)
-    print(f"[serve] wrote {len(items)} entr{'y' if len(items) == 1 else 'ies'} -> {out}")
+    print(
+        f"[serve] wrote {len(items)} entr{'y' if len(items) == 1 else 'ies'} -> {out}"
+    )
     return 0
 
 
@@ -800,26 +975,51 @@ def cmd_reload(args: argparse.Namespace) -> int:
     current = {} if args.replace else Registry.read_file(reg_path)
     merged = {**current, **incoming}  # entries from the file win on a name clash
     Registry.write_file(reg_path, merged)
-    print(f"[serve] {'replaced with' if args.replace else 'merged'} {len(incoming)} entr{'y' if len(incoming) == 1 else 'ies'} from {src} -> {reg_path} ({len(merged)} total)")
+    print(
+        f"[serve] {'replaced with' if args.replace else 'merged'} {len(incoming)} entr{'y' if len(incoming) == 1 else 'ies'} from {src} -> {reg_path} ({len(merged)} total)"
+    )
     return 0
 
 
 # ---------------------------------------------------------------- cli
 
+
 def main(argv: list[str]) -> int:
     def registry_arg(p):
-        p.add_argument("--registry", default=str(default_registry()), metavar="FILE",
-                       help="registry file, JSON {name: path} (default $XDG_CONFIG_HOME/ecarsi/registry.json)")
+        p.add_argument(
+            "--registry",
+            default=str(default_registry()),
+            metavar="FILE",
+            help="registry file, JSON {name: path} (default $XDG_CONFIG_HOME/ecarsi/registry.json)",
+        )
 
     if argv and argv[0] in SUBCOMMANDS:
-        ap = argparse.ArgumentParser(prog="ecarsi.serve", description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+        ap = argparse.ArgumentParser(
+            prog="ecarsi.serve",
+            description=__doc__,
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
         sub = ap.add_subparsers(dest="cmd", required=True)
 
-        p = sub.add_parser("scan-add", help="add every organize root / unit matching the globs to the registry")
-        p.add_argument("glob", nargs="+", help="dirs or globs, e.g. '$OAK/data/sc/*/eca-pp/*/rsi' (quote it)")
-        p.add_argument("--name", default=None, help="name for the (single) dataset instead of the derived one")
-        p.add_argument("--dry-run", action="store_true", help="show what would be added, add nothing")
+        p = sub.add_parser(
+            "scan-add",
+            help="add every organize root / unit matching the globs to the registry",
+        )
+        p.add_argument(
+            "glob",
+            nargs="+",
+            help="dirs or globs, e.g. '$OAK/data/sc/*/eca-pp/*/rsi' (quote it)",
+        )
+        p.add_argument(
+            "--name",
+            default=None,
+            help="name for the (single) dataset instead of the derived one",
+        )
+        p.add_argument(
+            "--dry-run",
+            action="store_true",
+            help="show what would be added, add nothing",
+        )
         registry_arg(p)
         p.set_defaults(func=cmd_scan_add)
 
@@ -828,35 +1028,66 @@ def main(argv: list[str]) -> int:
         registry_arg(p)
         p.set_defaults(func=cmd_remove)
 
-        p = sub.add_parser("list", help="list the registry, with each dataset's stage and final cells")
+        p = sub.add_parser(
+            "list", help="list the registry, with each dataset's stage and final cells"
+        )
         p.add_argument("--json", action="store_true")
         registry_arg(p)
         p.set_defaults(func=cmd_list)
 
-        p = sub.add_parser("dump", help="copy the registry file to PATH (no PATH: print it)")
+        p = sub.add_parser(
+            "dump", help="copy the registry file to PATH (no PATH: print it)"
+        )
         p.add_argument("path", nargs="?", default=None)
         registry_arg(p)
         p.set_defaults(func=cmd_dump)
 
-        p = sub.add_parser("reload", help="merge another registry file into the registry")
+        p = sub.add_parser(
+            "reload", help="merge another registry file into the registry"
+        )
         p.add_argument("path")
-        p.add_argument("--replace", action="store_true", help="replace the whole list instead of merging")
+        p.add_argument(
+            "--replace",
+            action="store_true",
+            help="replace the whole list instead of merging",
+        )
         registry_arg(p)
         p.set_defaults(func=cmd_reload)
 
         args = ap.parse_args(argv)
         return args.func(args)
 
-    ap = argparse.ArgumentParser(prog="ecarsi.serve", description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter,
-                                 epilog="registry subcommands: " + " | ".join(SUBCOMMANDS) + "  (ecarsi serve <sub> --help)")
-    ap.add_argument("dir", nargs="*", help="extra dataset dirs to serve for this process only (name = basename)")
+    ap = argparse.ArgumentParser(
+        prog="ecarsi.serve",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="registry subcommands: "
+        + " | ".join(SUBCOMMANDS)
+        + "  (ecarsi serve <sub> --help)",
+    )
+    ap.add_argument(
+        "dir",
+        nargs="*",
+        help="extra dataset dirs to serve for this process only (name = basename)",
+    )
     ap.add_argument("--port", type=int, default=8899)
-    ap.add_argument("--bind", default="127.0.0.1", help="default local only; 0.0.0.0 to expose on the LAN")
-    ap.add_argument("--ngrok", action="store_true", help="also open an ngrok tunnel to this port")
-    ap.add_argument("--domain", default=None, help="reserved ngrok domain (implies --ngrok)")
-    ap.add_argument("--auth", default=None, metavar="USER:PASS",
-                    help="web-level password (HTTP basic auth, enforced by the server on every request, local or tunnel); default none")
+    ap.add_argument(
+        "--bind",
+        default="127.0.0.1",
+        help="default local only; 0.0.0.0 to expose on the LAN",
+    )
+    ap.add_argument(
+        "--ngrok", action="store_true", help="also open an ngrok tunnel to this port"
+    )
+    ap.add_argument(
+        "--domain", default=None, help="reserved ngrok domain (implies --ngrok)"
+    )
+    ap.add_argument(
+        "--auth",
+        default=None,
+        metavar="USER:PASS",
+        help="web-level password (HTTP basic auth, enforced by the server on every request, local or tunnel); default none",
+    )
     registry_arg(ap)
     args = ap.parse_args(argv)
     return cmd_serve(args)
