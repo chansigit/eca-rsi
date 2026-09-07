@@ -11,7 +11,7 @@ served as-is (ecarsi.serve) and rendered from disk alone (ecarsi.index):
         index.html                           unit landing page (ecarsi.index)
         progress.log                         every event of every step
         input/{organized.h5ad, manifest.json}
-        persample/{manifest.json, <sample>/…}            osp, once
+        persample/{manifest.json, excluded_cells.csv, <sample>/…}   osp, once
         rounds/roundNN/
           manifest.json                      round 1: inclusion decision + batch key
           input.h5ad                         round >= 2: previous survivors, r(N-1)_* priors
@@ -51,6 +51,7 @@ MANIFEST = "manifest.json"
 RUN_STATE = "run_state.json"
 UPSTREAM = "upstream"
 SAMPLE_MAPPING = "sample_mapping.csv.gz"
+EXCLUDED_CELLS = "excluded_cells.csv"  # persample/: cells a sample-map policy dropped before OSP (ledger source)
 
 # step contracts — a step is complete when every file exists
 PS_CONTRACT = ("report.html", "clustered.h5ad")

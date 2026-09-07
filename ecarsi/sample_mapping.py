@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 from . import layout as L
+from . import policies as P
 from .run_state import digest, file_identity, read_json
 from .upstream import normalize
 
@@ -43,16 +44,24 @@ def build_mapping(h5ad: Path, unit: Path | None, spec: dict | None, identify,
     sources = obs["source_unit"].astype(str) if "source_unit" in obs else pd.Series("input", index=obs.index)
     original_ids = obs["eca_source_cell_id"].astype(str) if "eca_source_cell_id" in obs else obs.index.to_series()
     upstream = read_json(L.input_manifest(unit)).get("upstream", {}) if unit and L.input_manifest(unit).is_file() else {}
-    if spec is not None and set(spec.get("sources", {})) != set(sources):
-        raise ValueError("sample-map sources must exactly cover this analysis unit's sources")
+    if spec is not None:
+        P.check_spec_keys(spec)
+        if set(spec.get("sources", {})) != set(sources):
+            raise ValueError("sample-map sources must exactly cover this analysis unit's sources")
     if single and sources.nunique() != 1:
         raise ValueError("--single-sample requires one source; cross-source pooling needs sample-map merges with evidence")
     table = pd.DataFrame({"source_unit": sources, "source_cell_id": original_ids})
     table["source_value"] = ""
     table[SAMPLE_KEY] = ""
+    # policy exclusions come first: excluded cells never reach a profile,
+    # a partition or an OSP subset, and stay in the table with their reason
+    excluded = pd.Series("", index=obs.index, dtype=object)
+    rules = P.apply_rules(obs, spec.get("exclude_cells", []), excluded, "sample_map") if spec else []
     decisions, groups = {}, {}
     for source in sorted(sources.unique()):
-        part = obs.loc[sources == source]
+        part = obs.loc[(sources == source) & excluded.eq("")]
+        if part.empty:
+            raise ValueError(f"{source}: exclude_cells removed every cell of the source")
         evidence = upstream.get(source, {})
         profile = obs_profile(part)
         profile.update(source=source, upstream=evidence)
@@ -63,10 +72,16 @@ def build_mapping(h5ad: Path, unit: Path | None, spec: dict | None, identify,
         elif single:
             decision = {"sample_column": None, "confirmed_single": True, "rationale": "explicit --single-sample"}
         else:
-            decision = identify(profile)
+            decision = identify(profile, part)
             from . import cost
             cost.record(unit or h5ad.parent, f"{L.PERSAMPLE}/identify/{source}",
                         getattr(identify, "last_cost", None), "identify experiment column")
+            if decision.get("exclude_cells"):
+                # the agent's proposal, re-applied by the host exactly like a user rule
+                rules += P.apply_rules(part, decision["exclude_cells"], excluded, "agent", strict=True)
+                part = part.loc[excluded.reindex(part.index).eq("")]
+                profile = obs_profile(part)
+                profile.update(source=source, upstream=evidence)
         from .persample import _validate_sample_column
         derive = decision.get("derive_from_cell_id") if spec is not None else None
         missing_as = decision.get("missing_as") if spec is not None else None
@@ -110,8 +125,9 @@ def build_mapping(h5ad: Path, unit: Path | None, spec: dict | None, identify,
             full = pd.read_csv(path, index_col=0, dtype=str, keep_default_na=False)
             full.index = full.index.astype(str)
             full_values = partition(full, full.index.to_series())
+            gone = set(original_ids[(sources == source) & excluded.ne("")])  # policy-excluded, by original ID
             for value in values.unique():
-                expected = set(full.index[full_values == value])
+                expected = set(full.index[full_values == value]) - gone
                 actual = set(original_ids.loc[values.index[values == value]])
                 if expected != actual:
                     raise ValueError(f"{source}/{value}: organize split an experiment across units; complete-pool QC is required")
@@ -141,9 +157,14 @@ def build_mapping(h5ad: Path, unit: Path | None, spec: dict | None, identify,
             table.loc[table[SAMPLE_KEY] == groups[pair], SAMPLE_KEY] = sid
             assigned.add(pair)
         merge_ids.add(sid)
-    if table.duplicated([SAMPLE_KEY, "source_cell_id"]).any():
+    kept = table[SAMPLE_KEY].ne("")
+    if table[kept].duplicated([SAMPLE_KEY, "source_cell_id"]).any():
         raise ValueError("a merged experiment contains repeated original cell IDs; resolve overlapping source cells first")
-    return table, {"sources": decisions, "merges": (spec or {}).get("merges", [])}
+    table["excluded_reason"] = excluded.reindex(table.index).fillna("")
+    decision = {"sources": decisions, "merges": (spec or {}).get("merges", []), "exclude_cells": rules}
+    if spec is not None and spec.get("batch_key") is not None:
+        decision["batch_key"] = P.resolve_batch_key(obs[kept.to_numpy()], table.loc[kept, SAMPLE_KEY], spec["batch_key"])
+    return table, decision
 
 
 def mapping_identity(table) -> str:

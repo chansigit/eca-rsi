@@ -20,6 +20,7 @@ from pathlib import Path
 
 from . import cost
 from . import layout as L
+from . import policies as P
 from .run_state import digest, file_identity, read_json, source_provenance, write_json, writer_lock
 from .sample_mapping import SAMPLE_KEY, build_mapping, mapping_identity, obs_profile
 from .osp_contract import INPUT_CELLS, REQUEST, is_done, is_empty, is_finished
@@ -30,6 +31,7 @@ SAMPLE_COL_SCHEMA = {
         "sample_column": {"type": ["string", "null"]},
         "rationale": {"type": "string"},
         "confirmed_single": {"type": "boolean"},
+        "exclude_cells": {"type": "array", "items": P.RULE_SCHEMA},
     },
     "required": ["sample_column", "rationale"],
 }
@@ -81,13 +83,15 @@ def _validate_sample_column(decision: dict, profile: dict, *, allow_unknown: boo
     return None
 
 
-def identify_sample_column(profile: dict) -> dict:
+def identify_sample_column(profile: dict, obs=None) -> dict:
     from .agent_retry import run_with_retry
 
-    return run_with_retry(lambda: _identify(profile), label="identify sample column")
+    return run_with_retry(lambda: _identify(profile, obs), label="identify sample column")
 
 
-async def _identify(profile: dict) -> dict:
+async def _identify(profile: dict, obs=None) -> dict:
+    """obs (this source's cells) lets the host check an exclude_cells
+    proposal exactly, in-session; without it a proposal is refused."""
     from .harness import ToolSpec, run_agent
 
     brief = (Path(__file__).parent / "prompts" / "sample_column.md").read_text()
@@ -107,9 +111,21 @@ async def _identify(profile: dict) -> dict:
         if missing:
             return {"content": [{"type": "text", "text": f"missing field(s) {missing}, fix and resubmit"}],
                     "is_error": True}
+        kept = profile
+        if decision.get("exclude_cells"):
+            if obs is None:
+                return {"content": [{"type": "text", "text": "exclude_cells cannot be checked in this session; "
+                                     "submit sample_column only"}], "is_error": True}
+            import pandas as pd
+            excluded = pd.Series("", index=obs.index, dtype=object)
+            try:
+                P.apply_rules(obs, decision["exclude_cells"], excluded, "agent", strict=True)
+            except ValueError as exc:
+                return {"content": [{"type": "text", "text": f"{exc} — fix and resubmit"}], "is_error": True}
+            kept = obs_profile(obs.loc[excluded.eq("")])  # the sample column is judged on what remains
         # Accept an honest unknown decision. build_mapping then stops before
         # computation; repeatedly demanding resubmission would invite guesses.
-        problem = _validate_sample_column(decision, profile, allow_unknown=True)
+        problem = _validate_sample_column(decision, kept, allow_unknown=True)
         if problem:
             return {"content": [{"type": "text", "text": f"{problem} — fix and resubmit"}], "is_error": True}
         return {"content": [{"type": "text", "text": "recorded"}], "is_error": False, "_submitted": decision}
@@ -214,8 +230,10 @@ def plan_concurrency(pending: list[dict]) -> tuple[int, int, int]:
     return max_parallel, budget, threads
 
 
-def write_subsets(h5ad: Path, mapping, pending: list[dict]) -> None:
-    """Regenerate pending subsets from the verified input, never reuse by name."""
+def write_subsets(h5ad: Path, mapping, pending: list[dict], batch: dict | None = None) -> None:
+    """Regenerate pending subsets from the verified input, never reuse by name.
+    batch = sample_mapping["batch_key"]: its per-experiment constant is
+    written into the subset so blank cells follow their experiment."""
     import anndata as ad
     import pandas as pd
     full = ad.read_h5ad(h5ad)
@@ -226,6 +244,8 @@ def write_subsets(h5ad: Path, mapping, pending: list[dict]) -> None:
         with writer_lock(outdir / ".writer.lock"):
             sub = full[ids].copy()
             sub.obs[SAMPLE_KEY] = e["value"]
+            if batch:
+                sub.obs[batch["column"]] = batch["of_sample"][e["value"]]
             tmp = outdir / "subset.tmp.h5ad"
             sub.write_h5ad(tmp)
             os.replace(tmp, outdir / SUBSET_FILE)
@@ -353,7 +373,7 @@ def main(argv: list[str]) -> int:
     group = ap.add_mutually_exclusive_group()
     group.add_argument("--sample-column", help="explicit experiment column, scoped independently per source")
     group.add_argument("--single-sample", action="store_true", help="explicitly confirm one complete experiment")
-    group.add_argument("--sample-map", help="JSON source decisions and explicit cross-source merges")
+    group.add_argument("--sample-map", help="JSON source decisions, cross-source merges, exclude_cells rules, batch_key")
     ap.add_argument("--plan-only", action="store_true")
     args = ap.parse_args(argv)
     unit = Path(args.unit).resolve()
@@ -422,10 +442,13 @@ def _run(args, unit, h5ad, out, bare):
         if mapping_identity(table) != old["mapping_identity"]:
             raise ValueError("recorded cell/sample mapping changed")
         decision = old["sample_mapping"]
+        recommendation = old.get("batch_key_recommendation")
     else:
         table, decision = build_mapping(h5ad, None if bare else unit, spec, identify_sample_column,
                                         args.sample_column, args.single_sample)
-    counts = {str(k): int(v) for k, v in table[SAMPLE_KEY].value_counts().items()}
+        recommendation = None if bare or decision.get("batch_key") else _recommend_batch_key(unit, h5ad, table)
+    kept = table[SAMPLE_KEY].ne("")
+    counts = {str(k): int(v) for k, v in table.loc[kept, SAMPLE_KEY].value_counts().items()}
     entries = build_entries(h5ad, SAMPLE_KEY, counts, out, py, config["annotate"], selected_model())
     run_identity = digest({"input": identity, "metadata": metadata, "config": config,
                            "runtime": runtime, "mapping": mapping_identity(table)})
@@ -438,11 +461,21 @@ def _run(args, unit, h5ad, out, bare):
            "input_identity": identity, "metadata_identity": metadata, "runtime": runtime, "provenance": source_provenance(), "config": config,
            "sample_column": SAMPLE_KEY, "sample_mapping": decision, "explicit_mapping": old["explicit_mapping"] if old else explicit,
            "mapping_identity": mapping_identity(table), "identity": run_identity,
+           "batch_key_recommendation": recommendation,
            "species": config["species"], "tissue": config["tissue"], "annotate": config["annotate"],
            "rationale": "source-scoped experiment decisions; see sample_mapping",
            "samples": [{"value": e["value"], "n_cells": e["n_cells"], "dir": e["outdir"], "identity": e["identity"]} for e in entries]}
     if not old:
         table.to_csv(out / L.SAMPLE_MAPPING, index_label="cell_id")
+        gone = table[~kept]
+        if len(gone):
+            by_reason = {r["reason"]: r["proposed_by"] for r in decision["exclude_cells"]}
+            pd.DataFrame({"cell": gone.index, "source_unit": gone["source_unit"].to_numpy(),
+                          "source_cell_id": gone["source_cell_id"].to_numpy(), "reason": gone["excluded_reason"].to_numpy(),
+                          "proposed_by": gone["excluded_reason"].map(by_reason).to_numpy()}
+                         ).to_csv(out / L.EXCLUDED_CELLS, index=False)
+            print(f"[policy] {len(gone)} cells excluded before OSP: "
+                  + ", ".join(f"{r['reason']}={r['n_cells']}" for r in decision["exclude_cells"]), flush=True)
     write_json(path, man)
     if args.plan_only:
         for e in entries:
@@ -453,7 +486,7 @@ def _run(args, unit, h5ad, out, bare):
     if pending:
         man["state"] = "running"
         write_json(path, man)
-        write_subsets(h5ad, table, pending)
+        write_subsets(h5ad, table, pending, decision.get("batch_key"))
         failed = drive(pending, out, config["annotate"])
     missing = [e["value"] for e in entries if not is_finished(Path(e["outdir"]), config["annotate"], e["identity"])]
     man["state"] = "failed" if failed or missing else "complete"
@@ -469,8 +502,31 @@ def _run(args, unit, h5ad, out, bare):
     return 1 if failed or missing else 0
 
 
+def _recommend_batch_key(unit, h5ad, table):
+    """Advisory agent call when no batch_key is declared and the study design
+    (columns constant per experiment) has at least two such columns."""
+    from .design import _obs, design_table, render
+
+    obs = _obs(h5ad)
+    sample = table[SAMPLE_KEY].reindex(obs.index)
+    design = design_table(obs, sample.mask(sample.eq("")))
+    if design.shape[1] < 2:
+        return None
+    try:
+        rec = P.recommend_batch_key(render(design), list(design.columns))
+        cost.record(unit, f"{L.PERSAMPLE}/batch_key", getattr(P.recommend_batch_key, "last_cost", None),
+                    "batch key recommendation")
+    except Exception as exc:  # noqa: BLE001 - advisory only, never fails persample
+        rec = {"batch_key": None, "rationale": f"recommendation unavailable: {type(exc).__name__}: {exc}"}
+    return rec
+
+
 def _write_review(unit, out, man, bare):
     items = []
+    rec = man.get("batch_key_recommendation")
+    if rec and rec.get("batch_key"):
+        items.append({"step": "batch_key_recommendation", "source": rec["batch_key"],
+                      "detail": "NOT applied (declare batch_key in the sample map to use it): " + rec["rationale"]})
     if not bare:
         upstream = read_json(L.input_manifest(unit)).get("upstream", {})
         for source, evidence in upstream.items():

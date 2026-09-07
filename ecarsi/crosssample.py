@@ -8,9 +8,11 @@ every sample — hard prerequisite; a sample emptied by OSP QC counts as
 finished and is excluded before inclusion). Stages:
 
   1. RESOLVE (code): samples, batch key, species from persample's manifest.
-     The batch key is persample's sample column — when eca-pp's
-     identify_columns designated a different batch column, persample wins
-     and the eca-pp designation is archived alongside for the audit trail.
+     The batch key is MSP_BATCH_COL if set, else the sample map's declared
+     batch_key (persample validated it constant per experiment), else
+     persample's sample column; env and map disagreeing is an error. Nothing
+     is inferred. When eca-pp's identify_columns designated a different
+     batch column, that designation is archived alongside for the audit trail.
   2. INCLUDE (agent, structured output; skipped when there is exactly one
      sample — it is included as is): reads every sample's QC summary,
      annotation proposal AND its UMAP/QC figures; proposes which samples
@@ -144,6 +146,19 @@ def ecapp_batch_designations(unit: Path) -> dict:
             if isinstance(batch, dict):
                 out[u["name"]] = batch
     return out
+
+
+def resolve_batch_col(ps: dict) -> tuple[str, dict]:
+    """(batch column, integration policy) — explicit env > sample map > experiment column."""
+    experiment_col = ps["sample_column"] or "sample"
+    map_key = ((ps.get("sample_mapping") or {}).get("batch_key") or {}).get("column")
+    env_key = os.environ.get("MSP_BATCH_COL")
+    if env_key and map_key and env_key != map_key:
+        raise ValueError(f"MSP_BATCH_COL={env_key!r} contradicts the sample map's batch_key {map_key!r}; unset one")
+    batch_col = env_key or map_key or experiment_col
+    selection = "explicit" if env_key else "sample_map" if map_key else "compatibility_default"
+    return batch_col, {"experiment_column": experiment_col, "batch_col": batch_col,
+                       "correction": "harmony_if_multiple_batch_values", "selection": selection}
 
 
 # ---------------------------------------------------------------- include
@@ -302,11 +317,8 @@ def main(argv: list[str]) -> int:
     out_root = Path(args.out).resolve() if args.out else L.round_dir(unit, 1)
     # a null sample column means persample ran the whole file as one sample;
     # osp then labels every cell obs["sample"] = "all", which is the batch key
-    experiment_col = ps["sample_column"] or "sample"
-    batch_col = os.environ.get("MSP_BATCH_COL") or experiment_col
-    policy = {"experiment_column": experiment_col, "batch_col": batch_col,
-              "correction": "harmony_if_multiple_batch_values",
-              "selection": "explicit" if os.environ.get("MSP_BATCH_COL") else "compatibility_default"}
+    batch_col, policy = resolve_batch_col(ps)
+    print(f"[batch] correcting by {batch_col!r} ({policy['selection']})")
     species = ps.get("species")
 
     ecapp = ecapp_batch_designations(unit)
