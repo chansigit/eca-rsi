@@ -30,3 +30,18 @@ def test_nav_js_is_syntactically_valid(tmp_path):
     script = tmp_path / "nav.js"
     script.write_text(NAV_JS)
     subprocess.run(["node", "--check", str(script)], check=True)
+
+
+def test_access_log_names_the_tunnel_visitor(capsys):
+    """Behind ngrok the socket peer is 127.0.0.1; the log must show X-Forwarded-For and the UA."""
+    from ecarsi.serve import Handler
+
+    class Fake:
+        headers = {"X-Forwarded-For": "203.0.113.9, 127.0.0.1", "User-Agent": "TestBrowser/1.0"}
+
+        def address_string(self):
+            return "127.0.0.1"
+
+    Handler.log_message(Fake(), '"GET /Aorta/ HTTP/1.1" %s -', 200)
+    line = capsys.readouterr().err
+    assert "203.0.113.9" in line and '"TestBrowser/1.0"' in line and "127.0.0.1" not in line

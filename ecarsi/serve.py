@@ -691,7 +691,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
 
     def log_message(self, format, *args):  # noqa: A002 - matches BaseHTTPRequestHandler's signature
-        sys.stderr.write(f"[serve] {self.address_string()} {format % args}\n")
+        """Access log on stderr: time, visitor address, request line, user agent.
+        Through the ngrok tunnel every request arrives from 127.0.0.1; the
+        visitor's own address is the first hop of X-Forwarded-For."""
+        headers = getattr(self, "headers", None) or {}
+        who = (headers.get("X-Forwarded-For") or self.address_string()).split(",")[0].strip()
+        ua = headers.get("User-Agent", "-")
+        sys.stderr.write(
+            f'[serve] {time.strftime("%Y-%m-%d %H:%M:%S")} {who} {format % args} "{ua}"\n'
+        )
 
 
 # ---------------------------------------------------------------- ngrok
