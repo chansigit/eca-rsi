@@ -309,7 +309,7 @@ def test_persample_writes_policy_ledger_batch_subsets_and_review(
     write_json(m, spec(exclude_cells=[BLANK], batch_key="mouse.id"))
     monkeypatch.setattr(persample, "_kernel_runtime", lambda py: {"version": "test"})
     monkeypatch.setattr(
-        persample, "drive", lambda entries, *args: entries
+        persample, "drive", lambda entries, *args, **kw: entries
     )  # nothing runs, subsets stay
     monkeypatch.setattr(
         "ecarsi.harness.run_agent", None
@@ -358,7 +358,7 @@ def test_batch_key_recommendation_is_recorded_not_applied(tmp_path, monkeypatch)
     m = tmp_path / "map.json"
     write_json(m, spec(exclude_cells=[BLANK]))
     monkeypatch.setattr(persample, "_kernel_runtime", lambda py: {"version": "test"})
-    monkeypatch.setattr(persample, "drive", lambda entries, *args: entries)
+    monkeypatch.setattr(persample, "drive", lambda entries, *args, **kw: entries)
     seen: list = []
     agent_submitting(
         monkeypatch,
