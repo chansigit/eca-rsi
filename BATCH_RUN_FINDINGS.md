@@ -327,3 +327,21 @@ release(persample、MSP、ZMIP、release、prune、mirror 全程),但前两次�
    `.rsi-stage.json.pre-repair-20260907-1355`,JSON 里加 `repair` 字段写明改了哪个字段、从什么改到什么、为什么
    (`verify()` 封存时会重写该文件,所以备份文件才是长期证据),scratch 与 Oak 两份都改,随后重提 42376896。
    `verify()` 是**先跑完整输出校验子进程、再比身份**,所以这次修复没有跳过任何对产物的检查。
+
+10. **ZMIP 注释 agent 顶穿轮数上限(senis-facs/Brain_Myeloid)**:`RuntimeError: [zmip Microglia] HARNESS=openai exceeded
+   max_turns=200 without a successful finalize_annotation call (43 submitted)`。8,032 个小胶质细胞在 `msp_leiden_r2.0`
+   下切成 **44 个 cluster**(每个约 180 细胞),44 次 cluster_context + 43 次 submit_cluster + 16 次 check_genes = 105 次
+   工具调用,200 轮不够收尾。**处理不必改源码**:`ZMIP_MAX_TURNS` 经 `downstream.options()` 映射到 `--max-turns`,而
+   `computational_config()` 明确把 `--language/--effort/--max-turns` 从计算身份里剔除,所以
+   `sbatch --export=ALL,ZMIP_MAX_TURNS=400` 重投既能续上(MSP 契约整份复用、ZMIP 复用 plan),又不作废任何已封存阶段。
+   同批次对照:Heart 5,236 细胞 31 cluster、Marrow 9,448 细胞 31 cluster——r2.0 在整个 facs 批次上都偏高,
+   Brain_Myeloid 只是细胞数×cluster 数的组合刚好顶穿。调低 `ZMIP_RESOLUTIONS` 属于计算身份,会让该器官与其余 22 个不可比,
+   未做。
+
+11. **35 个不足 50 细胞的样本进入了 senis 的整合(用户决定不重跑)**:扫描两个 senis 批次全部 40 个分析单元的
+   persample manifest,`<50 细胞` 的样本共 35 个,最严重的是 facs/Brain_Non-Myeloid(45 块板 3,806 细胞,19 块 <50、
+   29 块 <100,最小 7 个细胞)。每块这样的板都会成为独立的 OSP 实验(在 20 个细胞上算 QC 的群体统计量)并成为 Harmony 的一个批次层级。
+   **原因不是剔除 3 月龄细胞**——交叉表证明没有任何一块板混合年龄(Brain_Non-Myeloid 87 块板:41 块整块是 3m 而消失、
+   46 块完全不含 3m;Brain_Myeloid / Thymus / Aorta 同样是 0 块混合),这些小板在 TMS 原始数据里本来就小。
+   教训:**样本级的最小规模闸门应该在 organize 之前就设**(tabula-sapiens 派生已按此加了"<200 细胞的 library 声明式排除"),
+   否则碎片样本会一路带进整合,只能事后在 needs_review 里体现。本批次用户决定不补规则、不重跑。
