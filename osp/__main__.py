@@ -12,6 +12,12 @@ import scanpy as sc
 
 from .cluster import run_one_sample_pipeline
 from .report import generate_report, write_report_context
+import logging
+
+from harness_bridge import ensure_logging
+
+log = logging.getLogger(__name__)
+ensure_logging("osp")
 
 parser = argparse.ArgumentParser(prog="osp", description=__doc__)
 parser.add_argument("h5ad_path")
@@ -70,15 +76,15 @@ _, _, cluster_summary, *_ = run_one_sample_pipeline(
     cluster_kwargs={"resolutions": (args.resolution,), "primary_resolution": args.resolution},
     outdir=args.outdir,
 )
-print(cluster_summary)
-print(f"report: {generate_report(args.outdir)}")
+log.info(cluster_summary)
+log.info(f"report: {generate_report(args.outdir)}")
 
 if args.annotate:
     from .annotate import propose_annotation
     from .harness import backend_name, default_model
 
     model = args.model or default_model()
-    print(f"[agent] harness={backend_name()} model={model}")
+    log.info(f"[agent] harness={backend_name()} model={model}")
 
     propose_annotation(
         args.outdir,

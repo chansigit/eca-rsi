@@ -49,6 +49,9 @@ import os
 import pandas as pd
 
 from ._io import atomic_write_text
+import logging
+
+log = logging.getLogger(__name__)
 
 # Fixed display order for the well-known QC metric suffixes — anything not
 # in this list still shows up, just after these, alphabetically.
@@ -702,4 +705,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     path = generate_report(args.outdir, out_html=args.out, top_n_de_display=args.top_n_de)
-    print(f"wrote {path}")
+    log.info(f"wrote {path}")

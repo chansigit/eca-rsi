@@ -80,6 +80,9 @@ from .cluster import (  # importing osp.cluster also selects the Agg backend
 )
 from .qc import cluster_order
 from .report import generate_report
+import logging
+
+log = logging.getLogger(__name__)
 
 _OPS = {">": operator.gt, ">=": operator.ge, "<": operator.lt, "<=": operator.le}
 _CONFIDENCE_VALUES = {"high", "medium", "low"}
@@ -644,7 +647,7 @@ def propose_annotation(
     # atomically replaced first; an interrupted finalization remains resumable.
     report = generate_report(outdir, annotation_proposal=proposal)
     atomic_write_json(proposal_path, proposal)
-    print(f"== report refreshed: {report}", flush=True)
+    log.info(f"== report refreshed: {report}")
     return proposal
 
 
@@ -680,5 +683,5 @@ if __name__ == "__main__":
         max_turns=args.max_turns,
     )
     for e in proposal["clusters"]:
-        print(f"cluster {e['cluster']}: {e['label_coarse']} / {e['label_fine']} [{e['confidence']}]")
-    print(f"\nannotation_proposal.json / annotation_notes.md / UMAPs written to {args.outdir}")
+        log.info(f"cluster {e['cluster']}: {e['label_coarse']} / {e['label_fine']} [{e['confidence']}]")
+    log.info(f"\nannotation_proposal.json / annotation_notes.md / UMAPs written to {args.outdir}")

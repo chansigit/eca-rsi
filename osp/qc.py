@@ -56,6 +56,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from ._io import atomic_write_dataframe_csv, atomic_write_json
+import logging
+
+log = logging.getLogger(__name__)
 
 
 def _mad_outlier(x, nmads):
@@ -500,7 +503,7 @@ def qc_one_sample(
     ).values
 
     if run_scrublet and ad.n_obs < MIN_CELLS_FOR_SCRUBLET:
-        print(f"== skipping scrublet: {ad.n_obs} cell(s) < {MIN_CELLS_FOR_SCRUBLET}", flush=True)
+        log.info(f"== skipping scrublet: {ad.n_obs} cell(s) < {MIN_CELLS_FOR_SCRUBLET}")
         run_scrublet = False
     if run_scrublet:
         n_prin_comps = min(30, ad.n_obs - 1, ad.n_vars - 1)
@@ -529,7 +532,7 @@ def qc_one_sample(
             try:
                 z = _coarse_clusters_for_decontx(ad)
             except ValueError as exc:
-                print(f"== skipping decontX: {exc}", flush=True)
+                log.info(f"== skipping decontX: {exc}")
                 run_decontx = False
                 res = None
             else:
@@ -546,9 +549,8 @@ def qc_one_sample(
             # Contamination estimates are untrustworthy even with supplied
             # labels. Keep the values for review, but prevent the downstream
             # PCA from treating this failed fit as a biological signal.
-            print(
-                f"== decontX degenerate ({still}); flagging uns['osp_decontx_degenerate']",
-                flush=True,
+            log.info(
+                f"== decontX degenerate ({still}); flagging uns['osp_decontx_degenerate']"
             )
             ad.uns["osp_decontx_degenerate"] = True
         ad.uns["decontx_top_genes"], ad.uns["decontx_top_genes_by_cluster"] = decontx_top_genes(
@@ -965,4 +967,4 @@ if __name__ == "__main__":
         run_decontx=not args.no_decontx,
         figdir=args.figdir,
     )
-    print(pd.Series(summary))
+    log.info(pd.Series(summary))

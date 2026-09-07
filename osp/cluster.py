@@ -85,6 +85,9 @@ from sklearn.decomposition import PCA
 
 from ._io import atomic_write_dataframe_csv, atomic_write_h5ad
 from .qc import assert_single_sample, cluster_order, decontx_top_genes, qc_one_sample
+import logging
+
+log = logging.getLogger(__name__)
 
 # OSP doesn't know what tissue/species it is given, so there is no built-in
 # default marker set — marker_genes defaults to None (marker plots skipped).
@@ -389,12 +392,12 @@ def cluster_and_deg(
         # clustered.h5ad keeps a copy of the raw counts this way too.
         ad.layers[counts_layer] = ad.X.copy()
 
-    print("== normalize/log1p", flush=True)
+    log.info("== normalize/log1p")
     sc.pp.normalize_total(ad, target_sum=1e4)
     sc.pp.log1p(ad)
     ad.raw = ad
 
-    print("== HVG", flush=True)
+    log.info("== HVG")
     sc.pp.highly_variable_genes(ad, n_top_genes=n_top_genes, flavor="seurat")
 
     hvg = ad[:, ad.var.highly_variable].copy()
@@ -408,10 +411,10 @@ def cluster_and_deg(
     if ad.uns.get("osp_decontx_degenerate") and "decontX_contamination" in qc_cov_cols:
         # qc_one_sample flagged the DecontX fit as unrecoverable — a pinned
         # 0/1 bimodal column would add a garbage axis to the PCA input
-        print("== decontX contamination flagged degenerate; dropping it from PCA covariates", flush=True)
+        log.info("== decontX contamination flagged degenerate; dropping it from PCA covariates")
         qc_cov_cols.remove("decontX_contamination")
     if qc_cov_cols:
-        print(f"== adding z-scored QC covariates to PCA input: {qc_cov_cols}", flush=True)
+        log.info(f"== adding z-scored QC covariates to PCA input: {qc_cov_cols}")
         qc_mat = ad.obs[qc_cov_cols].to_numpy(dtype=float)
         if not np.isfinite(qc_mat).all():
             bad = [c for i, c in enumerate(qc_cov_cols) if not np.isfinite(qc_mat[:, i]).all()]
@@ -428,11 +431,11 @@ def cluster_and_deg(
     ad.obsm["X_pca"] = PCA(n_components=n_comps, svd_solver="arpack", random_state=0).fit_transform(X_pca_input)
     del hvg
 
-    print("== neighbors (use_rep=X_pca)", flush=True)
+    log.info("== neighbors (use_rep=X_pca)")
     sc.pp.neighbors(ad, use_rep="X_pca", n_neighbors=min(n_neighbors, ad.n_obs - 1))
 
     for res, key in zip(resolutions, leiden_keys, strict=True):
-        print(f"== leiden {key}", flush=True)
+        log.info(f"== leiden {key}")
         sc.tl.leiden(ad, resolution=float(res), key_added=key, flavor="igraph", n_iterations=2)
 
     # A single leiden community is a legitimate outcome for a small/homogeneous
@@ -441,9 +444,9 @@ def cluster_and_deg(
     # a split via a higher resolution.
     single_cluster = ad.obs[primary_key].nunique() < 2
     if single_cluster:
-        print(f"== {primary_key!r} is a single cluster ({ad.n_obs} cells); skipping DEG/PAGA", flush=True)
+        log.info(f"== {primary_key!r} is a single cluster ({ad.n_obs} cells); skipping DEG/PAGA")
 
-    print("== umap", flush=True)
+    log.info("== umap")
     # umap-learn's spectral initialisation solves for n_components+1 = 3
     # eigenvectors and crashes when the graph has <= 3 nodes (k >= N); a
     # 3-cell survivor set is the smallest OSP accepts, so seed it randomly.
@@ -453,7 +456,7 @@ def cluster_and_deg(
     if single_cluster:
         de_top = pd.DataFrame(columns=de_columns)
     else:
-        print(f"== rank_genes_groups on {primary_key}", flush=True)
+        log.info(f"== rank_genes_groups on {primary_key}")
         sc.tl.rank_genes_groups(ad, primary_key, method="wilcoxon", use_raw=True, pts=True)
         de_df = sc.get.rank_genes_groups_df(ad, group=None)
         # pct1/pct2 = fraction of cells expressing (non-zero) the gene inside this
@@ -466,13 +469,13 @@ def cluster_and_deg(
     if single_cluster:
         paga_df = pd.DataFrame(columns=["group1", "group2", "connectivity"])
     else:
-        print(f"== paga on {primary_key}", flush=True)
+        log.info(f"== paga on {primary_key}")
         sc.tl.paga(ad, groups=primary_key)
         paga_df = _paga_table(ad, primary_key)
 
     decontx_by_cluster = None
     if "decontX_counts" in ad.layers:
-        print(f"== decontX gene contamination by {primary_key}", flush=True)
+        log.info(f"== decontX gene contamination by {primary_key}")
         _, decontx_by_cluster = decontx_top_genes(ad, cluster_key=primary_key, counts_layer=counts_layer)
 
     # Marker scores are obs columns, so compute them before clustered.h5ad is
@@ -646,7 +649,7 @@ def _plot_paga(ad, figdir):
     """PAGA graph, sized/positioned identically to the umap_clusters_*.png
     panels (see _UMAP_FIGSIZE/_UMAP_AXES_RECT) so it lines up when placed
     next to the primary-resolution cluster UMAP in the report."""
-    print(f"== plotting PAGA -> {figdir}", flush=True)
+    log.info(f"== plotting PAGA -> {figdir}")
 
     fig = plt.figure(figsize=_UMAP_FIGSIZE)
     ax = fig.add_axes(_UMAP_AXES_RECT)
@@ -739,7 +742,7 @@ def _plot_qc_violin(ad, cluster_key, figdir):
     qc_cols = [c for c in QC_OVERLAY_COLS if c in ad.obs]
     if not qc_cols:
         return
-    print(f"== plotting QC violin by {cluster_key} -> {figdir}", flush=True)
+    log.info(f"== plotting QC violin by {cluster_key} -> {figdir}")
 
     for col in qc_cols:
         fig, ax = plt.subplots(figsize=_PLOT_FIGSIZE)
@@ -758,7 +761,7 @@ def _score_marker_genes(ad, marker_genes):
     for name, genes in (marker_genes or {}).items():
         genes_ok = [g for g in genes if g in ad.raw.var_names]
         if not genes_ok:
-            print(f"== marker set {name!r}: none of its genes are present, skipped", flush=True)
+            log.info(f"== marker set {name!r}: none of its genes are present, skipped")
             continue
         sc.tl.score_genes(ad, genes_ok, score_name=f"score_{name}", use_raw=True)
         score_cols.append(f"score_{name}")
@@ -766,7 +769,7 @@ def _score_marker_genes(ad, marker_genes):
 
 
 def _plot_cluster_overview(ad, leiden_keys, score_cols, figdir):
-    print(f"== plotting UMAP panels -> {figdir}", flush=True)
+    log.info(f"== plotting UMAP panels -> {figdir}")
     _save_umap_panels(ad, leiden_keys, "umap_clusters", figdir, legend_loc="on data", legend_fontsize=6)
 
     qc_cols = [c for c in QC_OVERLAY_COLS if c in ad.obs]
@@ -797,9 +800,9 @@ def run_one_sample_pipeline(
         _invalidate_completion_markers(outdir)
         qc_kwargs.setdefault("figdir", os.path.join(outdir, "qc_figures"))
 
-    print(f"== QC ({sample_label})", flush=True)
+    log.info(f"== QC ({sample_label})")
     ad_qc, qc_summary = qc_one_sample(adata, sample_label=sample_label, **qc_kwargs)
-    print(pd.Series(qc_summary), flush=True)
+    log.info(pd.Series(qc_summary))
     ad_pass = ad_qc[~ad_qc.obs["low_quality"]].copy()
 
     if outdir:
@@ -832,8 +835,8 @@ def run_one_sample_pipeline(
     if ad_pass.n_obs < 3:
         raise ValueError(f"QC retained {ad_pass.n_obs} cell(s); at least 3 are required for clustering")
 
-    print(f"== after QC: {ad_pass.shape}", flush=True)
-    print("== clustering + DEG", flush=True)
+    log.info(f"== after QC: {ad_pass.shape}")
+    log.info("== clustering + DEG")
     ad_final, de_df, cluster_summary, paga_df, decontx_by_cluster = cluster_and_deg(
         ad_pass, outdir=outdir, **cluster_kwargs
     )
