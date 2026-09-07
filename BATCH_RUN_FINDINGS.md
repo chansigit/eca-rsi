@@ -314,3 +314,16 @@ release(persample、MSP、ZMIP、release、prune、mirror 全程),但前两次�
    computation",exit 1;该阶段(约 1.5 h ZMIP + agent)重算,已重提 42366353(sealed 阶段按内容身份仍有效,主 checkout 已 `git checkout` 还原)。
    26 个在 persample 的 senis unit 逐样本核对 run_state 身份,无错位。措施:四个主 checkout 的包目录 `chmod -R a-w`
    (`projects/{eca-rsi/ecarsi,osp/osp,msp/msp,zmip/zmip}`),批次跑完再 `chmod -R u+w`;代码改动一律 worktree + PYTHONPATH。
+
+9. **serve.py 事故的第二个受害者(13:37 才炸)与"身份快照修复"**:E8.5b round 2 的 zoomin 在 **12:09:46** 调
+   `downstream.prepare()` 写下 `.rsi-stage.json`——正落在我那两分钟补丁窗口(12:09:27–12:11:32)里,记下的
+   `sources.ecarsi.digest` 是 `a109e78c`(含被改过的 serve.py);3.5 小时后 zmip 算完,`verify()` 现算得到还原后的
+   `849ba397`,判 "downstream runtime changed",exit 1。**教训:身份不匹配可以潜伏一整个阶段的时长才爆**,
+   窗口期扫一遍 `.rsi-stage.json` 的 mtime 才能找全(本次全仓只有这一个,crosssample 那个写于 12:09:13,差 14 秒逃过)。
+   处理:直接重跑会被 `prepare()` 的 "input/configuration/runtime changed; use a new output directory" 硬挡,
+   等于整个 zoomin(140,857 细胞、4 个 lineage、全部注释 agent)重算。核对后确认**只有 ecarsi 这一个字段不同**
+   (msp/zmip/bridge/standissect 摘要、各包版本、python、executable 全同),而 driver 进程 05:11 就已把原始模块载入内存,
+   磁盘上那两分钟的快照**从未被执行过**——记录本身是假的。因此改回真值并留证:原文件另存
+   `.rsi-stage.json.pre-repair-20260907-1355`,JSON 里加 `repair` 字段写明改了哪个字段、从什么改到什么、为什么
+   (`verify()` 封存时会重写该文件,所以备份文件才是长期证据),scratch 与 Oak 两份都改,随后重提 42376896。
+   `verify()` 是**先跑完整输出校验子进程、再比身份**,所以这次修复没有跳过任何对产物的检查。
