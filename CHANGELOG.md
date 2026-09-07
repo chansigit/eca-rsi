@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1 — 2026-09-07
+
+- Source provenance tolerates a missing `git` binary (slim containers): the commit is recorded as null instead of
+  failing persample. Found on the first Apptainer-env run (calico-aging kidney).
+
 ## 0.2.0 — 2026-09-07
 
 - Sample-map cell policies (`ecarsi.policies`): `exclude_cells` rules applied before any OSP subset is cut (every

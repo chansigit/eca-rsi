@@ -34,3 +34,17 @@ def test_prepare_resumes_when_only_provenance_differs(tmp_path, monkeypatch):
     monkeypatch.setattr(D, "source_provenance", lambda *a: {"ecarsi": {"path": "/two", "commit": "bbb"}})
     D.prepare("python", "msp", [src], out, {})  # same content, different checkout: resumes
     assert read_json(out / D.STATE)["provenance"]["ecarsi"]["commit"] == "bbb"
+
+
+def test_source_provenance_survives_a_missing_git_binary(monkeypatch):
+    """python:3.12-slim has no git: the persample step must not die on provenance (calico-aging kidney, 2026-09-07)."""
+    import subprocess
+
+    from ecarsi import run_state
+
+    def no_git(*a, **k):
+        raise FileNotFoundError(2, "No such file or directory: 'git'")
+
+    monkeypatch.setattr(subprocess, "run", no_git)
+    prov = run_state.source_provenance(("ecarsi",))
+    assert prov["ecarsi"]["commit"] is None and prov["ecarsi"]["path"]

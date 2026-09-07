@@ -94,6 +94,10 @@ def source_provenance(modules=("ecarsi", "osp", "msp", "zmip", "harness_bridge")
         if spec is None or spec.origin is None:
             continue
         folder = Path(spec.origin).parent
-        git = subprocess.run(["git", "-C", str(folder), "rev-parse", "HEAD"], capture_output=True, text=True)
-        result[module] = {"path": str(folder.resolve()), "commit": git.stdout.strip() if git.returncode == 0 else None}
+        try:
+            git = subprocess.run(["git", "-C", str(folder), "rev-parse", "HEAD"], capture_output=True, text=True)
+            commit = git.stdout.strip() if git.returncode == 0 else None
+        except OSError:  # no git binary (e.g. inside a slim container): provenance is informational, never required
+            commit = None
+        result[module] = {"path": str(folder.resolve()), "commit": commit}
     return result
