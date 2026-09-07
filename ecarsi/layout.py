@@ -53,6 +53,7 @@ RUN_STATE = "run_state.json"
 UPSTREAM = "upstream"
 SAMPLE_MAPPING = "sample_mapping.csv.gz"
 MIRROR = "mirror.json"
+LOOP_CONTROL = "loop_control.json"  # <unit>/: manual overrides the loop reads at every round boundary
 EXCLUDED_CELLS = "excluded_cells.csv"  # persample/: cells a sample-map policy dropped before OSP (ledger source)
 
 # step contracts — a step is complete when every file exists

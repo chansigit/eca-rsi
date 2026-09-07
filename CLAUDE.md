@@ -71,6 +71,10 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
 - **停机只看细胞数**,标签变动不作判据(agent 措辞有随机性):给了 `--rounds N` 就按总轮数发布，允许 `--rounds 1`;
   没给则 (1) 本轮删除比 < 1% 或删除数 < 100,或 (2) 连续三轮删除比 < 2% 即 release；自动模式首轮继续;
   `--cap`(默认 10)是安全上限,触顶强制 release 并标记。`--force-reopen` 越过已有 release 继续开轮。
+- **手动挡**:`<unit>/loop_control.json` 在每个轮次边界重读(唯一做决定的时刻),可在跑的过程中编辑:
+  `cap`(改安全上限)、`rounds`(固定总轮数)、`extra_rounds_after_convergence`(收敛后再跑 n 轮)、
+  `stop_after_round`(该轮后暂停:退出码 3,不 release,重跑续上)。每次覆盖写 progress.log 并进该轮 stats 的 reason;
+  文件不合法只记录不生效。轮次循环是 while,上限每轮重算。
 - **生物学疑点不触发人工审批**：低 confidence、inspect flag、样本排除、reassign 等在
   `release/needs_review.md` 汇总。执行失败、无可纳入样本或缺少必需输出仍会使单元失败，不能承诺必然发布。
 - **每次删除都逐细胞记账**:osp `qc_removed.csv`、msp `annotation_removed.csv`、zmip `zmip_removed.csv`;

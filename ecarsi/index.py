@@ -466,6 +466,8 @@ def unit_state(unit: Path) -> dict:
     failed = bool(last) and "failed" in last[1]
     if failed:
         stage, cls = f"failed — {last[1]}", "failed"
+    elif last and last[1].startswith("paused by loop_control"):
+        stage, cls = f"paused after round {len(rounds)} (loop_control.json) — re-run to continue", "running"
     elif released and (not rounds or rounds[-1]["decision"] is not None):
         stage, cls = f"released after {len(rounds)} round(s)", "released"
     elif rounds and rounds[-1]["decision"] is None:
