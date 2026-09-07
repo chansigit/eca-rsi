@@ -2,6 +2,7 @@
 
 import io
 import logging
+import re
 
 import pytest
 
@@ -27,7 +28,10 @@ def test_configure_routes_bridge_and_named_families_to_one_stream():
     logging.getLogger("harness_bridge.harness").info("== [t] hello")
     logging.getLogger("app_x.sub").info("== step")
     logging.getLogger("app_x.sub").debug("hidden")
-    assert buf.getvalue() == "== [t] hello\n== step\n"
+    lines = buf.getvalue().splitlines()
+    # every line carries a "MM-DD HH:MM:SS" stamp so stage durations can be read off any log
+    assert [re.sub(r"^\d\d-\d\d \d\d:\d\d:\d\d ", "", l) for l in lines] == ["== [t] hello", "== step"]
+    assert all(re.match(r"^\d\d-\d\d \d\d:\d\d:\d\d ", l) for l in lines)
 
 
 def test_configure_is_idempotent_and_replaces_its_own_handler():
@@ -36,7 +40,7 @@ def test_configure_is_idempotent_and_replaces_its_own_handler():
     configure_logging("app_x", stream=second)
     logging.getLogger("app_x").info("once")
     assert first.getvalue() == ""
-    assert second.getvalue() == "once\n"
+    assert second.getvalue().endswith(" once\n")
     marked = [h for h in logging.getLogger("app_x").handlers if getattr(h, _MARK, False)]
     assert len(marked) == 1
 

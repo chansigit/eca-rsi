@@ -31,6 +31,7 @@ import logging
 import os
 import re
 import time
+import dataclasses
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Literal, Mapping, TypeVar, cast
 
@@ -191,6 +192,39 @@ class ToolSpec:
     # for the OpenAI and DeepSeek backends.
     input_schema: dict[str, type]
     handler: ToolHandler
+
+
+SLOW_TOOL_SECONDS = 1.0  # a single tool call at or above this gets its own "took" line
+
+
+def _timed(spec: ToolSpec, times: dict[str, list[float]], label: str) -> ToolSpec:
+    """Same tool, but every call is timed: slow calls are logged as they
+    return and every duration feeds the end-of-run summary."""
+    inner = spec.handler
+
+    async def handler(arguments):
+        t0 = time.monotonic()
+        try:
+            return await inner(arguments)
+        finally:
+            dt = time.monotonic() - t0
+            times.setdefault(spec.name, []).append(dt)
+            if dt >= SLOW_TOOL_SECONDS:
+                log.info(f"== [{label}] {spec.name} took {dt:.1f} s")
+
+    return dataclasses.replace(spec, handler=handler)
+
+
+def _log_tool_summary(label: str, times: dict[str, list[float]], wall: float) -> None:
+    """One line per run: wall time, time inside application tools, and the
+    tools ranked by total time — the answer to "where did this run's time
+    go" without instrumenting the kernels."""
+    calls = sum(len(v) for v in times.values())
+    in_tools = sum(sum(v) for v in times.values())
+    ranked = sorted(times.items(), key=lambda kv: -sum(kv[1]))
+    detail = ", ".join(f"{name} {sum(v):.1f} s ×{len(v)}" for name, v in ranked[:6])
+    log.info(f"== [{label}] time: wall {wall:.0f} s, tools {in_tools:.1f} s in {calls} call(s)"
+             + (f" — {detail}" if detail else ""))
 
 
 @dataclass
@@ -382,6 +416,9 @@ async def run_agent(
     _validate_tool_table(tools, submit_tool, allowed_builtin)
     adapter = importlib.import_module(_BACKENDS[config.harness][0], __package__)
     wall = wall_seconds()
+    tool_times: dict[str, list[float]] = {}
+    tools = [_timed(spec, tool_times, label) for spec in tools]
+    started = time.monotonic()
 
     async def _attempt() -> AgentRunResult:
         coro = adapter.run_agent(
@@ -401,4 +438,7 @@ async def run_agent(
             raise AgentTimeout(f"[{label}] agent run exceeded the wall-clock budget of {wall / 60:g} min "
                                f"(AGENT_WALL_MIN)") from None
 
-    return await retry_transient(_attempt, label)
+    try:
+        return await retry_transient(_attempt, label)
+    finally:
+        _log_tool_summary(label, tool_times, time.monotonic() - started)

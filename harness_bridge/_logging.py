@@ -21,7 +21,8 @@ import logging
 import sys
 from typing import IO
 
-DEFAULT_FORMAT = "%(message)s"
+DEFAULT_FORMAT = "%(asctime)s %(message)s"
+DEFAULT_DATEFMT = "%m-%d %H:%M:%S"  # every stage/tool line carries a wall-clock stamp, so durations fall out of any log
 _MARK = "_harness_bridge_handler"
 
 
@@ -37,7 +38,7 @@ class _FlushingHandler(logging.StreamHandler):
 
 def _attach(names, level, stream, fmt) -> logging.Handler:
     handler = _FlushingHandler(stream)
-    handler.setFormatter(logging.Formatter(fmt))
+    handler.setFormatter(logging.Formatter(fmt, DEFAULT_DATEFMT))
     for name in dict.fromkeys(names):
         logger = logging.getLogger(name)
         for old in list(logger.handlers):

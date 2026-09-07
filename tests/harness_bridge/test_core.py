@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import pytest
 
@@ -230,3 +231,29 @@ def test_unclassified_failures_raise_immediately(instant_sleep):
     with pytest.raises(ValueError):
         asyncio.run(retry_transient(attempt, "t"))
     assert calls["n"] == 1
+
+
+def test_tool_calls_are_timed_and_summarised(monkeypatch, tmp_path, caplog):
+    """Every application tool is wrapped: slow calls get a "took" line as they
+    return, and the run ends with one wall/tools summary ranked by tool."""
+    async def slow(args):
+        return {"content": [{"type": "text", "text": "ok"}]}
+
+    async def backend(**kwargs):
+        by_name = {t.name: t for t in kwargs["tools"]}
+        await by_name["slow"].handler({"x": 1})
+        await by_name["slow"].handler({"x": 2})
+        return AgentRunResult({"ok": True}, None, None)
+
+    monkeypatch.setenv("HARNESS", "openai")
+    monkeypatch.setattr("harness_bridge._harness_openai.run_agent", backend)
+    monkeypatch.setattr(H, "SLOW_TOOL_SECONDS", 0.0)
+    with caplog.at_level(logging.INFO, logger="harness_bridge"):
+        asyncio.run(harness_bridge.run_agent(
+            tools=[SUBMIT, ToolSpec("slow", "x", {"x": int}, slow)], submit_tool="submit",
+            prompt="probe", cwd=str(tmp_path), label="t",
+        ))
+    took = [r.message for r in caplog.records if " took " in r.message]
+    assert len(took) == 2 and took[0].startswith("== [t] slow took ")
+    summary = [r.message for r in caplog.records if "] time: wall" in r.message]
+    assert len(summary) == 1 and "in 2 call(s)" in summary[0] and "slow " in summary[0] and "×2" in summary[0]
