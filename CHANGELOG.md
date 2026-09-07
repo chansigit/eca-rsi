@@ -1,6 +1,24 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-09-07
+
+- Sample-map cell policies (`ecarsi.policies`): `exclude_cells` rules applied before any OSP subset is cut (every
+  excluded cell on the ledger as `removed:persample-policy:<reason>`, listed in needs_review) and a declared
+  `batch_key` (validated constant per experiment, back-filled for blank cells, passed to MSP). Without a map the
+  sample-column agent may propose exclusions (host-validated) and a separate call only *recommends* a batch key.
+- Run identity compares content only (package version + source hash); checkout path and git HEAD are recorded as
+  `provenance`. Doc-only commits or a relocated worktree no longer invalidate a resume.
+- `loop`: manual overrides via `<unit>/loop_control.json`, re-read at every round boundary (`cap`, `rounds`,
+  `extra_rounds_after_convergence`, `stop_after_round` → pause with exit 3); the round loop is a `while`.
+- A sample whose OSP QC removes every cell is finished-and-empty: accounted in `qc_removed.csv`, auto-excluded
+  before the inclusion agent, listed under needs_review; the loop prerequisite accepts it.
+- `organize` ignores ECA-RSI run roots mirrored inside the ECA-PP input tree; sample maps gain
+  `derive_from_cell_id` and `missing_as` for explicit experiment partitions.
+- Landing pages: one design system, overview page and navigator grouped by collection; step state derived from
+  light markers only, so a `--mirror` copy without h5ad shows the same stage as the run root; Sankey stage titles
+  vertical, labels decluttered, big nodes centred.
+- `serve`: access log with the visitor's address (`X-Forwarded-For` behind ngrok) and user agent; resizable
+  sidebar, sorting, no Slurm-specific column.
 
 - `--mirror DIR` on `run` / `organize` / `persample` / `loop` (`ecarsi.mirror`): remembered in `<root>/mirror.json`;
   light files copied to DIR after every landing-page write, the whole root at release (with pruned files removed

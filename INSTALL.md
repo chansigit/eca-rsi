@@ -10,11 +10,11 @@ ECA-PP 先独立运行；ECA-RSI 环境包含驱动包、OSP/MSP/ZMIP 三个内�
 
 | 发行名 / import 名 | 源码版本 | 关键依赖与职责 |
 | --- | --- | --- |
-| `ecarsi` / `ecarsi` | 0.1.0 | 驱动；依赖 `agent-harness-bridge[all]>=0.2.3,<0.3`、anndata、scanpy、h5py、numpy、pandas、matplotlib |
-| `osp-sc` / `osp` | 0.1.2 | 每样本 QC、Scrublet、内置 DecontX、聚类和注释建议；`[agent]` 安装 bridge 的全部后端依赖 |
-| `msp-sc` / `msp` | 0.3.3 | 跨样本整合与审查；依赖 `harmonypy>=2,<3`、`stanhue>=1.1.0`、`standissect-lite>=0.2.0`；`[agent]` 安装后端依赖 |
-| `zmip` / `zmip` | 0.3.3 | lineage 内重算与细化；依赖 `msp-sc>=0.3.3,<0.4` 和 `agent-harness-bridge[all]>=0.2.1,<0.3`，另有运行时 API 兼容检查 |
-| `agent-harness-bridge` / `harness_bridge` | 0.2.3 | core 无依赖；extras 为 `openai`、`claude`、`deepseek`、`all` |
+| `ecarsi` / `ecarsi` | 0.2.0 | 驱动；依赖 `agent-harness-bridge[all]>=0.2.4,<0.3`、anndata、scanpy、h5py、numpy、pandas、matplotlib |
+| `osp-sc` / `osp` | 0.1.3 | 每样本 QC、Scrublet、内置 DecontX、聚类和注释建议；`[agent]` 安装 bridge 的全部后端依赖 |
+| `msp-sc` / `msp` | 0.3.4 | 跨样本整合与审查；依赖 `harmonypy>=2,<3`、`stanhue>=1.1.0`、`standissect-lite>=0.2.0`；`[agent]` 安装后端依赖 |
+| `zmip` / `zmip` | 0.3.4 | lineage 内重算与细化；依赖 `msp-sc>=0.3.3,<0.4` 和 `agent-harness-bridge[all]>=0.2.1,<0.3`，另有运行时 API 兼容检查 |
+| `agent-harness-bridge` / `harness_bridge` | 0.2.4 | core 无依赖；extras 为 `openai`、`claude`、`deepseek`、`all` |
 | `standissect-lite` / `standissect_lite` | 0.2.0 | MSP 使用的群体内部小片段检测库 |
 
 安装名是 `osp-sc` 和 `msp-sc`，import 和模块入口仍为 `osp` 和 `msp`。
@@ -39,6 +39,11 @@ ECA-PP 先独立运行；ECA-RSI 环境包含驱动包、OSP/MSP/ZMIP 三个内�
 源码构建。Sherlock 可按本地环境检查 `polyfill-glibc/0.1` 模块是否适用。
 
 ## 3. 安装发行包与驱动源码
+
+**2026-09-07 起的 0.2.0 组合（ecarsi 0.2.0、osp 0.1.3、msp/zmip 0.3.4、bridge 0.2.4）只打了 GitHub tag，尚未上传 PyPI**：
+按第 2 节从五个源码 checkout（或对应 tag）`pip install -e` 安装即可；改动版本号后要重新 `pip install -e --no-deps`，
+`runtime_identity()` 才能读到新的 `importlib.metadata` 版本。下面的 PyPI 说明仍描述 0.1.0 组合。
+
 
 bridge 0.2.3、OSP 0.1.2、MSP/ZMIP 0.3.3 已发布到 PyPI，并同步 GitHub Release。
 八个线上文件的 SHA256 与本轮构建一致。此前 bridge 0.2.0 解析失败是索引尚未发布；

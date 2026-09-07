@@ -227,3 +227,20 @@
   4 轮 14、5 轮 11、6 轮 10、7 轮 3、8 轮 1(mca3.0/Kidney)。
 - 收尾:tracker 五个 batch 已同步;registry 104 条;`mirror_light.sh` 已停(02:31);serve 跑 integration 代码
   (db90762,access log 带真实来源 IP 和 UA)。
+
+## 后记 2026-09-07 03:xx:integration 合并、作业脚本收编
+
+- 五个仓库的 `integration` 分支已合并进各自 main(eca-rsi 018df28 为 merge commit,其余 fast-forward);
+  版本号 ecarsi 0.2.0 / osp 0.1.3 / msp 0.3.4 / zmip 0.3.4 / bridge 0.2.4,只打 GitHub tag,未上传 PyPI。
+  合并后唯一的测试失配是 msp `tests/test_log.py`:bridge 0.2.4 给每行日志加了时间戳,msp 的"裸消息格式"断言已改成剥掉时间戳再比。
+- `_eca-rsi-jobs/gen_rsi.sh` 重写:默认解释器改为 Apptainer 包装器 `venvs/eca-ct/python`;去掉全部 worktree 分支变量和
+  HVG_ORGANS / BRIDGE_ORGANS / EMPTY_ORGANS 白名单(已合并进 main);去掉作业内 5 分钟 rsync 循环和退出时的
+  `--delete` 全量 rsync,改为 `eca-rsi run … --mirror "$OAK_OUT"`(ecarsi 自己按步同步轻量文件、release 时全量);
+  作业只负责把 `status.txt` 拷到 Oak,失败时留一份可续跑的全量副本。facs 默认 `--no-decontx --no-scrublet`。
+  `RSI_SUFFIX`(v2 机制)从 gen_rsi.sh / submit.sh 删除。旧脚本留 `gen_rsi.sh.bak-*`。
+- facs 20 个器官的 `rsi-sample-map.json` 重写成"v2 分板 + 细胞策略"示例:`derive_from_cell_id` 同 v2;
+  `exclude_cells` 一条 `blank: [mouse.id, subtissue, cell_ontology_class] → upstream_qc_blank`;
+  `batch_key: mouse.id` 只写给"板 = 鼠 × FACS 门"的器官(subtissue ≥2 个门且每只鼠 ≥2 块板,且 mouse.id 在每块板内恒定;
+  12 个:Brain_Myeloid、Brain_Non-Myeloid、Fat、Heart、Large_Intestine、Liver、Lung、Marrow、Pancreas、Skin、Thymus 以及
+  Heart 的 subtissue 实为心腔而非门,按同一规则也归 mouse),其余 8 个保持按板校正(板 = 鼠)。v1 的 map 随 v1 运行进了 trash。
+  这些 map 尚未真实跑过(没有第三遍计划),只是配置示例。
