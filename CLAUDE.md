@@ -107,6 +107,8 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
 - serve 的 fleet 页(`/`、`/_home`)从 `StateCache` 后台线程(每 60 s 预算全部数据集 `dataset_state`)读内存,数据集页 / unit 页仍现算;
   渲染页按 Accept-Encoding gzip。根因是 Oak 冷元数据 8 ms/次 × 每页 15k 次(2026-09-07,分支 `serve-state-cache`;合并前从 worktree 起:
   `PYTHONPATH=$SCRATCH/worktrees/eca-rsi-serve-cache python -m ecarsi serve ...`)。
+- 容器环境的构建配方在仓库里:`container/build.sh`(镜像内建 venv + 五个仓库 editable)、`container/install-wrapper.sh`(生成 `python` wrapper)、
+  `container/README.md`(为什么要容器、踩过的坑、验证方法)。全部环境变量配置(`ECA_CT_ROOT` / `ECA_SIF` / `ECA_REPOS`),不写死路径。
 - serve 跑在容器解释器上,和批量作业同一个环境,不依赖 dl2025。容器 PATH 没有 `~/local/bin`,`start_ngrok()` 的 `shutil.which` 会找不到 ngrok,
   加一个 `APPTAINERENV_APPEND_PATH=$HOME/local/bin` 即可(二进制在容器里可见且能跑,不必改共享 wrapper——批量作业每个内核子进程都在用它)。
 

@@ -22,6 +22,10 @@ ECA-PP 先独立运行；ECA-RSI 环境包含驱动包、OSP/MSP/ZMIP 三个内�
 但版本范围不能锁定配套源码。本次后段使用 Harmony 2 的 CPU 实现，无需 torch；
 `MSP_DEVICE` 已移除。实际模块路径和源码摘要会写入每阶段的 `.rsi-stage.json`。
 
+容器环境的构建配方在 [container/](container/)（`build.sh` + `install-wrapper.sh` + 说明），
+全部由环境变量配置，不绑定站点。宿主 glibc 旧于 wheel 的 manylinux 标签时，pip/uv 会静默源码编译，
+numpy 由此失去 BLAS（能导入、测试全过、matmul 慢约 100 倍），在镜像里建 venv 可整体规避这一类问题。
+
 ## 2. 前置条件
 
 - Python ≥3.10；旧 Linux 的原生库兼容性需要结合 h5py/HDF5 等依赖检查。
