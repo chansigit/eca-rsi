@@ -133,6 +133,12 @@ def extract(lineage_dir: Path, out_root: Path, logs: list[Path]) -> Path:
             shutil.copytree(src, inputs / src.name, dirs_exist_ok=True)
         else:
             shutil.copy2(src, inputs / src.name)
+    # Round-level files the lineage step reads: lineage_markers.csv drives score_foreign(), which
+    # replay must recompute because its obs columns are not in integrated.h5ad (see replay.py).
+    for shared in ("lineage_markers.csv", "zmip_plan.json"):
+        src = lineage_dir.parent / shared
+        if src.is_file():
+            shutil.copy2(src, inputs / shared)
 
     (dest / "answer.json").write_text(json.dumps({
         "source": str(lineage_dir),

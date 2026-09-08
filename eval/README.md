@@ -95,8 +95,40 @@ out to be useful beyond ECA, split it out then, not now.
   `annotate_lineage` was called, what the model submitted, and every rejection the host issued to
   that lineage). Verified on two real lineages.
 
+- **`replay.py`** — runs `zmip.annotate.annotate_lineage()` on a fixture under a chosen model,
+  through the production code path (`score_foreign()` is recomputed first, exactly as
+  `zmip.lineage` does, because its obs columns are not in `integrated.h5ad`).
+
+## First result
+
+`gse311521-pan-cancer-round01-B_cell` (7,297 cells, 21 clusters), recorded by
+`doubao-seed-2-1-turbo` and replayed by `claude-opus-5`:
+
+| | doubao (recorded) | opus-5 |
+|---|---|---|
+| host rejections | 1 (consistency) | 0 |
+| actions | 21 keep | 21 keep |
+| confidence | 21 high | 12 high, 9 medium |
+| distinct fine labels | 7 | 7 |
+| merged groups | 2 | 1 |
+| cost / wall | not reported by backend | $3.72 / 386 s |
+
+`fine_partition_agreement` 0.93; `action` and `coarse` agreement are both 1.0 and both flagged
+**non-discriminating** — this lineage has nothing to remove and one allowed coarse label, so those
+numbers were never going to separate two models.
+
+Two lessons already:
+
+1. **Fixture selection is most of the work.** A lineage where the recorded answer is "keep
+   everything, one label" tests almost nothing. Prefer lineages with removals, reassignments and
+   several coarse labels.
+2. **The interesting signal was not in the agreement numbers.** doubao marked all 21 clusters
+   `high` confidence; opus-5 split 12/9. A model that says "high" to everything gives the loop no
+   signal to act on, and no agreement metric would have shown that — which is why every rate here
+   is printed next to the distribution it came from.
+
 ## Next
 
-`replay.py`: call `zmip.annotate.annotate_lineage()` on a fixture under a chosen `MODEL` and score
-the new proposal — host-checkable rules as pass/fail, agreement with the recorded proposal as a
-separate number. That is the first thing here that costs money, so pick fixtures deliberately.
+Extract fixtures that actually discriminate (removals, multi-label lineages, a plan step), and add
+the other decision types: `submit_plan` (lineage planning, where the host has a real connectivity
+check) and the MSP inspect/annotate calls.
