@@ -92,25 +92,42 @@ def output_identities(outdir: Path, annotate: bool) -> dict:
 
 
 EMPTY_KIND = "qc_zero_survivors"
+TOO_FEW_KIND = "qc_too_few_survivors"
+EMPTY_KINDS = (EMPTY_KIND, TOO_FEW_KIND)
 
 
 def is_empty(outdir: Path, identity: str | None = None) -> bool:
-    """True when OSP QC removed every cell of this sample: the worker stops
-    before clustering (nothing to cluster), but the sample is fully
-    accounted for — every input cell sits in qc_removed.csv with a reason —
-    so it counts as finished, not failed. Such a sample has no clustered.h5ad
-    and is never offered to the inclusion agent."""
+    """True when this sample hands no cells on, yet is fully accounted for.
+
+    Two ways that happens, and the invariant that matters is the same for
+    both: every input cell sits in qc_removed.csv with a reason, so the cell
+    ledger balances and the sample counts as finished rather than failed.
+    Such a sample has no clustered.h5ad and is never offered to the inclusion
+    agent.
+
+    - ``qc_zero_survivors``: QC removed every cell.
+    - ``qc_too_few_survivors``: one or two cells passed QC, which is below the
+      three clustering needs, so OSP books them as removed under the reason
+      ``too_few_survivors`` (osp >= 0.1.5) and stops. Here ``n_low_quality``
+      is deliberately *less* than ``n_cells`` — the QC summary keeps saying
+      those cells passed QC — so completeness is judged only by the ledger.
+      Older OSP left the survivors in no ledger at all; such a sample still
+      reads as failed, which is correct, because its cells are unaccounted for.
+    """
     try:
         import pandas as pd
 
         state = read_json(outdir / L.RUN_STATE)
-        if state.get("state") != "failed" or state.get("failure_kind") != EMPTY_KIND:
+        kind = state.get("failure_kind")
+        if state.get("state") != "failed" or kind not in EMPTY_KINDS:
             return False
         if identity is not None and state.get("identity") != identity:
             return False
         qc = pd.read_csv(outdir / "qc_summary.csv", index_col=0, dtype=str).iloc[:, 0]
         n = int(qc["n_cells"])
-        if n < 1 or int(qc["n_low_quality"]) != n:
+        if n < 1:
+            return False
+        if kind == EMPTY_KIND and int(qc["n_low_quality"]) != n:
             return False
         expected = pd.read_csv(outdir / INPUT_CELLS, dtype=str, keep_default_na=False)["cell_id"]
         removed = pd.read_csv(outdir / "qc_removed.csv", dtype=str, keep_default_na=False)
