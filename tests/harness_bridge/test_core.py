@@ -194,6 +194,20 @@ def test_ark_gateway_400_and_5xx_are_retried_as_transient(instant_sleep):
     assert instant_sleep == [20, 40]
 
 
+def test_a_forgotten_previous_response_restarts_the_run(instant_sleep):
+    # With SERVER_STATE=1 the SDK chains turns by previous_response_id. Ark has
+    # been seen to forget a stored response under load (2026-09-07, right after
+    # two 429 ServerOverloaded in the same call). The id is gone for good, so
+    # replaying that request would be pointless -- but the retry here starts a
+    # fresh run with a new chain, which does recover. Without it the stage dies
+    # and the driver recomputes it from the top.
+    attempt, calls = _failing([RuntimeError(
+        "Error code: 400 - {'error': {'code': 'InvalidParameter.PreviousResponseNotFound', "
+        "'message': 'Previous response with id resp_02178882 not found'}}")], then="ok")
+    assert asyncio.run(retry_transient(attempt, "t")) == "ok"
+    assert calls["n"] == 2
+
+
 def test_transient_failures_give_up_after_the_attempt_budget(instant_sleep):
     attempt, calls = _failing([RuntimeError("process exited unexpectedly")] * 10)
     with pytest.raises(RuntimeError, match="persisted after 5 attempts"):
