@@ -84,7 +84,19 @@ This lives in eca-rsi rather than in the bridge because the fixtures are single-
 and the tool tables come from osp/msp/zmip. The bridge stays domain-agnostic. If the exam turns
 out to be useful beyond ECA, split it out then, not now.
 
-## Status
+## What exists
 
-Design only. Nothing here runs yet. Next step is `extract.py`: freeze one real lineage decision
-into a fixture directory and prove the replay reproduces the recorded submission's shape.
+- **`baseline.py`** — classifies the host rejections already sitting in the production Slurm logs.
+  No API calls. On 354 logs the incumbent (`doubao-seed-2-1-turbo-260628`) shows 23,850 submissions
+  with a 3.4% rejection rate, dominated by `format` (1.9%) and `consistency` (0.9%). Useful within a
+  model, **not** across models: each was scored on whatever tasks it happened to run.
+- **`extract.py`** — freezes one recorded ZMIP lineage decision into a fixture: `inputs/` (the h5ad
+  and every diagnostic table, with the annotation outputs removed) plus `answer.json` (how
+  `annotate_lineage` was called, what the model submitted, and every rejection the host issued to
+  that lineage). Verified on two real lineages.
+
+## Next
+
+`replay.py`: call `zmip.annotate.annotate_lineage()` on a fixture under a chosen `MODEL` and score
+the new proposal — host-checkable rules as pass/fail, agreement with the recorded proposal as a
+separate number. That is the first thing here that costs money, so pick fixtures deliberately.
