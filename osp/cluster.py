@@ -89,6 +89,10 @@ import logging
 
 log = logging.getLogger(__name__)
 
+# Cells that pass QC in a sample too small to cluster are still removed -- nothing
+# downstream ever sees them -- so they get their own reason in qc_removed.csv.
+TOO_FEW_SURVIVORS_REASON = "too_few_survivors"
+
 # OSP doesn't know what tissue/species it is given, so there is no built-in
 # default marker set — marker_genes defaults to None (marker plots skipped).
 # Callers with actual cell-type/marker context (an upstream pipeline) pass
@@ -828,6 +832,17 @@ def run_one_sample_pipeline(
             if c in ad_qc.obs
         ]
         removed = ad_qc.obs.loc[ad_qc.obs["low_quality"].values, ledger_cols].copy()
+        if 0 < ad_pass.n_obs < 3:
+            # Clustering needs three cells, so this sample stops here. Book the
+            # survivors as removed too, under their own reason, instead of
+            # leaving them unaccounted for: the driver's cell ledger wants every
+            # input cell to be either a survivor or a removal that carries a
+            # reason, and a sample ending with one or two cells hands nothing on.
+            # Written before the raise below so the record exists even though
+            # this call fails.
+            leftover = ad_qc.obs.loc[~ad_qc.obs["low_quality"].values, ledger_cols].copy()
+            leftover["qc_reason"] = TOO_FEW_SURVIVORS_REASON
+            removed = pd.concat([removed, leftover])
         removed.insert(0, "sample", sample_label)
         removed.index.name = "cell"
         atomic_write_dataframe_csv(removed, os.path.join(outdir, "qc_removed.csv"))
