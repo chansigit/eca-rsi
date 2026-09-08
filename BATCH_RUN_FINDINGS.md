@@ -345,3 +345,14 @@ release(persample、MSP、ZMIP、release、prune、mirror 全程),但前两次�
    46 块完全不含 3m;Brain_Myeloid / Thymus / Aorta 同样是 0 块混合),这些小板在 TMS 原始数据里本来就小。
    教训:**样本级的最小规模闸门应该在 organize 之前就设**(tabula-sapiens 派生已按此加了"<200 细胞的 library 声明式排除"),
    否则碎片样本会一路带进整合,只能事后在 needs_review 里体现。本批次用户决定不补规则、不重跑。
+
+12. **新错误类型:`InvalidParameter.PreviousResponseNotFound`(tome E8.5b round 3 MSP inspect)**:
+   `openai.BadRequestError: 400 - Previous response with id resp_... not found`,发生在同一次 inspect 里连续两次
+   `429 ServerOverloaded` 之后。根因是 Responses API 的服务端状态链:bridge 默认 `OPENAI_AGENTS_SERVER_STATE=1`
+   (`ModelSettings.store=True`),靠 `previous_response_id` 增量续接以免每轮重传所有图片和工具结果;
+   Ark 在过载后把存储的那条响应丢了,SDK 仍引用它 → 400。**`TRANSIENT_PATTERN` 里没有这个串**,所以整轮判死。
+   处理:直接重 sbatch(新进程开新链)。若同一器官反复复发,可用
+   `sbatch --export=ALL,OPENAI_AGENTS_SERVER_STATE=0 eca-rsi.sbatch` 退回全本地历史——**该开关不进计算身份**
+   (`agent_config()` 只记录 `{harness, model}`),代价是输入 token 随轮次快速增长。
+   待办:把 `previousresponsenotfound` 加进 bridge 的 `TRANSIENT_PATTERN`(与 `error when parsing request`
+   同类的网关级瞬时故障),这样整次重试即可自愈,不必重跑整个阶段。
