@@ -48,8 +48,8 @@ def test_rendered_pages_are_gzipped_when_accepted(tmp_path):
         req = urllib.request.Request(url, headers={"Accept-Encoding": "gzip"})
         with urllib.request.urlopen(req) as r:
             assert r.headers["Content-Encoding"] == "gzip"
-            assert b"ECA-RSI runs" in gzip.decompress(r.read())
+            assert b"Periscope" in gzip.decompress(r.read())
         with urllib.request.urlopen(url) as r:  # no Accept-Encoding: plain
-            assert r.headers.get("Content-Encoding") is None and b"ECA-RSI runs" in r.read()
+            assert r.headers.get("Content-Encoding") is None and b"Periscope" in r.read()
     finally:
         httpd.shutdown(); httpd.server_close()

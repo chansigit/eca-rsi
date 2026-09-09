@@ -1,4 +1,7 @@
-"""ecarsi.serve — a stateless navigator server for eca-rsi run reports.
+"""ecarsi.serve — Periscope, a stateless navigator server for eca-rsi run reports.
+
+Periscope is the name of the web UI (page titles, the sidebar brand, the
+startup line); the CLI verb stays `serve`.
 
     ecarsi serve [dir...] [--registry FILE] [--port 8899] [--bind 127.0.0.1]
                  [--ngrok [--domain csj.example.app]] [--auth user:pass]
@@ -190,6 +193,25 @@ class Registry:
 
 # ---------------------------------------------------------------- navigator
 
+APP = "Periscope"
+# The mark: a periscope raised above the waterline — you are outside the cluster looking in.
+# Stroke-only and currentColor, so it takes the colour of wherever it is placed and scales with
+# the font (see LOGO_CSS). Single-quoted attributes and no '#' so the same string can go straight
+# into a data: URI for the favicon without an encoder.
+LOGO_SVG = (
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' aria-hidden='true' fill='none' "
+    "stroke='currentColor' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'>"
+    "<path d='M8 18.5V9.5A4.5 4.5 0 0 1 12.5 5h3.8'/><circle cx='18.5' cy='5' r='2.1'/>"
+    "<path d='M2.5 21.5c1.3-1.4 2.6-1.4 3.9 0s2.6 1.4 3.9 0 2.6-1.4 3.9 0 2.6 1.4 3.9 0 2.6-1.4 3.9 0'/></svg>"
+)
+FAVICON = '<link rel="icon" href="data:image/svg+xml,' + LOGO_SVG.replace("currentColor", "rgb(36,86,196)") + '">'
+LOGO_CSS = ".logo{display:inline-flex;vertical-align:-.12em;color:var(--accent)}.logo svg{width:1em;height:1em}h1 .logo{margin-right:.3em}"
+
+
+def logo() -> str:
+    return f'<span class="logo">{LOGO_SVG}</span>'
+
+
 NAV_JS = r"""
 (function(){
   const $ = id => document.getElementById(id);
@@ -212,13 +234,13 @@ NAV_JS = r"""
     if (p === "/_home") {
       if (location.hash !== "#/__home__") history.replaceState(null, "", "#/__home__");
       mark("__home__"); crumb.textContent = "overview"; open.href = "/_home";
-      try { document.title = frame.contentDocument.title || "ECA-RSI runs"; } catch (e) {}
+      try { document.title = frame.contentDocument.title || "Periscope"; } catch (e) {}
       return;
     }
     const m = p.match(/^\/([^/]+)\//); if (!m) return;
     if (location.hash !== "#" + p) history.replaceState(null, "", "#" + p);
     mark(m[1]); crumb.textContent = decodeURIComponent(p); open.href = p;
-    try { document.title = frame.contentDocument.title || "ECA-RSI runs"; } catch (e) {}
+    try { document.title = frame.contentDocument.title || "Periscope"; } catch (e) {}
   });
   window.addEventListener("hashchange", () => { const p = fromHash(); if (p) show(p); });
   items.forEach(i => i.addEventListener("click", ev => { if (ev.target.closest("input.sel")) return; ev.preventDefault(); show("/" + i.dataset.name + "/"); }));
@@ -377,6 +399,7 @@ aside.sb{width:360px;flex:0 0 360px;background:var(--card);border-right:1px soli
 .sb-head{padding:var(--s2) var(--s2) var(--s1);display:flex;flex-direction:column;gap:var(--s1);border-bottom:1px solid var(--line)}
 .sb-head .brand{display:flex;align-items:center;justify-content:space-between;gap:var(--s1)}
 .sb-head .brand b{font-size:var(--t5)}.sb-head .brand small{color:var(--muted);font-size:var(--t3);font-weight:400;margin-left:.4em}
+.sb-head .brand .logo{font-size:var(--t6);margin-right:.35em}
 .sb-head input[type=search]{width:100%;font:inherit;font-size:var(--t3);padding:8px 12px;border:1px solid var(--line-strong);border-radius:var(--r);background:var(--card)}
 .sb-head .sort-row{display:flex;align-items:center;gap:var(--s1);font-size:var(--t3);color:var(--muted)}
 .sb-head select{font:inherit;font-size:var(--t3);padding:4px 8px;border:1px solid var(--line-strong);border-radius:6px;background:var(--card);color:var(--ink)}
@@ -449,7 +472,7 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
     sidebar = (
         '<aside class="sb" id="sb" aria-label="datasets"><div class="sb-resizer" id="sb-resizer" title="drag to resize"></div>'
         '<div class="sb-head">'
-        f'<div class="brand"><span><b>ECA-RSI runs</b><small><span id="nav-n">{len(items)}</span> datasets</small></span>'
+        f'<div class="brand"><span>{logo()}<b>{APP}</b><small><span id="nav-n">{len(items)}</span> datasets</small></span>'
         '<button class="icon" id="sb-toggle" title="hide sidebar" aria-label="hide sidebar">&#9776;</button></div>'
         '<input id="nav-q" type="search" placeholder="Filter datasets…" aria-label="filter datasets" autocomplete="off">'
         '<div class="sort-row"><label for="nav-sort">sort</label><select id="nav-sort">'
@@ -481,8 +504,8 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
     )
     return (
         '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width,initial-scale=1"><title>ECA-RSI runs</title>'
-        f"<style>{index.CSS}{NAV_CSS}</style></head><body>{sidebar}{main}<script>{NAV_JS}</script></body></html>"
+        f'<meta name="viewport" content="width=device-width,initial-scale=1"><title>{APP} · ECA-RSI</title>{FAVICON}'
+        f"<style>{index.CSS}{NAV_CSS}{LOGO_CSS}</style></head><body>{sidebar}{main}<script>{NAV_JS}</script></body></html>"
     )
 
 
@@ -545,9 +568,9 @@ def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
              else '<p class="empty">No dataset is bound yet. Use <b>+ Bind…</b> in the sidebar or <code>eca-rsi serve scan-add</code> on the server host.</p>')
     return (
         '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width,initial-scale=1"><title>ECA-RSI runs — overview</title>'
-        f'<style>{index.CSS}</style></head><body><main class="page">'
-        '<header class="hero"><div class="title"><h1>ECA-RSI runs</h1></div>'
+        f'<meta name="viewport" content="width=device-width,initial-scale=1"><title>{APP} — overview</title>{FAVICON}'
+        f'<style>{index.CSS}{LOGO_CSS}</style></head><body><main class="page">'
+        f'<header class="hero"><div class="title"><h1>{logo()}{APP}</h1><span class="sub">ECA-RSI runs</span></div>'
         '<p class="sub" style="max-width:80ch;margin-top:8px">Recursive self-improving annotation of single-cell atlases. Each dataset below was '
         "processed per sample (QC, clustering), integrated across samples and annotated in rounds by agents, with low-quality cells removed "
         "until the loop converged. A dataset page shows the numbers, the rounds, the final UMAP with coarse and fine labels, "
@@ -558,7 +581,7 @@ def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
         '<p class="lede">Cells in is the number of cells the run started from; cells out is what the release keeps. Click a column header to sort.</p>'
         '<div class="toolbar"><label for="ds-q">Filter</label><input id="ds-q" type="search" placeholder="name, collection, species, status…" autocomplete="off"></div>'
         f"{table}</section>"
-        f'<footer>rendered {time.strftime("%Y-%m-%d %H:%M:%S")} by ecarsi serve from the registry · reload for the current state</footer>'
+        f'<footer>rendered {time.strftime("%Y-%m-%d %H:%M:%S")} by {APP} (ecarsi serve) from the registry · reload for the current state</footer>'
         f"</main><script>{HOME_JS}</script></body></html>"
     )
 
@@ -826,7 +849,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         (args.bind, args.port), partial(Handler, registry=registry, auth=args.auth, states=states)
     )
     print(
-        f"[serve] navigator on http://{args.bind}:{args.port}/  ({len(items)} dataset(s); registry {reg_path}"
+        f"[serve] {APP} on http://{args.bind}:{args.port}/  ({len(items)} dataset(s); registry {reg_path}"
         + (f", {len(extra)} from the command line)" if extra else ")")
         + (
             f"  [password-protected, user {args.auth.split(':', 1)[0]!r}]"

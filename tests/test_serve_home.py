@@ -9,7 +9,7 @@ from ecarsi.serve import NAV_JS, _home_html, _navigator_html
 
 def test_home_html_renders_stats_and_no_dataset_frame():
     html = _home_html({})
-    assert "<title>ECA-RSI runs — overview</title>" in html
+    assert "<title>Periscope — overview</title>" in html
     assert '>0</span><span class="k">datasets</span>' in html
     assert "No dataset is bound yet" in html
     assert "iframe" not in html

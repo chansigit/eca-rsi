@@ -135,7 +135,7 @@ def test_review_section_is_grouped_cards(tmp_path):
 def test_home_overview_has_stats_table_and_filter(tmp_path):
     root, _ = make_run(tmp_path)
     html = _home_html({"coll-Organ": root, "Gone": tmp_path / "nowhere"})
-    assert "<title>ECA-RSI runs — overview</title>" in html and "Recursive self-improving annotation" in html
+    assert "<title>Periscope — overview</title>" in html and "Recursive self-improving annotation" in html
     strip = html[html.index('<div class="glance">'):html.index('<section class="block" id="datasets">')]
     for v, k in (("2", "datasets"), ("1", "released"), ("0", "running"), ("1", "failed"), ("1,000", "cells in"), ("800", "cells released")):
         assert f'>{v}</span><span class="k">{k}</span>' in strip, (v, k)
