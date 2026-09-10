@@ -128,7 +128,7 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
   另存为 `provenance`(persample manifest 与各阶段 `.rsi-stage.json`),只供追溯,不参与比对。改文档提交、同一源码换 worktree 路径都不影响续跑。
 - `release_state.py` 在暂存目录生成完整 release 和收据，再可恢复地切换目录；入口先恢复中断发布。
   重开保留旧 round decision，只新增轮次；已有 release 无收据仅可浏览，计算用新目录。
-  `--allow-agent-change` 不覆盖新版 persample 严格身份要求；下游 agent 预算变化不使计算身份失效。
+  换后端/模型不再需要 `--allow-agent-change`（2026-09-10 起该开关已删，中途换模型是合理操作，`check_agent_config` 只记录不拦截，记进 progress.log 和 needs_review 的 `agent_config_changed`）；下游 agent 预算变化不使计算身份失效。
 - `--force-reopen` 继续已有 release，不等于 ZMIP 的 `--force`；`--rounds N` 是总轮数，要大于已完成轮数。
 - 本轮删除统计从 MSP integrated 到 ZMIP survivors，不含此前 OSP QC 和整样本排除；完整历史查 ledger。
   达到停止阈值不证明注释准确；轮数上限或固定轮数发布应按 reason 与收敛发布区分。

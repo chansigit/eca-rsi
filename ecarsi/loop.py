@@ -384,7 +384,9 @@ def main(argv: list[str]) -> int:
             man = json.load(open(L.round_dir(unit, 1) / L.MANIFEST))
             from . import check_agent_config
 
-            check_agent_config(man, str(L.round_dir(unit, 1) / L.MANIFEST))
+            changed = check_agent_config(man, str(L.round_dir(unit, 1) / L.MANIFEST))
+            if changed:
+                _log(unit, f"round {n} agent config changed: {changed}")
             requested_batch = os.environ.get("MSP_BATCH_COL")
             if requested_batch and requested_batch != man["batch_col"]:
                 raise ValueError("MSP_BATCH_COL changed after round 1; use a new output directory")

@@ -33,6 +33,7 @@ def test_sample_inclusion_uses_persample_tree_as_agent_cwd(monkeypatch, tmp_path
                 "notes": "ok",
             },
             cost_usd=None,
+            effective_config=None,
         )
 
     monkeypatch.setattr(harness, "run_agent", fake_run_agent)

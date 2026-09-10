@@ -23,8 +23,9 @@ Every step resumes, so re-running the same command after an interruption
 continues where it stopped. `python -m ecarsi ...` is the same thing.
 The global --harness and --model options may appear before or after the
 subcommand; explicit CLI values override HARNESS / MODEL environment values.
-By default a resume rejects a recorded harness/model mismatch; use
---allow-agent-change only when a deliberately mixed run is wanted.
+A resume with a different harness/model than an earlier stage used is
+allowed (switching mid-run to a stronger model is a legitimate operator
+move) and reported in progress.log / needs_review, never blocked.
 """
 
 from __future__ import annotations
@@ -132,14 +133,11 @@ def main(argv: list[str] | None = None) -> int:
     runtime = argparse.ArgumentParser(add_help=False)
     runtime.add_argument("--harness", choices=["deepseek", "openai", "claude"])
     runtime.add_argument("--model")
-    runtime.add_argument("--allow-agent-change", action="store_true")
     selected, argv = runtime.parse_known_args(argv)
     if selected.harness:
         os.environ["HARNESS"] = selected.harness
     if selected.model:
         os.environ["MODEL"] = selected.model
-    if selected.allow_agent_change:
-        os.environ["ECA_ALLOW_AGENT_CHANGE"] = "1"
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__)
         return 0 if argv else 2

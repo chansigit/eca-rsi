@@ -277,6 +277,7 @@ async def _propose(inventories: list[dict]) -> dict:
         allowed_builtin=("read", "glob", "grep"), label="sample inclusion",
     )
     propose_inclusion.last_cost = result.cost_usd  # type: ignore[attr-defined]
+    propose_inclusion.last_effective_config = result.effective_config  # type: ignore[attr-defined]
     return result.submitted
 
 
@@ -310,7 +311,7 @@ def main(argv: list[str]) -> int:
 
     unit = Path(args.unit).resolve()
     ps = load_persample(unit)
-    from . import agent_config, check_agent_config, model
+    from . import agent_config, check_agent_config, effective_or_requested, model
 
     check_agent_config(ps, str(L.persample_manifest(unit)))
     selected_model = model()
@@ -343,7 +344,9 @@ def main(argv: list[str]) -> int:
     if mpath.is_file():
         with open(mpath) as f:
             man = json.load(f)
-        check_agent_config(man, str(mpath))
+        changed = check_agent_config(man, str(mpath))
+        if changed:
+            L.log_event(unit, f"round 1 agent config changed: {changed}")
         if man.get("inclusion_evidence") != evidence or man.get("batch_col") != batch_col or man.get("species") != species:
             raise ValueError("inclusion inputs changed or lack identity; use a new output directory")
         decision = man["inclusion"]
@@ -354,7 +357,7 @@ def main(argv: list[str]) -> int:
         cost.record(unit, f"{out_root.name}/inclusion", getattr(propose_inclusion, "last_cost", None), "sample inclusion")
         man = {
             "unit": str(unit),
-            **agent_config(),
+            **effective_or_requested(propose_inclusion),
             "batch_col": batch_col,
             "integration_policy": policy,
             "species": species,

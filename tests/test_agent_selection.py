@@ -66,7 +66,10 @@ def test_run_agent_resolves_backend_default_when_model_is_omitted(monkeypatch, t
     assert captured["model"] == "doubao-seed-2-1-pro-260628"
 
 
-def test_recorded_model_blocks_silent_resume_change(monkeypatch):
+def test_recorded_model_change_is_reported_not_blocked(monkeypatch):
+    # 2026-09-10: switching backend mid-run is a legitimate operator move
+    # (round 3 shows the current model's QC is too lax -> continue with a
+    # stronger one); check_agent_config never raises, it reports.
     monkeypatch.setenv("HARNESS", "openai")
     monkeypatch.setenv("MODEL", "doubao-seed-2-1-pro-260628")
     recorded = {
@@ -74,8 +77,13 @@ def test_recorded_model_blocks_silent_resume_change(monkeypatch):
         "model": "doubao-seed-2-1-turbo-260628",
     }
 
-    with pytest.raises(RuntimeError, match="allow-agent-change"):
-        check_agent_config(recorded, "manifest.json")
+    changed = check_agent_config(recorded, "manifest.json")
+    assert changed is not None
+    assert "doubao-seed-2-1-turbo-260628" in changed and "doubao-seed-2-1-pro-260628" in changed
 
-    monkeypatch.setenv("ECA_ALLOW_AGENT_CHANGE", "1")
-    check_agent_config(recorded, "manifest.json")
+    monkeypatch.setenv("MODEL", "doubao-seed-2-1-turbo-260628")
+    assert check_agent_config(recorded, "manifest.json") is None  # matches -> nothing to report
+
+
+def test_agent_config_predating_the_recorded_fields_is_unverifiable_not_blocked():
+    assert check_agent_config({}, "old-manifest.json") is None
