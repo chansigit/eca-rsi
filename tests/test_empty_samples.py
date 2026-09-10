@@ -1,5 +1,7 @@
-"""A sample whose OSP QC removed every cell is finished-and-empty: fully
-accounted for in qc_removed.csv, excluded from integration, never failed."""
+"""A sample that hands no cells on is finished-and-empty rather than failed,
+provided every input cell is accounted for in qc_removed.csv with a reason.
+Two ways to get there: QC removed everything, or one or two cells passed QC
+and OSP booked them as `too_few_survivors` because clustering needs three."""
 import json
 
 import anndata as ad
@@ -27,8 +29,6 @@ def test_is_empty_requires_every_cell_removed_with_a_reason(tmp_path):
     assert is_empty(d) and is_empty(d, "id-1") and is_finished(d, True, "id-1")
     assert not is_done(d, True, "id-1")
     assert not is_empty(d, "other-identity")
-    _empty_sample(d, ["a", "b", "c"], kind="qc_too_few_survivors")  # 1-2 survivors are not "empty"
-    assert not is_empty(d)
     _empty_sample(d, ["a", "b", "c"], reason="")  # a removal without a reason is not accounted for
     assert not is_empty(d)
     _empty_sample(d, ["a", "b", "c"])
@@ -74,3 +74,51 @@ def test_crosssample_prerequisite_accepts_an_empty_sample(tmp_path):
     _empty_sample(empty, ["d1", "d2", "d3"], identity="stale")  # identity mismatch is still incomplete
     with pytest.raises(SystemExit, match="incomplete samples: S2"):
         load_persample(unit)
+
+
+def _too_few_sample(d, removed_by_qc, survivors, identity="id-1", complete_ledger=True):
+    """A sample where `survivors` passed QC but are below the clustering
+    minimum. `complete_ledger=False` reproduces osp < 0.1.5, which left those
+    cells in no ledger at all."""
+    d.mkdir(parents=True, exist_ok=True)
+    cells = list(removed_by_qc) + list(survivors)
+    pd.DataFrame({"cell_id": cells}).to_csv(d / "input_cells.csv.gz", index=False)
+    ledger = [(c, "hard_threshold") for c in removed_by_qc]
+    if complete_ledger:
+        ledger += [(c, "too_few_survivors") for c in survivors]
+    pd.DataFrame(ledger, columns=["cell", "qc_reason"]).to_csv(d / "qc_removed.csv", index=False)
+    # the QC summary stays honest: the survivors are not low quality
+    pd.Series({"n_cells": len(cells), "n_low_quality": len(removed_by_qc)}, name="0").to_csv(d / "qc_summary.csv")
+    (d / L.RUN_STATE).write_text(json.dumps({"state": "failed", "exit_code": 1,
+                                             "failure_kind": "qc_too_few_survivors",
+                                             "identity": identity, "annotate": True}))
+
+
+def test_a_sample_below_the_clustering_minimum_is_empty_once_its_survivors_are_booked(tmp_path):
+    d = tmp_path / "s"
+    _too_few_sample(d, ["a", "b"], ["c"])
+    assert is_empty(d) and is_finished(d, True, "id-1")
+    assert not is_done(d, True, "id-1")
+    assert not is_empty(d, "other-identity")
+
+
+def test_an_unbooked_survivor_keeps_the_sample_failed(tmp_path):
+    """osp < 0.1.5 wrote no ledger row for the survivors. Those cells are then
+    unaccounted for — neither in a clustered.h5ad nor in qc_removed.csv — so
+    the sample must stay a failure rather than silently lose them."""
+    d = tmp_path / "s"
+    _too_few_sample(d, ["a", "b"], ["c"], complete_ledger=False)
+    assert not is_empty(d) and not is_finished(d, True, "id-1")
+
+
+def test_the_ledger_reports_the_survivors_own_reason(tmp_path):
+    unit = tmp_path / "unit"
+    d = L.persample_root(unit) / "S1-aaaa"
+    _too_few_sample(d, ["a", "b"], ["c"], identity="id-1")
+    L.persample_manifest(unit).write_text(json.dumps({"samples": [
+        {"value": "S1", "dir": str(d), "n_cells": 3, "identity": "id-1"}], "empty_samples": ["S1"]}))
+    L.input_h5ad(unit).parent.mkdir(parents=True, exist_ok=True)
+    ad.AnnData(np.ones((3, 2)), obs=pd.DataFrame(index=pd.Index(["a", "b", "c"], name="cell"))).write_h5ad(L.input_h5ad(unit))
+    frames = pd.concat(_persample_frames(unit))
+    assert frames.loc["c", "osp_status"] == "removed:too_few_survivors"
+    assert (frames.loc[["a", "b"], "osp_status"] == "removed:hard_threshold").all()
