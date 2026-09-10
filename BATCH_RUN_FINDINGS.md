@@ -356,3 +356,100 @@ release(persample、MSP、ZMIP、release、prune、mirror 全程),但前两次�
    (`agent_config()` 只记录 `{harness, model}`),代价是输入 token 随轮次快速增长。
    待办:把 `previousresponsenotfound` 加进 bridge 的 `TRANSIENT_PATTERN`(与 `error when parsing request`
    同类的网关级瞬时故障),这样整次重试即可自愈,不必重跑整个阶段。
+
+13. **新错误类型:Ark Responses API `400 MissingParameter: input.arguments`(2026-09-08,tabula-sapiens-clean
+   Stomach round 2 `T & NK cells`、Large_Intestine round 2 `T cell`)**:
+   `openai.BadRequestError: 400 - {'code':'MissingParameter','message':'The request failed because it is missing
+   \`input.arguments\` parameter','param':'input.arguments'}`。请求是 bridge 发出的续接调用,`input` 里那条
+   `function_call` item 缺 `arguments` 字段——即模型上一轮吐出的工具调用参数是空的/被截断,SDK 原样回填进下一轮的
+   `input`,网关校验失败。两次都发生在 zoomin 的免疫谱系(cluster 多、context 长),一次 5.1 min 一次 19.1 min 后炸,
+   都直接判死整个 lineage → 整轮 zoomin rc=1。
+   和第 12 条同属**网关级瞬时故障而非模型判断错误**:`TRANSIENT_PATTERN` 里同样没有 `missingparameter` /
+   `input.arguments`,所以没有重试。处理:重 sbatch 即可续上(已完成 lineage 会跳过)。
+   **第三次(2026-09-09 00:43,tabula-sapiens-clean Bone_Marrow round 5 `Cytotoxic lymphoid`)**:同一错误,同样是免疫谱系;
+   lineage 00:43 就死了,但 zoomin 等其余 6 个 lineage 全部跑完才在 02:00 判整轮失败——**一个 lineage 的网关错误让 1.3 小时的其它工作白等**,
+   重投后已完成的 6 个跳过、只重算那 1 个。三次都发生在 zoomin 免疫谱系(T&NK / T cell / Cytotoxic lymphoid),
+   可能与这类谱系 cluster 多、context 长、模型更容易吐空参数有关,未验证。
+   待办与第 12 条合并:bridge 的 `TRANSIENT_PATTERN` 该补这两个串;更彻底的做法是在回填 `input` 前丢弃
+   `arguments` 缺失/为空的 `function_call` item,而不是把坏 item 递给网关。
+
+14. **`--mem` 公式对 <50k 细胞的**稠密**矩阵失效(tabula-sapiens-clean Vasculature,rc=137 OOM)**:
+   40,511 细胞但 nnz=163,951,007(**约 4,050 nnz/cell**,是同批次典型值的数倍)。`gen_rsi.sh` 对 <50k 细胞给的是
+   **固定 32 GB**,nnz 修正项只在 ≥90k 细胞的分支里才有;实测 MaxRSS 33.5 GB,round 1 zoomin 全部跑完、round 2 MSP 被 OOM kill。
+   教训:**内存该由 nnz 而不是细胞数决定**,细胞数只是 nnz 的粗代理。最小修法是把 `nnz / 10000000` 这一项提到所有档位,
+   不只是 ≥90k 那一档。当前处理:重投时手工 `--mem=96G`。
+
+15. **sample map 的 `exclude_cells` 规则必须带 `rationale`,缺了就在 persample 直接失败**
+   (tabula-sapiens-ss2/Small_Intestine:`[persample] rule qc_dead_plate_median_mt_55pct: rationale required`,
+   10 秒内退出)。`reason` 是机器读的短标签,`rationale` 是给人和 needs_review 看的说明,两个都是必填。
+   这是好设计——删细胞必须留下理由——但错误只在真正跑到 persample 时才暴露,配置写完没有 lint 能提前发现。
+   待办:给 sample map 加一个 `eca-rsi validate-sample-map <file> <h5ad>` 之类的离线校验(列存在性 + 必填字段 +
+   命中细胞数),能在 sbatch 之前把这类错误挡住。
+
+16. **Tabula Sapiens Smart-seq2:把 `sample_id` 当 library 是错的——它的后缀是 FACS 分选门,不是板号**
+   (2026-09-09 发现,用户决定**记录不重做**)。证据(Bladder,2,149 细胞):
+
+   - **13 个 `sample_id` 对 12 个 `cdna_plate`**。板 `B107926` 被拆成两个 sample_id
+     (`..._B107926Blue_Lymphocytes` 135 细胞、`..._B107926Blue_Neutrophils` 22 细胞)——同一块板,两个门。
+     obs 里真正的板列是 `cdna_plate` / `library_plate`,一个都没被用到。
+   - **分选门 ≈ 细胞类型**:`B107826` → Epithelium 145/145(100% 纯)、`B134537` → Stromal 268/269、
+     `B107825` → Immune 188/192、`B134606` → Epithelium 240/247。
+
+   后果有两层。**第一层是 Harmony 混杂**:14 个已发布 ss2 单元的 `batch_col` 全是 `eca_sample_id`
+   (核对过 Bladder / Muscle / Spleen 的 round01 manifest),等于要求 Harmony 把"一整块上皮板"和
+   "一整块成纤维板"对齐——用批次校正抹平真实的细胞类型差异。这是 CLAUDE.md 里
+   「不自动推断 biological condition 应被校正」那条警告的实例。缓解因素:6 个只剩一个 library 的单元
+   跳过了 Harmony,受影响的是有 ≥2 个 library 的那些;**"混杂确凿"不等于"输出已损坏"**,未做量化验证。
+
+   **第二层是我那条 200 细胞 library 规则的全部伤害都源自这个误判**:门比板小,按门切当然处处不足 200。
+   - ss2/Bladder:2,149 → 1,182(55%)被 `library_below_osp_minimum` 删,RSI 自己只删了 0.00%;
+   - ss2/Large_Intestine:15 个"library"排掉 14 个,剩下唯一一个是死板(median mt 57.6%,228/229 hard fail)→ **零样本,放弃**;
+   - ss2/Small_Intestine:排掉后剩 2 个,其中一个是死板(274 细胞,median mt 55%)→ **只剩 1 块 235 细胞的板,放弃**。
+   两个放弃**不是数据量太大,是同一条链走到头**:门比板小 → 阈值砍掉绝大多数 → 剩下的恰好是死板。
+
+   **正解是 `donor`**:它与 compartment 交叉而非嵌套(Bladder 的 TSP1/TSP14/TSP2 各覆盖 4/4/3 个 compartment),
+   校正它不误伤细胞类型;且每个 donor 有 478–2,097 细胞(唯一例外 Muscle/TSP14 = 10 细胞),
+   **200 细胞规则整个不再需要**。真要重做 ss2,应设 `sample_column: donor` + `batch_key: donor`,
+   而不是逐个单元救。
+   **只影响 Smart-seq2**:10X 批次(tabula-sapiens-clean、parse-5M、tome)的 `sample_id` 就是真正的 library,不受此问题影响。
+
+17. **`exclude_cells` 的 `where` 必须用 obs 里的原始值,不能抄日志里的实验目录名**
+   (ss2/Small_Intestine)。日志里的实验名是 `<source>__<sample_id>__<hash>` 且 **sample_id 被截断到 67 字符**
+   (那个哈希后缀就是截断后用来消歧的),所以 `..._D101530_Epithelial` 在日志里显示成 `..._D101530_E`。
+   照抄进规则的结果是命中 0 个细胞,host 按设计只记一行 warning
+   (`[policy] ... qc_dead_plate_median_mt_55pct=0`)就继续走,那块死板照常进 OSP,270/274 硬性不合格,
+   剩 1 个细胞 → `ValueError: QC retained 1 cell(s); at least 3 are required for clustering`,整个单元失败。
+   两个待办:(a) 离线 `validate-sample-map` 不能只查列存在,**必须报"这条规则命中 0 个细胞"**——
+   运行时 warning 太晚;(b) 这个 `QC retained 1 cell(s)` 正是 osp `tiny-sample-finish` +
+   eca-rsi `tiny-sample-empty` 两个未合分支修的东西,合并后它会被优雅记账而不是让单元挂掉。
+
+18. **serve / index 与计算身份耦合(用户 2026-09-09 定的方向:解耦)**。`runtime_identity()` 和 `downstream.runtime()`
+   都哈希**整个 `ecarsi/` 包目录**的 `.py/.md/.json`,所以改 `serve.py`(1,087 行,只 import `index` 和 `layout`)
+   会让所有正在 verify 的阶段报 `downstream runtime changed during computation`——tome E9.5 round 3 因此重算过,
+   今晚想改 serve 也只能作罢。**RSI 怎么跑,跟下游浏览器怎么展示,不该有关系。**
+   建议的切法(排空后、合 `serve-state-cache` 时一起做):`serve.py` / `index.py` / `umapdata.py` 搬到同级的
+   展示包(`ecarsi_pages/` 或独立仓库),`layout.py` 留在计算包(它定义目录契约,属于运行身份);
+   计算步骤对 `index.write_all` 的调用改成可选 hook。**哈希规则本身不改**——保持"整个包目录"这条简单规则,
+   不在哈希里加白名单(白名单会重新长出"规格与实现的接缝")。附带好处:ngrok / gzip / 线程这些 serve 依赖
+   离开计算包,批量作业的容器镜像不再需要它们。
+
+19. **Ark 长时间超时窗口(2026-09-09 约 05:00–09:30):bridge 的瞬时重试用尽后放弃**。三个单元同一早晨死于同一句
+   `RuntimeError: [...] transient agent failure persisted after 5 attempts: Request timed out.`
+   (`harness_bridge/harness.py` `retry_transient`,退避 40/60/80 s):
+   - Blood round 4 MSP annotate(06:08,attempt 2–5 从 05:16 到 05:56 全部超时);
+   - Bladder round 4 zoomin `Urothelial cell`(06:58,该 lineage 耗 139.8 min 后死);
+   - Spleen round 4 zoomin `Monocyte/macrophage` / `Neutrophil` / `B cell` **三个 lineage 同时**(08:18–08:40,各耗 135–157 min)。
+   和第 12、13 条不同:这次重试机制**是**触发了的,只是 Ark 连续几小时响应不了,5 次退避总共不到 4 分钟,
+   完全罩不住一个几小时的服务窗口。两点:(a) 5 次 × 几十秒的退避是按"网关抖一下"设计的,对"提供方停摆几小时"没有意义,
+   要么退避拉长到分钟级并设总时长上限,要么直接把整轮判为可续跑的暂停而不是失败;(b) 每次 attempt 都要等 SDK 600 s 超时,
+   Bladder 一个 lineage 白等了 2.3 小时才报错(backlog 里"缩短 openai client timeout"那条就是为这个)。
+   加上第 13 条的"一个 lineage 死了其它 lineage 白等到轮末",Spleen 这一轮总共烧掉约 8 lineage·小时的计算。
+   处理:三个单元原样重 sbatch(42633198 / 42633202 / 42633203),已完成的 lineage 跳过。
+   **这三个失败在磁盘上躺了 2–5 小时才被发现**——03:08 到 11:36 之间没有巡检。
+
+20. **第三种网关/模型畸形输出:`agents.exceptions.ModelBehaviorError: Tool , not found`(2026-09-09 16:04,
+   tabula-sapiens-clean Blood round 6 zoomin `Monocyte`)**。模型吐了一个工具名为空串的 tool call,OpenAI Agents SDK 在
+   分发前就抛 ModelBehaviorError;bridge 的 `TRANSIENT_PATTERN` 不含它,lineage 13.3 min 后判死,其它 7 个 lineage 照常跑完,
+   整轮 16:28 失败。与第 13 条(`input.arguments` 缺失)同源——都是 doubao 在长上下文免疫谱系里吐出残缺的 tool call——
+   只是残缺的字段从 arguments 换成了 name。处理:原样重投(42661889)。待办并入第 12/13 条:bridge 应把
+   `ModelBehaviorError` 也当作可重试的瞬时故障(丢弃这一轮模型输出、重新请求),而不是让 lineage 死。

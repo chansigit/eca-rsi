@@ -102,8 +102,8 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
   同一岛拆成多个 lineage 打回一次,agent 可带 `confirm_shared_islands: true` 重交,记入 plan 的 `host_warnings` 与 needs_review。
 - 历史测试与服务记录（使用前核对当前目录和进程）：`$SCRATCH/eca-runs/_organize_test/fu2022/fu2022-meniscus` 是旧结构的真实跑(不迁移);
   `$SCRATCH/eca-runs/_layout_test/fu2022` 是它的 symlink 复刻(新结构,验证 index/serve 用),
-  `_layout_test/running` 是"round 3 跑到一半"的假象。直播:`eca-rsi serve scan-add <root>` 再 `eca-rsi serve --domain csj.ngrok.pizza`(一个前台进程、一条隧道,`/<name>/` 路径路由;registry 文件是唯一真相,改文件 server 自动重读,进程随时可杀可重起),
-  用户自己的 ngrok 隧道 8899 → csj.ngrok.pizza(勿动;ngrok 账号并发 endpoint 有上限,`--ngrok` 会直接报它的错)。
+  `_layout_test/running` 是"round 3 跑到一半"的假象。直播:`eca-rsi serve scan-add <root>` 再 `eca-rsi serve --domain csj.ngrok.io`(一个前台进程、一条隧道,`/<name>/` 路径路由;registry 文件是唯一真相,改文件 server 自动重读,进程随时可杀可重起),
+  用户自己的 ngrok 隧道 8899 → csj.ngrok.io(2026-09-09 起走 csj.ngrok.io,pizza 已改作用户的终端隧道;勿动;ngrok 账号并发 endpoint 有上限,`--ngrok` 会直接报它的错)。
 - serve 的 fleet 页(`/`、`/_home`)从 `StateCache` 后台线程(每 60 s 预算全部数据集 `dataset_state`)读内存,数据集页 / unit 页仍现算;
   渲染页按 Accept-Encoding gzip。根因是 Oak 冷元数据 8 ms/次 × 每页 15k 次(2026-09-07,分支 `serve-state-cache`;合并前从 worktree 起:
   `PYTHONPATH=$SCRATCH/worktrees/eca-rsi-serve-cache python -m ecarsi serve ...`)。
