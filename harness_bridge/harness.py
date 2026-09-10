@@ -92,7 +92,15 @@ TRANSIENT_PATTERN = re.compile(
     # right after a multi-image tool-result upload, and HTTP 500
     # InternalServiceError. Both are rare, the identical payload succeeds on
     # replay, and the SDK will not replay a previous_response_id request itself.
-    r"error when parsing request|internalservererror|internalserviceerror",
+    r"error when parsing request|internalservererror|internalserviceerror|"
+    # Responses-API state loss: with SERVER_STATE=1 the SDK chains turns by
+    # previous_response_id, and Ark has been seen to forget a stored response
+    # under load (observed 2026-09-07 right after two 429 ServerOverloaded in
+    # the same call). The id can never come back, so retrying the request is
+    # useless -- but a retry here restarts the whole run with a fresh chain,
+    # which is exactly the recovery. Without this the stage dies and the
+    # driver recomputes it from the top.
+    r"previousresponsenotfound",
     re.IGNORECASE,
 )
 # ("returned an error result" used to be here for the old bundled CLI's
