@@ -425,7 +425,7 @@ main.shell{flex:1;display:flex;flex-direction:column;min-width:0;background:var(
 .mbar #crumb{flex:1;font:var(--t2) var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 iframe{flex:1;border:0;width:100%;background:var(--bg)}
 #empty{padding:var(--s4);max-width:70ch}
-.btn{font:inherit;font-size:var(--t3);font-weight:600;padding:6px 14px;border-radius:var(--r);border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
+.btn{font:inherit;font-size:var(--t3);font-weight:600;padding:6px 14px;border-radius:var(--r);border:1px solid var(--accent);background:var(--accent);color:var(--card);cursor:pointer}
 .btn:disabled{opacity:.45;cursor:default}.btn.danger{background:var(--bad);border-color:var(--bad)}
 .btn.plain{background:var(--card);color:var(--ink);border-color:var(--line-strong)}
 .icon{background:none;border:0;cursor:pointer;color:var(--muted);font-size:var(--t5);padding:2px 8px;border-radius:6px;line-height:1}.icon:hover{background:var(--none-bg)}
@@ -433,7 +433,7 @@ a.icon{text-decoration:none}
 #sb-show{display:none}body.sb-hidden aside.sb{display:none}body.sb-hidden #sb-show{display:inline-block}
 #bind-form{margin:0}#bind-form input{width:100%;font:var(--t3) var(--mono);padding:6px 10px;border:1px solid var(--line-strong);border-radius:6px;margin:4px 0}
 #bind-form p{margin:var(--s1) 0;color:var(--muted)}
-@media (max-width:760px){aside.sb{position:fixed;inset:0 auto 0 0;z-index:5;box-shadow:0 0 0 100vw rgba(0,0,0,.25)}}
+@media (max-width:760px){aside.sb{position:fixed;inset:0 auto 0 0;z-index:5;box-shadow:0 0 0 100vw rgba(0,0,0,.35)}}
 """
 
 
@@ -443,9 +443,9 @@ def group_tally(counts: dict[str, int]) -> str:
     done = counts.get("released", 0)
     working = counts.get("running", 0) + counts.get("neutral", 0)
     failed = counts.get("failed", 0)
-    parts = [f"{done} done"] if done else []
+    parts = [f'<span class="st released">{done} done</span>'] if done else []
     if working:
-        parts.append(f"{working} working")
+        parts.append(f'<span class="st running">{working} working</span>')
     if failed:
         parts.append(f'<span class="st failed">{failed} failed</span>')
     return " · ".join(parts)

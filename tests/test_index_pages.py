@@ -151,7 +151,7 @@ def test_home_overview_has_stats_table_and_filter(tmp_path):
 def test_navigator_groups_by_collection_with_status_dots(tmp_path):
     root, _ = make_run(tmp_path)
     html = _navigator_html({"coll-Organ": root, "Loose": tmp_path / "nowhere"}, tmp_path / "registry.json")
-    assert '<details class="group"><summary>coll<span class="gn">1 done</span></summary>' in html
+    assert '<details class="group"><summary>coll<span class="gn"><span class="st released">1 done</span></span></summary>' in html
     assert '<details class="group"><summary>other<span class="gn"><span class="st failed">1 failed</span></span></summary>' in html
     assert '<span class="dot released" title="released"></span><span class="nm">Organ</span><span class="cells">800</span>' in html
     assert '<span class="dot failed" title="missing on disk"></span><span class="nm">Loose</span>' in html
