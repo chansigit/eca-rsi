@@ -1,4 +1,7 @@
-"""ecarsi.serve — a stateless navigator server for eca-rsi run reports.
+"""ecarsi.serve — Periscope, a stateless navigator server for eca-rsi run reports.
+
+Periscope is the name of the web UI (page titles, the sidebar brand, the
+startup line); the CLI verb stays `serve`.
 
     ecarsi serve [dir...] [--registry FILE] [--port 8899] [--bind 127.0.0.1]
                  [--ngrok [--domain csj.example.app]] [--auth user:pass]
@@ -48,6 +51,7 @@ from __future__ import annotations
 import argparse
 import base64
 import glob as _glob
+import gzip
 import hmac
 import html as _h
 import http.server
@@ -59,6 +63,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from functools import partial
 from pathlib import Path
 
@@ -189,12 +194,31 @@ class Registry:
 
 # ---------------------------------------------------------------- navigator
 
+APP = "Periscope"
+# The mark: a periscope raised above the waterline — you are outside the cluster looking in.
+# Stroke-only and currentColor, so it takes the colour of wherever it is placed and scales with
+# the font (see LOGO_CSS). Single-quoted attributes and no '#' so the same string can go straight
+# into a data: URI for the favicon without an encoder.
+LOGO_SVG = (
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' aria-hidden='true' fill='none' "
+    "stroke='currentColor' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'>"
+    "<path d='M8 18.5V9.5A4.5 4.5 0 0 1 12.5 5h3.8'/><circle cx='18.5' cy='5' r='2.1'/>"
+    "<path d='M2.5 21.5c1.3-1.4 2.6-1.4 3.9 0s2.6 1.4 3.9 0 2.6-1.4 3.9 0 2.6 1.4 3.9 0 2.6-1.4 3.9 0'/></svg>"
+)
+FAVICON = '<link rel="icon" href="data:image/svg+xml,' + LOGO_SVG.replace("currentColor", "rgb(36,86,196)") + '">'
+LOGO_CSS = ".logo{display:inline-flex;vertical-align:-.12em;color:var(--accent)}.logo svg{width:1em;height:1em}h1 .logo{margin-right:.3em}"
+
+
+def logo() -> str:
+    return f'<span class="logo">{LOGO_SVG}</span>'
+
+
 NAV_JS = r"""
 (function(){
   const $ = id => document.getElementById(id);
   const items = [...document.querySelectorAll("#sb-list .item")], frame = $("frame"), crumb = $("crumb"), open = $("open"),
         q = $("nav-q"), n = $("nav-n"), msg = $("nav-msg"), empty = $("empty"), home = $("home-item"),
-        sort = $("nav-sort"), groups = [...document.querySelectorAll("#sb-list details.group")];
+        sort = $("nav-sort"), sp = $("nav-sp"), st = $("nav-st"), groups = [...document.querySelectorAll("#sb-list details.group")];
   const names = new Set(items.map(i => i.dataset.name));
   // -- sidebar <-> main pane --
   function mark(name){ items.forEach(i => i.classList.toggle("active", i.dataset.name === name));
@@ -211,26 +235,29 @@ NAV_JS = r"""
     if (p === "/_home") {
       if (location.hash !== "#/__home__") history.replaceState(null, "", "#/__home__");
       mark("__home__"); crumb.textContent = "overview"; open.href = "/_home";
-      try { document.title = frame.contentDocument.title || "ECA-RSI runs"; } catch (e) {}
+      try { document.title = frame.contentDocument.title || "Periscope"; } catch (e) {}
       return;
     }
     const m = p.match(/^\/([^/]+)\//); if (!m) return;
     if (location.hash !== "#" + p) history.replaceState(null, "", "#" + p);
     mark(m[1]); crumb.textContent = decodeURIComponent(p); open.href = p;
-    try { document.title = frame.contentDocument.title || "ECA-RSI runs"; } catch (e) {}
+    try { document.title = frame.contentDocument.title || "Periscope"; } catch (e) {}
   });
   window.addEventListener("hashchange", () => { const p = fromHash(); if (p) show(p); });
   items.forEach(i => i.addEventListener("click", ev => { if (ev.target.closest("input.sel")) return; ev.preventDefault(); show("/" + i.dataset.name + "/"); }));
   if (home) home.addEventListener("click", ev => { ev.preventDefault(); show("/_home"); });
+  const brand = $("brand"); if (brand) brand.addEventListener("click", ev => { ev.preventDefault(); show("/_home"); });
   $("sb-toggle").addEventListener("click", () => document.body.classList.toggle("sb-hidden"));
   $("sb-show").addEventListener("click", () => document.body.classList.remove("sb-hidden"));
   $("reload").addEventListener("click", () => { try { frame.contentWindow.location.reload(); } catch (e) { frame.src = frame.src; } });
-  // -- search (a group folds away when none of its datasets match; it opens while a query is typed) --
-  function apply(){ const t = q.value.trim().toLowerCase(); let k = 0;
-    for (const i of items) { const hit = !t || i.dataset.text.includes(t); i.style.display = hit ? "" : "none"; k += hit; }
-    for (const g of groups) { const any = [...g.querySelectorAll(".item")].some(i => i.style.display !== "none"); g.style.display = any ? "" : "none"; if (t && any) g.open = true; }
-    n.textContent = t ? `${k} / ${items.length}` : `${items.length}`; }
-  q.addEventListener("input", apply); apply();
+  // -- search + species filter (groups start collapsed; a group folds away when none of its
+  //    datasets match and opens while a filter is active) --
+  function apply(){ const t = q.value.trim().toLowerCase(), s = sp ? sp.value : "", w = st ? st.value : ""; let k = 0;
+    const okw = c => !w || (w === "working" ? (c === "running" || c === "neutral") : c === w);
+    for (const i of items) { const hit = (!t || i.dataset.text.includes(t)) && (!s || i.dataset.species === s) && okw(i.dataset.cls); i.style.display = hit ? "" : "none"; k += hit; }
+    for (const g of groups) { const any = [...g.querySelectorAll(".item")].some(i => i.style.display !== "none"); g.style.display = any ? "" : "none"; if ((t || s || w) && any) g.open = true; }
+    n.textContent = (t || s || w) ? `${k} / ${items.length}` : `${items.length}`; }
+  q.addEventListener("input", apply); if (sp) sp.addEventListener("change", apply); if (st) st.addEventListener("change", apply); apply();
   // -- sort (name / cells / status), within each collection --
   const STATUS_RANK = {released: 0, running: 1, neutral: 2, failed: 3};
   function applySort(){
@@ -312,13 +339,60 @@ NAV_JS = r"""
 def _dataset_state(root: Path) -> dict:
     """Per-dataset summary read from disk (ecarsi.index), for the navigator / list."""
     blank = {"units": 0, "released": 0, "n_input": None, "final_cells": None, "rounds": 0, "species": "",
-             "finished": None, "updated": None}
+             "finished": None, "updated": None, "events": {"organize": [], "release": []}}
     if not root.is_dir():
         return {**blank, "stage": "missing on disk", "cls": "failed"}
     try:
         return index.dataset_state(root)
     except Exception as e:  # a broken run dir must not take the navigator down
         return {**blank, "stage": f"unreadable: {e}", "cls": "failed"}
+
+
+class StateCache:
+    """dataset_state() of every registered root, refreshed by a background
+    thread. The fleet pages (`/`, `/_home`) need all of them: ~90 stat/open
+    per dataset, and a cold Lustre metadata op costs ~8 ms on Oak (measured
+    2026-09-07: 167 datasets = 15k ops = 0.4 s warm, minutes cold — and the
+    mirror writes of running jobs keep invalidating the client cache). So the
+    warmer pays that cost off the request path every `ttl` seconds and the
+    pages read the last result; dataset / unit pages are still rendered live."""
+
+    def __init__(self, registry: Registry, ttl: float = 60.0):
+        self._registry, self._ttl = registry, ttl
+        self._states: dict[Path, tuple[float, dict]] = {}
+        self._lock = threading.Lock()
+
+    def get(self, root: Path) -> dict:
+        with self._lock:
+            hit = self._states.get(root)
+        if hit and time.time() - hit[0] < 3 * self._ttl:  # warmer alive → never older than ttl; 3x = it died, recompute
+            return hit[1]
+        return self._put(root)
+
+    def _put(self, root: Path) -> dict:
+        st = _dataset_state(root)
+        with self._lock:
+            self._states[root] = (time.time(), st)
+        return st
+
+    def refresh(self) -> None:
+        roots = set(self._registry.snapshot().values())
+        for root in roots:
+            self._put(root)
+        with self._lock:
+            for gone in set(self._states) - roots:
+                del self._states[gone]
+
+    def start(self) -> None:
+        def loop():
+            while True:
+                try:
+                    self.refresh()
+                except Exception as e:  # keep warming; a request falls back to a live read after 3*ttl
+                    sys.stderr.write(f"[serve] state warmer: {e}\n")
+                time.sleep(self._ttl)
+
+        threading.Thread(target=loop, daemon=True, name="state-warmer").start()
 
 
 NAV_CSS = """
@@ -329,8 +403,11 @@ aside.sb{width:360px;flex:0 0 360px;background:var(--card);border-right:1px soli
 .sb-head{padding:var(--s2) var(--s2) var(--s1);display:flex;flex-direction:column;gap:var(--s1);border-bottom:1px solid var(--line)}
 .sb-head .brand{display:flex;align-items:center;justify-content:space-between;gap:var(--s1)}
 .sb-head .brand b{font-size:var(--t5)}.sb-head .brand small{color:var(--muted);font-size:var(--t3);font-weight:400;margin-left:.4em}
+.sb-head .brand .logo{font-size:var(--t6);margin-right:.35em}
+.sb-head .brand a{color:inherit;text-decoration:none;display:inline-flex;align-items:center}.sb-head .brand a:hover b{color:var(--accent)}
 .sb-head input[type=search]{width:100%;font:inherit;font-size:var(--t3);padding:8px 12px;border:1px solid var(--line-strong);border-radius:var(--r);background:var(--card)}
-.sb-head .sort-row{display:flex;align-items:center;gap:var(--s1);font-size:var(--t3);color:var(--muted)}
+.sb-head .sort-row{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s1) var(--s2);font-size:var(--t3);color:var(--muted)}
+.sb-head .sort-row .ctl{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
 .sb-head select{font:inherit;font-size:var(--t3);padding:4px 8px;border:1px solid var(--line-strong);border-radius:6px;background:var(--card);color:var(--ink)}
 .sb-list{flex:1;overflow-y:auto;padding:var(--s1)}
 details.group{margin-bottom:4px}details.group>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:var(--s1);padding:8px 10px;border-radius:var(--r);font-size:var(--t3);font-weight:650;color:var(--muted)}
@@ -353,7 +430,7 @@ main.shell{flex:1;display:flex;flex-direction:column;min-width:0;background:var(
 .mbar #crumb{flex:1;font:var(--t2) var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 iframe{flex:1;border:0;width:100%;background:var(--bg)}
 #empty{padding:var(--s4);max-width:70ch}
-.btn{font:inherit;font-size:var(--t3);font-weight:600;padding:6px 14px;border-radius:var(--r);border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
+.btn{font:inherit;font-size:var(--t3);font-weight:600;padding:6px 14px;border-radius:var(--r);border:1px solid var(--accent);background:var(--accent);color:var(--card);cursor:pointer}
 .btn:disabled{opacity:.45;cursor:default}.btn.danger{background:var(--bad);border-color:var(--bad)}
 .btn.plain{background:var(--card);color:var(--ink);border-color:var(--line-strong)}
 .icon{background:none;border:0;cursor:pointer;color:var(--muted);font-size:var(--t5);padding:2px 8px;border-radius:6px;line-height:1}.icon:hover{background:var(--none-bg)}
@@ -361,34 +438,57 @@ a.icon{text-decoration:none}
 #sb-show{display:none}body.sb-hidden aside.sb{display:none}body.sb-hidden #sb-show{display:inline-block}
 #bind-form{margin:0}#bind-form input{width:100%;font:var(--t3) var(--mono);padding:6px 10px;border:1px solid var(--line-strong);border-radius:6px;margin:4px 0}
 #bind-form p{margin:var(--s1) 0;color:var(--muted)}
-@media (max-width:760px){aside.sb{position:fixed;inset:0 auto 0 0;z-index:5;box-shadow:0 0 0 100vw rgba(0,0,0,.25)}}
+@media (max-width:760px){aside.sb{position:fixed;inset:0 auto 0 0;z-index:5;box-shadow:0 0 0 100vw rgba(0,0,0,.35)}}
 """
 
 
-def _navigator_html(items: dict[str, Path], registry_path: Path) -> str:
+def group_tally(counts: dict[str, int]) -> str:
+    """'12 done · 3 working · 1 failed' for a collection; zero parts are left out.
+    `neutral` (bound but not started) counts as working: it is not done and not broken."""
+    done = counts.get("released", 0)
+    working = counts.get("running", 0) + counts.get("neutral", 0)
+    failed = counts.get("failed", 0)
+    parts = [f'<span class="st released">{done} done</span>'] if done else []
+    if working:
+        parts.append(f'<span class="st running">{working} working</span>')
+    if failed:
+        parts.append(f'<span class="st failed">{failed} failed</span>')
+    return " · ".join(parts)
+
+
+def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_state) -> str:
     """Shell: datasets grouped by collection down the left, the selected
     dataset's own pages (root landing page -> its units -> ...) in an iframe on
     the right. The iframe keeps the address in the hash (#/<name>/...), so
     reload / back / bookmarks land on the same page; `/` opens the overview."""
     e = _h.escape
     groups: dict[str, list[str]] = {}
+    tally: dict[str, dict[str, int]] = {}
+    species: dict[str, int] = {}
     for name, p in sorted(items.items()):
-        st = _dataset_state(p)
+        st = state(p)
         coll = index.collection_of(p) or "other"
         short = name[len(coll) + 1:] if name.startswith(coll + "-") else name
         cells = index._n(st["final_cells"])
+        sp = st.get("species") or ""
+        species[sp] = species.get(sp, 0) + 1
+        t = tally.setdefault(coll, {})
+        t[st["cls"]] = t.get(st["cls"], 0) + 1
         groups.setdefault(coll, []).append(
             f'<a class="item" href="/{e(name)}/" data-name="{e(name)}" title="{e(name)} · {e(st["stage"])} · {e(str(p))}" '
-            f'data-cells="{st["final_cells"] or 0}" data-cls="{e(st["cls"])}" '
-            f'data-text="{e((name + " " + coll + " " + str(p) + " " + st["stage"]).lower())}">'
+            f'data-cells="{st["final_cells"] or 0}" data-cls="{e(st["cls"])}" data-species="{e(sp)}" '
+            f'data-text="{e((name + " " + coll + " " + sp + " " + str(p) + " " + st["stage"]).lower())}">'
             f'<input class="sel" type="checkbox" value="{e(name)}" aria-label="select {e(name)} for unbind">'
             f'<span class="dot {e(st["cls"])}" title="{e(st["stage"])}"></span>'
             f'<span class="nm">{e(short)}</span>'
             + (f'<span class="cells">{cells}</span>' if cells else "") + "</a>"
         )
     rows = "".join(
-        f'<details class="group" open><summary>{e(coll)}<span class="gn">{len(rs)}</span></summary><div class="items">{"".join(rs)}</div></details>'
+        f'<details class="group"><summary>{e(coll)}<span class="gn">{group_tally(tally[coll])}</span></summary><div class="items">{"".join(rs)}</div></details>'
         for coll, rs in sorted(groups.items())
+    )
+    sp_options = "".join(
+        f'<option value="{e(sp)}">{e(sp or "unknown")} ({k})</option>' for sp, k in sorted(species.items(), key=lambda kv: (kv[0] == "", kv[0]))
     )
     hint = (
         "A bindable directory is an eca-rsi <b>organize root</b> (contains <code>organize/manifest.json</code> or a "
@@ -401,12 +501,15 @@ def _navigator_html(items: dict[str, Path], registry_path: Path) -> str:
     sidebar = (
         '<aside class="sb" id="sb" aria-label="datasets"><div class="sb-resizer" id="sb-resizer" title="drag to resize"></div>'
         '<div class="sb-head">'
-        f'<div class="brand"><span><b>ECA-RSI runs</b><small><span id="nav-n">{len(items)}</span> datasets</small></span>'
+        f'<div class="brand"><a id="brand" href="/_home" title="overview">{logo()}<b>{APP}</b><small><span id="nav-n">{len(items)}</span> datasets</small></a>'
         '<button class="icon" id="sb-toggle" title="hide sidebar" aria-label="hide sidebar">&#9776;</button></div>'
         '<input id="nav-q" type="search" placeholder="Filter datasets…" aria-label="filter datasets" autocomplete="off">'
-        '<div class="sort-row"><label for="nav-sort">sort</label><select id="nav-sort">'
+        '<div class="sort-row"><span class="ctl"><label for="nav-sort">sort</label><select id="nav-sort">'
         '<option value="name">name</option><option value="cells">cells</option>'
-        '<option value="status">status</option></select></div>'
+        '<option value="status">status</option></select></span>'
+        f'<span class="ctl"><label for="nav-sp">species</label><select id="nav-sp"><option value="">all</option>{sp_options}</select></span>'
+        '<span class="ctl"><label for="nav-st">status</label><select id="nav-st"><option value="">all</option><option value="working">working</option>'
+        '<option value="failed">failed</option><option value="released">done</option></select></span></div>'
         "</div>"
         '<a class="item home-item" id="home-item" href="/_home" data-name="__home__">'
         '<span class="nm"><b>Overview</b> · all datasets</span></a>'
@@ -433,10 +536,125 @@ def _navigator_html(items: dict[str, Path], registry_path: Path) -> str:
     )
     return (
         '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width,initial-scale=1"><title>ECA-RSI runs</title>'
-        f"<style>{index.CSS}{NAV_CSS}</style></head><body>{sidebar}{main}<script>{NAV_JS}</script></body></html>"
+        f'<meta name="viewport" content="width=device-width,initial-scale=1"><title>{APP} · ECA-RSI</title>{FAVICON}'
+        f"<style>{index.CSS}{NAV_CSS}{LOGO_CSS}</style></head><body>{sidebar}{main}<script>{NAV_JS}</script></body></html>"
     )
 
+
+HOME_CSS = ("td.nw{white-space:nowrap}#ds-table td{padding:8px 10px}#ds-table .pill{white-space:normal;line-height:1.35;max-width:22ch}"
+            ".hist{position:relative;margin-top:var(--s1)}.hist-svg{display:block;width:100%;height:auto}"
+            ".hist-svg .grid{stroke:var(--line);stroke-width:1}.hist-svg .tick{font-size:11px;fill:var(--muted)}"
+            ".hist-svg .ser{fill:none;stroke-width:2.25;stroke-linejoin:round}.hist-svg .ser.in{stroke:var(--muted)}.hist-svg .ser.rel{stroke:var(--ok)}"
+            ".hist-svg .cross{stroke:var(--accent);stroke-width:1;stroke-dasharray:3 3}.hist-svg .zoom{fill:var(--accent);opacity:.15}.hist-svg .hit{cursor:crosshair}"
+            ".hist-legend{display:flex;gap:var(--s3);font-size:var(--t3);color:var(--muted);margin-top:4px}.hist-legend i{display:inline-block;width:18px;height:3px;vertical-align:middle;margin-right:6px}"
+            ".hist-legend i.in{background:var(--muted)}.hist-legend i.rel{background:var(--ok)}"
+            ".hist-range button{font:inherit;font-size:var(--t2);padding:3px 10px;border:1px solid var(--line-strong);background:var(--card);color:var(--ink);border-radius:999px;cursor:pointer}"
+            ".hist-range button.on{background:var(--accent-bg);color:var(--accent-ink);border-color:var(--accent)}")
+
+
+def fleet_history(states: dict) -> dict:
+    """Per-dataset organize / release events (epoch seconds, cells) for the
+    curve; `states` = {name: (dataset_state, path)}. Derived from the logs of
+    what is bound now, so unbinding a dataset removes it from the past too."""
+    out = {}
+    for name, (s, p) in sorted(states.items()):
+        ev = s.get("events") or {}
+        out[name] = {"collection": index.collection_of(p), "species": s["species"],
+                     "organize": [list(e) for e in ev.get("organize", [])], "release": [list(e) for e in ev.get("release", [])]}
+    return {"datasets": out}
+
+
+def history_at(hist: dict, at: float) -> dict:
+    """The curve read at one moment: cells in / released and how many datasets had started / released."""
+    cin = rel = din = drel = 0
+    for d in hist["datasets"].values():
+        o = [n for t, n in d["organize"] if t <= at]
+        r = [n for t, n in d["release"] if t <= at]
+        cin += sum(o); rel += sum(r); din += bool(o); drel += bool(r)
+    return {"at": at, "cells_in": cin, "cells_released": rel, "datasets_started": din, "datasets_released": drel}
+
+
+def _parse_at(text: str) -> float:
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return time.mktime(time.strptime(text, fmt))
+        except ValueError:
+            continue
+    raise ValueError(f"unparseable time {text!r}; use YYYY-MM-DDTHH:MM or epoch seconds")
+
+HISTORY_JS = r"""
+(function(){
+  const D = HISTORY_DATA, box = document.getElementById("hist"), tip = document.getElementById("hist-tip"),
+        nEl = document.getElementById("hist-n"), q = document.getElementById("ds-q"), table = document.getElementById("ds-table");
+  if (!D || !box) return;
+  const fmtN = v => v >= 1e6 ? (v / 1e6).toFixed(v >= 1e7 ? 0 : 1) + "M" : v >= 1e3 ? Math.round(v / 1e3) + "k" : String(v);
+  const fmtT = t => { const d = new Date(t * 1000), p = n => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
+  // -- which datasets count: the ones the table filter leaves visible --
+  function names(){ if (!table) return Object.keys(D.datasets);
+    return [...table.tBodies[0].rows].filter(r => !r.hidden).map(r => decodeURIComponent(r.querySelector("a").getAttribute("href").slice(1, -1))); }
+  function events(){ const ev = [];
+    for (const nm of names()) { const d = D.datasets[nm]; if (!d) continue;
+      for (const [t, n] of d.organize) ev.push({t, n, k: "in", nm});
+      for (const [t, n] of d.release) ev.push({t, n, k: "rel", nm}); }
+    return ev.sort((a, b) => a.t - b.t); }
+  // -- state --
+  let ev = events(), lo = null, hi = null, drag = null;
+  const now = () => Date.now() / 1000;
+  function totals(t){ let cin = 0, rel = 0, din = 0, drel = 0, last = null;
+    for (const e of ev) { if (e.t > t) break; if (e.k === "in") { cin += e.n; din++; } else { rel += e.n; drel++; } last = e; }
+    return {cin, rel, din, drel, last}; }
+  // -- drawing --
+  const W = 960, H = 280, L = 64, R = 16, T = 14, B = 34;
+  function draw(){
+    box.innerHTML = "";
+    if (!ev.length) { box.innerHTML = '<p class="empty">nothing to plot — no bound dataset has an organize line in its log</p>'; if (nEl) nEl.textContent = ""; return; }
+    const t0 = lo ?? ev[0].t, t1 = hi ?? now(), span = Math.max(t1 - t0, 60);
+    const yraw = Math.max(...ev.filter(e => e.k === "in").map((e, i, a) => a.slice(0, i + 1).reduce((s, x) => s + x.n, 0)), 1);
+    const nice = [1, 2, 5, 10, 20, 50, 100, 200, 500].map(m => m * Math.pow(10, Math.floor(Math.log10(yraw)) - 1)).find(s => yraw / s <= 6) || yraw / 4;
+    const ymax = Math.ceil(yraw / nice) * nice;
+    const x = t => L + (Math.min(Math.max(t, t0), t1) - t0) / span * (W - L - R), y = v => T + (1 - v / ymax) * (H - T - B);
+    const step = k => { let v = 0, d = `M${x(t0)} ${y(0)}`; for (const e of ev) { if (e.k !== k) continue; if (e.t > t1) break;
+        const xx = x(e.t); d += ` H${xx.toFixed(1)}`; v += e.n; d += ` V${y(v).toFixed(1)}`; } return d + ` H${x(t1)}`; };
+    const yt = [];
+    for (let v = 0; v <= ymax + nice / 2; v += nice) yt.push(v);
+    const xt = []; const days = span / 86400, stepS = days > 14 ? 7 * 86400 : days > 3 ? 86400 : days > 0.6 ? 6 * 3600 : 3600;
+    for (let t = Math.ceil(t0 / stepS) * stepS; t <= t1; t += stepS) xt.push(t);
+    const xl = t => { const d = new Date(t * 1000); return stepS >= 86400 ? `${d.getMonth() + 1}/${d.getDate()}` : `${String(d.getHours()).padStart(2, "0")}:00`; };
+    box.innerHTML = `<svg class="hist-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="cells in and released over time">
+      ${yt.map(v => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text class="tick" x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${fmtN(v)}</text>`).join("")}
+      ${xt.map(t => `<text class="tick" x="${x(t)}" y="${H - B + 18}" text-anchor="middle">${xl(t)}</text>`).join("")}
+      <path class="ser in" d="${step("in")}"/><path class="ser rel" d="${step("rel")}"/>
+      <line class="cross" id="hist-cross" x1="0" x2="0" y1="${T}" y2="${H - B}" style="display:none"/>
+      <rect class="zoom" id="hist-zoom" y="${T}" height="${H - T - B}" style="display:none"/>
+      <rect class="hit" x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent"/></svg>
+      <div class="hist-legend"><span><i class="in"></i>cells in</span><span><i class="rel"></i>cells released</span>${lo || hi ? '<span class="muted">zoomed · double-click to reset</span>' : ""}</div>`;
+    if (nEl) { const k = totals(t1); nEl.textContent = `${names().length} datasets · ${k.din} started · ${k.drel} released`; }
+    const svg = box.querySelector("svg"), hit = svg.querySelector(".hit"), cross = svg.querySelector("#hist-cross"), zoom = svg.querySelector("#hist-zoom");
+    const tAt = ev_ => { const r = svg.getBoundingClientRect(); const px = (ev_.clientX - r.left) / r.width * W; return t0 + (px - L) / (W - L - R) * span; };
+    hit.addEventListener("mousemove", e => {
+      const t = Math.min(Math.max(tAt(e), t0), t1), k = totals(t); cross.setAttribute("x1", x(t)); cross.setAttribute("x2", x(t)); cross.style.display = "";
+      tip.style.display = "block"; tip.innerHTML = `<b>${fmtT(t)}</b><br>cells in <b>${k.cin.toLocaleString()}</b> · released <b>${k.rel.toLocaleString()}</b>` +
+        (k.cin ? ` · kept ${(100 * k.rel / k.cin).toFixed(0)}%` : "") + `<br><span class="m">${k.din} started · ${k.drel} released</span>` +
+        (k.last ? `<br><span class="m">last: ${k.last.nm} ${k.last.k === "in" ? "started" : "released"} +${k.last.n.toLocaleString()} at ${fmtT(k.last.t).slice(5)}</span>` : "");
+      const bx = box.getBoundingClientRect(); tip.style.left = Math.min(e.clientX - bx.left + 14, bx.width - 300) + "px"; tip.style.top = (e.clientY - bx.top + 14) + "px";
+      if (drag !== null) { const a = Math.min(x(drag), x(t)), b = Math.max(x(drag), x(t)); zoom.setAttribute("x", a); zoom.setAttribute("width", b - a); zoom.style.display = ""; } });
+    hit.addEventListener("mouseleave", () => { tip.style.display = "none"; cross.style.display = "none"; });
+    hit.addEventListener("mousedown", e => { drag = tAt(e); e.preventDefault(); });
+    hit.addEventListener("mouseup", e => { if (drag === null) return; const t = tAt(e); if (Math.abs(t - drag) > span / 100) { lo = Math.min(drag, t); hi = Math.max(drag, t); draw(); } drag = null; });
+    svg.addEventListener("dblclick", () => { lo = hi = null; setRange(0); draw(); });
+  }
+  const buttons = [...document.querySelectorAll(".hist-range button")];
+  function setRange(days){ buttons.forEach(b => b.classList.toggle("on", Number(b.dataset.r) === days)); }
+  buttons.forEach(b => b.addEventListener("click", () => { const d = Number(b.dataset.r); lo = d ? now() - d * 86400 : null; hi = null; setRange(d); draw(); }));
+  if (q) q.addEventListener("input", () => { ev = events(); draw(); });
+  draw();
+})();
+"""
 
 HOME_JS = r"""
 (function(){
@@ -457,61 +675,76 @@ HOME_JS = r"""
       rows.sort((a, b) => { const x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : 0) * (asc ? 1 : -1); });
       for (const r of rows) body.appendChild(r);
       ths.forEach((h, j) => h.setAttribute("aria-sort", j === i ? (asc ? "ascending" : "descending") : "none")); }); });
+  // default order: most recently changed first (a numeric column's first click sorts descending)
+  const lu = ths.findIndex(h => /last updated/i.test(h.textContent));
+  if (lu >= 0) ths[lu].querySelector("button").click();
 })();
 """
 
 
-def _home_html(items: dict[str, Path]) -> str:
+def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
     """Overview: what this site is, fleet numbers, and a filterable, sortable
     table of every dataset. This is the page `/` opens."""
     import time
 
     e = _h.escape
-    states = {name: (_dataset_state(p), p) for name, p in items.items()}
+    states = {name: (state(p), p) for name, p in items.items()}
     by = lambda c: sum(1 for s, _ in states.values() if s["cls"] == c)  # noqa: E731
     cells_in = sum(s["n_input"] or 0 for s, _ in states.values())
     cells_out = sum(s["final_cells"] or 0 for s, _ in states.values() if s["cls"] == "released")
     stats = [(str(len(items)), "datasets", ""), (str(by("released")), "released", "released"),
              (str(by("running")), "running", "running"), (str(by("failed")), "failed", "failed"),
-             (index._n(cells_in) or "0", "cells in", ""), (index._n(cells_out) or "0", "cells released", "")]
+             (index._n(cells_in) or "0", "cells in", ""), (index._n(cells_out) or "0", "cells released", ""),
+             (f"{100 * cells_out / cells_in:.0f}%" if cells_in else "", "cells kept", "")]
     stat_html = "".join(f'<div class="stat"><span class="v{" st " + c if c and int(v) else ""}">{e(v)}</span><span class="k">{e(k)}</span></div>'
                         for v, k, c in stats)
     rank = {"released": 0, "running": 1, "neutral": 2, "failed": 3}
     rows = []
     for name, (s, p) in sorted(states.items()):
         coll = index.collection_of(p)
+        short = name[len(coll) + 1:] if coll and name.startswith(coll + "-") else name  # the collection has its own column
+        kept = 100 * s["final_cells"] / s["n_input"] if s["n_input"] and s["final_cells"] is not None else None
         rows.append(
             f'<tr data-text="{e((name + " " + coll + " " + s["species"] + " " + s["stage"]).lower())}">'
-            f'<td><a href="/{e(name)}/"><b>{e(name)}</b></a></td><td>{e(coll)}</td><td>{e(s["species"])}</td>'
+            f'<td><a href="/{e(name)}/" title="{e(name)}"><b>{e(short)}</b></a></td><td class="nw">{e(coll)}</td><td>{e(s["species"])}</td>'
             f'<td class="num" data-v="{s["n_input"] or 0}">{index._n(s["n_input"])}</td>'
             f'<td class="num" data-v="{s["final_cells"] or 0}">{index._n(s["final_cells"])}</td>'
+            f'<td class="num" data-v="{kept if kept is not None else -1}">{f"{kept:.0f}%" if kept is not None else ""}</td>'
             f'<td class="num" data-v="{s["rounds"]}">{s["rounds"] or ""}</td>'
             f'<td data-v="{rank.get(s["cls"], 9)}"><span class="pill {e(s["cls"])}">{e(s["stage"])}</span></td>'
-            f'<td class="num" data-v="{s["updated"] or 0}">{index._when(s["updated"])}</td></tr>')
+            f'<td class="num nw" data-v="{s["updated"] or 0}">{index._when(s["updated"])}</td></tr>')
     def th(t, num=False):
         attrs = ' class="r" data-num' if num else ""
         return f'<th{attrs} aria-sort="none"><button type="button">{t}</button></th>'
     table = ('<div class="wrap"><table id="ds-table"><thead><tr>' + th("dataset") + th("collection") + th("species")
-             + th("cells in", True) + th("cells out", True) + th("rounds", True) + th("status", True) + th("last updated", True)
+             + th("cells in", True) + th("cells out", True) + th("kept", True) + th("rounds", True) + th("status", True) + th("last updated", True)
              + f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div>' if rows
              else '<p class="empty">No dataset is bound yet. Use <b>+ Bind…</b> in the sidebar or <code>eca-rsi serve scan-add</code> on the server host.</p>')
     return (
         '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width,initial-scale=1"><title>ECA-RSI runs — overview</title>'
-        f'<style>{index.CSS}</style></head><body><main class="page">'
-        '<header class="hero"><div class="title"><h1>ECA-RSI runs</h1></div>'
+        f'<meta name="viewport" content="width=device-width,initial-scale=1"><title>{APP} — overview</title>{FAVICON}'
+        f'<style>{index.CSS}{LOGO_CSS}{HOME_CSS}</style></head><body><main class="page">'
+        f'<header class="hero"><div class="title"><h1>{logo()}{APP}</h1><span class="sub">ECA-RSI runs</span></div>'
         '<p class="sub" style="max-width:80ch;margin-top:8px">Recursive self-improving annotation of single-cell atlases. Each dataset below was '
         "processed per sample (QC, clustering), integrated across samples and annotated in rounds by agents, with low-quality cells removed "
         "until the loop converged. A dataset page shows the numbers, the rounds, the final UMAP with coarse and fine labels, "
         "the cell-identity Sankey, the review items and where the result files live.</p>"
         '<p class="next">Pick a dataset in the table or the sidebar. Green = released, amber = still running, red = failed.</p></header>'
         f'<div class="glance">{stat_html}</div>'
+        '<section class="block" id="history"><h2>Cells over time <span class="count" id="hist-n"></span></h2>'
+        '<p class="lede">Cells enter the curve when a dataset\'s run starts (its organize step) and are released when it releases. '
+        'Read from the run logs of whatever is bound right now — unbind a dataset and it leaves the past too. '
+        'Hover to read a moment, drag to zoom, double-click to reset; the table filter below narrows the curve as well.</p>'
+        '<div class="toolbar hist-range"><button type="button" data-r="1">24h</button><button type="button" data-r="7">7d</button>'
+        '<button type="button" data-r="30">30d</button><button type="button" data-r="0" class="on">all</button></div>'
+        '<div id="hist" class="hist"></div><div id="hist-tip" class="sk-tip" style="display:none"></div></section>'
         f'<section class="block" id="datasets"><h2>Datasets <span class="count" id="ds-n">{len(rows)} datasets</span></h2>'
-        '<p class="lede">Cells in is the number of cells the run started from; cells out is what the release keeps. Click a column header to sort.</p>'
+        '<p class="lede">Cells in is the number of cells the run started from; cells out is what the release keeps; kept is out / in. Click a column header to sort.</p>'
         '<div class="toolbar"><label for="ds-q">Filter</label><input id="ds-q" type="search" placeholder="name, collection, species, status…" autocomplete="off"></div>'
         f"{table}</section>"
-        f'<footer>rendered {time.strftime("%Y-%m-%d %H:%M:%S")} by ecarsi serve from the registry · reload for the current state</footer>'
-        f"</main><script>{HOME_JS}</script></body></html>"
+        f'<footer>rendered {time.strftime("%Y-%m-%d %H:%M:%S")} by {APP} (ecarsi serve) from the registry · reload for the current state</footer>'
+        f"</main><script>const HISTORY_DATA = {json.dumps(fleet_history(states))};</script>"
+        f"<script>{HOME_JS}</script><script>{HISTORY_JS}</script></body></html>"
     )
 
 
@@ -542,9 +775,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     self.path are recomputed per request, which is safe — translate_path
     reads them fresh on every call, not cached from __init__)."""
 
-    def __init__(self, *a, registry: Registry, auth: str | None = None, **kw):
+    def __init__(self, *a, registry: Registry, auth: str | None = None, states: StateCache | None = None, **kw):
         self._registry = registry
         self._auth = auth  # "user:pass" -> HTTP basic auth enforced here, on every request; None = open
+        self._state = states.get if states else _dataset_state  # fleet pages: cached states when a warmer runs
         super().__init__(
             *a, **kw
         )  # directory defaults to cwd; do_GET always overrides it before use
@@ -584,9 +818,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def _send(self, code: int, body: bytes, ctype: str) -> None:
         self.send_response(code)
         self.send_header("Content-Type", ctype)
+        if len(body) > 1024 and "gzip" in self.headers.get("Accept-Encoding", ""):
+            body = gzip.compress(body, 5)  # rendered pages are 80-450 KB of HTML and compress ~5x; matters through the tunnel
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except BrokenPipeError:
+            pass  # the visitor reloaded or left while we were rendering; not worth a traceback in the log
 
     def _json(self, code: int, obj: dict) -> None:
         self._send(code, json.dumps(obj).encode(), "application/json")
@@ -639,11 +880,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._demand_auth()
         raw = self.path.split("?", 1)[0]
         if raw == "/_home":
-            return self._html(_home_html(self._registry.snapshot()))
+            return self._html(_home_html(self._registry.snapshot(), self._state))
+        if raw == "/_history.json":  # the curve's data; ?at=YYYY-MM-DDTHH:MM (or epoch) reads it at one moment
+            hist = fleet_history({n: (self._state(p), p) for n, p in self._registry.snapshot().items()})
+            at = urllib.parse.parse_qs(self.path.partition("?")[2]).get("at")
+            if not at:
+                return self._json(200, hist)
+            try:
+                return self._json(200, history_at(hist, _parse_at(at[0])))
+            except ValueError as e:
+                return self._json(400, {"error": str(e)})
         parts = [p for p in raw.split("/") if p]
         if not parts:
             return self._html(
-                _navigator_html(self._registry.snapshot(), self._registry.path)
+                _navigator_html(self._registry.snapshot(), self._registry.path, self._state)
             )
         name = parts[0]
         root = self._registry.get(name)
@@ -764,11 +1014,13 @@ def cmd_serve(args: argparse.Namespace) -> int:
         extra[p.name] = p
     registry = Registry(reg_path, extra)
     items = registry.snapshot()
+    states = StateCache(registry)
+    states.start()
     httpd = http.server.ThreadingHTTPServer(
-        (args.bind, args.port), partial(Handler, registry=registry, auth=args.auth)
+        (args.bind, args.port), partial(Handler, registry=registry, auth=args.auth, states=states)
     )
     print(
-        f"[serve] navigator on http://{args.bind}:{args.port}/  ({len(items)} dataset(s); registry {reg_path}"
+        f"[serve] {APP} on http://{args.bind}:{args.port}/  ({len(items)} dataset(s); registry {reg_path}"
         + (f", {len(extra)} from the command line)" if extra else ")")
         + (
             f"  [password-protected, user {args.auth.split(':', 1)[0]!r}]"

@@ -120,6 +120,28 @@ def test_running_unit_shows_cells_now_and_the_running_round(tmp_path):
     assert st["cls"] == "running" and st["final_cells"] == 800 and st["rounds"] == 2 and st["finished"] is None
 
 
+def test_events_and_history_come_from_the_log(tmp_path):
+    import time
+    from ecarsi.serve import fleet_history, history_at
+    root, unit = make_run(tmp_path)
+    st = dataset_state(root)
+    t_org, t_rel = (time.mktime(time.strptime(s, "%Y-%m-%d %H:%M:%S")) for s in ("2026-09-06 10:00:00", "2026-09-06 12:30:00"))
+    assert st["events"] == {"organize": [(t_org, 1000)], "release": [(t_rel, 800)]}
+    hist = fleet_history({"coll-Organ": (st, root), "Gone": (dataset_state(tmp_path / "nowhere"), tmp_path / "nowhere")})
+    assert hist["datasets"]["coll-Organ"]["organize"] == [[t_org, 1000]] and hist["datasets"]["Gone"]["release"] == []
+    assert history_at(hist, t_org - 1) == {"at": t_org - 1, "cells_in": 0, "cells_released": 0, "datasets_started": 0, "datasets_released": 0}
+    assert history_at(hist, t_rel)["cells_released"] == 800 and history_at(hist, t_org)["cells_in"] == 1000
+    html = _home_html({"coll-Organ": root})
+    assert 'id="history"' in html and "const HISTORY_DATA = {" in html and 'data-r="7"' in html
+
+
+def test_running_round_with_only_a_log_line_reads_in_progress(tmp_path):
+    root, unit = make_run(tmp_path, released=False)
+    shutil.rmtree(L.round_dir(unit, 2))  # a mirror copy has the 'round 2 start' log line before any file of round 2
+    st = dataset_state(root)
+    assert st["stage"] == "round 2 · crosssample (since 12:31)" and st["cls"] == "running"
+
+
 def test_review_section_is_grouped_cards(tmp_path):
     root, unit = make_run(tmp_path)
     (L.persample_root(unit) / "needs_review.json").write_text(json.dumps(
@@ -135,15 +157,15 @@ def test_review_section_is_grouped_cards(tmp_path):
 def test_home_overview_has_stats_table_and_filter(tmp_path):
     root, _ = make_run(tmp_path)
     html = _home_html({"coll-Organ": root, "Gone": tmp_path / "nowhere"})
-    assert "<title>ECA-RSI runs — overview</title>" in html and "Recursive self-improving annotation" in html
+    assert "<title>Periscope — overview</title>" in html and "Recursive self-improving annotation" in html
     strip = html[html.index('<div class="glance">'):html.index('<section class="block" id="datasets">')]
-    for v, k in (("2", "datasets"), ("1", "released"), ("0", "running"), ("1", "failed"), ("1,000", "cells in"), ("800", "cells released")):
+    for v, k in (("2", "datasets"), ("1", "released"), ("0", "running"), ("1", "failed"), ("1,000", "cells in"), ("800", "cells released"), ("80%", "cells kept")):
         assert f'>{v}</span><span class="k">{k}</span>' in strip, (v, k)
     assert 'id="ds-table"' in html and 'id="ds-q"' in html and 'type="search"' in html
     row = html[html.index('<tr data-text="coll-organ'):]
     row = row[:row.index("</tr>")]
-    assert 'href="/coll-Organ/"' in row and "<td>coll</td><td>mouse</td>" in row
-    assert 'data-v="1000">1,000</td>' in row and 'data-v="800">800</td>' in row and 'class="pill released"' in row
+    assert 'href="/coll-Organ/" title="coll-Organ"><b>Organ</b>' in row and '<td class="nw">coll</td><td>mouse</td>' in row
+    assert 'data-v="1000">1,000</td>' in row and 'data-v="800">800</td>' in row and 'data-v="80.0">80%</td>' in row and 'class="pill released"' in row
     assert 'aria-sort="none"><button type="button">cells in</button>' in html
     assert "ds-table" in HOME_JS and HOME_JS in html
 
@@ -151,11 +173,11 @@ def test_home_overview_has_stats_table_and_filter(tmp_path):
 def test_navigator_groups_by_collection_with_status_dots(tmp_path):
     root, _ = make_run(tmp_path)
     html = _navigator_html({"coll-Organ": root, "Loose": tmp_path / "nowhere"}, tmp_path / "registry.json")
-    assert '<details class="group" open><summary>coll<span class="gn">1</span></summary>' in html
-    assert '<details class="group" open><summary>other<span class="gn">1</span></summary>' in html
+    assert '<details class="group"><summary>coll<span class="gn"><span class="st released">1 done</span></span></summary>' in html
+    assert '<details class="group"><summary>other<span class="gn"><span class="st failed">1 failed</span></span></summary>' in html
     assert '<span class="dot released" title="released"></span><span class="nm">Organ</span><span class="cells">800</span>' in html
     assert '<span class="dot failed" title="missing on disk"></span><span class="nm">Loose</span>' in html
-    assert 'id="nav-q"' in html and 'id="nav-sort"' in html and 'id="home-item"' in html and 'id="sb-resizer"' in html
+    assert 'id="nav-q"' in html and '<span class="ctl"><label for="nav-sort">' in html and 'id="home-item"' in html and 'id="sb-resizer"' in html
     assert '<span id="nav-n">2</span>' in html
 
 
