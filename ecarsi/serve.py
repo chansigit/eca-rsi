@@ -217,7 +217,7 @@ NAV_JS = r"""
   const $ = id => document.getElementById(id);
   const items = [...document.querySelectorAll("#sb-list .item")], frame = $("frame"), crumb = $("crumb"), open = $("open"),
         q = $("nav-q"), n = $("nav-n"), msg = $("nav-msg"), empty = $("empty"), home = $("home-item"),
-        sort = $("nav-sort"), groups = [...document.querySelectorAll("#sb-list details.group")];
+        sort = $("nav-sort"), sp = $("nav-sp"), groups = [...document.querySelectorAll("#sb-list details.group")];
   const names = new Set(items.map(i => i.dataset.name));
   // -- sidebar <-> main pane --
   function mark(name){ items.forEach(i => i.classList.toggle("active", i.dataset.name === name));
@@ -248,12 +248,13 @@ NAV_JS = r"""
   $("sb-toggle").addEventListener("click", () => document.body.classList.toggle("sb-hidden"));
   $("sb-show").addEventListener("click", () => document.body.classList.remove("sb-hidden"));
   $("reload").addEventListener("click", () => { try { frame.contentWindow.location.reload(); } catch (e) { frame.src = frame.src; } });
-  // -- search (a group folds away when none of its datasets match; it opens while a query is typed) --
-  function apply(){ const t = q.value.trim().toLowerCase(); let k = 0;
-    for (const i of items) { const hit = !t || i.dataset.text.includes(t); i.style.display = hit ? "" : "none"; k += hit; }
-    for (const g of groups) { const any = [...g.querySelectorAll(".item")].some(i => i.style.display !== "none"); g.style.display = any ? "" : "none"; if (t && any) g.open = true; }
-    n.textContent = t ? `${k} / ${items.length}` : `${items.length}`; }
-  q.addEventListener("input", apply); apply();
+  // -- search + species filter (groups start collapsed; a group folds away when none of its
+  //    datasets match and opens while a filter is active) --
+  function apply(){ const t = q.value.trim().toLowerCase(), s = sp ? sp.value : ""; let k = 0;
+    for (const i of items) { const hit = (!t || i.dataset.text.includes(t)) && (!s || i.dataset.species === s); i.style.display = hit ? "" : "none"; k += hit; }
+    for (const g of groups) { const any = [...g.querySelectorAll(".item")].some(i => i.style.display !== "none"); g.style.display = any ? "" : "none"; if ((t || s) && any) g.open = true; }
+    n.textContent = (t || s) ? `${k} / ${items.length}` : `${items.length}`; }
+  q.addEventListener("input", apply); if (sp) sp.addEventListener("change", apply); apply();
   // -- sort (name / cells / status), within each collection --
   const STATUS_RANK = {released: 0, running: 1, neutral: 2, failed: 3};
   function applySort(){
@@ -436,6 +437,20 @@ a.icon{text-decoration:none}
 """
 
 
+def group_tally(counts: dict[str, int]) -> str:
+    """'12 done · 3 working · 1 failed' for a collection; zero parts are left out.
+    `neutral` (bound but not started) counts as working: it is not done and not broken."""
+    done = counts.get("released", 0)
+    working = counts.get("running", 0) + counts.get("neutral", 0)
+    failed = counts.get("failed", 0)
+    parts = [f"{done} done"] if done else []
+    if working:
+        parts.append(f"{working} working")
+    if failed:
+        parts.append(f'<span class="st failed">{failed} failed</span>')
+    return " · ".join(parts)
+
+
 def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_state) -> str:
     """Shell: datasets grouped by collection down the left, the selected
     dataset's own pages (root landing page -> its units -> ...) in an iframe on
@@ -443,23 +458,32 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
     reload / back / bookmarks land on the same page; `/` opens the overview."""
     e = _h.escape
     groups: dict[str, list[str]] = {}
+    tally: dict[str, dict[str, int]] = {}
+    species: dict[str, int] = {}
     for name, p in sorted(items.items()):
         st = state(p)
         coll = index.collection_of(p) or "other"
         short = name[len(coll) + 1:] if name.startswith(coll + "-") else name
         cells = index._n(st["final_cells"])
+        sp = st.get("species") or ""
+        species[sp] = species.get(sp, 0) + 1
+        t = tally.setdefault(coll, {})
+        t[st["cls"]] = t.get(st["cls"], 0) + 1
         groups.setdefault(coll, []).append(
             f'<a class="item" href="/{e(name)}/" data-name="{e(name)}" title="{e(name)} · {e(st["stage"])} · {e(str(p))}" '
-            f'data-cells="{st["final_cells"] or 0}" data-cls="{e(st["cls"])}" '
-            f'data-text="{e((name + " " + coll + " " + str(p) + " " + st["stage"]).lower())}">'
+            f'data-cells="{st["final_cells"] or 0}" data-cls="{e(st["cls"])}" data-species="{e(sp)}" '
+            f'data-text="{e((name + " " + coll + " " + sp + " " + str(p) + " " + st["stage"]).lower())}">'
             f'<input class="sel" type="checkbox" value="{e(name)}" aria-label="select {e(name)} for unbind">'
             f'<span class="dot {e(st["cls"])}" title="{e(st["stage"])}"></span>'
             f'<span class="nm">{e(short)}</span>'
             + (f'<span class="cells">{cells}</span>' if cells else "") + "</a>"
         )
     rows = "".join(
-        f'<details class="group" open><summary>{e(coll)}<span class="gn">{len(rs)}</span></summary><div class="items">{"".join(rs)}</div></details>'
+        f'<details class="group"><summary>{e(coll)}<span class="gn">{group_tally(tally[coll])}</span></summary><div class="items">{"".join(rs)}</div></details>'
         for coll, rs in sorted(groups.items())
+    )
+    sp_options = "".join(
+        f'<option value="{e(sp)}">{e(sp or "unknown")} ({k})</option>' for sp, k in sorted(species.items(), key=lambda kv: (kv[0] == "", kv[0]))
     )
     hint = (
         "A bindable directory is an eca-rsi <b>organize root</b> (contains <code>organize/manifest.json</code> or a "
@@ -477,7 +501,8 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
         '<input id="nav-q" type="search" placeholder="Filter datasets…" aria-label="filter datasets" autocomplete="off">'
         '<div class="sort-row"><label for="nav-sort">sort</label><select id="nav-sort">'
         '<option value="name">name</option><option value="cells">cells</option>'
-        '<option value="status">status</option></select></div>'
+        '<option value="status">status</option></select>'
+        f'<label for="nav-sp">species</label><select id="nav-sp"><option value="">all</option>{sp_options}</select></div>'
         "</div>"
         '<a class="item home-item" id="home-item" href="/_home" data-name="__home__">'
         '<span class="nm"><b>Overview</b> · all datasets</span></a>'
@@ -528,6 +553,9 @@ HOME_JS = r"""
       rows.sort((a, b) => { const x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : 0) * (asc ? 1 : -1); });
       for (const r of rows) body.appendChild(r);
       ths.forEach((h, j) => h.setAttribute("aria-sort", j === i ? (asc ? "ascending" : "descending") : "none")); }); });
+  // default order: most recently changed first (a numeric column's first click sorts descending)
+  const lu = ths.findIndex(h => /last updated/i.test(h.textContent));
+  if (lu >= 0) ths[lu].querySelector("button").click();
 })();
 """
 
