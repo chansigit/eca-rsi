@@ -120,6 +120,21 @@ def test_running_unit_shows_cells_now_and_the_running_round(tmp_path):
     assert st["cls"] == "running" and st["final_cells"] == 800 and st["rounds"] == 2 and st["finished"] is None
 
 
+def test_events_and_history_come_from_the_log(tmp_path):
+    import time
+    from ecarsi.serve import fleet_history, history_at
+    root, unit = make_run(tmp_path)
+    st = dataset_state(root)
+    t_org, t_rel = (time.mktime(time.strptime(s, "%Y-%m-%d %H:%M:%S")) for s in ("2026-09-06 10:00:00", "2026-09-06 12:30:00"))
+    assert st["events"] == {"organize": [(t_org, 1000)], "release": [(t_rel, 800)]}
+    hist = fleet_history({"coll-Organ": (st, root), "Gone": (dataset_state(tmp_path / "nowhere"), tmp_path / "nowhere")})
+    assert hist["datasets"]["coll-Organ"]["organize"] == [[t_org, 1000]] and hist["datasets"]["Gone"]["release"] == []
+    assert history_at(hist, t_org - 1) == {"at": t_org - 1, "cells_in": 0, "cells_released": 0, "datasets_started": 0, "datasets_released": 0}
+    assert history_at(hist, t_rel)["cells_released"] == 800 and history_at(hist, t_org)["cells_in"] == 1000
+    html = _home_html({"coll-Organ": root})
+    assert 'id="history"' in html and "const HISTORY_DATA = {" in html and 'data-r="7"' in html
+
+
 def test_running_round_with_only_a_log_line_reads_in_progress(tmp_path):
     root, unit = make_run(tmp_path, released=False)
     shutil.rmtree(L.round_dir(unit, 2))  # a mirror copy has the 'round 2 start' log line before any file of round 2

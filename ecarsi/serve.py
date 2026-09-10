@@ -63,6 +63,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from functools import partial
 from pathlib import Path
 
@@ -338,7 +339,7 @@ NAV_JS = r"""
 def _dataset_state(root: Path) -> dict:
     """Per-dataset summary read from disk (ecarsi.index), for the navigator / list."""
     blank = {"units": 0, "released": 0, "n_input": None, "final_cells": None, "rounds": 0, "species": "",
-             "finished": None, "updated": None}
+             "finished": None, "updated": None, "events": {"organize": [], "release": []}}
     if not root.is_dir():
         return {**blank, "stage": "missing on disk", "cls": "failed"}
     try:
@@ -539,7 +540,118 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
     )
 
 
-HOME_CSS = "td.nw{white-space:nowrap}"
+HOME_CSS = ("td.nw{white-space:nowrap}"
+            ".hist{position:relative;margin-top:var(--s1)}.hist-svg{display:block;width:100%;height:auto}"
+            ".hist-svg .grid{stroke:var(--line);stroke-width:1}.hist-svg .tick{font-size:11px;fill:var(--muted)}"
+            ".hist-svg .ser{fill:none;stroke-width:2.25;stroke-linejoin:round}.hist-svg .ser.in{stroke:var(--muted)}.hist-svg .ser.rel{stroke:var(--ok)}"
+            ".hist-svg .cross{stroke:var(--accent);stroke-width:1;stroke-dasharray:3 3}.hist-svg .zoom{fill:var(--accent);opacity:.15}.hist-svg .hit{cursor:crosshair}"
+            ".hist-legend{display:flex;gap:var(--s3);font-size:var(--t3);color:var(--muted);margin-top:4px}.hist-legend i{display:inline-block;width:18px;height:3px;vertical-align:middle;margin-right:6px}"
+            ".hist-legend i.in{background:var(--muted)}.hist-legend i.rel{background:var(--ok)}"
+            ".hist-range button{font:inherit;font-size:var(--t2);padding:3px 10px;border:1px solid var(--line-strong);background:var(--card);color:var(--ink);border-radius:999px;cursor:pointer}"
+            ".hist-range button.on{background:var(--accent-bg);color:var(--accent-ink);border-color:var(--accent)}")
+
+
+def fleet_history(states: dict) -> dict:
+    """Per-dataset organize / release events (epoch seconds, cells) for the
+    curve; `states` = {name: (dataset_state, path)}. Derived from the logs of
+    what is bound now, so unbinding a dataset removes it from the past too."""
+    out = {}
+    for name, (s, p) in sorted(states.items()):
+        ev = s.get("events") or {}
+        out[name] = {"collection": index.collection_of(p), "species": s["species"],
+                     "organize": [list(e) for e in ev.get("organize", [])], "release": [list(e) for e in ev.get("release", [])]}
+    return {"datasets": out}
+
+
+def history_at(hist: dict, at: float) -> dict:
+    """The curve read at one moment: cells in / released and how many datasets had started / released."""
+    cin = rel = din = drel = 0
+    for d in hist["datasets"].values():
+        o = [n for t, n in d["organize"] if t <= at]
+        r = [n for t, n in d["release"] if t <= at]
+        cin += sum(o); rel += sum(r); din += bool(o); drel += bool(r)
+    return {"at": at, "cells_in": cin, "cells_released": rel, "datasets_started": din, "datasets_released": drel}
+
+
+def _parse_at(text: str) -> float:
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return time.mktime(time.strptime(text, fmt))
+        except ValueError:
+            continue
+    raise ValueError(f"unparseable time {text!r}; use YYYY-MM-DDTHH:MM or epoch seconds")
+
+HISTORY_JS = r"""
+(function(){
+  const D = HISTORY_DATA, box = document.getElementById("hist"), tip = document.getElementById("hist-tip"),
+        nEl = document.getElementById("hist-n"), q = document.getElementById("ds-q"), table = document.getElementById("ds-table");
+  if (!D || !box) return;
+  const fmtN = v => v >= 1e6 ? (v / 1e6).toFixed(v >= 1e7 ? 0 : 1) + "M" : v >= 1e3 ? Math.round(v / 1e3) + "k" : String(v);
+  const fmtT = t => { const d = new Date(t * 1000), p = n => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
+  // -- which datasets count: the ones the table filter leaves visible --
+  function names(){ if (!table) return Object.keys(D.datasets);
+    return [...table.tBodies[0].rows].filter(r => !r.hidden).map(r => decodeURIComponent(r.querySelector("a").getAttribute("href").slice(1, -1))); }
+  function events(){ const ev = [];
+    for (const nm of names()) { const d = D.datasets[nm]; if (!d) continue;
+      for (const [t, n] of d.organize) ev.push({t, n, k: "in", nm});
+      for (const [t, n] of d.release) ev.push({t, n, k: "rel", nm}); }
+    return ev.sort((a, b) => a.t - b.t); }
+  // -- state --
+  let ev = events(), lo = null, hi = null, drag = null;
+  const now = () => Date.now() / 1000;
+  function totals(t){ let cin = 0, rel = 0, din = 0, drel = 0, last = null;
+    for (const e of ev) { if (e.t > t) break; if (e.k === "in") { cin += e.n; din++; } else { rel += e.n; drel++; } last = e; }
+    return {cin, rel, din, drel, last}; }
+  // -- drawing --
+  const W = 960, H = 280, L = 64, R = 16, T = 14, B = 34;
+  function draw(){
+    box.innerHTML = "";
+    if (!ev.length) { box.innerHTML = '<p class="empty">nothing to plot — no bound dataset has an organize line in its log</p>'; if (nEl) nEl.textContent = ""; return; }
+    const t0 = lo ?? ev[0].t, t1 = hi ?? now(), span = Math.max(t1 - t0, 60);
+    const ymax = Math.max(...ev.filter(e => e.k === "in").map((e, i, a) => a.slice(0, i + 1).reduce((s, x) => s + x.n, 0)), 1);
+    const x = t => L + (Math.min(Math.max(t, t0), t1) - t0) / span * (W - L - R), y = v => T + (1 - v / ymax) * (H - T - B);
+    const step = k => { let v = 0, d = `M${x(t0)} ${y(0)}`; for (const e of ev) { if (e.k !== k) continue; if (e.t > t1) break;
+        const xx = x(e.t); d += ` H${xx.toFixed(1)}`; v += e.n; d += ` V${y(v).toFixed(1)}`; } return d + ` H${x(t1)}`; };
+    const yt = [], nice = [1, 2, 5, 10, 20, 50, 100, 200, 500].map(m => m * Math.pow(10, Math.floor(Math.log10(ymax)) - 1)).find(s => ymax / s <= 6) || ymax / 4;
+    for (let v = 0; v <= ymax; v += nice) yt.push(v);
+    const xt = []; const days = span / 86400, stepS = days > 14 ? 7 * 86400 : days > 3 ? 86400 : days > 0.6 ? 6 * 3600 : 3600;
+    for (let t = Math.ceil(t0 / stepS) * stepS; t <= t1; t += stepS) xt.push(t);
+    const xl = t => { const d = new Date(t * 1000); return stepS >= 86400 ? `${d.getMonth() + 1}/${d.getDate()}` : `${String(d.getHours()).padStart(2, "0")}:00`; };
+    box.innerHTML = `<svg class="hist-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="cells in and released over time">
+      ${yt.map(v => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text class="tick" x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${fmtN(v)}</text>`).join("")}
+      ${xt.map(t => `<text class="tick" x="${x(t)}" y="${H - B + 18}" text-anchor="middle">${xl(t)}</text>`).join("")}
+      <path class="ser in" d="${step("in")}"/><path class="ser rel" d="${step("rel")}"/>
+      <line class="cross" id="hist-cross" x1="0" x2="0" y1="${T}" y2="${H - B}" style="display:none"/>
+      <rect class="zoom" id="hist-zoom" y="${T}" height="${H - T - B}" style="display:none"/>
+      <rect class="hit" x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent"/></svg>
+      <div class="hist-legend"><span><i class="in"></i>cells in</span><span><i class="rel"></i>cells released</span>${lo || hi ? '<span class="muted">zoomed · double-click to reset</span>' : ""}</div>`;
+    if (nEl) { const k = totals(t1); nEl.textContent = `${names().length} datasets · ${k.din} started · ${k.drel} released`; }
+    const svg = box.querySelector("svg"), hit = svg.querySelector(".hit"), cross = svg.querySelector("#hist-cross"), zoom = svg.querySelector("#hist-zoom");
+    const tAt = ev_ => { const r = svg.getBoundingClientRect(); const px = (ev_.clientX - r.left) / r.width * W; return t0 + (px - L) / (W - L - R) * span; };
+    hit.addEventListener("mousemove", e => {
+      const t = Math.min(Math.max(tAt(e), t0), t1), k = totals(t); cross.setAttribute("x1", x(t)); cross.setAttribute("x2", x(t)); cross.style.display = "";
+      tip.style.display = "block"; tip.innerHTML = `<b>${fmtT(t)}</b><br>cells in <b>${k.cin.toLocaleString()}</b> · released <b>${k.rel.toLocaleString()}</b>` +
+        (k.cin ? ` · kept ${(100 * k.rel / k.cin).toFixed(0)}%` : "") + `<br><span class="m">${k.din} started · ${k.drel} released</span>` +
+        (k.last ? `<br><span class="m">last: ${k.last.nm} ${k.last.k === "in" ? "started" : "released"} +${k.last.n.toLocaleString()} at ${fmtT(k.last.t).slice(5)}</span>` : "");
+      const bx = box.getBoundingClientRect(); tip.style.left = Math.min(e.clientX - bx.left + 14, bx.width - 300) + "px"; tip.style.top = (e.clientY - bx.top + 14) + "px";
+      if (drag !== null) { const a = Math.min(x(drag), x(t)), b = Math.max(x(drag), x(t)); zoom.setAttribute("x", a); zoom.setAttribute("width", b - a); zoom.style.display = ""; } });
+    hit.addEventListener("mouseleave", () => { tip.style.display = "none"; cross.style.display = "none"; });
+    hit.addEventListener("mousedown", e => { drag = tAt(e); e.preventDefault(); });
+    hit.addEventListener("mouseup", e => { if (drag === null) return; const t = tAt(e); if (Math.abs(t - drag) > span / 100) { lo = Math.min(drag, t); hi = Math.max(drag, t); draw(); } drag = null; });
+    svg.addEventListener("dblclick", () => { lo = hi = null; setRange(0); draw(); });
+  }
+  const buttons = [...document.querySelectorAll(".hist-range button")];
+  function setRange(days){ buttons.forEach(b => b.classList.toggle("on", Number(b.dataset.r) === days)); }
+  buttons.forEach(b => b.addEventListener("click", () => { const d = Number(b.dataset.r); lo = d ? now() - d * 86400 : null; hi = null; setRange(d); draw(); }));
+  if (q) q.addEventListener("input", () => { ev = events(); draw(); });
+  draw();
+})();
+"""
 
 HOME_JS = r"""
 (function(){
@@ -616,12 +728,20 @@ def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
         "the cell-identity Sankey, the review items and where the result files live.</p>"
         '<p class="next">Pick a dataset in the table or the sidebar. Green = released, amber = still running, red = failed.</p></header>'
         f'<div class="glance">{stat_html}</div>'
+        '<section class="block" id="history"><h2>Cells over time <span class="count" id="hist-n"></span></h2>'
+        '<p class="lede">Cells enter the curve when a dataset\'s run starts (its organize step) and are released when it releases. '
+        'Read from the run logs of whatever is bound right now — unbind a dataset and it leaves the past too. '
+        'Hover to read a moment, drag to zoom, double-click to reset; the table filter below narrows the curve as well.</p>'
+        '<div class="toolbar hist-range"><button type="button" data-r="1">24h</button><button type="button" data-r="7">7d</button>'
+        '<button type="button" data-r="30">30d</button><button type="button" data-r="0" class="on">all</button></div>'
+        '<div id="hist" class="hist"></div><div id="hist-tip" class="sk-tip" style="display:none"></div></section>'
         f'<section class="block" id="datasets"><h2>Datasets <span class="count" id="ds-n">{len(rows)} datasets</span></h2>'
         '<p class="lede">Cells in is the number of cells the run started from; cells out is what the release keeps; kept is out / in. Click a column header to sort.</p>'
         '<div class="toolbar"><label for="ds-q">Filter</label><input id="ds-q" type="search" placeholder="name, collection, species, status…" autocomplete="off"></div>'
         f"{table}</section>"
         f'<footer>rendered {time.strftime("%Y-%m-%d %H:%M:%S")} by {APP} (ecarsi serve) from the registry · reload for the current state</footer>'
-        f"</main><script>{HOME_JS}</script></body></html>"
+        f"</main><script>const HISTORY_DATA = {json.dumps(fleet_history(states))};</script>"
+        f"<script>{HOME_JS}</script><script>{HISTORY_JS}</script></body></html>"
     )
 
 
@@ -758,6 +878,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         raw = self.path.split("?", 1)[0]
         if raw == "/_home":
             return self._html(_home_html(self._registry.snapshot(), self._state))
+        if raw == "/_history.json":  # the curve's data; ?at=YYYY-MM-DDTHH:MM (or epoch) reads it at one moment
+            hist = fleet_history({n: (self._state(p), p) for n, p in self._registry.snapshot().items()})
+            at = urllib.parse.parse_qs(self.path.partition("?")[2]).get("at")
+            if not at:
+                return self._json(200, hist)
+            try:
+                return self._json(200, history_at(hist, _parse_at(at[0])))
+            except ValueError as e:
+                return self._json(400, {"error": str(e)})
         parts = [p for p in raw.split("/") if p]
         if not parts:
             return self._html(

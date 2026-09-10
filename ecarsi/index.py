@@ -494,6 +494,31 @@ def _round_input_cells(unit: Path, n: int) -> int | None:
     return None
 
 
+_EVENT_ORGANIZE = re.compile(r"^organize: (\d+) cells")
+_EVENT_RELEASE = re.compile(r"^release rounds=\d+ final_cells=(\d+)")
+
+
+def _epoch(ts: str) -> float:
+    import time
+
+    return time.mktime(time.strptime(ts, "%Y-%m-%d %H:%M:%S"))
+
+
+def log_events(log: list[tuple[str, str]]) -> dict:
+    """When cells entered and left a unit, as (epoch seconds, cells): the first
+    'organize: N cells' line and the last 'release ... final_cells=N' line.
+    Derived, never recorded: what is on disk now is the whole history."""
+    org = rel = None
+    for ts, event in log:
+        m = _EVENT_ORGANIZE.match(event)
+        if m and org is None:
+            org = (_epoch(ts), int(m.group(1)))
+        m = _EVENT_RELEASE.match(event)
+        if m:
+            rel = (_epoch(ts), int(m.group(1)))
+    return {"organize": org, "release": rel}
+
+
 def _round_started_after(log: list[tuple[str, str]], n: int) -> tuple[int, str] | None:
     """(round, timestamp) of the newest 'round N start' with N > n, else None."""
     pat = re.compile(r"^round (\d+) start$")
@@ -559,7 +584,7 @@ def unit_state(unit: Path) -> dict:
             "persample": ps, "rounds": rounds, "released": released, "stage": stage, "stage_class": cls,
             "last_event": f"{last[0]} {last[1]}" if last else "", "final_cells": final_cells,
             "output_h5ad": output_h5ad, "output_note": output_note,
-            "sample_decisions": dec_rows, "forced": _forced(rounds)}
+            "sample_decisions": dec_rows, "forced": _forced(rounds), "events": log_events(log)}
 
 
 def _forced(rounds: list[dict]) -> bool:
@@ -622,7 +647,8 @@ def dataset_state(root: Path, states: list[dict] | None = None) -> dict:
     else:
         stage, cls = (states[0]["stage"] if len(states) == 1 else f"{released}/{len(states)} released"), "running"
     fin = [s["finished"] for s in states if s.get("finished")]
-    return {"units": len(states), "released": released, "n_input": sum(n_in) if n_in else None,
+    events = {k: [s["events"][k] for s in states if s.get("events") and s["events"][k]] for k in ("organize", "release")}
+    return {"units": len(states), "released": released, "n_input": sum(n_in) if n_in else None, "events": events,
             "final_cells": sum(final) if final else None, "rounds": max((len(s["rounds"]) for s in states), default=0),
             "species": ", ".join(sorted({str(s["species"]) for s in states if s["species"]})),
             "finished": max(fin) if fin and released == len(states) else None,
