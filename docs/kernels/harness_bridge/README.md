@@ -44,6 +44,31 @@ The default remains OpenAI Agents SDK with
 `doubao-seed-2-1-turbo-260628`. Model identifiers are intentionally open
 strings rather than a hard-coded catalog.
 
+### Falling back across backends (ModelPool)
+
+`HARNESS`/`MODEL` resolve to exactly one backend for the whole run. To fall
+back to a different `{harness, model}` when the current one is provably
+broken (auth/permission/unknown-model errors, or repeated malformed
+submissions — never a busy provider; waiting out a rate limit is a separate,
+unrelated mechanism), pass an ordered pool instead:
+
+```bash
+AGENT_MODEL_POOL='openai:doubao-seed-2-1-turbo-260628,claude:claude-sonnet-5' python your_workflow.py
+```
+
+or build one explicitly with `ModelPool(parse_model_pool(spec))` / `resolve_model_pool()`
+and pass it to `run_agent(..., pool=pool)`. Unlike `HARNESS`/`MODEL` above,
+**harness and model are always one paired token, never two separate lists**
+— a model pinned without its harness is exactly how a run ends up asking one
+backend for another's model id. `AgentRunResult.effective_config` records
+which candidate actually produced a result, so a caller never has to
+re-derive "what backend answered this" from the environment after the fact.
+
+One pool instance is one fallback scope: create a new one per unit of work
+that should stay on whichever backend it falls back to (a caller-level
+decision — the bridge only tracks which candidate is current), and pass the
+same instance to every `run_agent()` call within that scope.
+
 ## Logging
 
 Every bridge line (`== [label] agent: tool(...)`, retries, usage limits,
