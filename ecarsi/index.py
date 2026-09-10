@@ -494,6 +494,16 @@ def _round_input_cells(unit: Path, n: int) -> int | None:
     return None
 
 
+def _round_started_after(log: list[tuple[str, str]], n: int) -> tuple[int, str] | None:
+    """(round, timestamp) of the newest 'round N start' with N > n, else None."""
+    pat = re.compile(r"^round (\d+) start$")
+    for ts, event in reversed(log):
+        m = pat.match(event)
+        if m and int(m.group(1)) > n:
+            return int(m.group(1)), ts
+    return None
+
+
 def unit_state(unit: Path) -> dict:
     """Everything the pages need, read from disk."""
     im = _json(L.input_manifest(unit), {})
@@ -514,7 +524,11 @@ def unit_state(unit: Path) -> dict:
     elif rounds and rounds[-1]["decision"] is None:
         stage, cls = f"round {rounds[-1]['n']} · {rounds[-1]['step']}", "running"
     elif rounds:
-        stage, cls = f"round {rounds[-1]['n']} done, next round pending", "running"
+        nxt = _round_started_after(log, rounds[-1]["n"])
+        if nxt:  # a mirror copy carries the log line before any file of the new round
+            stage, cls = f"round {nxt[0]} · crosssample (since {nxt[1][11:16]})", "running"
+        else:
+            stage, cls = f"round {rounds[-1]['n']} done, next round pending", "running"
     elif ps["manifest"] and not ps["done"]:
         stage, cls = f"persample {ps['n_done']}/{ps['n']} samples", "running"
     elif ps["done"]:

@@ -217,7 +217,7 @@ NAV_JS = r"""
   const $ = id => document.getElementById(id);
   const items = [...document.querySelectorAll("#sb-list .item")], frame = $("frame"), crumb = $("crumb"), open = $("open"),
         q = $("nav-q"), n = $("nav-n"), msg = $("nav-msg"), empty = $("empty"), home = $("home-item"),
-        sort = $("nav-sort"), sp = $("nav-sp"), groups = [...document.querySelectorAll("#sb-list details.group")];
+        sort = $("nav-sort"), sp = $("nav-sp"), st = $("nav-st"), groups = [...document.querySelectorAll("#sb-list details.group")];
   const names = new Set(items.map(i => i.dataset.name));
   // -- sidebar <-> main pane --
   function mark(name){ items.forEach(i => i.classList.toggle("active", i.dataset.name === name));
@@ -251,11 +251,12 @@ NAV_JS = r"""
   $("reload").addEventListener("click", () => { try { frame.contentWindow.location.reload(); } catch (e) { frame.src = frame.src; } });
   // -- search + species filter (groups start collapsed; a group folds away when none of its
   //    datasets match and opens while a filter is active) --
-  function apply(){ const t = q.value.trim().toLowerCase(), s = sp ? sp.value : ""; let k = 0;
-    for (const i of items) { const hit = (!t || i.dataset.text.includes(t)) && (!s || i.dataset.species === s); i.style.display = hit ? "" : "none"; k += hit; }
-    for (const g of groups) { const any = [...g.querySelectorAll(".item")].some(i => i.style.display !== "none"); g.style.display = any ? "" : "none"; if ((t || s) && any) g.open = true; }
-    n.textContent = (t || s) ? `${k} / ${items.length}` : `${items.length}`; }
-  q.addEventListener("input", apply); if (sp) sp.addEventListener("change", apply); apply();
+  function apply(){ const t = q.value.trim().toLowerCase(), s = sp ? sp.value : "", w = st ? st.value : ""; let k = 0;
+    const okw = c => !w || (w === "working" ? (c === "running" || c === "neutral") : c === w);
+    for (const i of items) { const hit = (!t || i.dataset.text.includes(t)) && (!s || i.dataset.species === s) && okw(i.dataset.cls); i.style.display = hit ? "" : "none"; k += hit; }
+    for (const g of groups) { const any = [...g.querySelectorAll(".item")].some(i => i.style.display !== "none"); g.style.display = any ? "" : "none"; if ((t || s || w) && any) g.open = true; }
+    n.textContent = (t || s || w) ? `${k} / ${items.length}` : `${items.length}`; }
+  q.addEventListener("input", apply); if (sp) sp.addEventListener("change", apply); if (st) st.addEventListener("change", apply); apply();
   // -- sort (name / cells / status), within each collection --
   const STATUS_RANK = {released: 0, running: 1, neutral: 2, failed: 3};
   function applySort(){
@@ -404,7 +405,7 @@ aside.sb{width:360px;flex:0 0 360px;background:var(--card);border-right:1px soli
 .sb-head .brand .logo{font-size:var(--t6);margin-right:.35em}
 .sb-head .brand a{color:inherit;text-decoration:none;display:inline-flex;align-items:center}.sb-head .brand a:hover b{color:var(--accent)}
 .sb-head input[type=search]{width:100%;font:inherit;font-size:var(--t3);padding:8px 12px;border:1px solid var(--line-strong);border-radius:var(--r);background:var(--card)}
-.sb-head .sort-row{display:flex;align-items:center;gap:var(--s1);font-size:var(--t3);color:var(--muted)}
+.sb-head .sort-row{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s1);font-size:var(--t3);color:var(--muted)}
 .sb-head select{font:inherit;font-size:var(--t3);padding:4px 8px;border:1px solid var(--line-strong);border-radius:6px;background:var(--card);color:var(--ink)}
 .sb-list{flex:1;overflow-y:auto;padding:var(--s1)}
 details.group{margin-bottom:4px}details.group>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:var(--s1);padding:8px 10px;border-radius:var(--r);font-size:var(--t3);font-weight:650;color:var(--muted)}
@@ -504,7 +505,9 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
         '<div class="sort-row"><label for="nav-sort">sort</label><select id="nav-sort">'
         '<option value="name">name</option><option value="cells">cells</option>'
         '<option value="status">status</option></select>'
-        f'<label for="nav-sp">species</label><select id="nav-sp"><option value="">all</option>{sp_options}</select></div>'
+        f'<label for="nav-sp">species</label><select id="nav-sp"><option value="">all</option>{sp_options}</select>'
+        '<label for="nav-st">status</label><select id="nav-st"><option value="">all</option><option value="working">working</option>'
+        '<option value="failed">failed</option><option value="released">done</option></select></div>'
         "</div>"
         '<a class="item home-item" id="home-item" href="/_home" data-name="__home__">'
         '<span class="nm"><b>Overview</b> · all datasets</span></a>'
@@ -535,6 +538,8 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
         f"<style>{index.CSS}{NAV_CSS}{LOGO_CSS}</style></head><body>{sidebar}{main}<script>{NAV_JS}</script></body></html>"
     )
 
+
+HOME_CSS = "td.nw{white-space:nowrap}"
 
 HOME_JS = r"""
 (function(){
@@ -574,32 +579,36 @@ def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
     cells_out = sum(s["final_cells"] or 0 for s, _ in states.values() if s["cls"] == "released")
     stats = [(str(len(items)), "datasets", ""), (str(by("released")), "released", "released"),
              (str(by("running")), "running", "running"), (str(by("failed")), "failed", "failed"),
-             (index._n(cells_in) or "0", "cells in", ""), (index._n(cells_out) or "0", "cells released", "")]
+             (index._n(cells_in) or "0", "cells in", ""), (index._n(cells_out) or "0", "cells released", ""),
+             (f"{100 * cells_out / cells_in:.0f}%" if cells_in else "", "cells kept", "")]
     stat_html = "".join(f'<div class="stat"><span class="v{" st " + c if c and int(v) else ""}">{e(v)}</span><span class="k">{e(k)}</span></div>'
                         for v, k, c in stats)
     rank = {"released": 0, "running": 1, "neutral": 2, "failed": 3}
     rows = []
     for name, (s, p) in sorted(states.items()):
         coll = index.collection_of(p)
+        short = name[len(coll) + 1:] if coll and name.startswith(coll + "-") else name  # the collection has its own column
+        kept = 100 * s["final_cells"] / s["n_input"] if s["n_input"] and s["final_cells"] is not None else None
         rows.append(
             f'<tr data-text="{e((name + " " + coll + " " + s["species"] + " " + s["stage"]).lower())}">'
-            f'<td><a href="/{e(name)}/"><b>{e(name)}</b></a></td><td>{e(coll)}</td><td>{e(s["species"])}</td>'
+            f'<td><a href="/{e(name)}/" title="{e(name)}"><b>{e(short)}</b></a></td><td class="nw">{e(coll)}</td><td>{e(s["species"])}</td>'
             f'<td class="num" data-v="{s["n_input"] or 0}">{index._n(s["n_input"])}</td>'
             f'<td class="num" data-v="{s["final_cells"] or 0}">{index._n(s["final_cells"])}</td>'
+            f'<td class="num" data-v="{kept if kept is not None else -1}">{f"{kept:.0f}%" if kept is not None else ""}</td>'
             f'<td class="num" data-v="{s["rounds"]}">{s["rounds"] or ""}</td>'
             f'<td data-v="{rank.get(s["cls"], 9)}"><span class="pill {e(s["cls"])}">{e(s["stage"])}</span></td>'
-            f'<td class="num" data-v="{s["updated"] or 0}">{index._when(s["updated"])}</td></tr>')
+            f'<td class="num nw" data-v="{s["updated"] or 0}">{index._when(s["updated"])}</td></tr>')
     def th(t, num=False):
         attrs = ' class="r" data-num' if num else ""
         return f'<th{attrs} aria-sort="none"><button type="button">{t}</button></th>'
     table = ('<div class="wrap"><table id="ds-table"><thead><tr>' + th("dataset") + th("collection") + th("species")
-             + th("cells in", True) + th("cells out", True) + th("rounds", True) + th("status", True) + th("last updated", True)
+             + th("cells in", True) + th("cells out", True) + th("kept", True) + th("rounds", True) + th("status", True) + th("last updated", True)
              + f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div>' if rows
              else '<p class="empty">No dataset is bound yet. Use <b>+ Bind…</b> in the sidebar or <code>eca-rsi serve scan-add</code> on the server host.</p>')
     return (
         '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
         f'<meta name="viewport" content="width=device-width,initial-scale=1"><title>{APP} — overview</title>{FAVICON}'
-        f'<style>{index.CSS}{LOGO_CSS}</style></head><body><main class="page">'
+        f'<style>{index.CSS}{LOGO_CSS}{HOME_CSS}</style></head><body><main class="page">'
         f'<header class="hero"><div class="title"><h1>{logo()}{APP}</h1><span class="sub">ECA-RSI runs</span></div>'
         '<p class="sub" style="max-width:80ch;margin-top:8px">Recursive self-improving annotation of single-cell atlases. Each dataset below was '
         "processed per sample (QC, clustering), integrated across samples and annotated in rounds by agents, with low-quality cells removed "
@@ -608,7 +617,7 @@ def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
         '<p class="next">Pick a dataset in the table or the sidebar. Green = released, amber = still running, red = failed.</p></header>'
         f'<div class="glance">{stat_html}</div>'
         f'<section class="block" id="datasets"><h2>Datasets <span class="count" id="ds-n">{len(rows)} datasets</span></h2>'
-        '<p class="lede">Cells in is the number of cells the run started from; cells out is what the release keeps. Click a column header to sort.</p>'
+        '<p class="lede">Cells in is the number of cells the run started from; cells out is what the release keeps; kept is out / in. Click a column header to sort.</p>'
         '<div class="toolbar"><label for="ds-q">Filter</label><input id="ds-q" type="search" placeholder="name, collection, species, status…" autocomplete="off"></div>'
         f"{table}</section>"
         f'<footer>rendered {time.strftime("%Y-%m-%d %H:%M:%S")} by {APP} (ecarsi serve) from the registry · reload for the current state</footer>'

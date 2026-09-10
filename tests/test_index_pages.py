@@ -120,6 +120,13 @@ def test_running_unit_shows_cells_now_and_the_running_round(tmp_path):
     assert st["cls"] == "running" and st["final_cells"] == 800 and st["rounds"] == 2 and st["finished"] is None
 
 
+def test_running_round_with_only_a_log_line_reads_in_progress(tmp_path):
+    root, unit = make_run(tmp_path, released=False)
+    shutil.rmtree(L.round_dir(unit, 2))  # a mirror copy has the 'round 2 start' log line before any file of round 2
+    st = dataset_state(root)
+    assert st["stage"] == "round 2 · crosssample (since 12:31)" and st["cls"] == "running"
+
+
 def test_review_section_is_grouped_cards(tmp_path):
     root, unit = make_run(tmp_path)
     (L.persample_root(unit) / "needs_review.json").write_text(json.dumps(
@@ -137,13 +144,13 @@ def test_home_overview_has_stats_table_and_filter(tmp_path):
     html = _home_html({"coll-Organ": root, "Gone": tmp_path / "nowhere"})
     assert "<title>Periscope — overview</title>" in html and "Recursive self-improving annotation" in html
     strip = html[html.index('<div class="glance">'):html.index('<section class="block" id="datasets">')]
-    for v, k in (("2", "datasets"), ("1", "released"), ("0", "running"), ("1", "failed"), ("1,000", "cells in"), ("800", "cells released")):
+    for v, k in (("2", "datasets"), ("1", "released"), ("0", "running"), ("1", "failed"), ("1,000", "cells in"), ("800", "cells released"), ("80%", "cells kept")):
         assert f'>{v}</span><span class="k">{k}</span>' in strip, (v, k)
     assert 'id="ds-table"' in html and 'id="ds-q"' in html and 'type="search"' in html
     row = html[html.index('<tr data-text="coll-organ'):]
     row = row[:row.index("</tr>")]
-    assert 'href="/coll-Organ/"' in row and "<td>coll</td><td>mouse</td>" in row
-    assert 'data-v="1000">1,000</td>' in row and 'data-v="800">800</td>' in row and 'class="pill released"' in row
+    assert 'href="/coll-Organ/" title="coll-Organ"><b>Organ</b>' in row and '<td class="nw">coll</td><td>mouse</td>' in row
+    assert 'data-v="1000">1,000</td>' in row and 'data-v="800">800</td>' in row and 'data-v="80.0">80%</td>' in row and 'class="pill released"' in row
     assert 'aria-sort="none"><button type="button">cells in</button>' in html
     assert "ds-table" in HOME_JS and HOME_JS in html
 
