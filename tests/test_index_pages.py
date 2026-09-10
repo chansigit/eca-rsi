@@ -177,7 +177,7 @@ def test_navigator_groups_by_collection_with_status_dots(tmp_path):
     assert '<details class="group"><summary>other<span class="gn"><span class="st failed">1 failed</span></span></summary>' in html
     assert '<span class="dot released" title="released"></span><span class="nm">Organ</span><span class="cells">800</span>' in html
     assert '<span class="dot failed" title="missing on disk"></span><span class="nm">Loose</span>' in html
-    assert 'id="nav-q"' in html and 'id="nav-sort"' in html and 'id="home-item"' in html and 'id="sb-resizer"' in html
+    assert 'id="nav-q"' in html and '<span class="ctl"><label for="nav-sort">' in html and 'id="home-item"' in html and 'id="sb-resizer"' in html
     assert '<span id="nav-n">2</span>' in html
 
 

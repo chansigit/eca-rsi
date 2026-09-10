@@ -406,7 +406,8 @@ aside.sb{width:360px;flex:0 0 360px;background:var(--card);border-right:1px soli
 .sb-head .brand .logo{font-size:var(--t6);margin-right:.35em}
 .sb-head .brand a{color:inherit;text-decoration:none;display:inline-flex;align-items:center}.sb-head .brand a:hover b{color:var(--accent)}
 .sb-head input[type=search]{width:100%;font:inherit;font-size:var(--t3);padding:8px 12px;border:1px solid var(--line-strong);border-radius:var(--r);background:var(--card)}
-.sb-head .sort-row{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s1);font-size:var(--t3);color:var(--muted)}
+.sb-head .sort-row{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s1) var(--s2);font-size:var(--t3);color:var(--muted)}
+.sb-head .sort-row .ctl{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
 .sb-head select{font:inherit;font-size:var(--t3);padding:4px 8px;border:1px solid var(--line-strong);border-radius:6px;background:var(--card);color:var(--ink)}
 .sb-list{flex:1;overflow-y:auto;padding:var(--s1)}
 details.group{margin-bottom:4px}details.group>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:var(--s1);padding:8px 10px;border-radius:var(--r);font-size:var(--t3);font-weight:650;color:var(--muted)}
@@ -503,12 +504,12 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
         f'<div class="brand"><a id="brand" href="/_home" title="overview">{logo()}<b>{APP}</b><small><span id="nav-n">{len(items)}</span> datasets</small></a>'
         '<button class="icon" id="sb-toggle" title="hide sidebar" aria-label="hide sidebar">&#9776;</button></div>'
         '<input id="nav-q" type="search" placeholder="Filter datasets…" aria-label="filter datasets" autocomplete="off">'
-        '<div class="sort-row"><label for="nav-sort">sort</label><select id="nav-sort">'
+        '<div class="sort-row"><span class="ctl"><label for="nav-sort">sort</label><select id="nav-sort">'
         '<option value="name">name</option><option value="cells">cells</option>'
-        '<option value="status">status</option></select>'
-        f'<label for="nav-sp">species</label><select id="nav-sp"><option value="">all</option>{sp_options}</select>'
-        '<label for="nav-st">status</label><select id="nav-st"><option value="">all</option><option value="working">working</option>'
-        '<option value="failed">failed</option><option value="released">done</option></select></div>'
+        '<option value="status">status</option></select></span>'
+        f'<span class="ctl"><label for="nav-sp">species</label><select id="nav-sp"><option value="">all</option>{sp_options}</select></span>'
+        '<span class="ctl"><label for="nav-st">status</label><select id="nav-st"><option value="">all</option><option value="working">working</option>'
+        '<option value="failed">failed</option><option value="released">done</option></select></span></div>'
         "</div>"
         '<a class="item home-item" id="home-item" href="/_home" data-name="__home__">'
         '<span class="nm"><b>Overview</b> · all datasets</span></a>'
@@ -540,7 +541,7 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
     )
 
 
-HOME_CSS = ("td.nw{white-space:nowrap}"
+HOME_CSS = ("td.nw{white-space:nowrap}#ds-table td{padding:8px 10px}#ds-table .pill{white-space:normal;line-height:1.35;max-width:22ch}"
             ".hist{position:relative;margin-top:var(--s1)}.hist-svg{display:block;width:100%;height:auto}"
             ".hist-svg .grid{stroke:var(--line);stroke-width:1}.hist-svg .tick{font-size:11px;fill:var(--muted)}"
             ".hist-svg .ser{fill:none;stroke-width:2.25;stroke-linejoin:round}.hist-svg .ser.in{stroke:var(--muted)}.hist-svg .ser.rel{stroke:var(--ok)}"
@@ -613,12 +614,14 @@ HISTORY_JS = r"""
     box.innerHTML = "";
     if (!ev.length) { box.innerHTML = '<p class="empty">nothing to plot — no bound dataset has an organize line in its log</p>'; if (nEl) nEl.textContent = ""; return; }
     const t0 = lo ?? ev[0].t, t1 = hi ?? now(), span = Math.max(t1 - t0, 60);
-    const ymax = Math.max(...ev.filter(e => e.k === "in").map((e, i, a) => a.slice(0, i + 1).reduce((s, x) => s + x.n, 0)), 1);
+    const yraw = Math.max(...ev.filter(e => e.k === "in").map((e, i, a) => a.slice(0, i + 1).reduce((s, x) => s + x.n, 0)), 1);
+    const nice = [1, 2, 5, 10, 20, 50, 100, 200, 500].map(m => m * Math.pow(10, Math.floor(Math.log10(yraw)) - 1)).find(s => yraw / s <= 6) || yraw / 4;
+    const ymax = Math.ceil(yraw / nice) * nice;
     const x = t => L + (Math.min(Math.max(t, t0), t1) - t0) / span * (W - L - R), y = v => T + (1 - v / ymax) * (H - T - B);
     const step = k => { let v = 0, d = `M${x(t0)} ${y(0)}`; for (const e of ev) { if (e.k !== k) continue; if (e.t > t1) break;
         const xx = x(e.t); d += ` H${xx.toFixed(1)}`; v += e.n; d += ` V${y(v).toFixed(1)}`; } return d + ` H${x(t1)}`; };
-    const yt = [], nice = [1, 2, 5, 10, 20, 50, 100, 200, 500].map(m => m * Math.pow(10, Math.floor(Math.log10(ymax)) - 1)).find(s => ymax / s <= 6) || ymax / 4;
-    for (let v = 0; v <= ymax; v += nice) yt.push(v);
+    const yt = [];
+    for (let v = 0; v <= ymax + nice / 2; v += nice) yt.push(v);
     const xt = []; const days = span / 86400, stepS = days > 14 ? 7 * 86400 : days > 3 ? 86400 : days > 0.6 ? 6 * 3600 : 3600;
     for (let t = Math.ceil(t0 / stepS) * stepS; t <= t1; t += stepS) xt.push(t);
     const xl = t => { const d = new Date(t * 1000); return stepS >= 86400 ? `${d.getMonth() + 1}/${d.getDate()}` : `${String(d.getHours()).padStart(2, "0")}:00`; };
