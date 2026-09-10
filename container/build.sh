@@ -11,7 +11,7 @@
 # Configure with environment variables -- nothing here is site-specific:
 #   ECA_CT_ROOT   where the venv and wrapper live        (default: $PWD)
 #   ECA_SIF       image to build inside                  (default: $ECA_CT_ROOT/python312-slim.sif)
-#   ECA_REPOS     directory holding the five checkouts   (default: parent of this repo)
+#   ECA_REPOS     directory holding the checkouts        (default: parent of this repo)
 #   PIP_CACHE_DIR pip cache                              (default: pip's own)
 #
 # Run it INSIDE the image, e.g.
@@ -23,7 +23,7 @@ V="$ROOT/.venv"
 CACHE_ARG=()
 [ -n "${PIP_CACHE_DIR:-}" ] && CACHE_ARG=(--cache-dir "$PIP_CACHE_DIR")
 
-for r in agent-harness-bridge osp msp zmip eca-rsi; do
+for r in agent-harness-bridge osp msp zmip eca-rsi stancounts stangene eca-pp; do
     [ -d "$REPOS/$r" ] || { echo "missing checkout: $REPOS/$r (set ECA_REPOS)" >&2; exit 2; }
 done
 
@@ -36,6 +36,7 @@ python -m venv --clear "$V"
 "$V/bin/pip" install "${CACHE_ARG[@]}" \
     -e "$REPOS/agent-harness-bridge[all]" -e "$REPOS/osp[agent]" -e "$REPOS/msp[agent]" \
     -e "$REPOS/zmip" -e "$REPOS/eca-rsi" \
+    -e "$REPOS/stancounts" -e "$REPOS/stangene" -e "$REPOS/eca-pp[probe,openai,claude,test]" \
     "pandas<3" pyarrow pytest scikit-image 2>&1 | grep -v "already satisfied" | tail -15
 
 echo "=== sanity ==="
@@ -53,7 +54,8 @@ t = time.perf_counter(); x @ x
 print(f"dgemm 4000^3: {time.perf_counter() - t:.2f} s   (no-BLAS builds take ~40 s)")
 for p in ("scipy", "scanpy", "anndata", "h5py", "numba", "umap-learn", "pynndescent",
           "scikit-learn", "harmonypy", "igraph", "pyarrow", "openai-agents",
-          "agent-harness-bridge", "osp-sc", "msp-sc", "zmip", "ecarsi"):
+          "agent-harness-bridge", "osp-sc", "msp-sc", "zmip", "ecarsi",
+          "stancounts", "stangene", "eca-pp"):
     try:
         print(f"  {p:22s} {m.version(p)}")
     except Exception as e:
