@@ -268,3 +268,37 @@ def test_qc_skips_decontx_when_coarse_clustering_cannot_split(monkeypatch):
     assert "decontX_contamination" not in result.obs
     assert "median_contamination" not in summary
     assert "decontx_degenerate" not in summary
+
+
+def test_survivors_of_a_too_small_sample_are_booked_in_the_removal_ledger(tmp_path):
+    """A sample that keeps one or two cells cannot be clustered, so those cells
+    go nowhere. They must still appear in qc_removed.csv with a reason: the
+    driver's ledger requires every input cell to be a survivor or a removal,
+    and the sample is only resumable-as-finished once that holds."""
+    data = ad.AnnData(
+        np.array([[5.0, 4.0, 3.0], [0.0, 0.0, 0.0], [6.0, 5.0, 4.0]]),
+        obs=pd.DataFrame({"sample": ["A"] * 3}, index=["keep1", "drop1", "keep2"]),
+        var=pd.DataFrame(index=["G1", "G2", "G3"]),
+    )
+    with pytest.raises(ValueError, match="at least 3"):
+        run_one_sample_pipeline(
+            data,
+            sample_label="A",
+            outdir=tmp_path,
+            qc_kwargs={
+                "run_scrublet": False,
+                "run_decontx": False,
+                "run_dissociation_score": False,
+                "make_plots": False,
+                "hard_min_genes": 1,
+                "hard_min_counts": 1,
+            },
+        )
+    removed = pd.read_csv(tmp_path / "qc_removed.csv")
+    assert set(removed["cell"]) == set(data.obs_names), "every input cell must be accounted for"
+    assert not removed["qc_reason"].isna().any() and not removed["qc_reason"].eq("").any()
+    survivors = removed.loc[removed["cell"].isin(["keep1", "keep2"]), "qc_reason"]
+    assert set(survivors) == {"too_few_survivors"}
+    # the QC summary stays honest: the two survivors passed QC, they are not low quality
+    qc_summary = pd.read_csv(tmp_path / "qc_summary.csv", index_col=0).iloc[:, 0]
+    assert int(qc_summary["n_cells"]) == 3 and int(qc_summary["n_low_quality"]) == 1
