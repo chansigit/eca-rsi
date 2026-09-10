@@ -9,13 +9,17 @@ import pytest
 
 import harness_bridge
 from harness_bridge import (
+    AgentConfig,
     AgentIncompleteError,
     AgentLimitExhausted,
     AgentRunResult,
     AgentTimeout,
+    ModelPool,
     ToolSpec,
     backend_capabilities,
+    parse_model_pool,
     resolve_agent_config,
+    resolve_model_pool,
     retry_transient,
     wall_seconds,
 )
@@ -284,3 +288,217 @@ def test_tool_calls_are_timed_and_summarised(monkeypatch, tmp_path, caplog):
     assert len(took) == 2 and took[0].startswith("== [t] slow took ")
     summary = [r.message for r in caplog.records if "] time: wall" in r.message]
     assert len(summary) == 1 and "in 2 call(s)" in summary[0] and "slow " in summary[0] and "×2" in summary[0]
+
+
+# --------------------------------------------------------------------------
+# ModelPool: parsing, resolution, position tracking
+# --------------------------------------------------------------------------
+
+
+def test_parse_model_pool_pairs_harness_and_model():
+    pool = ModelPool(parse_model_pool("openai:doubao-seed-2-1-turbo, claude:claude-sonnet-5"))
+    assert str(pool.current()) == "openai:doubao-seed-2-1-turbo"
+    assert pool.can_advance()
+    assert str(pool.advance("test")) == "claude:claude-sonnet-5"
+    assert not pool.can_advance()
+
+
+@pytest.mark.parametrize("spec", ["openai", "claude:", ":claude-sonnet-5", "openai:x,claude"])
+def test_parse_model_pool_rejects_an_unpaired_entry(spec):
+    # eca-pp#6: a model pinned without its harness is exactly this mistake,
+    # one list per axis instead of one paired token — must fail to parse,
+    # not silently fall back to a default harness for a stray model id.
+    with pytest.raises(ValueError, match="harness:model"):
+        parse_model_pool(spec)
+
+
+def test_resolve_model_pool_is_none_when_unset():
+    assert resolve_model_pool(environ={}) is None
+
+
+def test_resolve_model_pool_reads_the_env_var():
+    pool = resolve_model_pool(environ={"AGENT_MODEL_POOL": "openai:doubao-seed-2-1-turbo,claude:claude-sonnet-5"})
+    assert [str(pool.current())] == ["openai:doubao-seed-2-1-turbo"]
+
+
+def test_model_pool_needs_at_least_one_candidate():
+    with pytest.raises(ValueError):
+        ModelPool([])
+
+
+def test_model_pool_advance_past_the_end_raises():
+    pool = ModelPool([AgentConfig("openai", "m1")])
+    with pytest.raises(RuntimeError, match="exhausted"):
+        pool.advance("no more candidates")
+
+
+def test_model_pool_records_the_failure_trail():
+    pool = ModelPool([AgentConfig("openai", "m1"), AgentConfig("claude", "m2")])
+    pool.advance("auth error")
+    assert pool.failures() == [(AgentConfig("openai", "m1"), "auth error")]
+
+
+# --------------------------------------------------------------------------
+# exception classification: type/structured-field, not message regex
+# --------------------------------------------------------------------------
+
+
+class _FakeModelBehaviorError(Exception):
+    """Stands in for agents.exceptions.ModelBehaviorError without importing
+    the openai-agents SDK — this test file is provider-free by design."""
+
+
+_FakeModelBehaviorError.__module__ = "agents.exceptions"
+_FakeModelBehaviorError.__qualname__ = "ModelBehaviorError"
+
+
+class _FakeBadRequest(Exception):
+    def __init__(self, message, code):
+        super().__init__(message)
+        self.code = code
+
+
+class _FakeAuthenticationError(Exception):
+    pass
+
+
+_FakeAuthenticationError.__module__ = "openai"
+_FakeAuthenticationError.__qualname__ = "AuthenticationError"
+
+
+def test_is_malformed_submission_matches_by_type_and_structured_code():
+    assert H._is_malformed_submission(_FakeModelBehaviorError("Tool , not found"))
+    assert H._is_malformed_submission(_FakeBadRequest("missing input.arguments", code="MissingParameter"))
+    assert not H._is_malformed_submission(RuntimeError("Tool , not found"))  # right text, wrong type/no code
+    assert not H._is_malformed_submission(_FakeBadRequest("x", code="SomethingElse"))
+
+
+def test_is_startup_failure_matches_openais_401_403_404_by_type():
+    assert H._is_startup_failure(_FakeAuthenticationError("bad key"))
+    assert not H._is_startup_failure(RuntimeError("bad key"))  # message alone is not enough
+
+
+# --------------------------------------------------------------------------
+# retry_transient: malformed submissions and startup failures, with and without a pool
+# --------------------------------------------------------------------------
+
+
+def test_malformed_submission_gets_one_same_backend_retry(instant_sleep):
+    attempt, calls = _failing([_FakeModelBehaviorError("Tool , not found")], then="ok")
+    assert asyncio.run(retry_transient(attempt, "t")) == "ok"
+    assert calls["n"] == 2
+    assert instant_sleep == []  # a fresh turn, not a backoff sleep
+
+
+def test_malformed_submission_without_a_pool_raises_after_the_attempt_budget(instant_sleep):
+    attempt, calls = _failing([_FakeModelBehaviorError("x")] * 5)
+    with pytest.raises(_FakeModelBehaviorError):
+        asyncio.run(retry_transient(attempt, "t"))
+    assert calls["n"] == H.MAX_MALFORMED_ATTEMPTS
+
+
+def test_malformed_submission_falls_back_to_the_next_pool_candidate(instant_sleep, caplog):
+    pool = ModelPool([AgentConfig("openai", "flaky"), AgentConfig("claude", "steady")])
+    attempt, calls = _failing([_FakeModelBehaviorError("x")] * H.MAX_MALFORMED_ATTEMPTS, then="ok")
+    with caplog.at_level(logging.WARNING):
+        assert asyncio.run(retry_transient(attempt, "t", pool=pool)) == "ok"
+    assert calls["n"] == H.MAX_MALFORMED_ATTEMPTS + 1
+    assert str(pool.current()) == "claude:steady"
+    assert any("falling back from openai:flaky to claude:steady" in r.message for r in caplog.records)
+
+
+def test_startup_failure_falls_back_immediately_with_no_same_backend_retry(instant_sleep):
+    pool = ModelPool([AgentConfig("openai", "wrong-key"), AgentConfig("claude", "steady")])
+    attempt, calls = _failing([_FakeAuthenticationError("bad key")], then="ok")
+    assert asyncio.run(retry_transient(attempt, "t", pool=pool)) == "ok"
+    assert calls["n"] == 2  # no retry attempt spent on the broken backend
+
+
+def test_startup_failure_without_a_pool_raises_immediately():
+    attempt, calls = _failing([_FakeAuthenticationError("bad key")] * 3)
+    with pytest.raises(_FakeAuthenticationError):
+        asyncio.run(retry_transient(attempt, "t"))
+    assert calls["n"] == 1
+
+
+def test_incomplete_run_falls_back_after_bounded_retries_with_a_pool(instant_sleep):
+    pool = ModelPool([AgentConfig("openai", "silent"), AgentConfig("claude", "steady")])
+    attempt, calls = _failing([AgentIncompleteError("no submission")] * H.MAX_INCOMPLETE_ATTEMPTS, then="ok")
+    assert asyncio.run(retry_transient(attempt, "t", pool=pool)) == "ok"
+    assert calls["n"] == H.MAX_INCOMPLETE_ATTEMPTS + 1
+    assert str(pool.current()) == "claude:steady"
+
+
+def test_pool_exhausted_raises_with_every_candidates_reason(instant_sleep):
+    pool = ModelPool([AgentConfig("openai", "wrong-key"), AgentConfig("claude", "also-wrong")])
+    attempt, calls = _failing([_FakeAuthenticationError("key A bad"), _FakeAuthenticationError("key B bad")])
+    with pytest.raises(_FakeAuthenticationError, match="key A bad.*key B bad"):
+        asyncio.run(retry_transient(attempt, "t", pool=pool))
+    assert calls["n"] == 2
+
+
+def test_a_single_candidate_pool_behaves_like_no_pool_on_exhaustion(instant_sleep):
+    pool = ModelPool([AgentConfig("openai", "only-option")])
+    attempt, calls = _failing([_FakeAuthenticationError("bad key")])
+    with pytest.raises(_FakeAuthenticationError, match="bad key"):
+        asyncio.run(retry_transient(attempt, "t", pool=pool))
+    assert calls["n"] == 1
+
+
+def test_usage_limit_is_never_a_fallback_trigger_even_with_a_pool(instant_sleep, monkeypatch):
+    # issue #1: a busy provider is not a broken one; falling back here would
+    # quietly move the run onto a different (possibly pricier) backend.
+    monkeypatch.setenv("AGENT_LIMIT_WAIT_MIN", "30")
+    monkeypatch.setenv("AGENT_LIMIT_WAIT_MAX_H", "1")
+    fake_now = {"t": 0.0}
+
+    def clock():
+        fake_now["t"] += 1800
+        return fake_now["t"]
+
+    monkeypatch.setattr(H.time, "time", clock)
+    pool = ModelPool([AgentConfig("openai", "busy"), AgentConfig("claude", "idle")])
+    attempt, calls = _failing([RuntimeError("429 Too Many Requests")] * 10)
+    with pytest.raises(AgentLimitExhausted):
+        asyncio.run(retry_transient(attempt, "t", pool=pool))
+    assert str(pool.current()) == "openai:busy"  # never advanced
+
+
+# --------------------------------------------------------------------------
+# run_agent(): the pool actually changes which adapter/model gets called
+# --------------------------------------------------------------------------
+
+
+def test_run_agent_falls_back_across_a_real_adapter_switch(monkeypatch, tmp_path):
+    calls = []
+
+    async def openai_backend(**kwargs):
+        calls.append(("openai", kwargs["model"]))
+        raise _FakeAuthenticationError("bad Ark key")
+
+    async def claude_backend(**kwargs):
+        calls.append(("claude", kwargs["model"]))
+        return AgentRunResult({"ok": True}, None, None)
+
+    monkeypatch.setattr("harness_bridge._harness_openai.run_agent", openai_backend)
+    monkeypatch.setattr("harness_bridge._harness_claude.run_agent", claude_backend)
+    pool = ModelPool([AgentConfig("openai", "doubao-seed-2-1-turbo"), AgentConfig("claude", "claude-sonnet-5")])
+    result = asyncio.run(harness_bridge.run_agent(
+        tools=[SUBMIT], submit_tool="submit", prompt="p", cwd=str(tmp_path), pool=pool,
+    ))
+    assert calls == [("openai", "doubao-seed-2-1-turbo"), ("claude", "claude-sonnet-5")]
+    assert result.submitted == {"ok": True}
+    assert result.effective_config == AgentConfig("claude", "claude-sonnet-5")
+
+
+def test_run_agent_records_effective_config_with_no_pool(monkeypatch, tmp_path):
+    async def backend(**_kwargs):
+        return AgentRunResult({"ok": True}, None, None)
+
+    monkeypatch.setenv("HARNESS", "openai")
+    monkeypatch.setenv("MODEL", "doubao-seed-2-1-pro-260628")
+    monkeypatch.setattr("harness_bridge._harness_openai.run_agent", backend)
+    result = asyncio.run(harness_bridge.run_agent(
+        tools=[SUBMIT], submit_tool="submit", prompt="p", cwd=str(tmp_path),
+    ))
+    assert result.effective_config == AgentConfig("openai", "doubao-seed-2-1-pro-260628")

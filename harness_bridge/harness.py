@@ -21,6 +21,12 @@ handler bodies serve all backends unchanged.
 
 Every run_agent() call is wrapped in `retry_transient`. Runtime-specific
 session, transport and recovery behavior remains inside its adapter.
+
+Optionally, a caller can pass an ordered `ModelPool` (or set AGENT_MODEL_POOL)
+to fall back to a different {harness, model} when the current one is
+provably broken (auth/permission/unknown-model, or repeated malformed
+submissions) -- see ModelPool below. Without one, behavior is unchanged: a
+single AgentConfig resolved once from HARNESS/MODEL.
 """
 
 from __future__ import annotations
@@ -61,6 +67,41 @@ class AgentLimitExhausted(RuntimeError):
 
 class AgentIncompleteError(RuntimeError):
     """The run ended without the submit tool ever firing."""
+
+
+def _qualname(e: BaseException) -> str:
+    return f"{type(e).__module__}.{type(e).__qualname__}"
+
+
+def _is_malformed_submission(e: BaseException) -> bool:
+    """The model itself produced a turn the gateway/SDK could not accept --
+    an empty tool name (agents.exceptions.ModelBehaviorError, seen 2026-09-09:
+    'Tool , not found') or a tool call missing its arguments (Ark's structured
+    error code 'MissingParameter' on `input.arguments`, seen 2026-09-08). Not
+    a network/gateway blip and not a real answer either; a fresh turn on the
+    *same* backend is the cheap recovery, same tier as TRANSIENT_PATTERN.
+
+    Classified by type / structured field, not by matching the rendered
+    message text, so a reworded SDK message or a new-but-equivalent Ark error
+    code is still caught without a new regex entry. Duck-typed on qualified
+    class name / an attribute openai's APIError family always sets, so this
+    module does not need to import `agents` or `openai` just to classify an
+    error -- callers on the claude/deepseek backends never load either.
+    """
+    if _qualname(e) == "agents.exceptions.ModelBehaviorError":
+        return True
+    return getattr(e, "code", None) == "MissingParameter"
+
+
+def _is_startup_failure(e: BaseException) -> bool:
+    """Auth/permission or unknown-model errors (issue #1): retrying the same
+    backend can never succeed, only a different one can. Duck-typed on
+    openai's 401/403/404 exception classes -- the only ones this has real
+    evidence for; extend when another backend's equivalent is actually seen,
+    not speculatively."""
+    return _qualname(e) in {
+        "openai.AuthenticationError", "openai.PermissionDeniedError", "openai.NotFoundError",
+    }
 
 
 # --------------------------------------------------------------------------
@@ -135,28 +176,77 @@ def wall_seconds() -> float | None:
     return minutes * 60 if minutes > 0 else None
 
 
-async def retry_transient(coro_fn: Callable[[], Awaitable[T]], label: str) -> T:
+MAX_MALFORMED_ATTEMPTS = 2   # one retry on the same backend before it counts against the pool
+MAX_INCOMPLETE_ATTEMPTS = 2  # ditto for a run that never submitted
+
+
+async def retry_transient(
+    coro_fn: Callable[[], Awaitable[T]],
+    label: str,
+    *,
+    pool: "ModelPool | None" = None,
+) -> T:
     """Run coro_fn(); on a transient-looking failure, retry a bounded number
     of times with linear backoff; on a usage/rate-limit-looking failure,
     wait and retry, bounded by a total wait budget (env AGENT_LIMIT_WAIT_MIN
     minutes between tries, default 10; AGENT_LIMIT_WAIT_MAX_H total hours,
-    default 12). Any other failure raises immediately."""
+    default 12). Any other failure raises immediately.
+
+    `pool`, if given, is consulted (never mutated by anything else) when a
+    failure is provably not fixed by retrying the same backend: an
+    auth/permission/unknown-model error advances immediately, a run that
+    never submits or keeps producing malformed submissions advances after
+    a couple of same-backend retries. `coro_fn` is expected to read
+    `pool.current()` itself on every call (`run_agent()` does); this
+    function only decides *when* to advance and re-invoke `coro_fn`.
+    Exhausting the pool raises with every abandoned candidate's reason
+    attached. Without a pool, every one of these behaves exactly as before
+    -- raise immediately.
+    """
     wait_min = _env_float("AGENT_LIMIT_WAIT_MIN", DEFAULT_LIMIT_WAIT_MINUTES)
     max_h = _env_float("AGENT_LIMIT_WAIT_MAX_H", DEFAULT_LIMIT_WAIT_MAX_HOURS)
     waited = 0.0
     limit_attempt = 0
     transient_attempts = 0
     timeout_attempts = 0
+    malformed_attempts = 0
+    incomplete_attempts = 0
+
+    def _advance_or_raise(reason: str, final: Exception) -> bool:
+        """True if the pool advanced (caller should retry); raises `final`
+        (with every candidate's reason attached) if there is nowhere left to
+        fall back to, including when no pool was given at all."""
+        if pool is None or not pool.can_advance():
+            if pool is not None:
+                trail = "; ".join(f"{c}: {r}" for c, r in [*pool.failures(), (pool.current(), reason)])
+                raise type(final)(f"[{label}] model pool exhausted ({trail})") from None
+            raise final
+        old = pool.current()
+        new = pool.advance(reason)
+        log.warning(f"== [{label}] falling back from {old} to {new}: {reason[:200]}")
+        return True
+
     while True:
         try:
             return await coro_fn()
-        except AgentIncompleteError:
+        except AgentIncompleteError as e:
             # The run completed and the model simply never submitted. Its
             # message quotes the model's final reply, so it must never reach
             # the classifiers below: a biology answer mentioning "capacity"
             # would otherwise read as a usage limit and park the job for up
             # to AGENT_LIMIT_WAIT_MAX_H, re-running the whole session each time.
-            raise
+            # Without a pool this still raises on the very first occurrence,
+            # unchanged from before pools existed -- the bounded retry below
+            # is a pool-only behavior, not a default nobody asked for.
+            if pool is None:
+                raise
+            incomplete_attempts += 1
+            if incomplete_attempts < MAX_INCOMPLETE_ATTEMPTS:
+                log.info(f"== [{label}] {e} — one fresh attempt")
+                continue
+            if _advance_or_raise(str(e), e):
+                incomplete_attempts = 0
+                continue
         except AgentTimeout as e:
             timeout_attempts += 1
             if timeout_attempts >= MAX_TIMEOUT_ATTEMPTS:
@@ -165,6 +255,21 @@ async def retry_transient(coro_fn: Callable[[], Awaitable[T]], label: str) -> T:
             continue
         except Exception as e:
             msg = str(e)
+            if _is_startup_failure(e):
+                # Retrying the same backend can never fix an auth/permission/
+                # unknown-model error -- only a different candidate can, so
+                # there is no same-backend retry step here at all.
+                if _advance_or_raise(msg, e):
+                    continue
+            if _is_malformed_submission(e):
+                malformed_attempts += 1
+                if malformed_attempts < MAX_MALFORMED_ATTEMPTS:
+                    log.info(f"== [{label}] malformed submission (attempt {malformed_attempts}/"
+                          f"{MAX_MALFORMED_ATTEMPTS}): {msg[:160]!r} — one fresh turn")
+                    continue
+                if _advance_or_raise(msg, e):
+                    malformed_attempts = 0
+                    continue
             if TRANSIENT_PATTERN.search(msg):
                 transient_attempts += 1
                 if transient_attempts >= MAX_TRANSIENT_ATTEMPTS:
@@ -178,6 +283,10 @@ async def retry_transient(coro_fn: Callable[[], Awaitable[T]], label: str) -> T:
                 await asyncio.sleep(wait)
                 continue
             if LIMIT_PATTERN.search(msg):
+                # A busy provider is not the pool's problem: waiting is the
+                # recovery, and falling back here would quietly move a run
+                # onto a different (possibly pricier) backend just because
+                # the first one was busy (issue #1, explicitly not a fallback).
                 limit_attempt += 1
                 if waited / 3600 >= max_h:
                     raise AgentLimitExhausted(
@@ -246,6 +355,13 @@ class AgentRunResult:
     submitted: dict | None  # whatever the submit tool's handler captured; None if it never fired
     transcript_text: str | None  # best-effort final assistant text, for *_notes.md-style logging
     cost_usd: float | None  # best-effort; None where the backend doesn't report it
+    # The config that actually produced this result -- set by run_agent(), never
+    # by an adapter (adapters only see a plain model string, not the resolved
+    # AgentConfig). Defaults to None only for the rare direct adapter-level
+    # construction in tests; every run_agent() caller gets a real value, even
+    # with no pool, so "what backend actually answered this" never requires
+    # re-deriving it from HARNESS/MODEL after the fact.
+    effective_config: "AgentConfig | None" = None
 
 
 # Tool names each read-only capability exposes to the model. HARNESS=claude
@@ -308,6 +424,78 @@ class AgentConfig:
 
     def as_manifest(self) -> dict[str, str]:
         return {"harness": self.harness, "model": self.model}
+
+    def __str__(self) -> str:
+        return f"{self.harness}:{self.model}"
+
+
+class ModelPool:
+    """Ordered {harness, model} candidates, first = primary. `retry_transient`
+    advances forward on a provably-broken current candidate (never back --
+    'one fallback per failure class, no ping-pong'); everything else about a
+    fallback (which failures qualify, backoff) lives in retry_transient, this
+    object only tracks position and the trail of what failed and why.
+
+    One instance per *stickiness scope* -- the caller decides what that scope
+    is (e.g. ECA-RSI creates one per crosssample/zoomin stage, matching
+    `.rsi-stage.json`'s own granularity, and threads it through every agent
+    call in that stage) and passes the same instance to every `run_agent()`
+    call that should share it. The bridge has no opinion on what a "stage"
+    is; it only tracks which candidate is current.
+    """
+
+    def __init__(self, candidates: list[AgentConfig]) -> None:
+        if not candidates:
+            raise ValueError("ModelPool needs at least one candidate")
+        self._candidates = list(candidates)
+        self._index = 0
+        self._failures: list[tuple[AgentConfig, str]] = []
+
+    def current(self) -> AgentConfig:
+        return self._candidates[self._index]
+
+    def can_advance(self) -> bool:
+        return self._index + 1 < len(self._candidates)
+
+    def advance(self, reason: str) -> AgentConfig:
+        if not self.can_advance():
+            raise RuntimeError("model pool exhausted")
+        self._failures.append((self.current(), reason))
+        self._index += 1
+        return self.current()
+
+    def failures(self) -> list[tuple[AgentConfig, str]]:
+        """(config, reason) for every candidate abandoned so far, in order --
+        attached to the final error message when the whole pool is exhausted."""
+        return list(self._failures)
+
+
+def parse_model_pool(spec: str) -> list[AgentConfig]:
+    """'harness:model,harness:model,...' -- harness and model are always
+    paired in one token, never two separate lists: a model pinned without its
+    harness is exactly how a run asks one backend for another's model id
+    (eca-pp#6, 257 generated job scripts pinned a claude model with no
+    HARNESS=claude)."""
+    out = []
+    for item in spec.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        harness, sep, model = item.partition(":")
+        if not sep or not harness.strip() or not model.strip():
+            raise ValueError(f"AGENT_MODEL_POOL entry {item!r} must be 'harness:model'")
+        out.append(resolve_agent_config(harness=harness.strip(), model=model.strip()))
+    if not out:
+        raise ValueError("AGENT_MODEL_POOL is set but empty")
+    return out
+
+
+def resolve_model_pool(environ: Mapping[str, str] | None = None) -> "ModelPool | None":
+    """None when AGENT_MODEL_POOL is unset -- the single-config path is then
+    unchanged from before pools existed."""
+    env = os.environ if environ is None else environ
+    spec = env.get("AGENT_MODEL_POOL", "").strip()
+    return ModelPool(parse_model_pool(spec)) if spec else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -417,24 +605,36 @@ async def run_agent(
     allowed_builtin: tuple[str, ...] = ("read", "glob", "grep"),
     label: str = "agent",
     max_buffer_size: int | None = None,
+    pool: "ModelPool | None" = None,
 ) -> AgentRunResult:
     """Run one agent turn to completion; raise AgentIncompleteError if
     `submit_tool` never fired. `allowed_builtin` is the read-only filesystem
     exploration surface ("read", "glob", "grep") plus "tasks" — a session
     task list the model keeps as its own progress checklist (Claude Code's
     TaskCreate/TaskUpdate/TaskList/TaskGet; the DeepSeek and OpenAI backends
-    serve same-named in-memory tools so prompts stay identical). The model
-    never gets write access under any backend."""
+    serve same-named in-memory tools so prompts stay identical). The
+    model never gets write access under any backend.
+
+    `pool`: an ordered ModelPool to fall back through on a provably-broken
+    current candidate (see ModelPool). Falls back to AGENT_MODEL_POOL from
+    the environment when not given explicitly; with neither, a single
+    AgentConfig is resolved from HARNESS/MODEL exactly as before pools
+    existed. `model` is ignored once a pool is in play -- pass a one-item
+    pool instead of both.
+    """
     ensure_logging()
-    config = resolve_agent_config(model=model)
+    if pool is None:
+        pool = resolve_model_pool()
+    single_config = None if pool is not None else resolve_agent_config(model=model)
     _validate_tool_table(tools, submit_tool, allowed_builtin)
-    adapter = importlib.import_module(_BACKENDS[config.harness][0], __package__)
     wall = wall_seconds()
     tool_times: dict[str, list[float]] = {}
     tools = [_timed(spec, tool_times, label) for spec in tools]
     started = time.monotonic()
 
     async def _attempt() -> AgentRunResult:
+        config = pool.current() if pool is not None else single_config
+        adapter = importlib.import_module(_BACKENDS[config.harness][0], __package__)
         coro = adapter.run_agent(
             tools=tools, submit_tool=submit_tool, prompt=prompt, system_prompt=system_prompt,
             cwd=cwd, model=config.model, effort=effort, max_turns=max_turns,
@@ -442,17 +642,21 @@ async def run_agent(
             wall_seconds=wall,
         )
         if wall is None:
-            return await coro
-        try:
-            # the backend enforces the budget itself (dsh: watchdog closes the
-            # runtime; claude: cancellation tears the CLI down); this is the
-            # backstop that also covers a backend stuck in its own teardown
-            return await asyncio.wait_for(coro, timeout=wall + 120)
-        except asyncio.TimeoutError:
-            raise AgentTimeout(f"[{label}] agent run exceeded the wall-clock budget of {wall / 60:g} min "
-                               f"(AGENT_WALL_MIN)") from None
+            result = await coro
+        else:
+            try:
+                # the backend enforces the budget itself (dsh: watchdog closes
+                # the runtime; claude: cancellation tears the CLI down); this
+                # is the backstop that also covers a backend stuck in its own
+                # teardown
+                result = await asyncio.wait_for(coro, timeout=wall + 120)
+            except asyncio.TimeoutError:
+                raise AgentTimeout(f"[{label}] agent run exceeded the wall-clock budget of "
+                                   f"{wall / 60:g} min (AGENT_WALL_MIN)") from None
+        result.effective_config = config
+        return result
 
     try:
-        return await retry_transient(_attempt, label)
+        return await retry_transient(_attempt, label, pool=pool)
     finally:
         _log_tool_summary(label, tool_times, time.monotonic() - started)
