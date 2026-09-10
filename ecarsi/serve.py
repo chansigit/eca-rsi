@@ -245,6 +245,7 @@ NAV_JS = r"""
   window.addEventListener("hashchange", () => { const p = fromHash(); if (p) show(p); });
   items.forEach(i => i.addEventListener("click", ev => { if (ev.target.closest("input.sel")) return; ev.preventDefault(); show("/" + i.dataset.name + "/"); }));
   if (home) home.addEventListener("click", ev => { ev.preventDefault(); show("/_home"); });
+  const brand = $("brand"); if (brand) brand.addEventListener("click", ev => { ev.preventDefault(); show("/_home"); });
   $("sb-toggle").addEventListener("click", () => document.body.classList.toggle("sb-hidden"));
   $("sb-show").addEventListener("click", () => document.body.classList.remove("sb-hidden"));
   $("reload").addEventListener("click", () => { try { frame.contentWindow.location.reload(); } catch (e) { frame.src = frame.src; } });
@@ -401,6 +402,7 @@ aside.sb{width:360px;flex:0 0 360px;background:var(--card);border-right:1px soli
 .sb-head .brand{display:flex;align-items:center;justify-content:space-between;gap:var(--s1)}
 .sb-head .brand b{font-size:var(--t5)}.sb-head .brand small{color:var(--muted);font-size:var(--t3);font-weight:400;margin-left:.4em}
 .sb-head .brand .logo{font-size:var(--t6);margin-right:.35em}
+.sb-head .brand a{color:inherit;text-decoration:none;display:inline-flex;align-items:center}.sb-head .brand a:hover b{color:var(--accent)}
 .sb-head input[type=search]{width:100%;font:inherit;font-size:var(--t3);padding:8px 12px;border:1px solid var(--line-strong);border-radius:var(--r);background:var(--card)}
 .sb-head .sort-row{display:flex;align-items:center;gap:var(--s1);font-size:var(--t3);color:var(--muted)}
 .sb-head select{font:inherit;font-size:var(--t3);padding:4px 8px;border:1px solid var(--line-strong);border-radius:6px;background:var(--card);color:var(--ink)}
@@ -496,7 +498,7 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
     sidebar = (
         '<aside class="sb" id="sb" aria-label="datasets"><div class="sb-resizer" id="sb-resizer" title="drag to resize"></div>'
         '<div class="sb-head">'
-        f'<div class="brand"><span>{logo()}<b>{APP}</b><small><span id="nav-n">{len(items)}</span> datasets</small></span>'
+        f'<div class="brand"><a id="brand" href="/_home" title="overview">{logo()}<b>{APP}</b><small><span id="nav-n">{len(items)}</span> datasets</small></a>'
         '<button class="icon" id="sb-toggle" title="hide sidebar" aria-label="hide sidebar">&#9776;</button></div>'
         '<input id="nav-q" type="search" placeholder="Filter datasets…" aria-label="filter datasets" autocomplete="off">'
         '<div class="sort-row"><label for="nav-sort">sort</label><select id="nav-sort">'

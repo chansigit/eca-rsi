@@ -19,6 +19,7 @@ def test_groups_collapsed_with_tallies_and_species(tmp_path):
     assert '<span class="st released">2 done</span> · <span class="st running">2 working</span> · <span class="st failed">1 failed</span>' in html
     assert 'data-species="mm"' in html and 'data-species="hs"' in html
     assert '<select id="nav-sp"><option value="">all</option>' in html
+    assert '<a id="brand" href="/_home"' in html and 'brand.addEventListener("click"' in serve.NAV_JS
     assert "<option value=\"hs\">hs (2)</option>" in html and "<option value=\"mm\">mm (3)</option>" in html
 
 
