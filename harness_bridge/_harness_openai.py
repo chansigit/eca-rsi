@@ -447,6 +447,8 @@ async def run_agent(
                     submitted=submitted_holder["value"],
                     transcript_text="\n\n".join(transcript_parts) or None,
                     cost_usd=None,
+                    tokens_in=usage_totals["input"],
+                    tokens_out=usage_totals["output"],
                 )
 
             if nudges >= max_nudges or turns_used >= max_turns:

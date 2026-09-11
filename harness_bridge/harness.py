@@ -362,6 +362,8 @@ class AgentRunResult:
     # with no pool, so "what backend actually answered this" never requires
     # re-deriving it from HARNESS/MODEL after the fact.
     effective_config: "AgentConfig | None" = None
+    tokens_in: int | None = None  # best-effort; None where the backend doesn't report it
+    tokens_out: int | None = None
 
 
 # Tool names each read-only capability exposes to the model. HARNESS=claude
