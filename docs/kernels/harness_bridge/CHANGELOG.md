@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.11 - 2026-09-11
+
+- A transient failure that outlives the whole same-backend backoff schedule
+  (provider down for hours, not a gateway hiccup) now advances the
+  `ModelPool` to the next candidate instead of ending the run; without a
+  pool it still raises as before. Usage/rate limits still never fall back.
+
 ## 0.2.10 - 2026-09-11
 
 - Bound each Ark HTTP request with an explicit client timeout

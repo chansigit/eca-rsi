@@ -196,7 +196,10 @@ async def retry_transient(
     failure is provably not fixed by retrying the same backend: an
     auth/permission/unknown-model error advances immediately, a run that
     never submits or keeps producing malformed submissions advances after
-    a couple of same-backend retries. `coro_fn` is expected to read
+    a couple of same-backend retries, and a transient failure that outlives
+    the whole backoff schedule (provider down, not a hiccup) advances too.
+    Only a usage/rate limit never advances: waiting is its recovery.
+    `coro_fn` is expected to read
     `pool.current()` itself on every call (`run_agent()` does); this
     function only decides *when* to advance and re-invoke `coro_fn`.
     Exhausting the pool raises with every abandoned candidate's reason
@@ -273,10 +276,19 @@ async def retry_transient(
             if TRANSIENT_PATTERN.search(msg):
                 transient_attempts += 1
                 if transient_attempts >= MAX_TRANSIENT_ATTEMPTS:
-                    raise RuntimeError(
+                    # The backoff (5x, under a minute of sleep) is sized for a
+                    # gateway hiccup. A provider that is still failing after
+                    # it is down for real (Ark, 2026-09-09, hours) -- exactly
+                    # what a second pool candidate is for. Unlike a usage
+                    # limit, this is not "busy, wait": nothing says when it
+                    # comes back.
+                    final = RuntimeError(
                         f"[{label}] transient agent failure persisted after "
                         f"{transient_attempts} attempts: {msg}"
-                    ) from None
+                    )
+                    if _advance_or_raise(msg, final):
+                        transient_attempts = 0
+                        continue
                 wait = TRANSIENT_BACKOFF_SECONDS * transient_attempts
                 log.info(f"== [{label}] transient agent failure (attempt {transient_attempts}/"
                       f"{MAX_TRANSIENT_ATTEMPTS}): {msg[:160]!r} — retrying in {wait}s")

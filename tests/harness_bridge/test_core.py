@@ -422,6 +422,26 @@ def test_malformed_submission_falls_back_to_the_next_pool_candidate(instant_slee
     assert any("falling back from openai:flaky to claude:steady" in r.message for r in caplog.records)
 
 
+def test_persistent_transient_failure_falls_back_to_the_next_pool_candidate(instant_sleep, caplog):
+    # A provider that is still timing out after the whole backoff schedule
+    # is down, not hiccuping: with a pool the run moves on instead of dying.
+    pool = ModelPool([AgentConfig("openai", "down"), AgentConfig("claude", "steady")])
+    attempt, calls = _failing([RuntimeError("Request timed out.")] * H.MAX_TRANSIENT_ATTEMPTS, then="ok")
+    with caplog.at_level(logging.WARNING):
+        assert asyncio.run(retry_transient(attempt, "t", pool=pool)) == "ok"
+    assert calls["n"] == H.MAX_TRANSIENT_ATTEMPTS + 1
+    assert str(pool.current()) == "claude:steady"
+    assert any("falling back from openai:down to claude:steady" in r.message for r in caplog.records)
+
+
+def test_persistent_transient_failure_with_exhausted_pool_carries_the_trail(instant_sleep):
+    pool = ModelPool([AgentConfig("openai", "down")])
+    attempt, calls = _failing([RuntimeError("Request timed out.")] * 10)
+    with pytest.raises(RuntimeError, match="model pool exhausted"):
+        asyncio.run(retry_transient(attempt, "t", pool=pool))
+    assert calls["n"] == H.MAX_TRANSIENT_ATTEMPTS
+
+
 def test_startup_failure_falls_back_immediately_with_no_same_backend_retry(instant_sleep):
     pool = ModelPool([AgentConfig("openai", "wrong-key"), AgentConfig("claude", "steady")])
     attempt, calls = _failing([_FakeAuthenticationError("bad key")], then="ok")
