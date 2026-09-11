@@ -492,6 +492,24 @@ def parse_model_pool(spec: str) -> list[AgentConfig]:
     return out
 
 
+def rotate_model_pool(spec: str, offset: int) -> str:
+    """Re-serialize an AGENT_MODEL_POOL spec starting at candidate `offset`
+    (mod length), wrapping the rest around behind it as the fallback
+    continuation -- e.g. rotate_model_pool("a:1,b:2,c:3", 1) == "b:2,c:3,a:1".
+
+    For a host launching many independent parallel workers against one
+    equally-trusted pool (osp per-sample workers, zmip per-lineage workers),
+    every worker resolving AGENT_MODEL_POOL fresh in its own process means
+    they all try candidate 0 first -- N-way concurrency collapses onto one
+    endpoint and invites exactly the rate-limit storm a pool of alternatives
+    was supposed to avoid. Handing worker i a copy of AGENT_MODEL_POOL
+    rotated by i spreads first attempts across the pool while each worker
+    keeps its own full fallback depth if its (rotated) primary fails."""
+    candidates = parse_model_pool(spec)
+    i = offset % len(candidates)
+    return ",".join(str(c) for c in candidates[i:] + candidates[:i])
+
+
 def resolve_model_pool(environ: Mapping[str, str] | None = None) -> "ModelPool | None":
     """None when AGENT_MODEL_POOL is unset -- the single-config path is then
     unchanged from before pools existed."""

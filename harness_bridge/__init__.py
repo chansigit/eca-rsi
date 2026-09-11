@@ -17,6 +17,7 @@ from .harness import (
     resolve_agent_config,
     resolve_model_pool,
     retry_transient,
+    rotate_model_pool,
     run_agent,
     wall_seconds,
 )
@@ -40,8 +41,9 @@ __all__ = [
     "resolve_agent_config",
     "resolve_model_pool",
     "retry_transient",
+    "rotate_model_pool",
     "run_agent",
     "wall_seconds",
 ]
 
-__version__ = "0.2.8"
+__version__ = "0.2.9"

@@ -18,6 +18,7 @@ from harness_bridge import (
     ToolSpec,
     backend_capabilities,
     parse_model_pool,
+    rotate_model_pool,
     resolve_agent_config,
     resolve_model_pool,
     retry_transient,
@@ -319,6 +320,20 @@ def test_resolve_model_pool_is_none_when_unset():
 def test_resolve_model_pool_reads_the_env_var():
     pool = resolve_model_pool(environ={"AGENT_MODEL_POOL": "openai:doubao-seed-2-1-turbo,claude:claude-sonnet-5"})
     assert [str(pool.current())] == ["openai:doubao-seed-2-1-turbo"]
+
+
+def test_rotate_model_pool_wraps_around():
+    spec = "openai:m1,claude:m2,deepseek:m3"
+    assert rotate_model_pool(spec, 0) == "openai:m1,claude:m2,deepseek:m3"
+    assert rotate_model_pool(spec, 1) == "claude:m2,deepseek:m3,openai:m1"
+    assert rotate_model_pool(spec, 2) == "deepseek:m3,openai:m1,claude:m2"
+    assert rotate_model_pool(spec, 3) == "openai:m1,claude:m2,deepseek:m3"  # mod length
+    assert rotate_model_pool(spec, -1) == "deepseek:m3,openai:m1,claude:m2"  # python's %, wraps like a worker index never does
+
+
+def test_rotate_model_pool_rejects_the_same_malformed_specs_as_parse():
+    with pytest.raises(ValueError, match="harness:model"):
+        rotate_model_pool("openai", 0)
 
 
 def test_model_pool_needs_at_least_one_candidate():
