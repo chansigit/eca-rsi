@@ -103,3 +103,26 @@ def test_cluster_and_deg_embeds_the_three_cell_minimum():
     result = cluster_and_deg(data, resolutions=(1.0,), primary_resolution=1.0, make_plots=False)[0]
     assert result.obsm["X_umap"].shape == (3, 2)
     assert np.isfinite(result.obsm["X_umap"]).all()
+
+
+def test_clustered_output_is_slim(tmp_path):
+    """0.1.6: no .raw copy of X (DE and marker scores read X), int64 counts
+    narrowed to int32, float32 PCA -- clustered.h5ad was ~1/3 duplicate bytes."""
+    import h5py
+    from scipy import sparse
+
+    rng = np.random.default_rng(1)
+    dense = rng.poisson(2.0, size=(60, 80)).astype(np.int64)
+    dense[:30, :20] += 15  # two populations so DE has something to rank
+    counts = sparse.csr_matrix(dense)
+    data = ad.AnnData(counts.astype(np.float32), obs=pd.DataFrame(index=[f"c{i}" for i in range(60)]),
+                      var=pd.DataFrame(index=[f"g{i}" for i in range(80)]))
+    data.layers["counts"] = counts
+    result, de_df, *_ = cluster_and_deg(data, resolutions=(1.0,), primary_resolution=1.0, make_plots=False,
+                                        outdir=str(tmp_path), marker_genes={"pop1": ["g0", "g1", "absent"]})
+    assert result.raw is None
+    assert result.layers["counts"].dtype == np.int32 and (result.layers["counts"] != counts).nnz == 0
+    assert result.obsm["X_pca"].dtype == np.float32
+    assert "score_pop1" in result.obs and len(de_df)  # scoring and DE ran on X
+    with h5py.File(tmp_path / "clustered.h5ad") as h:
+        assert "raw" not in h and h["layers/counts/data"].dtype == np.int32 and h["obsm/X_pca"].dtype == np.float32

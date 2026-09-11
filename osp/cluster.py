@@ -10,7 +10,7 @@ belong in this module.
 Standard scRNA-seq clustering flow:
   HVG(seurat) → scale → PCA(50) → neighbors → leiden (flavor="igraph",
   n_iterations=2, adjustable resolution) → umap → rank_genes_groups
-  (wilcoxon, use_raw=True) → per-cluster top-N DE gene table → PAGA
+  (wilcoxon on the log-normalized X) → per-cluster top-N DE gene table → PAGA
   (cluster-cluster connectivity over the neighbors graph).
 
 Two API layers:
@@ -330,7 +330,7 @@ def cluster_and_deg(
     Returns
     -------
     (adata, de_df, cluster_summary_df, paga_df, decontx_by_cluster_df)
-      de_df: top_n_de DE genes per cluster (wilcoxon, use_raw=True, with
+      de_df: top_n_de DE genes per cluster (wilcoxon on X, with
         pct1/pct2 expression-fraction columns)
       cluster_summary_df: per-cluster cell count and median doublet_score
       paga_df: cluster x cluster PAGA connectivity matrix
@@ -395,11 +395,18 @@ def cluster_and_deg(
         # heatmap need raw counts for raw - decontX_counts, and the exported
         # clustered.h5ad keeps a copy of the raw counts this way too.
         ad.layers[counts_layer] = ad.X.copy()
+    counts = ad.layers[counts_layer]
+    # int64 counts double the layer for nothing (a UMI count never nears
+    # 2^31): narrow to int32 for clustered.h5ad. Float counts are left alone.
+    if np.issubdtype(counts.dtype, np.integer) and counts.dtype.itemsize > 4 and counts.max() <= np.iinfo(np.int32).max:
+        ad.layers[counts_layer] = counts.astype(np.int32)
 
     log.info("== normalize/log1p")
     sc.pp.normalize_total(ad, target_sum=1e4)
     sc.pp.log1p(ad)
-    ad.raw = ad
+    # X stays the full log-normalized gene space from here on (HVG/scale work
+    # on a copy), so DE and marker scoring read X directly; no .raw copy is
+    # kept (0.1.6 -- it was a byte-identical duplicate in every clustered.h5ad)
 
     log.info("== HVG")
     sc.pp.highly_variable_genes(ad, n_top_genes=n_top_genes, flavor="seurat")
@@ -432,7 +439,8 @@ def cluster_and_deg(
         X_pca_input = X_hvg
 
     n_comps = min(n_pcs, n_features - 1, ad.n_obs - 1)
-    ad.obsm["X_pca"] = PCA(n_components=n_comps, svd_solver="arpack", random_state=0).fit_transform(X_pca_input)
+    # float32: neighbours/leiden/plots never use more, and float64 doubles the embedding on disk
+    ad.obsm["X_pca"] = PCA(n_components=n_comps, svd_solver="arpack", random_state=0).fit_transform(X_pca_input).astype(np.float32)
     del hvg
 
     log.info("== neighbors (use_rep=X_pca)")
@@ -461,7 +469,7 @@ def cluster_and_deg(
         de_top = pd.DataFrame(columns=de_columns)
     else:
         log.info(f"== rank_genes_groups on {primary_key}")
-        sc.tl.rank_genes_groups(ad, primary_key, method="wilcoxon", use_raw=True, pts=True)
+        sc.tl.rank_genes_groups(ad, primary_key, method="wilcoxon", use_raw=False, pts=True)
         de_df = sc.get.rank_genes_groups_df(ad, group=None)
         # pct1/pct2 = fraction of cells expressing (non-zero) the gene inside this
         # cluster / in all other cells; column names match deg_two_groups' output
@@ -763,11 +771,11 @@ def _score_marker_genes(ad, marker_genes):
     columns written. Sets whose genes are all absent are skipped."""
     score_cols = []
     for name, genes in (marker_genes or {}).items():
-        genes_ok = [g for g in genes if g in ad.raw.var_names]
+        genes_ok = [g for g in genes if g in ad.var_names]
         if not genes_ok:
             log.info(f"== marker set {name!r}: none of its genes are present, skipped")
             continue
-        sc.tl.score_genes(ad, genes_ok, score_name=f"score_{name}", use_raw=True)
+        sc.tl.score_genes(ad, genes_ok, score_name=f"score_{name}", use_raw=False)
         score_cols.append(f"score_{name}")
     return score_cols
 

@@ -547,7 +547,7 @@ def qc_one_sample(
         # returned DecontXResult in ourselves (same fields as its copy branch)
         ad.obs["decontX_contamination"] = res.contamination
         ad.obs["decontX_clusters"] = pd.Categorical(res.z)
-        ad.layers["decontX_counts"] = res.decontx_counts.T.tocsr()
+        ad.layers["decontX_counts"] = res.decontx_counts.T.tocsr().astype(np.float32)  # float64 doubled the layer
         still = _decontx_degenerate(ad.obs)
         if still is not None:
             # Contamination estimates are untrustworthy even with supplied
