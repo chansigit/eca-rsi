@@ -281,7 +281,7 @@ def _write_release(unit: Path, rounds: list[Path], stats: list[dict], forced: bo
                f"Flags: {L.RELEASE}/needs_review.md ({len(items)} items: "
                + ", ".join(f"{t} {n}" for _, t, n, _ in review.counts(items)) + ")",
                "", f"Landing page: {L.INDEX} (open directly in a browser; optional live view with python -m ecarsi.serve)",
-               "", *cost.summary_md(unit)]
+               "", *cost.summary_md(unit), "", *cost.backend_summary_md(unit)]
     (rel / "summary.md").write_text("\n".join(summary) + "\n")
     # the same facts as a small machine-readable file, so nothing downstream
     # has to open final.h5ad or parse markdown to get the headline numbers
@@ -290,7 +290,7 @@ def _write_release(unit: Path, rounds: list[Path], stats: list[dict], forced: bo
         "final_cells": stats[-1]["n_out"], "input_cells": stats[0]["n_in"] if stats else None,
         "final_h5ad": str(L.release_dir(unit) / "final.h5ad"), "labels": ["zmip_ann_coarse", "zmip_ann_fine"],
         "round_stats": stats, "needs_review": {t: n for _, t, n, _ in review.counts(items)},
-        "agent_cost": cost.summarize(unit)}, indent=2, default=str))
+        "agent_cost": cost.summarize(unit), "backends": cost.round_backends(unit)}, indent=2, default=str))
 
 
 def _release(unit: Path, rounds: list[Path], stats: list[dict], forced: bool, superseded: bool) -> None:

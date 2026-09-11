@@ -264,14 +264,7 @@ def _pump(proc: subprocess.Popen, tag: str, tail: deque, unit: Path | None = Non
         tail.append(line)
         print(f"[{tag}] {line}", flush=True)
         if unit is not None:
-            m = cost.COST_RE.search(line)
-            if m:
-                cost.record(unit, f"{L.PERSAMPLE}/{tag}", float(m.group("usd")), (m.group("label") or m.group("pre") or "").strip())
-                continue
-            m = cost.TOKEN_RE.search(line)
-            if m:
-                cost.record(unit, f"{L.PERSAMPLE}/{tag}", None, m.group("label").strip(),
-                             int(m.group("tin")), int(m.group("tout")))
+            cost._scan_line(unit, f"{L.PERSAMPLE}/{tag}", line)
 
 
 def drive(pending: list[dict], out_root: Path, annotate: bool, on_done=None) -> list[dict]:
