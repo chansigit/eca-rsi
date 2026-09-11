@@ -656,6 +656,12 @@ async def run_agent(
                 raise AgentTimeout(f"[{label}] agent run exceeded the wall-clock budget of "
                                    f"{wall / 60:g} min (AGENT_WALL_MIN)") from None
         result.effective_config = config
+        # The one line every caller can scrape off subprocess stdout to learn which
+        # {harness, model} actually answered -- printed for every backend, unlike the
+        # cost/usage lines below which are backend-specific. A host process orchestrating
+        # kernel subprocesses (osp per-sample workers, zmip per-lineage workers) has no
+        # other way to see this: AgentRunResult never crosses the process boundary.
+        log.info(f"== [{label}] resolved backend: harness={config.harness} model={config.model}")
         return result
 
     try:

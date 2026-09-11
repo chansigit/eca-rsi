@@ -502,3 +502,19 @@ def test_run_agent_records_effective_config_with_no_pool(monkeypatch, tmp_path):
         tools=[SUBMIT], submit_tool="submit", prompt="p", cwd=str(tmp_path),
     ))
     assert result.effective_config == AgentConfig("openai", "doubao-seed-2-1-pro-260628")
+
+
+def test_run_agent_logs_the_resolved_backend_for_any_caller_scraping_stdout(monkeypatch, tmp_path, caplog):
+    # osp per-sample and zmip per-lineage workers are subprocesses; the parent orchestrator
+    # only ever sees what lands on stdout, never the AgentRunResult object itself.
+    async def backend(**_kwargs):
+        return AgentRunResult({"ok": True}, None, None)
+
+    monkeypatch.setenv("HARNESS", "claude")
+    monkeypatch.setenv("MODEL", "claude-sonnet-5")
+    monkeypatch.setattr("harness_bridge._harness_claude.run_agent", backend)
+    with caplog.at_level("INFO"):
+        asyncio.run(harness_bridge.run_agent(
+            tools=[SUBMIT], submit_tool="submit", prompt="p", cwd=str(tmp_path), label="qc",
+        ))
+    assert "[qc] resolved backend: harness=claude model=claude-sonnet-5" in caplog.text
