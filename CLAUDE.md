@@ -94,6 +94,12 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
   `AGENT_WALL_MIN`(每次 agent 调用的墙钟预算,默认 180 分钟,所有后端都强制,超时重开一次);
   并发池:`PERSAMPLE_PARALLEL` / `PERSAMPLE_MEM_PER_CELL_MB`(persample)、`ZMIP_PARALLEL`(zoomin)，
   各层结合可用 CPU 和内存估算调度，具体配置以对应内核为准。
+  `AGENT_MODEL_POOL`(`harness:model,harness:model,...`,同一 stickiness scope 内的 agent 调用共用一个
+  `ModelPool` 按序降级,详见 agent-harness-bridge)在子进程边界(osp per-sample worker、zmip per-lineage worker)
+  各自重新解析、互不知情——`AGENT_MODEL_POOL_ROTATE=1`(2026-09-11,eca-rsi#7)让 persample.drive 和
+  zmip.lineage 各自的并发派发循环给第 N 个起的子进程一份轮转过 N 位的 pool(`rotate_model_pool`),
+  把并发请求摊开到 pool 里的不同模型,而不是全部先撞主候选;默认关,语义是"pool 里的模型同等可信任",
+  跟"pool 是质量排序的降级链"这个默认假设冲突,不能无条件打开。
 - agent runtime 实现在独立 `agent-harness-bridge` 包;`ecarsi.harness` / `msp.harness` / `osp.harness` 只是保持旧导入路径的 identity-preserving shim。adapter 回归测试在共享包,本仓库 `tests/test_harness_sync.py` 验证 shim 身份;`resources.py` 两份仍需逐字节相同。
 - persample 前半程接入已升级：逐来源实验映射、`eca_sample_id`、上游快照、完整实验池检查；
   同名样本默认跨来源隔离，跨文件合池须显式映射。统一 `ecarsi.osp_worker` 子进程调用 OSP 公共 API。

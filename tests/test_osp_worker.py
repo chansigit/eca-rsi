@@ -95,6 +95,45 @@ def test_nonzero_process_cannot_use_leftover_success(tmp_path, monkeypatch):
     assert persample.drive([entry], tmp_path, False) == [entry]
 
 
+def test_drive_rotates_the_model_pool_per_worker_when_opted_in(tmp_path, monkeypatch):
+    # 2-candidate pool, 3 workers launched in one batch: worker 0 and 2 land
+    # on the same (rotated-by-0-mod-2) start, worker 1 on the other -- proof
+    # that concurrent workers stop all hitting the same primary candidate.
+    import sys
+
+    monkeypatch.setattr(persample, "plan_concurrency", lambda _: (3, 1 << 30, 1))
+    monkeypatch.setattr(persample.time, "sleep", lambda _: None)
+    monkeypatch.setenv("AGENT_MODEL_POOL", "openai:m1,claude:m2")
+    monkeypatch.setenv("AGENT_MODEL_POOL_ROTATE", "1")
+    script = ("import os,pathlib;"
+              "pathlib.Path('pool_seen.txt').write_text(os.environ.get('AGENT_MODEL_POOL',''));"
+              "raise SystemExit(1)")
+    entries = []
+    for i, n in enumerate((3, 2, 1)):  # sorted by -n_cells -> launch order 0,1,2
+        outdir = tmp_path / f"s{i}"
+        entries.append({"value": f"s{i}", "n_cells": n, "outdir": str(outdir),
+                        "command": [sys.executable, "-c", script]})
+    persample.drive(entries, tmp_path, False)
+    seen = [(tmp_path / f"s{i}" / "pool_seen.txt").read_text() for i in range(3)]
+    assert seen == ["openai:m1,claude:m2", "claude:m2,openai:m1", "openai:m1,claude:m2"]
+
+
+def test_drive_does_not_rotate_by_default(tmp_path, monkeypatch):
+    import sys
+
+    monkeypatch.setattr(persample, "plan_concurrency", lambda _: (2, 1 << 30, 1))
+    monkeypatch.setattr(persample.time, "sleep", lambda _: None)
+    monkeypatch.setenv("AGENT_MODEL_POOL", "openai:m1,claude:m2")
+    script = ("import os,pathlib;"
+              "pathlib.Path('pool_seen.txt').write_text(os.environ.get('AGENT_MODEL_POOL',''));"
+              "raise SystemExit(1)")
+    entries = [{"value": f"s{i}", "n_cells": 2 - i, "outdir": str(tmp_path / f"s{i}"),
+                "command": [sys.executable, "-c", script]} for i in range(2)]
+    persample.drive(entries, tmp_path, False)
+    seen = [(tmp_path / f"s{i}" / "pool_seen.txt").read_text() for i in range(2)]
+    assert seen == ["openai:m1,claude:m2", "openai:m1,claude:m2"]  # every worker prefers the same primary
+
+
 def test_subset_rebuild_preserves_checkpoint_cell_identity(tmp_path):
     import pandas as pd
     h5 = tmp_path / "full.h5ad"

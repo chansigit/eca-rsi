@@ -270,7 +270,17 @@ def _pump(proc: subprocess.Popen, tag: str, tail: deque, unit: Path | None = Non
 def drive(pending: list[dict], out_root: Path, annotate: bool, on_done=None) -> list[dict]:
     """Run every pending sample's command as a child process under the
     concurrency plan; one retry per sample; failures go to failures.md.
-    Returns the entries that did not finish."""
+    Returns the entries that did not finish.
+
+    AGENT_MODEL_POOL_ROTATE=1 (with AGENT_MODEL_POOL set) hands the Nth
+    launched worker a copy of the pool rotated by N instead of the same
+    unrotated spec every worker would otherwise resolve fresh in its own
+    process -- spreads first attempts across an equally-trusted pool so
+    many concurrent samples don't all hit the same candidate at once
+    (eca-rsi#7). A retried sample gets the next launch's rotation, not the
+    one that just failed. Off by default: without it every worker prefers
+    the same primary, which is the right default for a quality-ranked
+    fallback list rather than equally-trusted alternatives."""
     import resource
 
     if not pending:
@@ -288,6 +298,9 @@ def drive(pending: list[dict], out_root: Path, annotate: bool, on_done=None) -> 
     for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS",
               "MSP_MAX_THREADS"):
         env[k] = str(threads)
+    pool_spec = env.get("AGENT_MODEL_POOL", "")
+    rotate = bool(pool_spec) and env.get("AGENT_MODEL_POOL_ROTATE", "").strip() not in ("", "0")
+    launched = 0
 
     queue = list(pending)
     running: dict[str, tuple] = {}  # value -> (proc, est, t0, entry, tail)
@@ -340,8 +353,13 @@ def drive(pending: list[dict], out_root: Path, annotate: bool, on_done=None) -> 
             outdir.mkdir(parents=True, exist_ok=True)
             attempts[value] = attempts.get(value, 0) + 1
             tail: deque = deque(maxlen=40)
+            child_env = env
+            if rotate:
+                from harness_bridge import rotate_model_pool
+                child_env = {**env, "AGENT_MODEL_POOL": rotate_model_pool(pool_spec, launched)}
+            launched += 1
             proc = subprocess.Popen(e["command"], stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, text=True, env=env, bufsize=1,
+                                    stderr=subprocess.STDOUT, text=True, env=child_env, bufsize=1,
                                     cwd=str(outdir))
             threading.Thread(target=_pump, args=(proc, value, tail, out_root.parent if out_root.name == L.PERSAMPLE else None), daemon=True).start()
             running[value] = (proc, est, time.time(), e, tail)
