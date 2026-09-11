@@ -144,6 +144,10 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
   ≥2 值；crosssample 作 MSP batch 列，`selection: sample_map`；`MSP_BATCH_COL` 仍优先，二者冲突报错）。
   无 map 时样本列 agent 可提 `exclude_cells` 提案（host 用 obs 当场校验，≤ 来源一半），`batch_key` 只由 agent **推荐**进
   needs_review，从不自动应用。FACS 例：blank `mouse.id`+`subtissue`+`cell_ontology_class` → `upstream_qc_blank`，`batch_key: mouse.id`。
+- **H5AD 瘦身(2026-09-10,eca-rsi#2)**:`organized.h5ad` 的 X 是空 csr 占位(`uns["X_placeholder"]` 说明),表达只在 `layers["counts"]`
+  ——`validate_matrix` 本来就不认 X 为 counts,OSP/MSP 都从 counts 重建 X;X 不能是 None,anndata backed 模式读 layers 要有 X 组。
+  三层写盘规则一致:整数 counts 宽于 4 字节则转 int32(float 不动)、不再存 `.raw`(与 X 逐字节相同的副本)、
+  嵌入 float32(osp 0.1.6 / msp 0.3.6 / ecarsi 0.2.6)。persample 的 `computed.h5ad` 仍是 clustered.h5ad 的整份拷贝(注释重试用的检查点),未动。
 - `ecarsi.design` 从 organized.h5ad 的 obs 推导 study design（每样本内恒定、跨样本变化的列，如 FACS 的 `subtissue` / `mouse.id`），
   以 `--design-context` 原文交给 MSP/ZMIP 的 inspect/annotate agent（含 round N≥2 与 zoomin）；只是 agent 上下文，
   与 `--report-context` 一样不进 run identity。`python -m ecarsi.design <unit>` 预览文本。

@@ -25,6 +25,8 @@ eca-rsi organize /path/to/eca-pp-output /path/to/new-run --plan-json plan.json
   TSV 在合并改名之前按原始细胞 ID 对齐；重复、缺失、额外 ID 均拒绝。
 - `organized.h5ad` 保留原始 metadata，并新增 `source_unit`、`eca_source_cell_id`、
   可选 `eca_pp_batch`、`eca_pp_cell_type`。这些列名保留给 RSI；输入发生重名会报错。
+  表达只在 `layers["counts"]`（整数宽于 4 字节则转 int32）；X 是空 csr 占位（`uns["X_placeholder"]`），
+  上游的归一化 X 不保留——`validate_matrix` 不认 X 为 counts，OSP/MSP 都从 counts 重建 X（0.2.6 起，eca-rsi#2）。
 
 `organize/manifest.json` 先记计划和 running 状态，逐单元登记输出指纹，全部完成后才记 complete。
 同输入、同适配代码的中断可继续完成剩余单元；旧目录或已修改的输入、计划、代码要求新目录。

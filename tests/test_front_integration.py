@@ -344,6 +344,29 @@ def test_dense_sources_with_different_genes_merge_as_zero_counts(tmp_path):
     assert (a[a.obs.source_unit == "A", "B-only"].layers["counts"] == 0).all()
 
 
+def test_organized_h5ad_is_a_slim_counts_carrier(tmp_path):
+    # the upstream's normalized X is dead weight (validate_matrix refuses X as a
+    # counts fallback; OSP/MSP rebuild X from layers["counts"]) -> an empty
+    # placeholder, and int64 counts narrow to int32
+    root, out = tmp_path / "in", tmp_path / "out"
+    step = source(root)
+    a = ad.read_h5ad(step / "standardized.h5ad")
+    a.layers["counts"] = a.layers["counts"].astype(np.int64)
+    a.write_h5ad(step / "standardized.h5ad")
+    p = plan_file(tmp_path / "p.json")
+    assert organize.main([str(root), str(out), "--plan-json", str(p)]) == 0
+    path = L.input_h5ad(L.unit_dir(out, "test-unit"))
+    o = ad.read_h5ad(path)
+    assert o.X.nnz == 0 and o.X.shape == a.shape and "X_placeholder" in o.uns
+    assert o.layers["counts"].dtype == np.int32
+    assert (o.layers["counts"] != a.layers["counts"]).nnz == 0  # values untouched
+    b = ad.read_h5ad(path, backed="r")  # persample validates the file backed: layers must stay reachable
+    try:
+        assert b.layers["counts"].shape == a.shape
+    finally:
+        b.file.close()
+
+
 @pytest.mark.parametrize("legacy_check", [True, False], ids=["0.5.0-with-check", "0.5.1-trust-raw"])
 def test_raw_expansion_results_are_preserved(tmp_path, legacy_check):
     root, out = tmp_path / "in", tmp_path / "out"

@@ -33,6 +33,26 @@ def _keep_mask(obs, flt):
     return obs[flt["column"]].astype(str).isin(vals).values
 
 
+def _slim(a) -> None:
+    """organized.h5ad is a counts carrier: every consumer (persample subsets,
+    OSP QC/cluster, MSP) rebuilds X from layers["counts"], and
+    validate_matrix() refuses X as a counts fallback -- so the upstream's
+    normalized X was dead weight, half the matrix bytes of a file kept for
+    the unit's lifetime and mirrored. X becomes an empty placeholder rather
+    than None: anndata's backed mode needs an X group to serve layers
+    (persample validates the file backed). Integer counts wider than 4 bytes
+    narrow to int32 (a UMI count never nears 2^31); float counts are left
+    alone. Same rules as msp 0.3.6 / osp 0.1.6 apply on their own outputs."""
+    import numpy as np
+    from scipy import sparse
+
+    counts = a.layers["counts"]
+    if np.issubdtype(counts.dtype, np.integer) and counts.dtype.itemsize > 4 and counts.max() <= np.iinfo(np.int32).max:
+        a.layers["counts"] = counts.astype(np.int32)
+    a.X = sparse.csr_matrix(a.shape, dtype=np.float32)
+    a.uns["X_placeholder"] = "X is intentionally empty; expression lives in layers['counts'] (ecarsi.execute)"
+
+
 def _load_member(units_by_name: dict, member: dict):
     import anndata as ad
 
@@ -176,6 +196,7 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
                 f"unit {name!r}: merged {merged.n_obs} cells but conservation audit expected {expected}"
             )
         validate_matrix(merged)
+        _slim(merged)
 
         unit = L.unit_dir(out_root, name)
         udir = unit / L.INPUT
