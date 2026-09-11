@@ -18,6 +18,8 @@ deliberately NOT a criterion):
   otherwise          release after a round when (1) it removed < 1% of the
                      cells that entered it OR fewer than 100 cells, or
                      (2) the last three rounds each removed < 2%.
+                     (3) and, on top of either, fewer than 1000 cells in absolute
+                         terms (the floor; loop_control max_removed tunes it).
                      Round 1 never releases (it works on raw integration);
                      a safety cap (--cap, default 10) forces a flagged
                      release so the loop cannot run forever.
@@ -30,7 +32,8 @@ round is running and takes effect when that round ends:
     {"cap": 12,                            # raise/lower the safety cap
      "rounds": 8,                          # or fix the total like --rounds
      "extra_rounds_after_convergence": 2,  # keep going n rounds past the stop rule
-     "stop_after_round": 9}                # pause (exit 3, no release) after round 9; re-run to continue
+     "stop_after_round": 9,                # pause (exit 3, no release) after round 9; re-run to continue
+     "max_removed": 2000}                  # absolute release floor in cells (default 1000)
 Every override is logged and written into that round's stats reason.
 --force-reopen continues past an existing release (the superseded round's
 decision becomes 'continue').
@@ -69,13 +72,18 @@ RELEASE_FRAC = 0.01        # (1) this round removed < 1% of what entered it ...
 RELEASE_MIN_REMOVED = 100  #     ... or fewer than 100 cells
 PLATEAU_FRAC = 0.02        # (2) three consecutive rounds each < 2%
 PLATEAU_ROUNDS = 3
+RELEASE_MAX_REMOVED = 1000 # (3) floor on top of (1)/(2): a round that still removed >= 1000 cells never
+                           #     releases — "< 1%" of 400k cells is 4k cells (issue #3; 5 of 6 tome releases)
 DEFAULT_CAP = 10           # safety ceiling in auto mode (forced, flagged release)
 
 
-def decide(n: int, stats: list[dict], rounds: int | None, cap: int, extra: int = 0) -> tuple[str, str]:
+def decide(n: int, stats: list[dict], rounds: int | None, cap: int, extra: int = 0,
+           max_removed: int = RELEASE_MAX_REMOVED) -> tuple[str, str]:
     """(decision, reason) after round n; stats includes round n. `extra` keeps
     the loop going that many rounds past the convergence rule (counted through
-    the recorded reasons, so it survives a resume); the cap still wins."""
+    the recorded reasons, so it survives a resume); the cap still wins.
+    `max_removed` is the absolute floor: neither convergence path may release
+    a round that removed at least that many cells."""
     st = stats[-1]
     if rounds is not None:
         return ("release", f"fixed --rounds {rounds}") if n >= rounds else ("continue", f"--rounds {rounds}")
@@ -94,18 +102,21 @@ def decide(n: int, stats: list[dict], rounds: int | None, cap: int, extra: int =
             converged = f"last {PLATEAU_ROUNDS} rounds each removed < {100 * PLATEAU_FRAC:.0f}% ({fracs})"
     if converged is None:
         return "continue", f"removed {100 * st['frac']:.2f}% ({st['removed']} cells)"
+    if st["removed"] >= max_removed:
+        return "continue", f"removed {100 * st['frac']:.2f}% but {st['removed']:,} cells >= {max_removed:,} floor"
     done = sum(1 for x in stats[:-1] if str(x.get("reason", "")).startswith("converged"))
     if done < extra:
         return "continue", f"converged ({converged}); extra round {done + 1}/{extra}"
     return "release", converged + (f"; +{extra} extra round(s) done" if extra else "")
 
 
-CONTROL_KEYS = {"cap": int, "rounds": int, "extra_rounds_after_convergence": int, "stop_after_round": int}
+CONTROL_KEYS = {"cap": int, "rounds": int, "extra_rounds_after_convergence": int, "stop_after_round": int,
+                "max_removed": int}
 
 
 def read_control(unit: Path) -> dict:
     """<unit>/loop_control.json, validated; a bad file is reported and ignored
-    (never fails a run). Values: cap/rounds/stop_after_round >= 1,
+    (never fails a run). Values: cap/rounds/stop_after_round/max_removed >= 1,
     extra_rounds_after_convergence >= 0, rounds may be null."""
     p = unit / L.LOOP_CONTROL
     if not p.is_file():
@@ -134,21 +145,24 @@ def read_control(unit: Path) -> dict:
         return {}
 
 
-def _controls(unit: Path, args, seen: dict) -> tuple[int | None, int, int, int | None]:
-    """(rounds, cap, extra, stop_after) for the next decision: CLI values
-    overridden by loop_control.json; each change is logged once."""
+def _controls(unit: Path, args, seen: dict) -> tuple[int | None, int, int, int | None, int]:
+    """(rounds, cap, extra, stop_after, max_removed) for the next decision:
+    CLI values overridden by loop_control.json; each change is logged once."""
     ctl = read_control(unit)
     rounds = ctl["rounds"] if "rounds" in ctl else args.rounds
     cap = ctl.get("cap", args.cap)
     extra = ctl.get("extra_rounds_after_convergence", 0)
     stop_after = ctl.get("stop_after_round")
-    now = {"rounds": rounds, "cap": cap, "extra_rounds_after_convergence": extra, "stop_after_round": stop_after}
-    base = {"rounds": args.rounds, "cap": args.cap, "extra_rounds_after_convergence": 0, "stop_after_round": None}
+    max_removed = ctl.get("max_removed", RELEASE_MAX_REMOVED)
+    now = {"rounds": rounds, "cap": cap, "extra_rounds_after_convergence": extra, "stop_after_round": stop_after,
+           "max_removed": max_removed}
+    base = {"rounds": args.rounds, "cap": args.cap, "extra_rounds_after_convergence": 0, "stop_after_round": None,
+            "max_removed": RELEASE_MAX_REMOVED}
     for key, value in now.items():
         if seen.get(key, base[key]) != value:
             _log(unit, f"loop_control: {key} {seen.get(key, base[key])} -> {value}")
     seen.update(now)
-    return rounds, cap, extra, stop_after
+    return rounds, cap, extra, stop_after, max_removed
 
 
 PREV_COLS = ("msp_ann_cluster", "msp_ann_coarse", "msp_ann_fine", "msp_ann_action",
@@ -325,7 +339,7 @@ def main(argv: list[str]) -> int:
             print(f"[loop] already released: {summary} (use --force-reopen to continue)")
             return 0
         published_rounds = int(read_json(L.release_dir(unit) / "summary.json")["rounds"])
-        c_rounds, c_cap, _, _ = _controls(unit, args, {})
+        c_rounds, c_cap, _, _, _ = _controls(unit, args, {})
         limit = c_rounds if c_rounds is not None else c_cap
         if limit <= published_rounds:
             raise ValueError("force-reopen requires a round limit greater than the published history")
@@ -342,7 +356,7 @@ def main(argv: list[str]) -> int:
     n = 0
     while True:  # the limits are re-read every round, so loop_control.json can move them while we run
         n += 1
-        c_rounds, c_cap, c_extra, c_stop = _controls(unit, args, seen_controls)
+        c_rounds, c_cap, c_extra, c_stop, c_max = _controls(unit, args, seen_controls)
         if n > (c_rounds if c_rounds is not None else c_cap):
             break
         rdir = L.round_dir(unit, n)
@@ -355,7 +369,7 @@ def main(argv: list[str]) -> int:
             st.setdefault("elapsed_s", _elapsed_from_log(unit, n))
             stats.append(st)
             if "reason" not in st:  # stats.txt from before reasons were recorded
-                st["reason"] = decide(n, stats, c_rounds, c_cap, c_extra)[1]
+                st["reason"] = decide(n, stats, c_rounds, c_cap, c_extra, c_max)[1]
             decision = dec_p.read_text().strip()
             _log(unit, f"round {n} already decided: {decision} (resume)")
             if decision == "release" and not (superseded and n == len(stats)):
@@ -424,8 +438,8 @@ def main(argv: list[str]) -> int:
         st = {"n_in": n_in, "n_out": n_out, "removed": removed, "frac": frac,
               "elapsed_s": round(time.time() - t0, 1)}
         stats.append(st)
-        c_rounds, c_cap, c_extra, c_stop = _controls(unit, args, seen_controls)  # edits made during the round count now
-        decision, reason = decide(n, stats, c_rounds, c_cap, c_extra)
+        c_rounds, c_cap, c_extra, c_stop, c_max = _controls(unit, args, seen_controls)  # edits made during the round count now
+        decision, reason = decide(n, stats, c_rounds, c_cap, c_extra, c_max)
         st["decision"], st["reason"] = decision, reason
         _write_stats(st_p, st)
         _log(unit, f"round {n} stats removed={removed}/{n_in} ({100 * frac:.2f}%) decision={decision} "

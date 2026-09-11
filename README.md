@@ -223,7 +223,13 @@ In automatic mode, round 1 continues. From round 2, a unit releases when:
 
 - the current round removed **less than 1%** of its entering cells, **or fewer
   than 100 cells**; or
-- the last three rounds each removed **less than 2%**.
+- the last three rounds each removed **less than 2%**;
+
+and, on top of either path, the current round removed **fewer than 1000
+cells** in absolute terms. Relative rules alone let a 400k-cell unit release
+while still dropping thousands of cells per round; the floor keeps such units
+going, and the round's `reason` names it (`removed 0.81% but 1,989 cells >=
+1,000 floor`). Tune it per unit with `max_removed` in `loop_control.json`.
 
 The entering count is MSP's `integrated.h5ad` and the outgoing count is ZMIP's
 `annotated_zmip.h5ad`; these round statistics exclude earlier OSP filtering

@@ -30,6 +30,33 @@ def test_decide_extra_rounds_past_convergence_then_release():
     assert loop.decide(4, stats, None, 4, extra=5)[1].startswith("FORCED")
 
 
+def test_decide_absolute_floor_blocks_both_convergence_paths():
+    # E12.5: 0.81% of 245k cells is still 1,989 cells — the "< 1%" path alone would release
+    big = {"n_in": 245_499, "n_out": 243_510, "removed": 1_989, "frac": 1_989 / 245_499}
+    d, r = loop.decide(3, [_st(0.05), _st(0.03), big], None, 10)
+    assert d == "continue" and r == "removed 0.81% but 1,989 cells >= 1,000 floor"
+    # the plateau path (E13.5: 1.38, 1.44, 1.10 %) is subject to the same floor
+    plateau = [_st(0.10), _st(0.0138, 3000), _st(0.0144, 3100), _st(0.0110, 2476)]
+    d, r = loop.decide(4, plateau, None, 10)
+    assert d == "continue" and "2,476 cells >= 1,000 floor" in r
+    # below the floor both paths release exactly as before
+    assert loop.decide(4, plateau[:-1] + [_st(0.0110, 900)], None, 10)[0] == "release"
+    assert loop.decide(3, [_st(0.05), _st(0.03), {**big, "removed": 999}], None, 10)[0] == "release"
+    # the floor is tunable (loop_control max_removed) and the cap / --rounds still win over it
+    assert loop.decide(3, [_st(0.05), _st(0.03), big], None, 10, max_removed=2000)[0] == "release"
+    assert loop.decide(3, [_st(0.05), _st(0.03), big], None, 3)[1].startswith("FORCED")
+    assert loop.decide(3, [_st(0.05), _st(0.03), big], 3, 10)[1] == "fixed --rounds 3"
+
+
+def test_read_control_accepts_max_removed(tmp_path):
+    unit = tmp_path / "unit"
+    unit.mkdir()
+    (unit / L.LOOP_CONTROL).write_text(json.dumps({"max_removed": 2000}))
+    assert loop.read_control(unit) == {"max_removed": 2000}
+    (unit / L.LOOP_CONTROL).write_text(json.dumps({"max_removed": 0}))
+    assert loop.read_control(unit) == {}  # < 1 is rejected like the other limits
+
+
 def test_read_control_validates_and_never_raises(tmp_path):
     unit = tmp_path / "unit"
     unit.mkdir()
