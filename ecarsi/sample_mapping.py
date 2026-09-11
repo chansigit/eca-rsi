@@ -74,8 +74,9 @@ def build_mapping(h5ad: Path, unit: Path | None, spec: dict | None, identify,
         else:
             decision = identify(profile, part)
             from . import cost
+            tin, tout = getattr(identify, "last_tokens", (None, None))
             cost.record(unit or h5ad.parent, f"{L.PERSAMPLE}/identify/{source}",
-                        getattr(identify, "last_cost", None), "identify experiment column")
+                        getattr(identify, "last_cost", None), "identify experiment column", tin, tout)
             if decision.get("exclude_cells"):
                 # the agent's proposal, re-applied by the host exactly like a user rule
                 rules += P.apply_rules(part, decision["exclude_cells"], excluded, "agent", strict=True)

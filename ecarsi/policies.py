@@ -259,4 +259,5 @@ async def _recommend(design: str, columns: list[str]) -> dict:
         label="batch key recommendation",
     )
     recommend_batch_key.last_cost = result.cost_usd  # type: ignore[attr-defined]
+    recommend_batch_key.last_tokens = (result.tokens_in, result.tokens_out)  # type: ignore[attr-defined]
     return result.submitted

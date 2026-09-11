@@ -87,7 +87,7 @@ def agent_submitting(monkeypatch, decisions, seen):
             r = await tool.handler({"decision_json": json.dumps(d)})
             seen.append(r["content"][0]["text"])
             if not r["is_error"]:
-                return SimpleNamespace(submitted=r["_submitted"], cost_usd=None)
+                return SimpleNamespace(submitted=r["_submitted"], cost_usd=None, tokens_in=None, tokens_out=None)
         raise AssertionError(seen)
 
     monkeypatch.setattr("ecarsi.harness.run_agent", agent)

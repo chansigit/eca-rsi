@@ -143,6 +143,7 @@ async def _identify(profile: dict, obs=None) -> dict:
         max_turns=5, allowed_builtin=(), label="identify sample column",
     )
     identify_sample_column.last_cost = result.cost_usd  # type: ignore[attr-defined]
+    identify_sample_column.last_tokens = (result.tokens_in, result.tokens_out)  # type: ignore[attr-defined]
     return result.submitted
 
 
@@ -266,6 +267,11 @@ def _pump(proc: subprocess.Popen, tag: str, tail: deque, unit: Path | None = Non
             m = cost.COST_RE.search(line)
             if m:
                 cost.record(unit, f"{L.PERSAMPLE}/{tag}", float(m.group("usd")), (m.group("label") or m.group("pre") or "").strip())
+                continue
+            m = cost.TOKEN_RE.search(line)
+            if m:
+                cost.record(unit, f"{L.PERSAMPLE}/{tag}", None, m.group("label").strip(),
+                             int(m.group("tin")), int(m.group("tout")))
 
 
 def drive(pending: list[dict], out_root: Path, annotate: bool, on_done=None) -> list[dict]:
@@ -525,8 +531,9 @@ def _recommend_batch_key(unit, h5ad, table):
         return None
     try:
         rec = P.recommend_batch_key(render(design), list(design.columns))
+        tin, tout = getattr(P.recommend_batch_key, "last_tokens", (None, None))
         cost.record(unit, f"{L.PERSAMPLE}/batch_key", getattr(P.recommend_batch_key, "last_cost", None),
-                    "batch key recommendation")
+                    "batch key recommendation", tin, tout)
     except Exception as exc:  # noqa: BLE001 - advisory only, never fails persample
         rec = {"batch_key": None, "rationale": f"recommendation unavailable: {type(exc).__name__}: {exc}"}
     return rec

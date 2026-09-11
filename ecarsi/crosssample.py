@@ -278,6 +278,7 @@ async def _propose(inventories: list[dict]) -> dict:
     )
     propose_inclusion.last_cost = result.cost_usd  # type: ignore[attr-defined]
     propose_inclusion.last_effective_config = result.effective_config  # type: ignore[attr-defined]
+    propose_inclusion.last_tokens = (result.tokens_in, result.tokens_out)  # type: ignore[attr-defined]
     return result.submitted
 
 
@@ -354,7 +355,9 @@ def main(argv: list[str]) -> int:
     else:
         inventories = [_sample_inventory(s) for s in offered]
         decision = propose_inclusion(inventories)
-        cost.record(unit, f"{out_root.name}/inclusion", getattr(propose_inclusion, "last_cost", None), "sample inclusion")
+        tin, tout = getattr(propose_inclusion, "last_tokens", (None, None))
+        cost.record(unit, f"{out_root.name}/inclusion", getattr(propose_inclusion, "last_cost", None),
+                    "sample inclusion", tin, tout)
         man = {
             "unit": str(unit),
             **effective_or_requested(propose_inclusion),

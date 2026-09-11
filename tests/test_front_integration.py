@@ -375,7 +375,7 @@ def test_agent_can_report_unknown_without_being_pushed_to_guess(monkeypatch):
     async def agent(**kwargs):
         response = await kwargs["tools"][0].handler({"decision_json": json.dumps(decision)})
         assert response["is_error"] is False
-        return SimpleNamespace(submitted=response["_submitted"], cost_usd=None)
+        return SimpleNamespace(submitted=response["_submitted"], cost_usd=None, tokens_in=None, tokens_out=None)
     monkeypatch.setattr("ecarsi.harness.run_agent", agent)
     assert asyncio.run(persample._identify(profile)) == decision
     assert persample._validate_sample_column(decision, profile) is not None
