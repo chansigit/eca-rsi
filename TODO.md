@@ -1,3 +1,3 @@
 # 待议事项
 
-- **Stress population 保留／删除开关**：未来考虑由 RSI 配置透传至 MSP、ZMIP，调整 prompt，选择保留并标注 stress population，或按约定的证据标准删除。默认策略、适用阶段、数值建议与模型判断的关系、删除台账及续跑身份如何记录该设置，均待讨论。本轮仅记录，不修改当前判定规则或现有结果。
+- **Stress population 保留／删除开关**：见 [eca-rsi#9](https://github.com/chansigit/eca-rsi/issues/9)(2026-09-11 转 issue,附 102 器官批跑的实测占比:MSP 3.5%、ZMIP 0.9%)。本轮仅记录,不修改当前判定规则或现有结果。

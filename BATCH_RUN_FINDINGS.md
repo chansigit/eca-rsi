@@ -140,6 +140,8 @@
   checkout 提交任何东西**,哪怕只是纯文档。因此**本节内容故意不提交**(截至写这段话,一直保持 working-tree
   的未提交状态),等整个批量跑彻底跑完、没有任何 organ 还在引用这份 checkout 时再统一提交。
 - **PyPI 上传 `ecarsi` 0.1.0 仍被新项目频率限制卡住**(非本轮新增,历史遗留,见 `eca-rsi-open-backlog` memory)。
+  **已过时**(2026-09-11 复核):2026-09-07 起 0.2.x 系列五个包全部改为只打 GitHub tag、不再上传 PyPI(见 INSTALL.md),
+  分发策略已变,PyPI 限流不再是待解决问题。
 
 ## 架构/流程发现(不是这次要修的 bug,但值得未来设计时考虑)
 - **mca3.0/Kidney 不收敛(2026-09-06 深夜观察)**:round 2–7 每轮删除 1.6 / 3.4 / 5.2 / 2.3 / 3.3 / 3.0%,在 3% 附近震荡,
@@ -218,6 +220,8 @@
 - 遗留:Aorta "Platelet"(27 细胞,20 个是 QC 空白孔)和 Kidney "Renal interstitial matrix fibroblast"(37 细胞,27 个空白孔)
   两个伪簇留在 v2 release 里,已在 needs_review;integration 分支的 `exclude_cells` 策略会在下次运行前就把空白孔丢掉,
   这类簇不会再出现。`gen_rsi.sh` 的 facs lane 仍是 v1 配置(sample-map、decontx/scrublet),合并 integration 时一并改。
+  **已解决**(2026-09-11 复核):`exclude_cells` 策略已在 `ecarsi/policies.py` 落地(见 CLAUDE.md「sample map 的两个声明式细胞策略」),
+  这两个伪簇是历史发布数据,不重算;之后任何新跑都会在 OSP subset 之前把空白孔剔除。
 
 ## 批量跑结束 2026-09-07 02:14
 
@@ -284,9 +288,9 @@ release(persample、MSP、ZMIP、release、prune、mirror 全程),但前两次�
    "runtime changed during computation" 失败;身份只比内容,以后主线合并同一内容后 senis 已封存的阶段仍然有效。
 4. **OSP 最小样本(senis-facs Thymus)**:板 B001256 只有 2 个孔,两个都过 QC,`cluster` 要求 ≥3 抛 ValueError;ecarsi 把它归为
    `qc_too_few_survivors` 却只把 `qc_zero_survivors` 当空样本 → persample 硬失败。临时用 map 的 `exclude_cells`
-   (`where: {cell: [两个孔]}`,reason `plate_below_osp_minimum`,进 needs_review)。**backlog**:OSP 在 <3 存活时把存活细胞
-   追加进 `qc_removed.csv`(reason `too_few_survivors`),ecarsi 把 `qc_too_few_survivors` 也当空样本;需要 osp+ecarsi 同改,
-   等没有作业处于 persample 时再做(persample 身份含 osp 源码)。
+   (`where: {cell: [两个孔]}`,reason `plate_below_osp_minimum`,进 needs_review)。**已解决**(2026-09-11 复核):OSP(≥0.1.5)
+   在 <3 存活时把存活细胞追加进 `qc_removed.csv`(reason `too_few_survivors`,`osp/osp/cluster.py`),ecarsi 的
+   `EMPTY_KINDS`(`ecarsi/osp_contract.py`)已同时认 `qc_zero_survivors` 与 `qc_too_few_survivors`,细胞台账对得上,不再硬失败。
 5. **部署失误 A:apptainer 1.5 剥掉 PYTHONPATH**。senis 重提后 drop 器官仍从 `projects/msp` 导入(traceback 路径),
    worktree 修复没生效。我此前的验证是假阳性:在 worktree 目录里跑 `python -c`,cwd 在 sys.path 最前。
    `APPTAINERENV_PYTHONPATH` 能透传,包装器 `venvs/eca-ct/python` 现在显式转发;从 `/tmp` 重验:父进程、子进程、
@@ -442,7 +446,10 @@ release(persample、MSP、ZMIP、release、prune、mirror 全程),但前两次�
    和第 12、13 条不同:这次重试机制**是**触发了的,只是 Ark 连续几小时响应不了,5 次退避总共不到 4 分钟,
    完全罩不住一个几小时的服务窗口。两点:(a) 5 次 × 几十秒的退避是按"网关抖一下"设计的,对"提供方停摆几小时"没有意义,
    要么退避拉长到分钟级并设总时长上限,要么直接把整轮判为可续跑的暂停而不是失败;(b) 每次 attempt 都要等 SDK 600 s 超时,
-   Bladder 一个 lineage 白等了 2.3 小时才报错(backlog 里"缩短 openai client timeout"那条就是为这个)。
+   Bladder 一个 lineage 白等了 2.3 小时才报错(backlog 里"缩短 openai client timeout"那条就是为这个;
+   **(b) 已解决**,bridge 0.2.10(2026-09-11):`AsyncOpenAI` 显式 `timeout=`,`OPENAI_AGENTS_REQUEST_TIMEOUT_S` 默认 300s。
+   (a) bridge 0.2.11:transient 重试耗尽后**切 `AGENT_MODEL_POOL` 下一候选**(此前直接 raise,pool 不参与);
+   无 pool / pool 耗尽时仍判失败而非暂停,那部分并入 eca-rsi#4)。
    加上第 13 条的"一个 lineage 死了其它 lineage 白等到轮末",Spleen 这一轮总共烧掉约 8 lineage·小时的计算。
    处理:三个单元原样重 sbatch(42633198 / 42633202 / 42633203),已完成的 lineage 跳过。
    **这三个失败在磁盘上躺了 2–5 小时才被发现**——03:08 到 11:36 之间没有巡检。
