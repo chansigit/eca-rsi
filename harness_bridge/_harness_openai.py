@@ -25,6 +25,11 @@ Environment:
   OPENAI_AGENTS_SERVER_STATE
                        Responses-only response chaining (default 1). Disable
                        with 0 to send the complete local history every turn.
+  OPENAI_AGENTS_REQUEST_TIMEOUT_S
+                       per-HTTP-request timeout on the Ark client (default
+                       300s), so a dead connection during a provider outage
+                       fails fast instead of hanging until the SDK's own
+                       (~600s) default.
 """
 
 from __future__ import annotations
@@ -37,7 +42,7 @@ import re
 from typing import Any
 
 from ._harness_host_tools import served_tools, with_runtime_instructions
-from .harness import AgentIncompleteError, AgentRunResult, AgentTimeout, ToolSpec
+from .harness import AgentIncompleteError, AgentRunResult, AgentTimeout, ToolSpec, _env_float
 
 log = logging.getLogger(__name__)
 
@@ -156,6 +161,10 @@ def _client():
         api_key=key,
         base_url=os.environ.get("DOUBAO_BASE_URL", DOUBAO_BASE_URL_DEFAULT),
         max_retries=0,
+        # SDK default (~600s) let one dead request hang the whole
+        # retry_transient backoff (5x still under a minute) for hours during
+        # an Ark outage (eca-rsi BATCH_RUN_FINDINGS.md #19, Bladder 2.3h).
+        timeout=_env_float("OPENAI_AGENTS_REQUEST_TIMEOUT_S", 300.0),
     )
 
 

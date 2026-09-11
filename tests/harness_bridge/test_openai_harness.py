@@ -425,3 +425,31 @@ def test_refusing_model_raises_incomplete_and_still_closes_client(
             )
         )
     assert offline_model.closed is True
+
+
+def test_client_uses_a_bounded_request_timeout_by_default(monkeypatch):
+    captured = {}
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("openai.AsyncOpenAI", FakeAsyncOpenAI)
+    monkeypatch.setenv("ARK_API_KEY", "k")
+    monkeypatch.delenv("OPENAI_AGENTS_REQUEST_TIMEOUT_S", raising=False)
+    H._client()
+    assert captured["timeout"] == 300.0
+
+
+def test_client_request_timeout_is_env_overridable(monkeypatch):
+    captured = {}
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("openai.AsyncOpenAI", FakeAsyncOpenAI)
+    monkeypatch.setenv("ARK_API_KEY", "k")
+    monkeypatch.setenv("OPENAI_AGENTS_REQUEST_TIMEOUT_S", "45")
+    H._client()
+    assert captured["timeout"] == 45.0

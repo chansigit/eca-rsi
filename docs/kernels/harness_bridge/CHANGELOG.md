@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.10 - 2026-09-11
+
+- Bound each Ark HTTP request with an explicit client timeout
+  (`OPENAI_AGENTS_REQUEST_TIMEOUT_S`, default 300s) instead of the SDK's ~600s
+  default, so a provider outage fails a transient attempt in minutes rather
+  than letting one dead request stall `retry_transient` for hours
+  (eca-rsi BATCH_RUN_FINDINGS #19).
+
 ## 0.2.4 - 2026-09-07
 
 - Every log line is time-stamped and every application tool call is timed (slow-call lines + per-run summary);
