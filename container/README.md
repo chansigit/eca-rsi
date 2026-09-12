@@ -49,6 +49,22 @@ ECA_RSI_PYTHON=$ECA_CT_ROOT/python eca-rsi run <eca-pp dir> <root>
   `ecarsi serve --ngrok`), export `APPTAINERENV_APPEND_PATH=$HOME/local/bin` for that call
   rather than editing the shared wrapper.
 
+## Shared Dask warm pool (`dask-pool.sh`)
+
+For `MSP_COMPUTE_ENDPOINT=dask` (eca-rsi#8, msp `compute-endpoint` branch): one scheduler,
+workers in any allocations you already hold, runs attach concurrently. All processes use the
+wrapper above, and `PYTHONPATH` is forwarded so workers import the same `msp` as the runs.
+
+```bash
+container/dask-pool.sh scheduler            # on the coordinator node, background
+container/dask-pool.sh worker sh03-08n39 4  # a node you hold an allocation on, 4 procs
+container/dask-pool.sh status | stop
+MSP_COMPUTE_ENDPOINT=dask MSP_DASK_SCHEDULER=$SCRATCH/dask-pool/scheduler.json eca-rsi run ...
+```
+
+Embeddings from a pool mixing CPU vendors are ulp-equivalent, not byte-equal, to a local run
+(labels identical); see msp `docs/compute-endpoint-design.md`.
+
 ## Validation
 
 `build.sh` ends with a sanity block (BLAS check, a dgemm timing, versions, imports).
