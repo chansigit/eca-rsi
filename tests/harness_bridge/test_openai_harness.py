@@ -474,22 +474,27 @@ def test_openrouter_client_uses_its_own_key_base_url_and_attribution(monkeypatch
 def test_openrouter_client_needs_its_key_not_arks(monkeypatch):
     monkeypatch.setenv("ARK_API_KEY", "k")
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    with pytest.raises(RuntimeError, match="HARNESS=openrouter needs OPENROUTER_API_KEY"):
+    with pytest.raises(RuntimeError, match="HARNESS=openai@openrouter needs OPENROUTER_API_KEY"):
         H._client("openrouter")
 
 
-def test_openrouter_adapter_delegates_with_the_openrouter_provider(monkeypatch):
-    import harness_bridge._harness_openrouter as R
+def test_providers_are_selected_under_the_openai_harness(monkeypatch):
+    from harness_bridge.harness import parse_model_pool, resolve_agent_config
 
-    seen = {}
-
-    async def fake_run(**kwargs):
-        seen.update(kwargs)
-        return "ok"
-
-    monkeypatch.setattr(R, "_run_openai", fake_run)
-    assert asyncio.run(R.run_agent(model="m", label="x")) == "ok"
-    assert seen["provider"] == "openrouter" and seen["model"] == "m"
+    monkeypatch.delenv("HARNESS", raising=False)
+    monkeypatch.delenv("OPENAI_PROVIDER", raising=False)
+    monkeypatch.delenv("MODEL", raising=False)
+    assert resolve_agent_config().provider is None  # Ark
+    c = resolve_agent_config(harness="openai@vllm")
+    assert (c.harness, c.provider, c.model, str(c)) == ("openai", "vllm", "local-coder", "openai@vllm:local-coder")
+    monkeypatch.setenv("OPENAI_PROVIDER", "openrouter")
+    assert resolve_agent_config().backend == "openai@openrouter"
+    pool = parse_model_pool("openai:doubao-x,openai@openrouter:a/b,openai@vllm:local-coder")
+    assert [str(c) for c in pool] == ["openai:doubao-x", "openai@openrouter:a/b", "openai@vllm:local-coder"]
+    with pytest.raises(ValueError, match="takes no provider"):
+        resolve_agent_config(harness="claude@vllm")
+    with pytest.raises(ValueError, match="unknown openai provider"):
+        resolve_agent_config(harness="openai@bedrock")
 
 
 def test_openrouter_models_get_images_only_when_listed(monkeypatch):

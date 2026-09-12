@@ -9,11 +9,12 @@ actually drives the model is an env-var choice, not a call-site choice:
     HARNESS=openai      (default since 2026-09-04) OpenAI Agents SDK with
                          the Doubao Ark endpoint, direct in-process
                          function tools
-    HARNESS=openrouter  the same loop against OpenRouter (OPENROUTER_API_KEY,
-                         stateless Responses: full history every turn);
-                         intended as AGENT_MODEL_POOL fallbacks behind Doubao
-    HARNESS=vllm        the same loop against a self-hosted vLLM server
-                         (VLLM_BASE_URL, VLLM_API_KEY); history kept local
+                         The endpoint under it is a *provider*, not a harness:
+                         OPENAI_PROVIDER=ark (default) | openrouter | vllm, or
+                         `openai@openrouter:model` / `openai@vllm:model` in
+                         AGENT_MODEL_POOL. Same loop, tools, nudges and resets;
+                         only credentials, base URL and what the endpoint
+                         supports (images, server-side state) change.
     HARNESS=deepseek    DeepSeek Harness (dsh) via its Python SDK, driving
                          Doubao by default, tools bridged over an in-process
                          streamable-http MCP server
@@ -50,7 +51,7 @@ from ._logging import ensure_logging
 
 ToolHandler = Callable[[dict], Awaitable[dict]]
 T = TypeVar("T")
-HarnessName = Literal["openai", "openrouter", "vllm", "deepseek", "claude"]
+HarnessName = Literal["openai", "deepseek", "claude"]
 BuiltinCapability = Literal["read", "glob", "grep", "tasks"]
 
 
@@ -441,11 +442,6 @@ def _validate_tool_table(tools: list[ToolSpec], submit_tool: str, allowed_builti
 # Model ids stay open strings by design — no catalog to keep current.
 _BACKENDS: dict[HarnessName, tuple[str, str]] = {
     "openai": ("._harness_openai", "doubao-seed-2-1-turbo-260628"),
-    # Same adapter loop as openai, pointed at OpenRouter (OPENROUTER_API_KEY);
-    # meant as AGENT_MODEL_POOL fallbacks behind Doubao, not as the default.
-    "openrouter": ("._harness_openrouter", "dots-studio/dots-3-note-preview:free"),
-    # Self-hosted vLLM (VLLM_BASE_URL); the model id is the server's --served-model-name.
-    "vllm": ("._harness_vllm", "local-coder"),
     # HARNESS=deepseek's default provider is Doubao via dsh's pi-ai adapter
     # (see _harness_deepseek); DSH_PROVIDER=deepseek-official switches to a
     # real DeepSeek model, in which case override MODEL too.
@@ -454,6 +450,14 @@ _BACKENDS: dict[HarnessName, tuple[str, str]] = {
 }
 DEFAULT_BACKEND = "openai"
 KNOWN_BACKENDS = frozenset(_BACKENDS)
+# Providers behind the openai harness (see _harness_openai.PROVIDERS): the
+# same Agents SDK loop against a different OpenAI-compatible endpoint. None
+# means Ark. Written `openai@<provider>` in HARNESS / AGENT_MODEL_POOL, or
+# OPENAI_PROVIDER=<provider> for a single config.
+OPENAI_PROVIDERS: dict[str, str] = {  # provider -> default model
+    "openrouter": "dots-studio/dots-3-note-preview:free",
+    "vllm": "local-coder",  # the server's --served-model-name
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -462,12 +466,19 @@ class AgentConfig:
 
     harness: HarnessName
     model: str
+    provider: str | None = None  # openai harness only; None = Ark
+
+    @property
+    def backend(self) -> str:
+        """`openai`, `openai@vllm`, `claude`, ... -- what logs and manifests show."""
+        return f"{self.harness}@{self.provider}" if self.provider else self.harness
 
     def as_manifest(self) -> dict[str, str]:
-        return {"harness": self.harness, "model": self.model}
+        out = {"harness": self.backend, "model": self.model}
+        return out
 
     def __str__(self) -> str:
-        return f"{self.harness}:{self.model}"
+        return f"{self.backend}:{self.model}"
 
 
 class ModelPool:
@@ -525,7 +536,8 @@ def parse_model_pool(spec: str) -> list[AgentConfig]:
         harness, sep, model = item.partition(":")
         if not sep or not harness.strip() or not model.strip():
             raise ValueError(f"AGENT_MODEL_POOL entry {item!r} must be 'harness:model'")
-        out.append(resolve_agent_config(harness=harness.strip(), model=model.strip()))
+        # explicit entries: "openai:" is Ark even when OPENAI_PROVIDER is set
+        out.append(resolve_agent_config(harness=harness.strip(), model=model.strip(), environ={}))
     if not out:
         raise ValueError("AGENT_MODEL_POOL is set but empty")
     return out
@@ -578,15 +590,25 @@ def resolve_agent_config(
     """Resolve explicit values before environment values before defaults."""
     env = os.environ if environ is None else environ
     selected = (harness or env.get("HARNESS") or DEFAULT_BACKEND).strip().lower()
+    selected, _, provider = selected.partition("@")
     if selected not in _BACKENDS:
         raise ValueError(
             f"unknown HARNESS backend {selected!r} (expected one of {sorted(_BACKENDS)})"
         )
     backend = cast(HarnessName, selected)
-    selected_model = (model or env.get("MODEL") or _BACKENDS[backend][1]).strip()
+    if backend == "openai" and not provider:
+        provider = env.get("OPENAI_PROVIDER", "").strip().lower()
+    if provider in ("", "ark"):
+        provider = ""
+    elif backend != "openai":
+        raise ValueError(f"HARNESS={backend} takes no provider (got {provider!r}); providers belong to openai")
+    elif provider not in OPENAI_PROVIDERS:
+        raise ValueError(f"unknown openai provider {provider!r} (expected one of {sorted(OPENAI_PROVIDERS)} or ark)")
+    default_model = OPENAI_PROVIDERS[provider] if provider else _BACKENDS[backend][1]
+    selected_model = (model or env.get("MODEL") or default_model).strip()
     if not selected_model:
         raise ValueError(f"HARNESS={selected} needs a non-empty model id")
-    return AgentConfig(harness=backend, model=selected_model)
+    return AgentConfig(harness=backend, model=selected_model, provider=provider or None)
 
 
 def backend_name() -> str:
@@ -612,24 +634,21 @@ def backend_capabilities(
     """
     env = os.environ if environ is None else environ
     resolved = config or resolve_agent_config(environ=env)
-    if resolved.harness in ("openai", "openrouter", "vllm"):
+    if resolved.harness == "openai":
         mode = (openai_api or env.get("OPENAI_AGENTS_API") or "responses").strip().lower()
         if mode not in {"responses", "chat_completions"}:
             raise ValueError(
                 f"invalid OPENAI_AGENTS_API={mode!r} (expected 'responses' or 'chat_completions')"
             )
         responses = mode == "responses"
-        if resolved.harness == "openrouter":
-            from ._harness_openai import model_accepts_images
+        from ._harness_openai import PROVIDERS, model_accepts_images
 
-            responses_images = responses and model_accepts_images("openrouter", resolved.model)
-        else:
-            responses_images = responses
+        provider = resolved.provider or "ark"
         return HarnessCapabilities(
             builtins=BUILTIN_CAPABILITIES,
-            image_tool_outputs=responses_images,
-            # OpenRouter's Responses endpoint is stateless (no previous_response_id)
-            response_chaining=responses and resolved.harness == "openai",
+            image_tool_outputs=responses and model_accepts_images(provider, resolved.model),
+            # only Ark keeps Responses state server-side (previous_response_id)
+            response_chaining=responses and bool(PROVIDERS[provider]["server_state"]),
             same_session_nudge=True,
             mcp_transport=False,
             context_reset=True,
@@ -705,7 +724,7 @@ async def run_agent(
             tools=tools, submit_tool=submit_tool, prompt=prompt, system_prompt=system_prompt,
             cwd=cwd, model=config.model, effort=effort, max_turns=max_turns,
             allowed_builtin=allowed_builtin, label=label, max_buffer_size=max_buffer_size,
-            wall_seconds=wall,
+            wall_seconds=wall, **({"provider": config.provider} if config.provider else {}),
         )
         if wall is None:
             result = await coro
@@ -725,7 +744,7 @@ async def run_agent(
         # cost/usage lines below which are backend-specific. A host process orchestrating
         # kernel subprocesses (osp per-sample workers, zmip per-lineage workers) has no
         # other way to see this: AgentRunResult never crosses the process boundary.
-        log.info(f"== [{label}] resolved backend: harness={config.harness} model={config.model}")
+        log.info(f"== [{label}] resolved backend: harness={config.backend} model={config.model}")
         return result
 
     try:

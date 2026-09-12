@@ -1,6 +1,7 @@
-"""HARNESS=openai backend using OpenAI Agents SDK with Volcengine Ark -- and,
-through ``_harness_openrouter`` (``provider="openrouter"``), the same loop
-against OpenRouter's OpenAI-compatible endpoint.
+"""HARNESS=openai backend: the OpenAI Agents SDK loop against an
+OpenAI-compatible endpoint -- Volcengine Ark by default, or another
+*provider* (``PROVIDERS``: openrouter, vllm) selected with
+``OPENAI_PROVIDER`` / ``openai@<provider>`` in AGENT_MODEL_POOL.
 
 This is the direct-Python alternative to the dsh backend.  The Agents SDK
 owns the model/tool loop, while our existing ``ToolSpec`` handlers remain the
@@ -10,10 +11,10 @@ server, Node subprocess, or remote OpenAI tracing is enabled.
 Environment:
   ARK_API_KEY          Volcengine Ark credential (HARNESS=openai).
   DOUBAO_BASE_URL      OpenAI-compatible API root (default Beijing /api/v3).
-  VLLM_BASE_URL        self-hosted OpenAI-compatible server (HARNESS=vllm,
+  VLLM_BASE_URL        self-hosted OpenAI-compatible server (provider vllm,
                        default http://127.0.0.1:8000/v1); VLLM_API_KEY is
                        whatever the server was started with ("local").
-  OPENROUTER_API_KEY   OpenRouter credential (HARNESS=openrouter).
+  OPENROUTER_API_KEY   OpenRouter credential (provider openrouter).
   OPENROUTER_IMAGE_MODELS
                        comma-separated OpenRouter model ids that accept image
                        input; every other OpenRouter model gets image tool
@@ -81,7 +82,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
     },
     "vllm": {
         # a self-hosted OpenAI-compatible server (vLLM); key is a placeholder
-        "harness": "vllm",
+        "harness": "openai@vllm",
         "key_env": "VLLM_API_KEY",
         "base_env": "VLLM_BASE_URL",
         "base_default": "http://127.0.0.1:8000/v1",
@@ -89,7 +90,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "headers": None,
     },
     "openrouter": {
-        "harness": "openrouter",
+        "harness": "openai@openrouter",
         "key_env": "OPENROUTER_API_KEY",
         "base_env": "OPENROUTER_BASE_URL",
         "base_default": OPENROUTER_BASE_URL_DEFAULT,
@@ -228,7 +229,7 @@ def _client(provider: str = "ark"):
     spec = PROVIDERS[provider]
     key = os.environ.get(spec["key_env"])
     if not key:
-        raise RuntimeError(f"HARNESS={spec['harness']} needs {spec['key_env']}")
+        raise RuntimeError(f"HARNESS={spec['harness']} needs {spec['key_env']}")  # e.g. HARNESS=openai@vllm
     return AsyncOpenAI(
         api_key=key,
         base_url=os.environ.get(spec["base_env"], spec["base_default"]),

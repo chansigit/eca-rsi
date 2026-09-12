@@ -2,14 +2,14 @@
 
 ## 0.2.13 - 2026-09-12
 
-- `HARNESS=openrouter`: the OpenAI Agents SDK loop against OpenRouter
+- `HARNESS=openai@openrouter` (provider openrouter under the openai harness): the OpenAI Agents SDK loop against OpenRouter
   (`OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL` default
   `https://openrouter.ai/api/v1`). Same tools, nudges and resets as
   `openai`; OpenRouter's Responses endpoint is stateless (no
   `previous_response_id`, no `store`, probed 2026-09-12), so server-side
   chaining is always off there and the full local history is sent every
   turn. Meant as `AGENT_MODEL_POOL` fallbacks behind Doubao, e.g.
-  `openai:doubao-seed-2-1-turbo-260628,openrouter:dots-studio/dots-3-note-preview:free`.
+  `openai:doubao-seed-2-1-turbo-260628,openai@openrouter:dots-studio/dots-3-note-preview:free`.
 - With a pool, a *capacity* limit (Ark `ServerOverloaded`, "too many
   requests", a per-model rate limit, OpenRouter's upstream throttles)
   advances to the next candidate after the transient backoff instead of
@@ -17,7 +17,7 @@
   quota, "resets at", OpenRouter `free-models-per-day`) still waits and
   never advances (issue #1). This is what makes a second Doubao model a
   useful pool entry: `openai:doubao-seed-2-1-turbo-260628,openai:doubao-seed-2-1-pro-260628`.
-- `HARNESS=vllm`: the same loop against a self-hosted OpenAI-compatible
+- `HARNESS=openai@vllm` (provider vllm): the same loop against a self-hosted OpenAI-compatible
   server (`VLLM_BASE_URL`, default `http://127.0.0.1:8000/v1`,
   `VLLM_API_KEY`), history kept local; the model id is the server's
   `--served-model-name`.

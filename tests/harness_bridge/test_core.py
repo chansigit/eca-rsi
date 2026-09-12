@@ -558,8 +558,8 @@ def test_run_agent_logs_the_resolved_backend_for_any_caller_scraping_stdout(monk
 def test_openrouter_is_a_pool_candidate_without_response_chaining(monkeypatch):
     from harness_bridge.harness import backend_capabilities, parse_model_pool
 
-    pool = parse_model_pool("openai:doubao-seed-2-1-turbo-260628,openrouter:dots-studio/dots-3-note-preview:free")
-    assert [c.harness for c in pool] == ["openai", "openrouter"]
+    pool = parse_model_pool("openai:doubao-seed-2-1-turbo-260628,openai@openrouter:dots-studio/dots-3-note-preview:free")
+    assert [c.backend for c in pool] == ["openai", "openai@openrouter"]
     monkeypatch.delenv("OPENAI_AGENTS_API", raising=False)
     assert backend_capabilities(pool[0]).response_chaining is True
     monkeypatch.delenv("OPENROUTER_IMAGE_MODELS", raising=False)
@@ -589,7 +589,7 @@ def test_capacity_limit_advances_the_pool_after_the_transient_backoff(instant_sl
 def test_openrouter_rate_limit_advances_the_pool_instead_of_waiting(instant_sleep):
     from harness_bridge.harness import ModelPool, parse_model_pool, retry_transient
 
-    pool = ModelPool(parse_model_pool("openrouter:a/one:free,openrouter:b/two:free"))
+    pool = ModelPool(parse_model_pool("openai@openrouter:a/one:free,openai@openrouter:b/two:free"))
     calls = []
 
     async def run():
@@ -599,7 +599,7 @@ def test_openrouter_rate_limit_advances_the_pool_instead_of_waiting(instant_slee
         return "ok"
 
     assert asyncio.run(retry_transient(run, "t", pool=pool)) == "ok"
-    assert calls[-1] == "openrouter:b/two:free"
+    assert calls[-1] == "openai@openrouter:b/two:free"
     assert len(calls) <= 6  # bounded same-candidate retries, then the fallback
 
 
@@ -607,7 +607,7 @@ def test_account_usage_limit_still_waits_even_with_a_pool(instant_sleep, monkeyp
     from harness_bridge.harness import ModelPool, parse_model_pool, retry_transient
 
     monkeypatch.setenv("AGENT_LIMIT_WAIT_MAX_H", "0.001")
-    pool = ModelPool(parse_model_pool("openai:doubao-x,openrouter:b/two:free"))
+    pool = ModelPool(parse_model_pool("openai:doubao-x,openai@openrouter:b/two:free"))
     seen = []
 
     async def run():
