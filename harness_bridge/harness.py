@@ -590,7 +590,11 @@ def resolve_agent_config(
     """Resolve explicit values before environment values before defaults."""
     env = os.environ if environ is None else environ
     selected = (harness or env.get("HARNESS") or DEFAULT_BACKEND).strip().lower()
-    selected, _, provider = selected.partition("@")
+    selected, separator, provider = selected.partition("@")
+    if separator and selected != "openai":
+        raise ValueError(f"HARNESS={selected} takes no provider; providers belong to openai")
+    if separator and not provider:
+        raise ValueError("openai@<provider> requires a non-empty provider")
     if selected not in _BACKENDS:
         raise ValueError(
             f"unknown HARNESS backend {selected!r} (expected one of {sorted(_BACKENDS)})"
@@ -612,7 +616,7 @@ def resolve_agent_config(
 
 
 def backend_name() -> str:
-    return resolve_agent_config().harness
+    return resolve_agent_config().backend
 
 
 def default_model() -> str:

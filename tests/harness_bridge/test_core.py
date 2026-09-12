@@ -605,8 +605,11 @@ def test_openrouter_rate_limit_advances_the_pool_instead_of_waiting(instant_slee
 
 def test_account_usage_limit_still_waits_even_with_a_pool(instant_sleep, monkeypatch):
     from harness_bridge.harness import ModelPool, parse_model_pool, retry_transient
+    from itertools import count
 
     monkeypatch.setenv("AGENT_LIMIT_WAIT_MAX_H", "0.001")
+    clock = count(0, 600)
+    monkeypatch.setattr(H.time, "time", lambda: next(clock))
     pool = ModelPool(parse_model_pool("openai:doubao-x,openai@openrouter:b/two:free"))
     seen = []
 
@@ -617,3 +620,14 @@ def test_account_usage_limit_still_waits_even_with_a_pool(instant_sleep, monkeyp
     with pytest.raises(Exception, match="usage limit still in force"):
         asyncio.run(retry_transient(run, "t", pool=pool))
     assert set(seen) == {"openai:doubao-x"}  # never moved off the primary
+    assert len(seen) == 2
+
+
+def test_provider_selection_survives_receipts_and_rejects_malformed_names(monkeypatch):
+    monkeypatch.setenv("HARNESS", "openai@vllm")
+    monkeypatch.setenv("OPENAI_PROVIDER", "openrouter")
+    assert H.backend_name() == "openai@vllm"
+    assert H.resolve_agent_config(harness="openai@ark").provider is None
+    for value in ("openai@", "claude@ark", "deepseek@ark", "openai@vllm@ark"):
+        with pytest.raises(ValueError):
+            H.resolve_agent_config(harness=value)

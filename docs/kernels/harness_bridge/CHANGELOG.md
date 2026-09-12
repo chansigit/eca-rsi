@@ -2,6 +2,8 @@
 
 ## 0.2.13 - 2026-09-12
 
+- Preserve provider-qualified backend names in downstream records; reject empty providers and provider suffixes on non-OpenAI harnesses.
+
 - `HARNESS=openai@openrouter` (provider openrouter under the openai harness): the OpenAI Agents SDK loop against OpenRouter
   (`OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL` default
   `https://openrouter.ai/api/v1`). Same tools, nudges and resets as
