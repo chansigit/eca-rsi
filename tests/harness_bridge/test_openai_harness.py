@@ -438,7 +438,7 @@ def test_client_uses_a_bounded_request_timeout_by_default(monkeypatch):
     monkeypatch.setenv("ARK_API_KEY", "k")
     monkeypatch.delenv("OPENAI_AGENTS_REQUEST_TIMEOUT_S", raising=False)
     H._client()
-    assert captured["timeout"] == 300.0
+    assert captured["timeout"] == 900.0
 
 
 def test_client_request_timeout_is_env_overridable(monkeypatch):

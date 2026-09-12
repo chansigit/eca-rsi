@@ -27,9 +27,11 @@ Environment:
                        with 0 to send the complete local history every turn.
   OPENAI_AGENTS_REQUEST_TIMEOUT_S
                        per-HTTP-request timeout on the Ark client (default
-                       300s), so a dead connection during a provider outage
-                       fails fast instead of hanging until the SDK's own
-                       (~600s) default.
+                       900s), so a dead connection during a provider outage
+                       fails in minutes, not hours. Not lower: one Doubao
+                       reasoning turn after an image read is routinely
+                       3-6 minutes (zmip plan, 2026-09-12), and the 300s
+                       default of 0.2.10 timed those out five times in a row.
 """
 
 from __future__ import annotations
@@ -161,10 +163,11 @@ def _client():
         api_key=key,
         base_url=os.environ.get("DOUBAO_BASE_URL", DOUBAO_BASE_URL_DEFAULT),
         max_retries=0,
-        # SDK default (~600s) let one dead request hang the whole
-        # retry_transient backoff (5x still under a minute) for hours during
-        # an Ark outage (eca-rsi BATCH_RUN_FINDINGS.md #19, Bladder 2.3h).
-        timeout=_env_float("OPENAI_AGENTS_REQUEST_TIMEOUT_S", 300.0),
+        # Bounded so a dead request during an Ark outage cannot hang the
+        # retry_transient backoff for hours (eca-rsi BATCH_RUN_FINDINGS.md
+        # #19, Bladder 2.3h) -- but generous: a long reasoning turn over an
+        # image legitimately runs 3-6 min, and 300s (0.2.10) cut those off.
+        timeout=_env_float("OPENAI_AGENTS_REQUEST_TIMEOUT_S", 900.0),
     )
 
 

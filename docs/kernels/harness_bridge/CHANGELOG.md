@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.12 - 2026-09-12
+
+- Default `OPENAI_AGENTS_REQUEST_TIMEOUT_S` raised 300 -> 900. The 0.2.10
+  bound cut off legitimate long reasoning turns: a zmip plan request that
+  follows a UMAP image read runs 3-6 minutes on Doubao (187 s and 9.6k
+  reasoning tokens on a 1.1k-cell dataset; over 300 s on a 7k-cell one),
+  and retry_transient then timed out five times in a row and failed the
+  stage. 900 s still ends a dead connection in minutes, not hours.
+
 ## 0.2.11 - 2026-09-11
 
 - A transient failure that outlives the whole same-backend backoff schedule
