@@ -27,7 +27,7 @@ mkdir -p "$POOL"
 case "${1:-}" in
 scheduler)
     [ -f "$SF" ] && { echo "scheduler file exists: $SF (stop first)" >&2; exit 2; }
-    nohup "$PY" -m distributed.cli.dask_scheduler --scheduler-file "$SF" --no-dashboard \
+    nohup "$PY" -m distributed.cli.dask_scheduler --scheduler-file "$SF" --no-dashboard --port 0 \
         > "$POOL/scheduler.log" 2>&1 &
     for _ in $(seq 30); do [ -f "$SF" ] && break; sleep 1; done
     [ -f "$SF" ] || { echo "scheduler did not come up, see $POOL/scheduler.log" >&2; exit 1; }
