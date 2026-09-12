@@ -44,33 +44,26 @@ numpy 由此失去 BLAS（能导入、测试全过、matmul 慢约 100 倍），
 
 ## 3. 安装发行包与驱动源码
 
-**2026-09-07 起的 0.2.0 组合（ecarsi 0.2.1、osp 0.1.4、msp/zmip 0.3.4、bridge 0.2.4）只打了 GitHub tag，尚未上传 PyPI**：
-按第 2 节从五个源码 checkout（或对应 tag）`pip install -e` 安装即可；改动版本号后要重新 `pip install -e --no-deps`，
-`runtime_identity()` 才能读到新的 `importlib.metadata` 版本。下面的 PyPI 说明仍描述 0.1.0 组合。
-
-
-bridge 0.2.3、OSP 0.1.2、MSP/ZMIP 0.3.3 已发布到 PyPI，并同步 GitHub Release。
-八个线上文件的 SHA256 与本轮构建一致。此前 bridge 0.2.0 解析失败是索引尚未发布；
-本轮先发布依赖包，再发布内核，并在更新驱动最低版本后核对纯 PyPI 解析。
-bridge 0.2.3 修正 0.2.2 的模块版本显示遗漏；0.2.2 的有限恢复逻辑保持不变。
-旧 OSP 0.1.1 固定 bridge 0.1.0，不能与本次组合混装。
-
-RSI 0.1.0 已发布到 GitHub Release；PyPI 因 `Too many new projects created`
-限制暂未接受首次上传。当前使用 GitHub wheel 安装 RSI，配套依赖仍来自 PyPI：
+**2026-09-11 起五个包都在 PyPI 上**（agent-harness-bridge 0.2.11、osp-sc 0.1.6、msp-sc 0.4.0、zmip 0.3.7、
+ecarsi 0.2.8），同步打了 GitHub tag + Release。2026-09-07–09-11 之间的 0.2.x 组合只打了 tag、没上传
+PyPI（先前决定,已撤销）；`ecarsi` 此前被 PyPI 的 `Too many new projects created` 新项目频率限制拦下
+首次上传,2026-09-11 复核已解除,首传成功。
 
 ```bash
 python -m venv /path/to/venvs/eca
 source /path/to/venvs/eca/bin/activate
 python -m pip install -U pip
 python -m pip install \
-  'agent-harness-bridge[all]==0.2.3' \
-  'osp-sc[agent]==0.1.2' \
-  'msp-sc[agent]==0.3.3' \
-  'zmip==0.3.3' \
-  'ecarsi[kernels] @ https://github.com/chansigit/eca-rsi/releases/download/v0.1.0/ecarsi-0.1.0-py3-none-any.whl'
+  'agent-harness-bridge[all]==0.2.11' \
+  'osp-sc[agent]==0.1.6' \
+  'msp-sc[agent]==0.4.0' \
+  'zmip==0.3.7' \
+  'ecarsi[kernels]==0.2.8'
 ```
 
-开发 RSI 时，可将最后一项替换为 `-e /path/to/source-checkouts/eca-rsi`。
+开发时改动版本号后要重新 `pip install -e --no-deps`（用源码 checkout 而非上面的固定版本时），
+`runtime_identity()` 才能读到新的 `importlib.metadata` 版本；开发 RSI 时可将最后一项替换为
+`-e /path/to/source-checkouts/eca-rsi`。
 
 **numpy 必须是带 BLAS 的二进制 wheel。** glibc 2.17 的机器（Sherlock 的 CentOS 7）装不上 numpy ≥2.3 的
 manylinux_2_28 wheel，pip/uv 会退回源码编译且找不到 BLAS，矩阵乘会慢 100 倍以上而不报错

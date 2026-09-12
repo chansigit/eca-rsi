@@ -140,8 +140,8 @@
   checkout 提交任何东西**,哪怕只是纯文档。因此**本节内容故意不提交**(截至写这段话,一直保持 working-tree
   的未提交状态),等整个批量跑彻底跑完、没有任何 organ 还在引用这份 checkout 时再统一提交。
 - **PyPI 上传 `ecarsi` 0.1.0 仍被新项目频率限制卡住**(非本轮新增,历史遗留,见 `eca-rsi-open-backlog` memory)。
-  **已过时**(2026-09-11 复核):2026-09-07 起 0.2.x 系列五个包全部改为只打 GitHub tag、不再上传 PyPI(见 INSTALL.md),
-  分发策略已变,PyPI 限流不再是待解决问题。
+  **已解决**(2026-09-11):限流已解除,`ecarsi` 0.2.8 首传 PyPI 成功;同批把 agent-harness-bridge 0.2.11、
+  osp-sc 0.1.6、msp-sc 0.4.0、zmip 0.3.7 也补发到 PyPI + GitHub Release,见 INSTALL.md。
 
 ## 架构/流程发现(不是这次要修的 bug,但值得未来设计时考虑)
 - **mca3.0/Kidney 不收敛(2026-09-06 深夜观察)**:round 2–7 每轮删除 1.6 / 3.4 / 5.2 / 2.3 / 3.3 / 3.0%,在 3% 附近震荡,
