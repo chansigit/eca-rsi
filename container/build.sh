@@ -13,6 +13,8 @@
 #   ECA_SIF       image to build inside                  (default: $ECA_CT_ROOT/python312-slim.sif)
 #   ECA_REPOS     directory holding the checkouts        (default: parent of this repo)
 #   PIP_CACHE_DIR pip cache                              (default: pip's own)
+#   ECA_GPU=1     also install rapids-singlecell-cu12[rapids] (GPU-tier pool workers;
+#                 ~8 GB, needs a CUDA 12 driver on the nodes that run it)
 #
 # Run it INSIDE the image, e.g.
 #   apptainer exec --bind /scratch,/oak,/home "$ECA_SIF" bash container/build.sh
@@ -22,6 +24,12 @@ REPOS="${ECA_REPOS:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 V="$ROOT/.venv"
 CACHE_ARG=()
 [ -n "${PIP_CACHE_DIR:-}" ] && CACHE_ARG=(--cache-dir "$PIP_CACHE_DIR")
+GPU_ARG=()
+# RAPIDS pinned to one release: unpinned, pip backtracks through cudf versions,
+# downloading a 700 MB libcudf wheel per candidate (2026-09-12).
+RAPIDS="${ECA_RAPIDS:-26.6}"
+[ "${ECA_GPU:-0}" = 1 ] && GPU_ARG=(--extra-index-url https://pypi.nvidia.com "rapids-singlecell-cu12[rapids]"
+    "cudf-cu12==$RAPIDS.*" "cuml-cu12==$RAPIDS.*" "cugraph-cu12==$RAPIDS.*")
 
 for r in agent-harness-bridge osp msp zmip eca-rsi stancounts stangene eca-pp; do
     [ -d "$REPOS/$r" ] || { echo "missing checkout: $REPOS/$r (set ECA_REPOS)" >&2; exit 2; }
@@ -33,11 +41,11 @@ python -m venv --clear "$V"
 # Series.values, which broke osp's cells-scope QC actions in a way all four test
 # suites passed straight through (2026-09-07). Lift the pin only with a real run.
 # scikit-image is scanpy's scrublet dependency and is not declared by osp.
-"$V/bin/pip" install "${CACHE_ARG[@]}" \
+"$V/bin/pip" install --resume-retries 10 "${CACHE_ARG[@]}" \
     -e "$REPOS/agent-harness-bridge[all]" -e "$REPOS/osp[agent]" -e "$REPOS/msp[agent]" \
     -e "$REPOS/zmip" -e "$REPOS/eca-rsi" \
     -e "$REPOS/stancounts" -e "$REPOS/stangene" -e "$REPOS/eca-pp[probe,openai,claude,test]" \
-    "pandas<3" pyarrow pytest scikit-image "dask[distributed]" 2>&1 | grep -v "already satisfied" | tail -15
+    "pandas<3" pyarrow pytest scikit-image "dask[distributed]" "${GPU_ARG[@]}" 2>&1 | grep -v "already satisfied" | tail -15
 # dask[distributed] here as a bare package, not msp's own [dask] extra: this
 # script installs the primary msp checkout, and that extra only exists on the
 # not-yet-merged compute-endpoint branch (eca-rsi#8). Switch to -e "$REPOS/msp[agent,dask]"
@@ -58,6 +66,7 @@ t = time.perf_counter(); x @ x
 print(f"dgemm 4000^3: {time.perf_counter() - t:.2f} s   (no-BLAS builds take ~40 s)")
 for p in ("scipy", "scanpy", "anndata", "h5py", "numba", "umap-learn", "pynndescent",
           "scikit-learn", "harmonypy", "igraph", "pyarrow", "dask", "distributed", "openai-agents",
+          "rapids-singlecell-cu12", "cuml-cu12",
           "agent-harness-bridge", "osp-sc", "msp-sc", "zmip", "ecarsi",
           "stancounts", "stangene", "eca-pp"):
     try:

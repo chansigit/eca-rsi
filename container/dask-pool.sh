@@ -12,12 +12,15 @@
 #
 # Environment:  DASK_POOL_DIR  (default $SCRATCH/dask-pool) holds scheduler.json + logs.
 #               ECA_CT_ROOT    (default /scratch/users/chensj16/venvs/eca-ct) has the python wrapper.
+#               ECA_CT_GPU_ROOT wrapper for --gpu workers (default: ECA_CT_ROOT); a venv built with
+#                              ECA_GPU=1 build.sh, i.e. the same packages plus rapids-singlecell.
 #               PYTHONPATH     is forwarded to workers: the pool must import the SAME msp
 #                              as the runs that use it (a worktree override travels along).
 # Then, in the run:  MSP_COMPUTE_ENDPOINT=dask MSP_DASK_SCHEDULER=$DASK_POOL_DIR/scheduler.json
 set -euo pipefail
 POOL="${DASK_POOL_DIR:-$SCRATCH/dask-pool}"
 PY="${ECA_CT_ROOT:-/scratch/users/chensj16/venvs/eca-ct}/python"
+PY_GPU="${ECA_CT_GPU_ROOT:-${ECA_CT_ROOT:-/scratch/users/chensj16/venvs/eca-ct}}/python"
 SF="$POOL/scheduler.json"
 mkdir -p "$POOL"
 
@@ -31,15 +34,16 @@ scheduler)
     echo "scheduler $(python3 -c "import json;print(json.load(open('$SF'))['address'])") pid $!"
     ;;
 worker)
-    node="${2:?node}"; n="${3:-4}"; extra=""; tag="$node"
+    node="${2:?node}"; n="${3:-4}"; extra=""; tag="$node"; wpy="$PY"
     if [ "${3:-}" = "--gpu" ]; then
+        wpy="$PY_GPU"
         # one process per GPU, each advertising GPU=1 so only tier="gpu" tasks
         # land on it; APPTAINER_NV=1 makes the container wrapper pass --nv.
         n=$(ssh -o BatchMode=yes "$node" 'nvidia-smi -L | wc -l'); extra="--resources GPU=1"; tag="$node-gpu"
     fi
     # ssh -f: fork after auth, before the remote command. A plain `ssh node 'cmd &'`
     # never returns -- ssh keeps waiting on the inherited stdin (spike, 2026-09-12).
-    ssh -f -o BatchMode=yes "$node" "env PYTHONPATH='${PYTHONPATH:-}' ${extra:+APPTAINER_NV=1} '$PY' -m distributed.cli.dask_worker \
+    ssh -f -o BatchMode=yes "$node" "env PYTHONPATH='${PYTHONPATH:-}' ${extra:+APPTAINER_NV=1} '$wpy' -m distributed.cli.dask_worker \
         --scheduler-file '$SF' --nworkers $n --nthreads 1 --name '$tag' $extra \
         > '$POOL/worker-$tag.log' 2>&1"
     echo "worker on $node ($n procs${extra:+, GPU tier}), log $POOL/worker-$tag.log"
