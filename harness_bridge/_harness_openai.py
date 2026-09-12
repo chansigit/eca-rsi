@@ -1,4 +1,6 @@
-"""HARNESS=openai backend using OpenAI Agents SDK with Volcengine Ark.
+"""HARNESS=openai backend using OpenAI Agents SDK with Volcengine Ark -- and,
+through ``_harness_openrouter`` (``provider="openrouter"``), the same loop
+against OpenRouter's OpenAI-compatible endpoint.
 
 This is the direct-Python alternative to the dsh backend.  The Agents SDK
 owns the model/tool loop, while our existing ``ToolSpec`` handlers remain the
@@ -6,8 +8,13 @@ only authority for validation and final submission.  No shell, editor, MCP
 server, Node subprocess, or remote OpenAI tracing is enabled.
 
 Environment:
-  ARK_API_KEY          Volcengine Ark credential.
+  ARK_API_KEY          Volcengine Ark credential (HARNESS=openai).
   DOUBAO_BASE_URL      OpenAI-compatible API root (default Beijing /api/v3).
+  OPENROUTER_API_KEY   OpenRouter credential (HARNESS=openrouter).
+  OPENROUTER_BASE_URL  default https://openrouter.ai/api/v1. OpenRouter's
+                       Responses endpoint is stateless (no previous_response_id,
+                       no store), so server_state is always off there and the
+                       full local history is sent every turn.
   OPENAI_AGENTS_API    responses (default) or chat_completions.  The latter is
                        a text-only compatibility path; image tool results need
                        Responses.
@@ -49,7 +56,31 @@ from .harness import AgentIncompleteError, AgentRunResult, AgentTimeout, ToolSpe
 log = logging.getLogger(__name__)
 
 DOUBAO_BASE_URL_DEFAULT = "https://ark.cn-beijing.volces.com/api/v3"
+OPENROUTER_BASE_URL_DEFAULT = "https://openrouter.ai/api/v1"
 DEFAULT_API_MODE = "responses"
+
+# One OpenAI-compatible loop, two providers. `harness` is the HARNESS name the
+# provider answers to (log lines, error messages); `server_state` says whether
+# the provider's Responses endpoint keeps conversation state (previous_response_id).
+PROVIDERS: dict[str, dict[str, Any]] = {
+    "ark": {
+        "harness": "openai",
+        "key_env": "ARK_API_KEY",
+        "base_env": "DOUBAO_BASE_URL",
+        "base_default": DOUBAO_BASE_URL_DEFAULT,
+        "server_state": True,
+        "headers": None,
+    },
+    "openrouter": {
+        "harness": "openrouter",
+        "key_env": "OPENROUTER_API_KEY",
+        "base_env": "OPENROUTER_BASE_URL",
+        "base_default": OPENROUTER_BASE_URL_DEFAULT,
+        "server_state": False,  # probed 2026-09-12: previous_response_id / store -> 400 invalid_prompt
+        # app attribution OpenRouter asks for; optional, honest, no gate depends on it
+        "headers": {"HTTP-Referer": "https://github.com/chansigit/agent-harness-bridge", "X-Title": "agent-harness-bridge"},
+    },
+}
 DEFAULT_MAX_NUDGES = 2
 DEFAULT_MAX_CONTEXT_RESETS = 2
 DEFAULT_MAX_OUTPUT_RESETS = 2
@@ -151,17 +182,19 @@ def _tool(
     )
 
 
-def _client():
-    """One Ark client per run_agent call; the caller closes it so hundreds of
+def _client(provider: str = "ark"):
+    """One client per run_agent call; the caller closes it so hundreds of
     runs in one Slurm job do not each leave an httpx connection pool behind."""
     from openai import AsyncOpenAI
 
-    key = os.environ.get("ARK_API_KEY")
+    spec = PROVIDERS[provider]
+    key = os.environ.get(spec["key_env"])
     if not key:
-        raise RuntimeError("HARNESS=openai needs ARK_API_KEY")
+        raise RuntimeError(f"HARNESS={spec['harness']} needs {spec['key_env']}")
     return AsyncOpenAI(
         api_key=key,
-        base_url=os.environ.get("DOUBAO_BASE_URL", DOUBAO_BASE_URL_DEFAULT),
+        base_url=os.environ.get(spec["base_env"], spec["base_default"]),
+        default_headers=spec["headers"],
         max_retries=0,
         # Bounded so a dead request during an Ark outage cannot hang the
         # retry_transient backoff for hours (eca-rsi BATCH_RUN_FINDINGS.md
@@ -244,7 +277,9 @@ async def run_agent(
     label: str,
     max_buffer_size: int | None,
     wall_seconds: float | None = None,
+    provider: str = "ark",
 ) -> AgentRunResult:
+    hname = PROVIDERS[provider]["harness"]
     from agents import (
         Agent,
         ItemHelpers,
@@ -257,7 +292,7 @@ async def run_agent(
     from agents.agent import ToolsToFinalOutputResult
 
     if not model:
-        raise ValueError("HARNESS=openai needs a model id (MODEL env or caller model)")
+        raise ValueError(f"HARNESS={hname} needs a model id (MODEL env or caller model)")
     api_mode = os.environ.get("OPENAI_AGENTS_API", DEFAULT_API_MODE).strip().lower()
     max_nudges = _env_int("OPENAI_AGENTS_MAX_NUDGES", DEFAULT_MAX_NUDGES)
     max_context_resets = _env_int(
@@ -266,7 +301,7 @@ async def run_agent(
     max_output_resets = _env_int(
         "OPENAI_AGENTS_MAX_OUTPUT_RESETS", DEFAULT_MAX_OUTPUT_RESETS
     )
-    server_state = api_mode == "responses" and os.environ.get(
+    server_state = api_mode == "responses" and PROVIDERS[provider]["server_state"] and os.environ.get(
         "OPENAI_AGENTS_SERVER_STATE", "1"
     ).strip().lower() not in {"0", "false", "no", "off"}
     _ = max_buffer_size  # OpenAI Agents SDK does not pipe image bytes through a CLI buffer.
@@ -292,7 +327,7 @@ async def run_agent(
             final_output=submitted_holder.get("value"),
         )
 
-    client = _client()
+    client = _client(provider)
     agent = Agent(
         name=label,
         instructions=with_runtime_instructions(system_prompt, cwd, submit_tool),
@@ -325,7 +360,7 @@ async def run_agent(
                 nonlocal turns_used
                 if turns_used >= max_turns:
                     raise AgentIncompleteError(
-                        f"[{label}] HARNESS=openai exhausted max_turns={max_turns} without a successful "
+                        f"[{label}] HARNESS={hname} exhausted max_turns={max_turns} without a successful "
                         f"{submit_tool} call"
                     )
                 turns_used += 1
@@ -335,7 +370,7 @@ async def run_agent(
             remaining = max_turns - turns_used
             if remaining <= 0:
                 raise AgentIncompleteError(
-                    f"[{label}] HARNESS=openai exhausted max_turns={max_turns} without a successful "
+                    f"[{label}] HARNESS={hname} exhausted max_turns={max_turns} without a successful "
                     f"{submit_tool} call"
                 )
             try:
@@ -354,7 +389,7 @@ async def run_agent(
                 )
             except MaxTurnsExceeded:
                 raise AgentIncompleteError(
-                    f"[{label}] HARNESS=openai exceeded max_turns={max_turns} without a successful "
+                    f"[{label}] HARNESS={hname} exceeded max_turns={max_turns} without a successful "
                     f"{submit_tool} call"
                 ) from None
             except Exception as exc:
@@ -396,7 +431,7 @@ async def run_agent(
                 if output_length:
                     if output_resets >= max_output_resets:
                         raise AgentIncompleteError(
-                            f"[{label}] HARNESS=openai exhausted output-length recovery budget "
+                            f"[{label}] HARNESS={hname} exhausted output-length recovery budget "
                             f"({max_output_resets} fresh sessions) without a successful {submit_tool} call"
                         ) from exc
                     output_resets += 1
@@ -444,7 +479,7 @@ async def run_agent(
 
             if "value" in submitted_holder:
                 log.info(
-                    f"== [{label}] HARNESS=openai api={api_mode} "
+                    f"== [{label}] HARNESS={hname} api={api_mode} "
                     f"server_state={'on' if server_state else 'off'} model={model} run: "
                     f"{usage_totals['requests']} model request(s), {usage_totals['input']} input / "
                     f"{usage_totals['output']} output tokens "

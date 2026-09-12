@@ -30,7 +30,7 @@ def offline_model(monkeypatch):
     model is a model id or a Model instance during construction, and the
     client must exist so run_agent can close it."""
     client = FakeClient()
-    monkeypatch.setattr(H, "_client", lambda: client)
+    monkeypatch.setattr(H, "_client", lambda *a, **k: client)
     monkeypatch.setattr(H, "_model", lambda *_args: "dummy-model")
     return client
 
@@ -453,3 +453,40 @@ def test_client_request_timeout_is_env_overridable(monkeypatch):
     monkeypatch.setenv("OPENAI_AGENTS_REQUEST_TIMEOUT_S", "45")
     H._client()
     assert captured["timeout"] == 45.0
+
+
+def test_openrouter_client_uses_its_own_key_base_url_and_attribution(monkeypatch):
+    captured = {}
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("openai.AsyncOpenAI", FakeAsyncOpenAI)
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-k")
+    H._client("openrouter")
+    assert captured["api_key"] == "or-k"
+    assert captured["base_url"] == "https://openrouter.ai/api/v1"
+    assert captured["default_headers"]["X-Title"] == "agent-harness-bridge"
+
+
+def test_openrouter_client_needs_its_key_not_arks(monkeypatch):
+    monkeypatch.setenv("ARK_API_KEY", "k")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="HARNESS=openrouter needs OPENROUTER_API_KEY"):
+        H._client("openrouter")
+
+
+def test_openrouter_adapter_delegates_with_the_openrouter_provider(monkeypatch):
+    import harness_bridge._harness_openrouter as R
+
+    seen = {}
+
+    async def fake_run(**kwargs):
+        seen.update(kwargs)
+        return "ok"
+
+    monkeypatch.setattr(R, "_run_openai", fake_run)
+    assert asyncio.run(R.run_agent(model="m", label="x")) == "ok"
+    assert seen["provider"] == "openrouter" and seen["model"] == "m"

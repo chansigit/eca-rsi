@@ -9,6 +9,9 @@ actually drives the model is an env-var choice, not a call-site choice:
     HARNESS=openai      (default since 2026-09-04) OpenAI Agents SDK with
                          the Doubao Ark endpoint, direct in-process
                          function tools
+    HARNESS=openrouter  the same loop against OpenRouter (OPENROUTER_API_KEY,
+                         stateless Responses: full history every turn);
+                         intended as AGENT_MODEL_POOL fallbacks behind Doubao
     HARNESS=deepseek    DeepSeek Harness (dsh) via its Python SDK, driving
                          Doubao by default, tools bridged over an in-process
                          streamable-http MCP server
@@ -45,7 +48,7 @@ from ._logging import ensure_logging
 
 ToolHandler = Callable[[dict], Awaitable[dict]]
 T = TypeVar("T")
-HarnessName = Literal["openai", "deepseek", "claude"]
+HarnessName = Literal["openai", "openrouter", "deepseek", "claude"]
 BuiltinCapability = Literal["read", "glob", "grep", "tasks"]
 
 
@@ -419,6 +422,9 @@ def _validate_tool_table(tools: list[ToolSpec], submit_tool: str, allowed_builti
 # Model ids stay open strings by design — no catalog to keep current.
 _BACKENDS: dict[HarnessName, tuple[str, str]] = {
     "openai": ("._harness_openai", "doubao-seed-2-1-turbo-260628"),
+    # Same adapter loop as openai, pointed at OpenRouter (OPENROUTER_API_KEY);
+    # meant as AGENT_MODEL_POOL fallbacks behind Doubao, not as the default.
+    "openrouter": ("._harness_openrouter", "dots-studio/dots-3-note-preview:free"),
     # HARNESS=deepseek's default provider is Doubao via dsh's pi-ai adapter
     # (see _harness_deepseek); DSH_PROVIDER=deepseek-official switches to a
     # real DeepSeek model, in which case override MODEL too.
@@ -585,7 +591,7 @@ def backend_capabilities(
     """
     env = os.environ if environ is None else environ
     resolved = config or resolve_agent_config(environ=env)
-    if resolved.harness == "openai":
+    if resolved.harness in ("openai", "openrouter"):
         mode = (openai_api or env.get("OPENAI_AGENTS_API") or "responses").strip().lower()
         if mode not in {"responses", "chat_completions"}:
             raise ValueError(
@@ -595,7 +601,8 @@ def backend_capabilities(
         return HarnessCapabilities(
             builtins=BUILTIN_CAPABILITIES,
             image_tool_outputs=responses,
-            response_chaining=responses,
+            # OpenRouter's Responses endpoint is stateless (no previous_response_id)
+            response_chaining=responses and resolved.harness == "openai",
             same_session_nudge=True,
             mcp_transport=False,
             context_reset=True,

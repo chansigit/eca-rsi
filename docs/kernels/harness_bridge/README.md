@@ -36,6 +36,7 @@ Harness and model selection are independent:
 ```bash
 HARNESS=openai MODEL=doubao-seed-2-1-turbo-260628 python your_workflow.py
 HARNESS=openai MODEL=doubao-seed-2-1-pro-260628 python your_workflow.py
+HARNESS=openrouter MODEL=dots-studio/dots-3-note-preview:free python your_workflow.py   # OPENROUTER_API_KEY
 HARNESS=deepseek MODEL=doubao-seed-2-1-turbo-260628 python your_workflow.py
 HARNESS=claude MODEL=claude-sonnet-5 python your_workflow.py
 ```
@@ -53,7 +54,7 @@ submissions — never a busy provider; waiting out a rate limit is a separate,
 unrelated mechanism), pass an ordered pool instead:
 
 ```bash
-AGENT_MODEL_POOL='openai:doubao-seed-2-1-turbo-260628,claude:claude-sonnet-5' python your_workflow.py
+AGENT_MODEL_POOL='openai:doubao-seed-2-1-turbo-260628,openrouter:dots-studio/dots-3-note-preview:free,claude:claude-sonnet-5' python your_workflow.py
 ```
 
 or build one explicitly with `ModelPool(parse_model_pool(spec))` / `resolve_model_pool()`

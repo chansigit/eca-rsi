@@ -54,7 +54,7 @@ def setup(monkeypatch, tmp_path):
     async def close():
         pass
 
-    monkeypatch.setattr(H, "_client", lambda: SimpleNamespace(close=close))
+    monkeypatch.setattr(H, "_client", lambda *a, **k: SimpleNamespace(close=close))
     monkeypatch.setattr(H, "_model", lambda *a: "dummy")
     monkeypatch.setenv("OPENAI_AGENTS_API", "responses")
     return {

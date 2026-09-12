@@ -553,3 +553,14 @@ def test_run_agent_logs_the_resolved_backend_for_any_caller_scraping_stdout(monk
             tools=[SUBMIT], submit_tool="submit", prompt="p", cwd=str(tmp_path), label="qc",
         ))
     assert "[qc] resolved backend: harness=claude model=claude-sonnet-5" in caplog.text
+
+
+def test_openrouter_is_a_pool_candidate_without_response_chaining(monkeypatch):
+    from harness_bridge.harness import backend_capabilities, parse_model_pool
+
+    pool = parse_model_pool("openai:doubao-seed-2-1-turbo-260628,openrouter:dots-studio/dots-3-note-preview:free")
+    assert [c.harness for c in pool] == ["openai", "openrouter"]
+    monkeypatch.delenv("OPENAI_AGENTS_API", raising=False)
+    assert backend_capabilities(pool[0]).response_chaining is True
+    caps = backend_capabilities(pool[1])
+    assert caps.response_chaining is False and caps.image_tool_outputs is True

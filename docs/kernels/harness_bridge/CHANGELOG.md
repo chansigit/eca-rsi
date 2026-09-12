@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.13 - 2026-09-12
+
+- `HARNESS=openrouter`: the OpenAI Agents SDK loop against OpenRouter
+  (`OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL` default
+  `https://openrouter.ai/api/v1`). Same tools, nudges and resets as
+  `openai`; OpenRouter's Responses endpoint is stateless (no
+  `previous_response_id`, no `store`, probed 2026-09-12), so server-side
+  chaining is always off there and the full local history is sent every
+  turn. Meant as `AGENT_MODEL_POOL` fallbacks behind Doubao, e.g.
+  `openai:doubao-seed-2-1-turbo-260628,openrouter:dots-studio/dots-3-note-preview:free`.
+
 ## 0.2.12 - 2026-09-12
 
 - Default `OPENAI_AGENTS_REQUEST_TIMEOUT_S` raised 300 -> 900. The 0.2.10
