@@ -230,7 +230,7 @@ def test_usage_limit_waits_within_the_hour_budget(instant_sleep, monkeypatch):
         return fake_now["t"]
 
     monkeypatch.setattr(H.time, "time", clock)
-    attempt, calls = _failing([RuntimeError("429 Too Many Requests")] * 10)
+    attempt, calls = _failing([RuntimeError("usage limit reached, resets at 3pm")] * 10)
     with pytest.raises(AgentLimitExhausted):
         asyncio.run(retry_transient(attempt, "t"))
     assert instant_sleep == [1800, 1800]  # two waits exhaust the 1 h budget; the third failure is final
@@ -493,7 +493,7 @@ def test_usage_limit_is_never_a_fallback_trigger_even_with_a_pool(instant_sleep,
 
     monkeypatch.setattr(H.time, "time", clock)
     pool = ModelPool([AgentConfig("openai", "busy"), AgentConfig("claude", "idle")])
-    attempt, calls = _failing([RuntimeError("429 Too Many Requests")] * 10)
+    attempt, calls = _failing([RuntimeError("usage limit reached, resets at 3pm")] * 10)
     with pytest.raises(AgentLimitExhausted):
         asyncio.run(retry_transient(attempt, "t", pool=pool))
     assert str(pool.current()) == "openai:busy"  # never advanced
@@ -569,6 +569,23 @@ def test_openrouter_is_a_pool_candidate_without_response_chaining(monkeypatch):
     assert backend_capabilities(pool[1]).image_tool_outputs is True
 
 
+def test_capacity_limit_advances_the_pool_after_the_transient_backoff(instant_sleep):
+    from harness_bridge.harness import ModelPool, parse_model_pool, retry_transient
+
+    pool = ModelPool(parse_model_pool("openai:doubao-seed-2-1-turbo-260628,openai:doubao-seed-2-1-pro-260628"))
+    calls = []
+
+    async def run():
+        calls.append(str(pool.current()))
+        if pool.current().model.endswith("turbo-260628"):
+            raise RuntimeError("Error code: 429 - {'error': {'code': 'ServerOverloaded', 'message': 'server overload'}}")
+        return "ok"
+
+    assert asyncio.run(retry_transient(run, "t", pool=pool)) == "ok"
+    assert calls[-1] == "openai:doubao-seed-2-1-pro-260628"
+    assert len(calls) <= 6
+
+
 def test_openrouter_rate_limit_advances_the_pool_instead_of_waiting(instant_sleep):
     from harness_bridge.harness import ModelPool, parse_model_pool, retry_transient
 
@@ -586,7 +603,7 @@ def test_openrouter_rate_limit_advances_the_pool_instead_of_waiting(instant_slee
     assert len(calls) <= 6  # bounded same-candidate retries, then the fallback
 
 
-def test_doubao_rate_limit_still_waits_even_with_openrouter_behind_it(instant_sleep, monkeypatch):
+def test_account_usage_limit_still_waits_even_with_a_pool(instant_sleep, monkeypatch):
     from harness_bridge.harness import ModelPool, parse_model_pool, retry_transient
 
     monkeypatch.setenv("AGENT_LIMIT_WAIT_MAX_H", "0.001")
@@ -595,7 +612,7 @@ def test_doubao_rate_limit_still_waits_even_with_openrouter_behind_it(instant_sl
 
     async def run():
         seen.append(str(pool.current()))
-        raise RuntimeError("Error code: 429 - rate limit exceeded")
+        raise RuntimeError("Error code: 429 - Rate limit exceeded: free-models-per-day (usage limit resets at 00:00)")
 
     with pytest.raises(Exception, match="usage limit still in force"):
         asyncio.run(retry_transient(run, "t", pool=pool))

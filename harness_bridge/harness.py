@@ -154,11 +154,17 @@ MAX_TRANSIENT_ATTEMPTS = 5
 TRANSIENT_BACKOFF_SECONDS = 20  # linear: 20s, 40s, 60s, 80s
 MAX_TIMEOUT_ATTEMPTS = 2  # a run that blew its wall-clock budget gets exactly one fresh start
 DEFAULT_WALL_MINUTES = 180.0
-# Backends whose rate limits are per-model upstream throttles (OpenRouter's
-# free tier: "temporarily rate-limited upstream"), not account usage limits.
-# With a pool, another candidate is the recovery there -- handled like a
-# transient failure (bounded backoff, then advance) instead of the long wait.
-LIMIT_ADVANCES = frozenset({"openrouter"})
+# Within LIMIT_PATTERN, the account-level kind: the key's usage/spend quota
+# is spent or a daily cap is hit. Waiting is the only recovery and a pool
+# never advances on it (issue #1: a spent account must not quietly move the
+# run to a pricier backend). Everything else in LIMIT_PATTERN -- ServerOverloaded,
+# "too many requests", per-model rate limits -- is capacity: with a pool the
+# next candidate is the recovery (bounded backoff first, then advance); without
+# one it still waits like before.
+ACCOUNT_LIMIT_PATTERN = re.compile(
+    r"usage limit|limit will reset|resets at|quota|out of extra usage|spend limit|free-models-per-day",
+    re.IGNORECASE,
+)
 DEFAULT_LIMIT_WAIT_MINUTES = 10.0
 DEFAULT_LIMIT_WAIT_MAX_HOURS = 12.0
 
@@ -206,9 +212,10 @@ async def retry_transient(
     never submits or keeps producing malformed submissions advances after
     a couple of same-backend retries, and a transient failure that outlives
     the whole backoff schedule (provider down, not a hiccup) advances too.
-    Only a usage/rate limit never advances: waiting is its recovery --
-    except on LIMIT_ADVANCES backends (OpenRouter), whose 429s are per-model
-    upstream throttles and go through the transient path instead.
+    Only an account-level usage limit (ACCOUNT_LIMIT_PATTERN) never
+    advances: waiting is its recovery. A capacity limit (ServerOverloaded,
+    too many requests, a per-model rate limit) goes through the transient
+    path when a pool exists -- bounded backoff, then the next candidate.
     `coro_fn` is expected to read
     `pool.current()` itself on every call (`run_agent()` does); this
     function only decides *when* to advance and re-invoke `coro_fn`.
@@ -284,7 +291,7 @@ async def retry_transient(
                     malformed_attempts = 0
                     continue
             throttled_fallback = (
-                pool is not None and pool.current().harness in LIMIT_ADVANCES and LIMIT_PATTERN.search(msg)
+                pool is not None and LIMIT_PATTERN.search(msg) and not ACCOUNT_LIMIT_PATTERN.search(msg)
             )
             if TRANSIENT_PATTERN.search(msg) or throttled_fallback:
                 transient_attempts += 1

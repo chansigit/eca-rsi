@@ -10,10 +10,13 @@
   chaining is always off there and the full local history is sent every
   turn. Meant as `AGENT_MODEL_POOL` fallbacks behind Doubao, e.g.
   `openai:doubao-seed-2-1-turbo-260628,openrouter:dots-studio/dots-3-note-preview:free`.
-- With a pool, a rate limit on an OpenRouter candidate advances to the next
-  candidate after the transient backoff instead of waiting out
-  `AGENT_LIMIT_WAIT_MAX_H`: free-tier 429s there are per-model upstream
-  throttles, not account usage limits. Doubao/Claude limits still wait.
+- With a pool, a *capacity* limit (Ark `ServerOverloaded`, "too many
+  requests", a per-model rate limit, OpenRouter's upstream throttles)
+  advances to the next candidate after the transient backoff instead of
+  waiting out `AGENT_LIMIT_WAIT_MAX_H`. An *account* limit (usage/spend
+  quota, "resets at", OpenRouter `free-models-per-day`) still waits and
+  never advances (issue #1). This is what makes a second Doubao model a
+  useful pool entry: `openai:doubao-seed-2-1-turbo-260628,openai:doubao-seed-2-1-pro-260628`.
 - `OPENROUTER_IMAGE_MODELS`: only listed OpenRouter models receive image
   tool outputs; every other one gets a text error and continues (the
   provider otherwise 404s the whole request: "No endpoints found that
