@@ -120,13 +120,10 @@ the study design goes to `needs_review` only.
 ## Run the workflow
 
 Use Python 3.10 or newer with ECA-RSI, its three kernels, and the shared bridge
-installed. Version 0.1.0 is available on
-[GitHub Releases](https://github.com/chansigit/eca-rsi/releases/tag/v0.1.0).
-PyPI publication is pending a new-project creation rate limit. Install the
-GitHub wheel with its kernels:
+installed. Install the 0.2.9 package combination from PyPI:
 
 ```bash
-python -m pip install 'ecarsi[kernels] @ https://github.com/chansigit/eca-rsi/releases/download/v0.1.0/ecarsi-0.1.0-py3-none-any.whl'
+python -m pip install 'ecarsi[kernels]==0.2.9'
 ```
 
 Follow [INSTALL.md](https://github.com/chansigit/eca-rsi/blob/main/INSTALL.md)
@@ -136,7 +133,9 @@ not install the kernels by default.
 The default agent backend is OpenAI Agents SDK driving Doubao through
 Volcengine Ark, with model `doubao-seed-2-1-turbo-260628`. Set `ARK_API_KEY` in
 your environment before running. Other configured backends can be selected
-with `--harness deepseek` or `--harness claude`.
+with `--harness deepseek` or `--harness claude`. The OpenAI harness also supports
+`--harness openai@openrouter` and `--harness openai@vllm`; configure the endpoint,
+API key, and model as described in [INSTALL.md](INSTALL.md).
 
 ```bash
 # Automatic stopping for every analysis unit.
@@ -160,11 +159,17 @@ Use `eca-rsi --help` and `eca-rsi run --help` for available commands.
 
 ### Compatible packages
 
-The 0.1.0 release uses bridge **0.2.3**, OSP **0.1.2**, and MSP/ZMIP **0.3.3**
-as its minimum compatible versions, with upper version bounds in
-`pyproject.toml`. These dependencies are published on PyPI. MSP uses Harmony 2
-on the CPU; this workflow does not require torch. See [INSTALL.md](INSTALL.md)
-for the tested package combination and configurable kernel parameters.
+The 0.2.9 combination uses bridge **0.2.13**, OSP **0.1.6**, MSP **0.5.0**,
+and ZMIP **0.3.8**. Dependency ranges are in `pyproject.toml`; the explicit
+installation pins are in [INSTALL.md](INSTALL.md).
+
+MSP defaults to CPU computation. `MSP_COMPUTE_ENDPOINT=dask` with
+`MSP_DASK_SCHEDULER` sends Harmony, graph/clustering, and differential-expression
+work to an existing Dask pool. ZMIP uses these same MSP calls for its lineages.
+`MSP_COMPUTE_GPU=1` selects the RAPIDS implementations and requires a GPU worker
+and compatible GPU environment. Pool startup is manual; automatic scaling,
+driver placement, and OSP offloading are not implemented. See
+[container/README.md](container/README.md).
 
 To validate the input and per-sample stages before starting iterative analysis:
 
@@ -282,7 +287,10 @@ Each analysis unit has its own release:
 are `obs["zmip_ann_coarse"]` and `obs["zmip_ann_fine"]`. Read `summary.md` for
 round counts and stopping reasons, and `needs_review.md` for uncertain labels,
 policy-excluded cells, excluded samples, reassignments, and other review
-items. The ledger and stage-specific removal CSVs (`persample/excluded_cells.csv`,
+items. MSP requires an explicit review for adjacent coarse-label pairs; unresolved
+boundaries are retained and listed here. ZMIP requires a written explanation when
+a UMAP island is split across lineages. Neither missing DEGs nor a fixed graph
+mixing percentage proves that labels should merge. The ledger and stage-specific removal CSVs (`persample/excluded_cells.csv`,
 OSP `qc_removed.csv`, MSP `annotation_removed.csv`, ZMIP `zmip_removed.csv`)
 record the cell-level history. Cost summaries
 include only costs reported and captured by the runtime; missing cost records
@@ -339,10 +347,17 @@ Use a new output root when inputs or analysis code change. Legacy outputs
 without the required identities or receipts remain browsable, but are not
 accepted as verified completion for upgraded computation.
 
-Recorded harness/model changes are rejected unless the stage supports an
-explicit `--allow-agent-change`. That option permits an intentional mixed run;
-it does not reset computation caches or override input/runtime checks.
-Per-sample model/configuration changes require a new output directory.
+Harness/model changes are recorded in progress and review records and do not
+invalidate completed computation. The bridge version and source are provenance;
+scientific package versions, source, inputs, and computation settings remain
+part of the computation identity.
+
+For deliberate development across source changes, `ECA_RSI_DEVELOPER_MODE=1`
+relaxes RSI's runtime comparison only. Reused per-sample outputs still require
+their original validated receipts, and skipped runtime checks remain recorded
+as `runtime_check: skipped`. Input, analysis settings, output integrity, and
+kernel-level resume checks still apply. Prefer a new root for reproducible runs.
+
 `--force-reopen` continues beyond an existing release; with `--rounds N`, choose
 a total larger than the completed round count. It does not restore pruned
 matrices or forward ZMIP's `--force` option.
@@ -360,10 +375,14 @@ eca-rsi prune /path/to/eca-runs/study --dry-run
 
 ## Validation scope
 
-Release checks passed **131 tests**, with **2 skipped**. Wheel and source archive
-metadata checks passed, and the installed wheel's modules and prompt resources
-were verified. A browser check confirmed offline UMAP rendering, legend
-selection, and zoom without fetching plot data.
+The 0.2.9 combination has offline tests for provider selection, computation
+endpoints, resume receipts, cell conservation, and release review rendering.
+A replay of 19 saved chondroatlas rounds checks the new boundary-review contract
+without changing historical results or calling a model. Detailed release checks
+are recorded in [TAKEOVER_VALIDATION.md](TAKEOVER_VALIDATION.md).
+
+The earlier 0.1.0 validation also checked installed-wheel resources and offline
+UMAP rendering, legend selection, and zoom.
 
 Real-data validation includes a two-round RSI run on **Clayton**, ending with
 850 cells and a matching cell ledger, and a separate full-size **19Liu MSP/ZMIP**

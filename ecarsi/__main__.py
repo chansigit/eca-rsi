@@ -131,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging("ecarsi", stream=sys.stderr)
     argv = sys.argv[1:] if argv is None else argv
     runtime = argparse.ArgumentParser(add_help=False)
-    runtime.add_argument("--harness", choices=["deepseek", "openai", "claude"])
+    runtime.add_argument("--harness", choices=["deepseek", "openai", "claude", "openai@ark", "openai@openrouter", "openai@vllm"])
     runtime.add_argument("--model")
     selected, argv = runtime.parse_known_args(argv)
     if selected.harness:

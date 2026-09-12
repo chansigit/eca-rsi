@@ -1,6 +1,6 @@
 # 安装与运行（ecarsi 主线）
 
-本文对应 2026-09-05 核对的配套源码。流程和结果说明见 [README.md](README.md)。
+本文对应 2026-09-12 核对的配套源码。流程和结果说明见 [README.md](README.md)。
 ECA-PP 先独立运行；ECA-RSI 环境包含驱动包、OSP/MSP/ZMIP 三个内核和共享库。
 建议装入同一个独立环境，内核通过 `python -m osp|msp|zmip` 子进程运行。
 
@@ -10,16 +10,16 @@ ECA-PP 先独立运行；ECA-RSI 环境包含驱动包、OSP/MSP/ZMIP 三个内�
 
 | 发行名 / import 名 | 源码版本 | 关键依赖与职责 |
 | --- | --- | --- |
-| `ecarsi` / `ecarsi` | 0.2.0 | 驱动；依赖 `agent-harness-bridge[all]>=0.2.4,<0.3`、anndata、scanpy、h5py、numpy、pandas、matplotlib |
-| `osp-sc` / `osp` | 0.1.4 | 每样本 QC、Scrublet、内置 DecontX、聚类和注释建议；`[agent]` 安装 bridge 的全部后端依赖 |
-| `msp-sc` / `msp` | 0.3.4 | 跨样本整合与审查；依赖 `harmonypy>=2,<3`、`stanhue>=1.1.0`、`standissect-lite>=0.2.0`；`[agent]` 安装后端依赖 |
-| `zmip` / `zmip` | 0.3.4 | lineage 内重算与细化；依赖 `msp-sc>=0.3.3,<0.4` 和 `agent-harness-bridge[all]>=0.2.1,<0.3`，另有运行时 API 兼容检查 |
-| `agent-harness-bridge` / `harness_bridge` | 0.2.4 | core 无依赖；extras 为 `openai`、`claude`、`deepseek`、`all` |
-| `standissect-lite` / `standissect_lite` | 0.2.0 | MSP 使用的群体内部小片段检测库 |
+| `ecarsi` / `ecarsi` | 0.2.9 | 驱动；依赖 `agent-harness-bridge[all]>=0.2.13,<0.3`、anndata、scanpy、h5py、numpy、pandas、matplotlib |
+| `osp-sc` / `osp` | 0.1.6 | 每样本 QC、Scrublet、内置 DecontX、聚类和注释建议；`[agent]` 安装 bridge 的全部后端依赖 |
+| `msp-sc` / `msp` | 0.5.0 | 跨样本整合与审查；依赖 `harmonypy>=2,<3`、`stanhue>=1.1.0`、`standissect-lite>=0.2.0`；`[agent]` 安装后端依赖 |
+| `zmip` / `zmip` | 0.3.8 | lineage 内重算与细化；依赖 `msp-sc>=0.5.0,<0.6` 和 `agent-harness-bridge[all]>=0.2.13,<0.3`，另有运行时 API 兼容检查 |
+| `agent-harness-bridge` / `harness_bridge` | 0.2.13 | core 无依赖；extras 为 `openai`、`claude`、`deepseek`、`all` |
+| `standissect-lite` / `standissect_lite` | 0.2.9 | MSP 使用的群体内部小片段检测库 |
 
 安装名是 `osp-sc` 和 `msp-sc`，import 和模块入口仍为 `osp` 和 `msp`。
 `ecarsi` 默认依赖不包含三套内核；其 `[kernels]` extra 声明了内核依赖，
-但版本范围不能锁定配套源码。本次后段使用 Harmony 2 的 CPU 实现，无需 torch；
+但版本范围不能锁定配套源码。默认使用 Harmony 2 的 CPU 实现；可选 GPU 路径使用 RAPIDS，需要单独的兼容环境；
 `MSP_DEVICE` 已移除。实际模块路径和源码摘要会写入每阶段的 `.rsi-stage.json`。
 
 容器环境的构建配方在 [container/](container/)（`build.sh` + `install-wrapper.sh` + 说明），
@@ -44,21 +44,19 @@ numpy 由此失去 BLAS（能导入、测试全过、matmul 慢约 100 倍），
 
 ## 3. 安装发行包与驱动源码
 
-**2026-09-11 起五个包都在 PyPI 上**（agent-harness-bridge 0.2.11、osp-sc 0.1.6、msp-sc 0.4.0、zmip 0.3.7、
-ecarsi 0.2.8），同步打了 GitHub tag + Release。2026-09-07–09-11 之间的 0.2.x 组合只打了 tag、没上传
-PyPI（先前决定,已撤销）；`ecarsi` 此前被 PyPI 的 `Too many new projects created` 新项目频率限制拦下
-首次上传,2026-09-11 复核已解除,首传成功。
+本次发布组合为 ecarsi 0.2.9、bridge 0.2.13、OSP 0.1.6、MSP 0.5.0、ZMIP 0.3.8。
+PyPI 包和 GitHub Release 分别核验，记录见 [TAKEOVER_VALIDATION.md](TAKEOVER_VALIDATION.md)。
 
 ```bash
 python -m venv /path/to/venvs/eca
 source /path/to/venvs/eca/bin/activate
 python -m pip install -U pip
 python -m pip install \
-  'agent-harness-bridge[all]==0.2.11' \
+  'agent-harness-bridge[all]==0.2.13' \
   'osp-sc[agent]==0.1.6' \
-  'msp-sc[agent]==0.4.0' \
-  'zmip==0.3.7' \
-  'ecarsi[kernels]==0.2.8'
+  'msp-sc[agent]==0.5.0' \
+  'zmip==0.3.8' \
+  'ecarsi[kernels]==0.2.9'
 ```
 
 开发时改动版本号后要重新 `pip install -e --no-deps`（用源码 checkout 而非上面的固定版本时），
@@ -102,7 +100,7 @@ ECA_RSI_PYTHON="apptainer-wrapper"   # 一个 exec apptainer exec --bind /scratc
 [agent-harness-bridge](https://github.com/chansigit/agent-harness-bridge)、
 [standissect-lite](https://github.com/chansigit/standissect-lite)。
 
-RSI 最低内核版本采用 OSP 0.1.2、MSP/ZMIP 0.3.3，bridge 最低 0.2.3。
+RSI 的实际依赖范围见 `pyproject.toml`；上面的固定版本是此次验证组合。
 独立内核测试、wheel 导入和真实模型运行分别记录，不互相替代。
 
 ## 4. 检查实际运行环境
@@ -144,14 +142,18 @@ editable 安装的 `__file__` 应指向预期源码目录；wheel 安装应指�
 
 | 配置 | 作用 / 默认值 |
 | --- | --- |
-| `HARNESS` / `--harness` | `openai`（默认）、`deepseek` 或 `claude` |
+| `HARNESS` / `--harness` | `openai`（默认）、`deepseek`、`claude`、`openai@openrouter` 或 `openai@vllm` |
 | `MODEL` / `--model` | CLI 优先；OpenAI/dsh 默认 `doubao-seed-2-1-turbo-260628`，Claude 默认 `claude-sonnet-5` |
 | `ARK_API_KEY` / `DOUBAO_BASE_URL` | Ark 密钥 / endpoint；默认使用北京区域 `/api/v3` |
 | `OPENAI_AGENTS_API` | 默认 `responses`；`chat_completions` 是文本兼容路径，图像工具结果使用 Responses |
 | `OPENAI_AGENTS_MAX_NUDGES` | 未 submit 时在同一历史中继续提醒，默认 2 次 |
 | `OPENAI_AGENTS_MAX_CONTEXT_RESETS` | 超长上下文恢复次数上限，默认 2 次 |
 | `OPENAI_AGENTS_SERVER_STATE` | 默认 1，Responses 使用 `previous_response_id` 增量续接 |
-| `--allow-agent-change` | 显式允许被检查的 manifest 与当前 harness/model 不同；不重算已完成步骤 |
+| `ECA_RSI_DEVELOPER_MODE=1` | 放宽 RSI 的代码运行身份比较，记录 `runtime_check: skipped`；仍校验输入、计算配置和输出，内核自己的缓存检查不变 |
+| `OPENROUTER_API_KEY` / `OPENROUTER_BASE_URL` | OpenRouter 密钥 / endpoint；默认 `https://openrouter.ai/api/v1` |
+| `VLLM_API_KEY` / `VLLM_BASE_URL` | 自建服务密钥 / endpoint；默认 `http://127.0.0.1:8000/v1`，MODEL 必须匹配服务名称 |
+| `MSP_COMPUTE_ENDPOINT` / `MSP_DASK_SCHEDULER` | `local`（默认）、`dask-local` 或 `dask`；后者连接已有 scheduler 地址或 JSON 文件 |
+| `MSP_COMPUTE_GPU=1` | Harmony、图/聚类、DE 选择 GPU 实现；需要 RAPIDS 环境和 GPU worker |
 | `OSP_PYTHON` / `MSP_PYTHON` | 内核解释器，默认当前解释器 |
 | `ZMIP_PYTHON` | 默认依次取 `MSP_PYTHON`、当前解释器 |
 | `ECA_RSI_PYTHON` | `run-eca-rsi.sh` 使用的解释器；未设时先尝试脚本内的本机 venv，再回退到 `python` |
@@ -166,6 +168,9 @@ editable 安装的 `__file__` 应指向预期源码目录；wheel 安装应指�
 | `MSP_EFFORT` / `ZMIP_EFFORT` / `MSP_MAX_TURNS` / `ZMIP_MAX_TURNS` | agent 推理和预算参数 |
 | `AGENT_WALL_MIN` | 单次 agent 调用时间预算，默认 180 分钟 |
 | `AGENT_LIMIT_WAIT_MIN` / `AGENT_LIMIT_WAIT_MAX_H` | 额度等待间隔（分钟）/ 总预算（小时），默认 10 / 12 |
+
+`--allow-agent-change` 已移除；换模型/后端自动记录，不再拦截续跑。
+暖池目前手动启动，尚无自动扩缩容、driver 调度或 OSP offload；启动方式见 [container/README.md](container/README.md)。
 
 后端细节由共享 bridge 管理。更换解释器时，也要在对应环境安装兼容的内核和
 bridge。并非内核的全部 CLI 参数都能经由 `eca-rsi run` 传入，以驱动的帮助为准。

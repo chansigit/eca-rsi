@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.9 — 2026-09-12
+
+- Keep bridge version/source as agent provenance, outside scientific runtime identity; retain provider-qualified names.
+- Fix developer resume to verify reused OSP receipts with their original identity and preserve skipped runtime checks.
+- Surface uncertain MSP coarse boundaries and written ZMIP island reviews; round one no longer receives an over-budget convergence flag.
+- Require the bridge 0.2.13 / MSP 0.5.0 / ZMIP 0.3.8 combination and document the manual CPU/GPU pool scope.
+
 ## 0.2.1 — 2026-09-07
 
 - Source provenance tolerates a missing `git` binary (slim containers): the commit is recorded as null instead of

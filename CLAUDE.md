@@ -100,7 +100,7 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
   zmip.lineage 各自的并发派发循环给第 N 个起的子进程一份轮转过 N 位的 pool(`rotate_model_pool`),
   把并发请求摊开到 pool 里的不同模型,而不是全部先撞主候选;默认关,语义是"pool 里的模型同等可信任",
   跟"pool 是质量排序的降级链"这个默认假设冲突,不能无条件打开。
-- agent runtime 实现在独立 `agent-harness-bridge` 包;`ecarsi.harness` / `msp.harness` / `osp.harness` 只是保持旧导入路径的 identity-preserving shim。adapter 回归测试在共享包,本仓库 `tests/test_harness_sync.py` 验证 shim 身份;`resources.py` 两份仍需逐字节相同。
+- agent runtime 实现在独立 `agent-harness-bridge` 包;`ecarsi.harness` / `osp.harness` 保持旧导入路径；MSP 0.4 起已删除 `msp.harness`，调用方直接导入 `harness_bridge`。adapter 回归测试在共享包,本仓库 `tests/test_harness_sync.py` 验证 shim 身份;`resources.py` 两份仍需逐字节相同。
 - persample 前半程接入已升级：逐来源实验映射、`eca_sample_id`、上游快照、完整实验池检查；
   同名样本默认跨来源隔离，跨文件合池须显式映射。统一 `ecarsi.osp_worker` 子进程调用 OSP 公共 API。
   每样本成功状态、内容指纹和 QC 细胞守恒共同决定完成；只自动重试明确临时错误，注释失败可单独恢复。
@@ -133,7 +133,9 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
   counts 使用 HDF5 直接分块比较，不能用 AnnData backed 模式假设 layers 不占内存。
 - 运行身份只比内容:`runtime_identity()` / `downstream.runtime()` 记录计算包(ecarsi / osp / msp / zmip / standissect-lite 及数值栈)的版本 + 源码摘要;
   **developer mode `ECA_RSI_DEVELOPER_MODE=1`**:跳过全部 runtime 比对(organize adapter / persample / 各阶段 prepare 与 verify,含样本级完成判定),输入与配置身份照比,每次跳过都打印并记进阶段状态;开发期改代码、发版、重装 editable 都不再让在跑的单元作废。**agent-harness-bridge 不进身份,只进 provenance**(2026-09-12 起,0.2.9:它是 agent 运行时,和换模型同类,bridge 发个补丁版不能让在跑的单元作废);checkout 路径和 git HEAD
-  另存为 `provenance`(persample manifest 与各阶段 `.rsi-stage.json`),只供追溯,不参与比对。改文档提交、同一源码换 worktree 路径都不影响续跑。
+  另存为 `provenance`(persample manifest 与各阶段 `.rsi-stage.json`),只供追溯,不参与比对。改仓库顶层文档、同一源码换 worktree 路径都不影响续跑。
+  bridge 版本/源码仅记 provenance；`ECA_RSI_DEVELOPER_MODE=1` 可跳过 RSI 的运行身份比较，但不跳过输入/配置/输出校验或内核检查。
+  复用 OSP 样本必须保留并验证原 receipt identity，跳过记录 `runtime_check: skipped` 不能在终检时重置为 ok。
 - `release_state.py` 在暂存目录生成完整 release 和收据，再可恢复地切换目录；入口先恢复中断发布。
   重开保留旧 round decision，只新增轮次；已有 release 无收据仅可浏览，计算用新目录。
   换后端/模型不再需要 `--allow-agent-change`（2026-09-10 起该开关已删，中途换模型是合理操作，`check_agent_config` 只记录不拦截，记进 progress.log 和 needs_review 的 `agent_config_changed`）；下游 agent 预算变化不使计算身份失效。
@@ -141,7 +143,11 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
 - 本轮删除统计从 MSP integrated 到 ZMIP survivors，不含此前 OSP QC 和整样本排除；完整历史查 ledger。
   达到停止阈值不证明注释准确；轮数上限或固定轮数发布应按 reason 与收敛发布区分。
 - `ecarsi.cost` 只累计捕获到的费用事件；缺失记录不能解释成免费或完整账单。
-- MSP/ZMIP 使用 0.3 系列，Harmony 2 为 CPU 实现，无需 torch/MSP_DEVICE；RSI 资源副本已同步。
+- 配套版本：ecarsi 0.2.9、bridge 0.2.13、OSP 0.1.6、MSP 0.5.0、ZMIP 0.3.8。默认 Harmony 2 CPU；可选 RAPIDS GPU。
+- `MSP_COMPUTE_ENDPOINT=local|dask-local|dask` 调度 Harmony、图/聚类、DE；ZMIP lineage 复用同一实现。
+  `dask` 连接 `MSP_DASK_SCHEDULER`，`MSP_COMPUTE_GPU=1` 要求 GPU worker。暖池仍手动管理，没有自动扩缩容、driver tier 或 OSP offload。
+- MSP 相邻 coarse-label pair 必须提交 `boundary_reviews`（证据、uncertain），未解决边界留在 needs_review；
+  ZMIP 同岛拆分要求 `shared_island_reviews`。不把缺失 DEG 或固定混合百分比当作强制合并依据。
 - `MSP_BATCH_COL` 可显式选择校正列，完整 OSP 实验内必须只有一个值；默认仍为 `eca_sample_id`，
   不自动推断 biological condition 应被校正，不将校正分组用于重切 OSP 实验池。
 - sample map 的两个声明式细胞策略（`ecarsi/policies.py`，见 FRONT_INTEGRATION.md）：`exclude_cells`

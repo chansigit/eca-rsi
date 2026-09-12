@@ -481,7 +481,18 @@ def _run(args, unit, h5ad, out, bare):
         e["request"] = {"identity": e["identity"], "config": config, "runtime": runtime,
                         "value": e["value"], "n_cells": e["n_cells"],
                         "context": None if bare else L.report_context(unit)}
+    runtime_skipped = bool(old and developer_mode() and
+                           (old["runtime"] != runtime or old.get("runtime_check") == "skipped"))
+    if old and developer_mode():
+        previous = {s["value"]: s["identity"] for s in old["samples"]}
+        for e in entries:
+            saved = previous.get(e["value"])
+            if saved and is_finished(Path(e["outdir"]), config["annotate"], saved):
+                # Keep the verified receipt identity of reused samples. Pending
+                # samples receive the current identity when they actually run.
+                e["identity"] = e["request"]["identity"] = saved
     man = {"schema_version": 2, "state": old.get("state", "planned") if old else "planned", "h5ad": str(h5ad), **agent_config(),
+           "runtime_check": "skipped" if runtime_skipped else "ok",
            "input_identity": identity, "metadata_identity": metadata, "runtime": runtime, "provenance": source_provenance(), "config": config,
            "sample_column": SAMPLE_KEY, "sample_mapping": decision, "explicit_mapping": old["explicit_mapping"] if old else explicit,
            "mapping_identity": mapping_identity(table), "identity": run_identity,
@@ -505,10 +516,8 @@ def _run(args, unit, h5ad, out, bare):
         for e in entries:
             print(f"[plan] {e['value']} ({e['n_cells']} cells): {shlex.join(e['command'])}")
         return 0
-    # the experiment identity digests the runtime too; with the development
-    # switch a finished sample stays finished across a runtime change
     pending = [e for e in entries
-               if not is_finished(Path(e["outdir"]), config["annotate"], None if developer_mode() else e["identity"])]
+               if not is_finished(Path(e["outdir"]), config["annotate"], e["identity"])]
     failed = []
     if pending:
         man["state"] = "running"

@@ -126,8 +126,10 @@ def prepare(py, kernel, inputs, outdir, config):
                 'config': computational_config(config), 'runtime': kernel_runtime(py, kernel)}
     from . import agent_config, check_agent_config
     path = outdir / STATE
+    runtime_check = 'ok'
     if path.exists():
         old = read_json(path)
+        runtime_check = old.get('runtime_check', 'ok')
         check_agent_config(old.get('agent', {}), str(path))
         if old.get('identity') != identity:
             same_but_runtime = {k: v for k, v in (old.get('identity') or {}).items() if k != 'runtime'} == \
@@ -136,11 +138,12 @@ def prepare(py, kernel, inputs, outdir, config):
                 raise ValueError('downstream input/configuration/runtime changed; use a new output directory'
                                  + (' (or ECA_RSI_DEVELOPER_MODE=1)' if same_but_runtime else ''))
             print(f'[{kernel}] runtime changed since this stage was prepared; continuing (developer mode)')
+            runtime_check = 'skipped'
         if old.get('state') == 'complete':
             _check_files(outdir, old['validation']['outputs'])
     elif any((outdir / f).exists() for f in (*L.MSP_CONTRACT, *L.ZMIP_CONTRACT)):
         raise ValueError('legacy downstream outputs have no RSI identity; use a new output directory')
-    write_json(path, {'identity': identity, 'provenance': source_provenance(), 'agent': stage_agent(kernel), 'state': 'running'})
+    write_json(path, {'identity': identity, 'provenance': source_provenance(), 'agent': stage_agent(kernel), 'state': 'running', 'runtime_check': runtime_check})
     return identity
 
 
@@ -286,7 +289,7 @@ def verify(py, kernel, inputs, outdir, identity=None):
     if identity is not None:
         if [file_identity(Path(p)) for p in inputs] != identity['inputs']:
             raise ValueError('downstream input changed during computation')
-        runtime_check = 'ok'
+        runtime_check = read_json(Path(outdir) / STATE).get('runtime_check', 'ok')
         if kernel_runtime(py, kernel) != identity['runtime']:
             if not developer_mode():
                 raise ValueError('downstream runtime changed during computation (or ECA_RSI_DEVELOPER_MODE=1)')

@@ -150,8 +150,8 @@ def test_review_section_is_grouped_cards(tmp_path):
     assert '<div class="rv-group tone-info" id="review-upstream_review">' in html
     assert "check input counts" in html and "review-cards" not in html
     sec = html[html.index('id="review"'):]
-    assert "<span class=\"count\">2 items — 1 input and per-sample review · 1 loop convergence</span>" in sec
-    assert '<div class="rv-group tone-bad" id="review-convergence">' in sec
+    assert "<span class=\"count\">1 items — 1 input and per-sample review</span>" in sec
+    assert 'id="review-convergence"' not in sec
 
 
 def test_home_overview_has_stats_table_and_filter(tmp_path):

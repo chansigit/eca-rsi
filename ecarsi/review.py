@@ -58,6 +58,8 @@ KINDS: list[tuple[str, str, str]] = [
      "They stay on disk untouched (persample/)."),
     ("reassigned", "Clusters moved between lineages",
      "Zoom-in reassignments. The same population moving every round means the coarse label upstream is unstable."),
+    ("annotation_boundary", "Uncertain coarse-label boundaries",
+     "The annotation agent retained different coarse labels across adjacent clusters with insufficient evidence."),
     ("inspect_flag", "Inspection flags",
      "Cluster QC verdicts flagged, ambiguous or low-confidence. Advisory to annotate; nothing was removed here."),
     ("lineage_skipped", "Lineages not zoomed",
@@ -176,6 +178,11 @@ def _crosssample_items(n: int, cdir: Path, unit: Path) -> list[Item]:
 def _annotation_items(n: int, step: str, scope: str, prop: dict, sizes: dict, removed: dict,
                       report: str) -> list[Item]:
     items = []
+    for boundary in prop.get("boundary_reviews", []):
+        if boundary.get("uncertain"):
+            items.append(Item("annotation_boundary", n, step, scope,
+                              label=" / ".join(boundary["coarse_labels"]), action="retained for review",
+                              note=boundary["evidence"], link=report))
     for e in prop.get("clusters", []):
         cid = str(e["cluster_id"])
         label = f"{e.get('coarse_label', '')} / {e.get('fine_label', '')}"
@@ -206,6 +213,9 @@ def _zoomin_items(n: int, zdir: Path, unit: Path) -> list[Item]:
     for w in plan.get("host_warnings", []):
         items.append(Item("plan_warning", n, "zoomin", scope="plan", action="confirmed by agent", note=w,
                           link=_rel(zdir / "report.html", unit)))
+    for island, evidence in plan.get("shared_island_reviews", {}).items():
+        items.append(Item("plan_warning", n, "zoomin", scope=island, action="agent boundary review",
+                          note=evidence, link=_rel(zdir / "report.html", unit)))
     for ln in plan["lineages"]:
         name = ln["name"]
         if "host:" in ln.get("reason", ""):
