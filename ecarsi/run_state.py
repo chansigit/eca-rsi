@@ -67,8 +67,13 @@ def runtime_identity() -> dict:
     import subprocess
     import sys
 
+    # agent-harness-bridge is deliberately NOT here: it is the agent runtime,
+    # not the computation. Changing the backend or model mid-run is allowed and
+    # only recorded (check_agent_config), and a bridge patch release is the
+    # same kind of change -- a 0.2.11 -> 0.2.12 bump invalidated every in-flight
+    # unit on 2026-09-12. Its version and checkout go to source_provenance().
     result = {"python": sys.version, "executable": str(Path(sys.executable).resolve()), "packages": {}}
-    for module, dist in (("ecarsi", "ecarsi"), ("osp", "osp-sc"), ("harness_bridge", "agent-harness-bridge")):
+    for module, dist in (("ecarsi", "ecarsi"), ("osp", "osp-sc")):
         spec = importlib.util.find_spec(module)
         if spec is None or spec.origin is None:
             raise RuntimeError(f"{module} is not installed in {sys.executable}")
@@ -82,9 +87,14 @@ def runtime_identity() -> dict:
     return result
 
 
+_DISTS = {"ecarsi": "ecarsi", "osp": "osp-sc", "msp": "msp-sc", "zmip": "zmip", "harness_bridge": "agent-harness-bridge"}
+
+
 def source_provenance(modules=("ecarsi", "osp", "msp", "zmip", "harness_bridge")) -> dict:
-    """Where each importable package came from (path + git HEAD), for humans
-    reading a manifest. Recorded next to the identity, never compared."""
+    """Where each importable package came from (path + git HEAD + version),
+    for humans reading a manifest. Recorded next to the identity, never
+    compared -- for harness_bridge this is the only record."""
+    import importlib.metadata
     import importlib.util
     import subprocess
 
@@ -95,9 +105,13 @@ def source_provenance(modules=("ecarsi", "osp", "msp", "zmip", "harness_bridge")
             continue
         folder = Path(spec.origin).parent
         try:
+            version = importlib.metadata.version(_DISTS.get(module, module))
+        except importlib.metadata.PackageNotFoundError:
+            version = None
+        try:
             git = subprocess.run(["git", "-C", str(folder), "rev-parse", "HEAD"], capture_output=True, text=True)
             commit = git.stdout.strip() if git.returncode == 0 else None
         except OSError:  # no git binary (e.g. inside a slim container): provenance is informational, never required
             commit = None
-        result[module] = {"path": str(folder.resolve()), "commit": commit}
+        result[module] = {"path": str(folder.resolve()), "commit": commit, "version": version}
     return result

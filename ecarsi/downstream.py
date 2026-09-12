@@ -45,7 +45,8 @@ def locked_unit(function):
 
 
 def runtime(kernel):
-    modules = ['ecarsi', 'msp', 'harness_bridge', 'standissect_lite']
+    # harness_bridge is agent runtime, not computation: provenance only (see run_state.runtime_identity)
+    modules = ['ecarsi', 'msp', 'standissect_lite']
     if kernel == 'zmip':
         modules.append('zmip')
     sources = {}
@@ -58,7 +59,7 @@ def runtime(kernel):
             str(p.relative_to(root)): file_identity(p) for p in sorted(root.rglob('*'))
             if p.suffix in {'.py', '.md', '.json'} and '__pycache__' not in p.parts})}
     packages = {}
-    for name in ('msp-sc', 'zmip', 'agent-harness-bridge', 'standissect-lite', 'harmonypy',
+    for name in ('msp-sc', 'zmip', 'standissect-lite', 'harmonypy',
                  'scanpy', 'anndata', 'numpy', 'scipy', 'pandas', 'h5py', 'numba',
                  'scikit-learn', 'igraph', 'stanhue'):
         try:
