@@ -11,6 +11,11 @@ Environment:
   ARK_API_KEY          Volcengine Ark credential (HARNESS=openai).
   DOUBAO_BASE_URL      OpenAI-compatible API root (default Beijing /api/v3).
   OPENROUTER_API_KEY   OpenRouter credential (HARNESS=openrouter).
+  OPENROUTER_IMAGE_MODELS
+                       comma-separated OpenRouter model ids that accept image
+                       input; every other OpenRouter model gets image tool
+                       outputs as a text error (the provider would otherwise
+                       404 the whole request).
   OPENROUTER_BASE_URL  default https://openrouter.ai/api/v1. OpenRouter's
                        Responses endpoint is stateless (no previous_response_id,
                        no store), so server_state is always off there and the
@@ -113,7 +118,7 @@ def _params_schema(spec: ToolSpec) -> dict[str, Any]:
 
 
 def _tool(
-    spec: ToolSpec, submitted_holder: dict, is_submit: bool, label: str, api_mode: str
+    spec: ToolSpec, submitted_holder: dict, is_submit: bool, label: str, api_mode: str, images_ok: bool = True
 ):
     from agents import FunctionTool, ToolOutputImage, ToolOutputText
 
@@ -162,6 +167,16 @@ def _tool(
                         )
                     )
                     continue
+                if not images_ok:
+                    # a text-only model: the provider would reject the whole
+                    # request (OpenRouter: 404 "No endpoints found that support
+                    # image input"), ending the run. Tell the model instead.
+                    outputs.append(
+                        ToolOutputText(
+                            text="ERROR: this model does not accept images; use the text tools and tables instead"
+                        )
+                    )
+                    continue
                 media_type = str(block.get("mimeType") or "application/octet-stream")
                 outputs.append(
                     ToolOutputImage(
@@ -180,6 +195,17 @@ def _tool(
         on_invoke_tool=invoke,
         strict_json_schema=True,
     )
+
+
+def model_accepts_images(provider: str, model: str | None) -> bool:
+    """Ark's Doubao models take images. On OpenRouter most free models are
+    text-only and the provider rejects any request carrying an image, so a
+    model must be listed in OPENROUTER_IMAGE_MODELS (comma-separated ids) to
+    receive image tool outputs; others get a text error and carry on."""
+    if provider != "openrouter":
+        return True
+    listed = {m.strip() for m in os.environ.get("OPENROUTER_IMAGE_MODELS", "").split(",") if m.strip()}
+    return (model or "") in listed
 
 
 def _client(provider: str = "ark"):
@@ -307,8 +333,9 @@ async def run_agent(
     _ = max_buffer_size  # OpenAI Agents SDK does not pipe image bytes through a CLI buffer.
 
     submitted_holder: dict = {}
+    images_ok = model_accepts_images(provider, model)
     wrapped = [
-        _tool(spec, submitted_holder, spec.name == submit_tool, label, api_mode)
+        _tool(spec, submitted_holder, spec.name == submit_tool, label, api_mode, images_ok)
         for spec in served_tools(tools, cwd, allowed_builtin)
     ]
     settings = ModelSettings(

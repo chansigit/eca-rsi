@@ -562,8 +562,11 @@ def test_openrouter_is_a_pool_candidate_without_response_chaining(monkeypatch):
     assert [c.harness for c in pool] == ["openai", "openrouter"]
     monkeypatch.delenv("OPENAI_AGENTS_API", raising=False)
     assert backend_capabilities(pool[0]).response_chaining is True
+    monkeypatch.delenv("OPENROUTER_IMAGE_MODELS", raising=False)
     caps = backend_capabilities(pool[1])
-    assert caps.response_chaining is False and caps.image_tool_outputs is True
+    assert caps.response_chaining is False and caps.image_tool_outputs is False  # text-only unless listed
+    monkeypatch.setenv("OPENROUTER_IMAGE_MODELS", "dots-studio/dots-3-note-preview:free")
+    assert backend_capabilities(pool[1]).image_tool_outputs is True
 
 
 def test_openrouter_rate_limit_advances_the_pool_instead_of_waiting(instant_sleep):

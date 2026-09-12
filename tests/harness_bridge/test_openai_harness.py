@@ -490,3 +490,24 @@ def test_openrouter_adapter_delegates_with_the_openrouter_provider(monkeypatch):
     monkeypatch.setattr(R, "_run_openai", fake_run)
     assert asyncio.run(R.run_agent(model="m", label="x")) == "ok"
     assert seen["provider"] == "openrouter" and seen["model"] == "m"
+
+
+def test_openrouter_models_get_images_only_when_listed(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_IMAGE_MODELS", raising=False)
+    assert H.model_accepts_images("ark", "doubao-x") is True
+    assert H.model_accepts_images("openrouter", "nvidia/nemotron-3.5-lightning:free") is False
+    monkeypatch.setenv("OPENROUTER_IMAGE_MODELS", "thinkingmachines/inkling-small:free, a/b")
+    assert H.model_accepts_images("openrouter", "a/b") is True
+    assert H.model_accepts_images("openrouter", "nvidia/nemotron-3.5-lightning:free") is False
+
+
+def test_text_only_model_gets_a_text_error_instead_of_an_image(monkeypatch):
+    from agents import ToolOutputText
+
+    async def handler(args):
+        return {"content": [{"type": "image", "mimeType": "image/png", "data": "AAAA"}]}
+
+    spec = ToolSpec("plot", "a plot", {}, handler)
+    tool = H._tool(spec, {}, False, "t", "responses", images_ok=False)
+    out = asyncio.run(tool.on_invoke_tool(None, "{}"))
+    assert isinstance(out[0], ToolOutputText) and "does not accept images" in out[0].text

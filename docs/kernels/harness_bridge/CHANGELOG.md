@@ -14,6 +14,10 @@
   candidate after the transient backoff instead of waiting out
   `AGENT_LIMIT_WAIT_MAX_H`: free-tier 429s there are per-model upstream
   throttles, not account usage limits. Doubao/Claude limits still wait.
+- `OPENROUTER_IMAGE_MODELS`: only listed OpenRouter models receive image
+  tool outputs; every other one gets a text error and continues (the
+  provider otherwise 404s the whole request: "No endpoints found that
+  support image input", which ended an OSP annotate run on nemotron).
 
 ## 0.2.12 - 2026-09-12
 

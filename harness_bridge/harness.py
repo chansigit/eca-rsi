@@ -608,9 +608,15 @@ def backend_capabilities(
                 f"invalid OPENAI_AGENTS_API={mode!r} (expected 'responses' or 'chat_completions')"
             )
         responses = mode == "responses"
+        if resolved.harness == "openrouter":
+            from ._harness_openai import model_accepts_images
+
+            responses_images = responses and model_accepts_images("openrouter", resolved.model)
+        else:
+            responses_images = responses
         return HarnessCapabilities(
             builtins=BUILTIN_CAPABILITIES,
-            image_tool_outputs=responses,
+            image_tool_outputs=responses_images,
             # OpenRouter's Responses endpoint is stateless (no previous_response_id)
             response_chaining=responses and resolved.harness == "openai",
             same_session_nudge=True,
