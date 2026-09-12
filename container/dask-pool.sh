@@ -6,6 +6,7 @@
 #
 #   dask-pool.sh scheduler                 # start here (this node), in the background
 #   dask-pool.sh worker <node> [nprocs]    # add a worker on a node you hold an allocation on
+#   dask-pool.sh worker <node> --gpu       # one worker per GPU, --nv, resource GPU=1 (tier="gpu")
 #   dask-pool.sh status                    # who is connected
 #   dask-pool.sh stop                      # kill workers and scheduler
 #
@@ -30,13 +31,18 @@ scheduler)
     echo "scheduler $(python3 -c "import json;print(json.load(open('$SF'))['address'])") pid $!"
     ;;
 worker)
-    node="${2:?node}"; n="${3:-4}"
+    node="${2:?node}"; n="${3:-4}"; extra=""; tag="$node"
+    if [ "${3:-}" = "--gpu" ]; then
+        # one process per GPU, each advertising GPU=1 so only tier="gpu" tasks
+        # land on it; APPTAINER_NV=1 makes the container wrapper pass --nv.
+        n=$(ssh -o BatchMode=yes "$node" 'nvidia-smi -L | wc -l'); extra="--resources GPU=1"; tag="$node-gpu"
+    fi
     # ssh -f: fork after auth, before the remote command. A plain `ssh node 'cmd &'`
     # never returns -- ssh keeps waiting on the inherited stdin (spike, 2026-09-12).
-    ssh -f -o BatchMode=yes "$node" "env PYTHONPATH='${PYTHONPATH:-}' '$PY' -m distributed.cli.dask_worker \
-        --scheduler-file '$SF' --nworkers $n --nthreads 1 --name '$node' \
-        > '$POOL/worker-$node.log' 2>&1"
-    echo "worker on $node ($n procs), log $POOL/worker-$node.log"
+    ssh -f -o BatchMode=yes "$node" "env PYTHONPATH='${PYTHONPATH:-}' ${extra:+APPTAINER_NV=1} '$PY' -m distributed.cli.dask_worker \
+        --scheduler-file '$SF' --nworkers $n --nthreads 1 --name '$tag' $extra \
+        > '$POOL/worker-$tag.log' 2>&1"
+    echo "worker on $node ($n procs${extra:+, GPU tier}), log $POOL/worker-$tag.log"
     ;;
 status)
     "$PY" - "$SF" <<'PYEOF'
@@ -46,7 +52,8 @@ with Client(scheduler_file=sys.argv[1], timeout=10) as c:
     info = c.scheduler_info()
     print(info["address"])
     for w in info["workers"].values():
-        print(f"  {w['name']:16s} {w['host']:16s} threads={w['nthreads']}")
+        res = " ".join(f"{k}={v:g}" for k, v in w.get("resources", {}).items())
+        print(f"  {w['name']:20s} {w['host']:16s} threads={w['nthreads']} {res}")
 PYEOF
     ;;
 stop)
