@@ -511,3 +511,18 @@ def test_text_only_model_gets_a_text_error_instead_of_an_image(monkeypatch):
     tool = H._tool(spec, {}, False, "t", "responses", images_ok=False)
     out = asyncio.run(tool.on_invoke_tool(None, "{}"))
     assert isinstance(out[0], ToolOutputText) and "does not accept images" in out[0].text
+
+
+def test_vllm_client_points_at_the_local_server(monkeypatch):
+    captured = {}
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("openai.AsyncOpenAI", FakeAsyncOpenAI)
+    monkeypatch.setenv("VLLM_API_KEY", "local")
+    monkeypatch.delenv("VLLM_BASE_URL", raising=False)
+    H._client("vllm")
+    assert captured["base_url"] == "http://127.0.0.1:8000/v1" and captured["api_key"] == "local"
+    assert H.model_accepts_images("vllm", "local-coder") is True

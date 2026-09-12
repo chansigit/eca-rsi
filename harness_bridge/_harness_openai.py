@@ -10,6 +10,9 @@ server, Node subprocess, or remote OpenAI tracing is enabled.
 Environment:
   ARK_API_KEY          Volcengine Ark credential (HARNESS=openai).
   DOUBAO_BASE_URL      OpenAI-compatible API root (default Beijing /api/v3).
+  VLLM_BASE_URL        self-hosted OpenAI-compatible server (HARNESS=vllm,
+                       default http://127.0.0.1:8000/v1); VLLM_API_KEY is
+                       whatever the server was started with ("local").
   OPENROUTER_API_KEY   OpenRouter credential (HARNESS=openrouter).
   OPENROUTER_IMAGE_MODELS
                        comma-separated OpenRouter model ids that accept image
@@ -74,6 +77,15 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "base_env": "DOUBAO_BASE_URL",
         "base_default": DOUBAO_BASE_URL_DEFAULT,
         "server_state": True,
+        "headers": None,
+    },
+    "vllm": {
+        # a self-hosted OpenAI-compatible server (vLLM); key is a placeholder
+        "harness": "vllm",
+        "key_env": "VLLM_API_KEY",
+        "base_env": "VLLM_BASE_URL",
+        "base_default": "http://127.0.0.1:8000/v1",
+        "server_state": False,  # vLLM's Responses store is per-process memory; keep history local
         "headers": None,
     },
     "openrouter": {

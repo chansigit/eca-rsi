@@ -17,6 +17,10 @@
   quota, "resets at", OpenRouter `free-models-per-day`) still waits and
   never advances (issue #1). This is what makes a second Doubao model a
   useful pool entry: `openai:doubao-seed-2-1-turbo-260628,openai:doubao-seed-2-1-pro-260628`.
+- `HARNESS=vllm`: the same loop against a self-hosted OpenAI-compatible
+  server (`VLLM_BASE_URL`, default `http://127.0.0.1:8000/v1`,
+  `VLLM_API_KEY`), history kept local; the model id is the server's
+  `--served-model-name`.
 - `OPENROUTER_IMAGE_MODELS`: only listed OpenRouter models receive image
   tool outputs; every other one gets a text error and continues (the
   provider otherwise 404s the whole request: "No endpoints found that
