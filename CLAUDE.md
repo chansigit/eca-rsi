@@ -132,7 +132,7 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
   `unit_lock` 覆盖整个下游写入，MSP pending 与 ZMIP publication 凭证不能被文件跳步绕过。
   counts 使用 HDF5 直接分块比较，不能用 AnnData backed 模式假设 layers 不占内存。
 - 运行身份只比内容:`runtime_identity()` / `downstream.runtime()` 记录计算包(ecarsi / osp / msp / zmip / standissect-lite 及数值栈)的版本 + 源码摘要;
-  **agent-harness-bridge 不进身份,只进 provenance**(2026-09-12 起,0.2.9:它是 agent 运行时,和换模型同类,bridge 发个补丁版不能让在跑的单元作废);checkout 路径和 git HEAD
+  **developer mode `ECA_RSI_DEVELOPER_MODE=1`**:跳过全部 runtime 比对(organize adapter / persample / 各阶段 prepare 与 verify,含样本级完成判定),输入与配置身份照比,每次跳过都打印并记进阶段状态;开发期改代码、发版、重装 editable 都不再让在跑的单元作废。**agent-harness-bridge 不进身份,只进 provenance**(2026-09-12 起,0.2.9:它是 agent 运行时,和换模型同类,bridge 发个补丁版不能让在跑的单元作废);checkout 路径和 git HEAD
   另存为 `provenance`(persample manifest 与各阶段 `.rsi-stage.json`),只供追溯,不参与比对。改文档提交、同一源码换 worktree 路径都不影响续跑。
 - `release_state.py` 在暂存目录生成完整 release 和收据，再可恢复地切换目录；入口先恢复中断发布。
   重开保留旧 round decision，只新增轮次；已有 release 无收据仅可浏览，计算用新目录。

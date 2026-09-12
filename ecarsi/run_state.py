@@ -60,6 +60,18 @@ def writer_lock(path: Path):
             fcntl.flock(f, fcntl.LOCK_UN)
 
 
+def developer_mode() -> bool:
+    """ECA_RSI_DEVELOPER_MODE=1 -- developer mode: do not compare the recorded runtime
+    identity (interpreter, package versions, source digests) on resume or at
+    stage verification. Input and configuration identity are still compared.
+    A development switch: while packages are edited between stages of one
+    run, the runtime comparison fails the run on every edit -- a version bump,
+    a docstring, a refreshed editable install -- without protecting anything
+    the input/config checks do not already protect. Every skip is printed and
+    recorded in the stage state as ``runtime_check: skipped``."""
+    return os.environ.get("ECA_RSI_DEVELOPER_MODE", "0").strip() == "1"
+
+
 def runtime_identity() -> dict:
     """No kernel imports: also runs in OSP_PYTHON before any analysis."""
     import importlib.metadata

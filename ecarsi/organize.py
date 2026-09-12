@@ -81,7 +81,7 @@ def profile_unit(unit: dict, max_levels: int = 30) -> dict:
 def main(argv: list[str]) -> int:
     import argparse
     from . import layout as L
-    from .run_state import digest, file_identity, read_json, writer_lock, write_json
+    from .run_state import digest, file_identity, read_json, developer_mode, writer_lock, write_json
     from .upstream import inspect_unit, verify_snapshots
 
     ap = argparse.ArgumentParser(description=__doc__)
@@ -123,9 +123,12 @@ def main(argv: list[str]) -> int:
                 "organize.py", "execute.py", "upstream.py", "plan.py", "run_state.py", "prompts/plan.md")})
             old = read_json(gm) if gm.is_file() else None
             if old:
-                if (old.get("schema_version") != 2 or old.get("input_identity") != identity
-                        or old.get("adapter_identity") != adapter):
-                    raise ValueError("organize input/adapter changed or legacy manifest has no verified identity; use a new output root")
+                if old.get("schema_version") != 2 or old.get("input_identity") != identity:
+                    raise ValueError("organize input changed or legacy manifest has no verified identity; use a new output root")
+                if old.get("adapter_identity") != adapter:
+                    if not developer_mode():
+                        raise ValueError("organize adapter changed; use a new output root (or ECA_RSI_DEVELOPER_MODE=1)")
+                    print("[organize] adapter source changed since this root was organized; continuing (developer mode)")
                 if args.plan_json and read_json(Path(args.plan_json)) != old["plan"]:
                     raise ValueError("organize plan changed; use a new output root")
                 plan, profiles = old["plan"], old["profiles"]

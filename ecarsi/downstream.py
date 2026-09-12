@@ -13,7 +13,7 @@ import sys
 import threading
 
 from . import layout as L
-from .run_state import digest, file_identity, read_json, source_provenance, write_json, writer_lock
+from .run_state import digest, file_identity, read_json, developer_mode, source_provenance, write_json, writer_lock
 
 STATE = '.rsi-stage.json'
 _HELD = set()
@@ -130,7 +130,12 @@ def prepare(py, kernel, inputs, outdir, config):
         old = read_json(path)
         check_agent_config(old.get('agent', {}), str(path))
         if old.get('identity') != identity:
-            raise ValueError('downstream input/configuration/runtime changed; use a new output directory')
+            same_but_runtime = {k: v for k, v in (old.get('identity') or {}).items() if k != 'runtime'} == \
+                {k: v for k, v in identity.items() if k != 'runtime'}
+            if not (same_but_runtime and developer_mode()):
+                raise ValueError('downstream input/configuration/runtime changed; use a new output directory'
+                                 + (' (or ECA_RSI_DEVELOPER_MODE=1)' if same_but_runtime else ''))
+            print(f'[{kernel}] runtime changed since this stage was prepared; continuing (developer mode)')
         if old.get('state') == 'complete':
             _check_files(outdir, old['validation']['outputs'])
     elif any((outdir / f).exists() for f in (*L.MSP_CONTRACT, *L.ZMIP_CONTRACT)):
@@ -281,11 +286,15 @@ def verify(py, kernel, inputs, outdir, identity=None):
     if identity is not None:
         if [file_identity(Path(p)) for p in inputs] != identity['inputs']:
             raise ValueError('downstream input changed during computation')
+        runtime_check = 'ok'
         if kernel_runtime(py, kernel) != identity['runtime']:
-            raise ValueError('downstream runtime changed during computation')
+            if not developer_mode():
+                raise ValueError('downstream runtime changed during computation (or ECA_RSI_DEVELOPER_MODE=1)')
+            print(f'[{kernel}] runtime changed during computation; accepting (developer mode)')
+            runtime_check = 'skipped'
         from . import agent_config
         write_json(Path(outdir) / STATE, {'identity': identity, 'provenance': source_provenance(), 'agent': stage_agent(kernel),
-                                          'state': 'complete', 'validation': validation})
+                                          'state': 'complete', 'validation': validation, 'runtime_check': runtime_check})
     return validation
 
 

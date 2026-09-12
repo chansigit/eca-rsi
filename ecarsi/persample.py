@@ -21,7 +21,7 @@ from pathlib import Path
 from . import cost
 from . import layout as L
 from . import policies as P
-from .run_state import digest, file_identity, read_json, source_provenance, write_json, writer_lock
+from .run_state import digest, file_identity, read_json, developer_mode, source_provenance, write_json, writer_lock
 from .sample_mapping import SAMPLE_KEY, build_mapping, mapping_identity, obs_profile
 from .osp_contract import INPUT_CELLS, REQUEST, is_done, is_empty, is_finished
 
@@ -453,9 +453,12 @@ def _run(args, unit, h5ad, out, bare):
     spec = read_json(Path(args.sample_map)) if args.sample_map else None
     explicit = {"sample_map": spec, "column": args.sample_column, "single": args.single_sample}
     if old:
-        if (old["input_identity"] != identity or old.get("metadata_identity") != metadata or
-                old["config"] != config or old["runtime"] != runtime):
-            raise ValueError("input, configuration or runtime changed; use a new output directory")
+        if old["input_identity"] != identity or old.get("metadata_identity") != metadata or old["config"] != config:
+            raise ValueError("input or configuration changed; use a new output directory")
+        if old["runtime"] != runtime:
+            if not developer_mode():
+                raise ValueError("runtime changed; use a new output directory (or ECA_RSI_DEVELOPER_MODE=1)")
+            print("[persample] runtime changed since this unit started; continuing (developer mode)")
         if any((spec is not None, args.sample_column, args.single_sample)) and old["explicit_mapping"] != explicit:
             raise ValueError("experiment mapping changed; use a new output directory")
         table = pd.read_csv(out / L.SAMPLE_MAPPING, index_col=0, dtype=str, keep_default_na=False)
@@ -502,7 +505,10 @@ def _run(args, unit, h5ad, out, bare):
         for e in entries:
             print(f"[plan] {e['value']} ({e['n_cells']} cells): {shlex.join(e['command'])}")
         return 0
-    pending = [e for e in entries if not is_finished(Path(e["outdir"]), config["annotate"], e["identity"])]
+    # the experiment identity digests the runtime too; with the development
+    # switch a finished sample stays finished across a runtime change
+    pending = [e for e in entries
+               if not is_finished(Path(e["outdir"]), config["annotate"], None if developer_mode() else e["identity"])]
     failed = []
     if pending:
         man["state"] = "running"
