@@ -37,7 +37,11 @@ python -m venv --clear "$V"
     -e "$REPOS/agent-harness-bridge[all]" -e "$REPOS/osp[agent]" -e "$REPOS/msp[agent]" \
     -e "$REPOS/zmip" -e "$REPOS/eca-rsi" \
     -e "$REPOS/stancounts" -e "$REPOS/stangene" -e "$REPOS/eca-pp[probe,openai,claude,test]" \
-    "pandas<3" pyarrow pytest scikit-image 2>&1 | grep -v "already satisfied" | tail -15
+    "pandas<3" pyarrow pytest scikit-image "dask[distributed]" 2>&1 | grep -v "already satisfied" | tail -15
+# dask[distributed] here as a bare package, not msp's own [dask] extra: this
+# script installs the primary msp checkout, and that extra only exists on the
+# not-yet-merged compute-endpoint branch (eca-rsi#8). Switch to -e "$REPOS/msp[agent,dask]"
+# once it lands on main.
 
 echo "=== sanity ==="
 "$V/bin/python" - <<'PY'
@@ -53,7 +57,7 @@ x = np.random.rand(4000, 4000)
 t = time.perf_counter(); x @ x
 print(f"dgemm 4000^3: {time.perf_counter() - t:.2f} s   (no-BLAS builds take ~40 s)")
 for p in ("scipy", "scanpy", "anndata", "h5py", "numba", "umap-learn", "pynndescent",
-          "scikit-learn", "harmonypy", "igraph", "pyarrow", "openai-agents",
+          "scikit-learn", "harmonypy", "igraph", "pyarrow", "dask", "distributed", "openai-agents",
           "agent-harness-bridge", "osp-sc", "msp-sc", "zmip", "ecarsi",
           "stancounts", "stangene", "eca-pp"):
     try:
