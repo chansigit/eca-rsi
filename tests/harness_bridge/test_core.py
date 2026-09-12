@@ -564,3 +564,36 @@ def test_openrouter_is_a_pool_candidate_without_response_chaining(monkeypatch):
     assert backend_capabilities(pool[0]).response_chaining is True
     caps = backend_capabilities(pool[1])
     assert caps.response_chaining is False and caps.image_tool_outputs is True
+
+
+def test_openrouter_rate_limit_advances_the_pool_instead_of_waiting(instant_sleep):
+    from harness_bridge.harness import ModelPool, parse_model_pool, retry_transient
+
+    pool = ModelPool(parse_model_pool("openrouter:a/one:free,openrouter:b/two:free"))
+    calls = []
+
+    async def run():
+        calls.append(str(pool.current()))
+        if pool.current().model == "a/one:free":
+            raise RuntimeError("Error code: 429 - a/one:free is temporarily rate-limited upstream")
+        return "ok"
+
+    assert asyncio.run(retry_transient(run, "t", pool=pool)) == "ok"
+    assert calls[-1] == "openrouter:b/two:free"
+    assert len(calls) <= 6  # bounded same-candidate retries, then the fallback
+
+
+def test_doubao_rate_limit_still_waits_even_with_openrouter_behind_it(instant_sleep, monkeypatch):
+    from harness_bridge.harness import ModelPool, parse_model_pool, retry_transient
+
+    monkeypatch.setenv("AGENT_LIMIT_WAIT_MAX_H", "0.001")
+    pool = ModelPool(parse_model_pool("openai:doubao-x,openrouter:b/two:free"))
+    seen = []
+
+    async def run():
+        seen.append(str(pool.current()))
+        raise RuntimeError("Error code: 429 - rate limit exceeded")
+
+    with pytest.raises(Exception, match="usage limit still in force"):
+        asyncio.run(retry_transient(run, "t", pool=pool))
+    assert set(seen) == {"openai:doubao-x"}  # never moved off the primary

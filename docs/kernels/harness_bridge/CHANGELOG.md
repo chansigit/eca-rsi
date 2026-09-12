@@ -10,6 +10,10 @@
   chaining is always off there and the full local history is sent every
   turn. Meant as `AGENT_MODEL_POOL` fallbacks behind Doubao, e.g.
   `openai:doubao-seed-2-1-turbo-260628,openrouter:dots-studio/dots-3-note-preview:free`.
+- With a pool, a rate limit on an OpenRouter candidate advances to the next
+  candidate after the transient backoff instead of waiting out
+  `AGENT_LIMIT_WAIT_MAX_H`: free-tier 429s there are per-model upstream
+  throttles, not account usage limits. Doubao/Claude limits still wait.
 
 ## 0.2.12 - 2026-09-12
 
