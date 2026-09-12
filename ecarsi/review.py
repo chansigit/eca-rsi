@@ -49,7 +49,7 @@ KINDS: list[tuple[str, str, str]] = [
      "Declarative exclude_cells rules of the sample map (or an agent proposal the host validated the same way), "
      "applied before any QC. Every cell is in persample/excluded_cells.csv and the ledger (step persample-policy)."),
     ("convergence", "Loop convergence",
-     "The loop did not stop on its own, or a round removed more than the per-round budget."),
+     "The loop did not stop on its own, or a round after the first removed more than the per-round budget."),
     ("removed", "Cells removed below high confidence",
      "Irreversible. Each row is a cluster an agent deleted with medium/low confidence, or a lineage whose "
      "zoom-in removal exceeded the soft budget after a forced second look."),
@@ -132,7 +132,10 @@ def _loop_items(n: int, st: dict, forced: bool, last: bool) -> list[Item]:
         items.append(Item("convergence", n, "loop", action="forced release",
                           note=f"{st.get('reason')}; last round removed {100 * st['frac']:.2f}% "
                                f"({st['removed']}/{st['n_in']}) — the loop did not converge on its own"))
-    if st["frac"] > OVER_BUDGET_FRAC:
+    # Round 1 is exempt: it is where the low-quality cells that survived
+    # per-sample QC get removed, and 10-30% there is normal (chondroatlas
+    # runs, 2026-09-12: 14-31%); flagging it is noise, not a convergence signal.
+    if st["frac"] > OVER_BUDGET_FRAC and n > 1:
         items.append(Item("convergence", n, "loop", n_cells=st["removed"], action="over budget",
                           note=f"removed {100 * st['frac']:.1f}% of the cells that entered the round "
                                f"({st['removed']}/{st['n_in']}), above the ~{100 * OVER_BUDGET_FRAC:.0f}% per-round budget"))

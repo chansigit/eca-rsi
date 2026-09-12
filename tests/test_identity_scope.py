@@ -41,3 +41,11 @@ def test_runtime_check_can_be_skipped_while_developing(tmp_path, monkeypatch):
     monkeypatch.setattr(D, "computational_config", lambda config: {"c": 2})
     with pytest.raises(ValueError, match="changed"):
         D.prepare("python", "msp", [str(inp)], out, {})  # config differs: still refused
+
+
+def test_round_one_is_exempt_from_the_over_budget_review_flag():
+    from ecarsi.review import _loop_items
+
+    st = {"frac": 0.25, "removed": 250, "n_in": 1000, "reason": "round 1 never releases"}
+    assert _loop_items(1, st, forced=False, last=False) == []
+    assert [i.action for i in _loop_items(2, st, forced=False, last=False)] == ["over budget"]
