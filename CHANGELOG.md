@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0 — 2026-09-12
+
+- Add an optional Slurm warm pool with a shared FIFO/resource-fit queue, manually started workers and CPU/memory/GPU/time inventory. No automatic allocation or job cancellation.
+- Add OSP compute dispatch with isolated attempts and driver-owned validated publication; retain local execution and driver-side annotation.
+- Add local/pool/auto routing, worker drain/loss fencing and live CPU/memory/GPU status. Require MSP 0.5.2 for the optional pool adapter.
+- Match Slurm GPU device minors to CUDA-visible devices through UUIDs.
+
 ## 0.2.10 — 2026-09-12
 
 - Add `pause` and `pause_after_stage` controls, drain running sample/lineage workers and preserve exit 3 through the driver.
