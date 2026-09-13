@@ -257,7 +257,7 @@ NAV_JS = r"""
     history.replaceState(null,"","#/__home__");
     if(matchMedia('(max-width:760px)').matches)document.body.classList.add('sb-hidden');
   }
-  models.addEventListener('click',()=>showMonitor(window.modelMonitor,window.poolMonitor,'_model_pool_panel','Agent models'));
+  models.addEventListener('click',()=>showMonitor(window.modelMonitor,window.poolMonitor,'_model_pool_panel','Agent Bridge'));
   if (pool) {
     pool.addEventListener("click", () => { if(!pool.disabled) showMonitor(window.poolMonitor, window.modelMonitor, "_warm_pool_panel", "Warm pool"); });
     function poolAvailable(available){
@@ -556,9 +556,9 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
         "</div>"
         '<a class="item home-item" id="home-item" href="/_home" data-name="__home__">'
         '<span class="nm"><b>Overview</b> · all datasets</span></a>'
+        '<button class="item home-item" id="models-item" title="Primary and fallback model inventory"><span class="nm"><b>Agent Bridge</b></span></button>'
         '<button class="item home-item" id="pool-item" disabled aria-disabled="true" title="Checking warm pool availability">'
         '<span class="nm"><b>Warm pool</b></span><span class="cells" id="pool-state">offline</span></button>'
-        '<button class="item home-item" id="models-item" title="Primary and fallback model inventory"><span class="nm"><b>Agent models</b></span></button>'
         f'<div class="sb-list" id="sb-list">{rows or empty_note}</div>'
         '<div class="sb-foot">'
         '<div class="row"><button id="bind-open" class="btn plain">+ Bind…</button><button id="unbind-go" class="btn danger" disabled>Unbind…</button></div>'
@@ -576,7 +576,7 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
         '<span id="crumb"></span><button class="icon" id="reload" title="reload page" aria-label="reload page">&#8635;</button>'
         '<a class="icon" id="open" href="/" target="_blank" title="open in a new tab" aria-label="open in a new tab">&#8599;</a></div>'
         '<iframe id="frame" name="frame" title="dataset"></iframe>'
-        f'{pool_web.panel()}<section id="model-panel" hidden aria-label="Agent models"></section>'
+        f'{pool_web.panel()}<section id="model-panel" hidden aria-label="Agent Bridge"></section>'
         '<div id="empty" style="display:none"><h2>Nothing bound yet</h2><p>Use <b>+ Bind…</b> in the sidebar or, on the server host, '
         "<code>eca-rsi serve scan-add &lt;dir-or-glob&gt;</code>. The server picks up registry changes on the next request.</p>"
         f"<p>{hint}</p></div></main>"

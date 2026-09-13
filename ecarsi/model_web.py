@@ -172,11 +172,11 @@ def render(data):
                 f'<div class="model-check">{check}</div></article>')
     chain = ''.join(card(m, m['position']) for m in data['chain']) or '<p class="muted">No models configured.</p>'
     alternatives = ''.join(card(m) for m in data['alternatives'])
-    return (f'<header class="hero"><h1>Agent model pool</h1><p class="lede">Primary and fallback models, in calling order.</p>'
+    return (f'<header class="hero"><h1>Agent Bridge</h1><p class="lede">Primary and fallback models, in calling order.</p>'
             f'<dl class="facts"><div><dt>Configured models</dt><dd>{len(data["chain"])}</dd></div>'
             f'<div><dt>Fallbacks</dt><dd>{max(0,len(data["chain"])-1)}</dd></div>'
             f'<div><dt>Previously validated</dt><dd>{data["validated_count"]}</dd></div></dl></header>'
-            '<section class="block"><div class="model-tools"><h2>Calling order</h2><button class="btn plain" data-model-action="edit">Edit models</button><button class="btn plain" data-model-action="keys">Check API keys</button></div>'
+            '<section class="block"><div class="model-tools"><h2>Model routing</h2><button class="btn plain" data-model-action="edit">Edit models</button><button class="btn plain" data-model-action="keys">Check API keys</button></div>'
             + controls() +
             f'<p class="lede">Source: {e(data["source"])}</p><div class="model-chain">{chain}</div>'
             + ('<p class="model-note">No fallback is configured.</p>' if len(data['chain']) == 1 else '') + '</section>'

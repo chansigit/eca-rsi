@@ -1,6 +1,6 @@
-# Agent model pool in Periscope
+# Agent Bridge in Periscope
 
-Open **Agent models**, below **Warm pool**, to see the primary model followed by
+Open **Agent Bridge**, above **Warm pool**, to see the primary model followed by
 Fallback 1, Fallback 2, and so on. The panel stays inside Periscope and works
 independently of Slurm workers.
 
