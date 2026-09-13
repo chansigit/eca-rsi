@@ -177,3 +177,10 @@ for the failed request is unavailable, logs explicitly mark usage as incomplete.
 The wall-clock limit continues across fresh sessions. This does not provide
 cross-process checkpoints; a process that has already exited cannot recover
 partial decisions from its transcript alone.
+
+Hosts can use `harness_bridge.control.pause_signals()` around a run and
+`safe_point()` between completed steps. `SIGTERM` requests a shared pause;
+`PauseRequested` exits with code 3. Concurrent hosts check `pause_requested()`
+before launching work and drain their running children. The `pausable` decorator
+wraps CLI functions and returns 3 on pause. Domain checkpoints and validation
+remain the host's responsibility.

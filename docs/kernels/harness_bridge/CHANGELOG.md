@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.14 - 2026-09-12
+
+- Add cooperative SIGTERM pause requests shared with child processes and host-controlled safe points (exit 3).
+
 ## 0.2.13 - 2026-09-12
 
 - Preserve provider-qualified backend names in downstream records; reject empty providers and provider suffixes on non-OpenAI harnesses.
