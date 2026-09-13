@@ -60,7 +60,7 @@ from pathlib import Path
 # "== [zmip B cell] HARNESS=openai api=responses server_state=on model=doubao-... run: 63 model
 #  request(s), 5191909 input / 55736 output tokens (34516 reasoning)"
 RUN = re.compile(
-    r"HARNESS=(?P<harness>\w+).*?model=(?P<model>[\w.\-]+) run: (?P<requests>\d+) model request\(s\), "
+    r"HARNESS=(?P<harness>\S+).*?model=(?P<model>\S+) run: (?P<requests>\d+) model request\(s\), "
     r"(?P<input>\d+) input / (?P<output>\d+) output tokens \((?P<reasoning>\d+) reasoning\)"
 )
 # "== [zmip B cell] time: wall 1593 s, tools 73.6 s in 101 call(s) — check_deg 72.4 s ×33, ..."

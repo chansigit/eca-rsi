@@ -27,13 +27,19 @@ Cost and wall time come from the bridge's own summary lines.
 
 from __future__ import annotations
 
+import argparse
+import hashlib
 import json
 import logging
 import os
 import shutil
 import sys
 import time
+from collections import Counter
 from pathlib import Path
+
+from baseline import RUN, category
+from extract import _safe, file_digest, verify_fixture
 
 
 class _Watch(logging.Handler):
@@ -41,8 +47,10 @@ class _Watch(logging.Handler):
 
     def __init__(self):
         super().__init__()
-        self.rejections: list[tuple[str, str]] = []
-        self.cost = 0.0
+        self.rejections = []
+        self.tool_errors = []
+        self.cost = None
+        self.usage = None
 
     def emit(self, record):
         import re
@@ -50,13 +58,20 @@ class _Watch(logging.Handler):
         msg = record.getMessage()
         m = re.search(r"tool (error|exception) in (\w*)[:=] ?(.*)", msg)
         if m:
-            sys.path.insert(0, str(Path(__file__).parent))
-            from baseline import category
-
-            self.rejections.append((category(m.group(1), m.group(3)), m.group(3)[:200]))
+            target = (
+                self.rejections
+                if m.group(2) in ("submit_cluster", "finalize_annotation")
+                else self.tool_errors
+            )
+            target.append((category(m.group(1), m.group(3)), m.group(3)[:200]))
         m = re.search(r"agent cost: \$([0-9.]+)", msg)
         if m:
-            self.cost += float(m.group(1))
+            self.cost = (self.cost or 0.0) + float(m.group(1))
+        m = RUN.search(msg)
+        if m:
+            self.usage = {
+                key: int(m[key]) for key in ("requests", "input", "output", "reasoning")
+            }
 
 
 def _partition_agreement(a: dict, b: dict, field: str, keys: list) -> float | None:
@@ -69,11 +84,15 @@ def _partition_agreement(a: dict, b: dict, field: str, keys: list) -> float | No
     label or not. That is invariant to phrasing and still catches a model that collapses a
     distinction the other one drew (or invents one).
     """
-    pairs = [(keys[i], keys[j]) for i in range(len(keys)) for j in range(i + 1, len(keys))]
+    pairs = [
+        (keys[i], keys[j]) for i in range(len(keys)) for j in range(i + 1, len(keys))
+    ]
     if not pairs:
         return None
-    same = sum((a[x].get(field) == a[y].get(field)) == (b[x].get(field) == b[y].get(field))
-               for x, y in pairs)
+    same = sum(
+        (a[x].get(field) == a[y].get(field)) == (b[x].get(field) == b[y].get(field))
+        for x, y in pairs
+    )
     return same / len(pairs)
 
 
@@ -96,111 +115,226 @@ def agreement(new: dict, old: dict) -> dict:
     a = {c["cluster_id"]: c for c in new.get("clusters", [])}
     b = {c["cluster_id"]: c for c in old.get("clusters", [])}
     both = sorted(set(a) & set(b))
-    act_a, act_b = _spread(a[k].get("action") for k in both), _spread(b[k].get("action") for k in both)
+    act_a, act_b = (
+        _spread(a[k].get("action") for k in both),
+        _spread(b[k].get("action") for k in both),
+    )
     return {
-        "clusters_new": len(a), "clusters_recorded": len(b), "compared": len(both),
-        "only_new": sorted(set(a) - set(b)), "only_recorded": sorted(set(b) - set(a)),
-        "actions_new": act_a, "actions_recorded": act_b,
+        "clusters_new": len(a),
+        "clusters_recorded": len(b),
+        "compared": len(both),
+        "only_new": sorted(set(a) - set(b)),
+        "only_recorded": sorted(set(b) - set(a)),
+        "actions_new": act_a,
+        "actions_recorded": act_b,
         "confidence_new": _spread(a[k].get("confidence") for k in both),
         "confidence_recorded": _spread(b[k].get("confidence") for k in both),
         "merged_groups_new": len(new.get("merged_groups", [])),
         "merged_groups_recorded": len(old.get("merged_groups", [])),
-        "action_agreement": (sum(a[k].get("action") == b[k].get("action") for k in both) / len(both)
-                             if both else None),
-        "coarse_agreement": (sum(a[k].get("coarse_label") == b[k].get("coarse_label") for k in both)
-                             / len(both) if both else None),
+        "action_agreement": (
+            sum(a[k].get("action") == b[k].get("action") for k in both) / len(both)
+            if both
+            else None
+        ),
+        "coarse_agreement": (
+            sum(a[k].get("coarse_label") == b[k].get("coarse_label") for k in both)
+            / len(both)
+            if both
+            else None
+        ),
         "fine_partition_agreement": _partition_agreement(a, b, "fine_label", both),
         "fine_labels_new": len({a[k].get("fine_label") for k in both}),
         "fine_labels_recorded": len({b[k].get("fine_label") for k in both}),
         "discriminating": {
-            "action": len(act_b) > 1,   # every cluster kept -> action agreement is trivially 1
+            "action": len(act_b)
+            > 1,  # every cluster kept -> action agreement is trivially 1
             "coarse": len({b[k].get("coarse_label") for k in both}) > 1,
         },
         "action_differs": [
-            {"cluster": k, "recorded": b[k].get("action"), "new": a[k].get("action"),
-             "recorded_label": b[k].get("coarse_label"), "new_label": a[k].get("coarse_label")}
-            for k in both if a[k].get("action") != b[k].get("action")
+            {
+                "cluster": k,
+                "recorded": b[k].get("action"),
+                "new": a[k].get("action"),
+                "recorded_label": b[k].get("coarse_label"),
+                "new_label": a[k].get("coarse_label"),
+            }
+            for k in both
+            if a[k].get("action") != b[k].get("action")
         ],
     }
 
 
-def run(fixture: Path, work: Path, model: str) -> dict:
-    import scanpy as sc
+def run(fixture: Path, work: Path, model: str, max_turns=200) -> dict:
     import pandas as pd
+    import scanpy as sc
+    from harness_bridge import resolve_agent_config
     from zmip.annotate import annotate_lineage
     from zmip.foreign import score_foreign
+    from zmip.lineage import load_result
+    from zmip.merge import _validate_annotation, _validate_partition
+    from zmip.runtime import runtime_identity
+
+    if os.environ.get("AGENT_MODEL_POOL"):
+        raise ValueError(
+            "unset AGENT_MODEL_POOL: each evaluation must use only its named model"
+        )
+    identity = verify_fixture(fixture)
+    if work.exists():
+        raise ValueError(
+            f"evaluation work directory already exists: {work}; use a new directory"
+        )
+    config = resolve_agent_config(model=model).as_manifest()
+    runtime = runtime_identity()
 
     answer = json.loads((fixture / "answer.json").read_text())
     call = answer["call"]
 
-    work.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(fixture / "inputs", work, dirs_exist_ok=True)   # never write into the fixture
+    shutil.copytree(
+        fixture / "inputs", work
+    )  # a fresh directory never inherits another model's checkpoint
     figdir = work / "figures"
     figdir.mkdir(exist_ok=True)
 
     ad = sc.read_h5ad(work / "integrated.h5ad")
     species = ad.uns["msp"].get("species")
-    mk = pd.read_csv(work / "lineage_markers.csv", keep_default_na=False,
-                     dtype={"lineage": str, "gene": str})
-    markers = {g: mk.loc[mk["lineage"] == g, "gene"].tolist() for g in mk["lineage"].unique()}
+    mk = pd.read_csv(
+        work / "lineage_markers.csv",
+        keep_default_na=False,
+        dtype={"lineage": str, "gene": str},
+    )
+    markers = {
+        g: mk.loc[mk["lineage"] == g, "gene"].tolist() for g in mk["lineage"].unique()
+    }
     keys = [f"msp_leiden_r{r}" for r in ad.uns["msp"]["resolutions"] if r in (1.0, 2.0)]
 
     watch = _Watch()
-    logging.getLogger().addHandler(watch)
-    logging.getLogger().setLevel(logging.INFO)
+    logger = logging.getLogger()
+    level = logger.level
+    logger.addHandler(watch)
+    logger.setLevel(logging.INFO)
 
     started = time.time()
-    foreign_cols = score_foreign(ad, markers, call["lineage"], keys, str(work), str(figdir))
-    annotate_lineage(
-        ad, str(work), call["lineage"], call["lineage_labels"], call["other_labels"],
-        foreign_cols, species=species, model=model,
-    )
+    new, error = None, None
+    try:
+        foreign_cols = score_foreign(
+            ad, markers, call["lineage"], keys, str(work), str(figdir)
+        )
+        expected = ad.obs_names.copy()
+        annotate_lineage(
+            ad,
+            str(work),
+            call["lineage"],
+            call["lineage_labels"],
+            call["other_labels"],
+            foreign_cols,
+            species=species,
+            model=model,
+            max_turns=max_turns,
+        )
+        result = load_result(work)
+        kept = sc.read_h5ad(work / "annotated.h5ad", backed="r")
+        try:
+            _validate_partition(
+                call["lineage"],
+                expected,
+                kept.obs,
+                result["removed"],
+                result["reassigned"],
+            )
+            _validate_annotation(
+                call["lineage"],
+                kept.obs,
+                result["reassigned"],
+                call["lineage_labels"],
+                call["lineage_labels"] + call["other_labels"],
+            )
+        finally:
+            kept.file.close()
+        new = json.loads((work / "annotation_proposal.json").read_text())
+    except Exception as exc:
+        error = {"type": type(exc).__name__, "message": str(exc)[:1500]}
+    finally:
+        logger.removeHandler(watch)
+        logger.setLevel(level)
     elapsed = time.time() - started
-
-    new = json.loads((work / "annotation_proposal.json").read_text())
-    from collections import Counter
+    if verify_fixture(fixture) != identity:
+        raise ValueError("fixture changed during evaluation")
 
     return {
         "fixture": fixture.name,
+        "fixture_sha256": identity,
+        "evaluator_sha256": {
+            name: file_digest(Path(__file__).with_name(name))
+            for name in ("replay.py", "extract.py", "baseline.py")
+        },
         "model": model,
-        "harness": os.environ.get("HARNESS", "openai"),
+        "harness": config["harness"],
+        "runtime": runtime,
+        "max_turns": max_turns,
+        "status": "failed" if error else "passed",
+        "error": error,
         "wall_s": round(elapsed, 1),
-        "cost_usd": round(watch.cost, 4) or None,
+        "cost_usd": round(watch.cost, 4) if watch.cost is not None else None,
+        "usage": watch.usage,
         "contract": {
+            "passed": error is None,
             "rejections": len(watch.rejections),
             "by_category": dict(Counter(c for c, _ in watch.rejections)),
             "messages": [m for _, m in watch.rejections][:10],
         },
-        "recorded_contract": {
-            "rejections": len(answer["host"]["rejections"]) if answer["host"]["log_found"] else None,
+        "tool_errors": {
+            "count": len(watch.tool_errors),
+            "by_category": dict(Counter(c for c, _ in watch.tool_errors)),
         },
-        "agreement": agreement(new, answer["recorded_proposal"]),
+        "recorded_contract": {
+            "rejections": sum(
+                r["tool"] in ("submit_cluster", "finalize_annotation")
+                for r in answer["host"]["rejections"]
+            )
+            if answer["host"]["log_found"]
+            else None,
+        },
+        "agreement": agreement(new, answer["recorded_proposal"])
+        if new is not None
+        else None,
     }
 
 
 def main(argv: list[str]) -> int:
-    model, work = None, None
-    for flag in ("--model", "--work"):
-        if flag in argv:
-            i = argv.index(flag)
-            value, argv = argv[i + 1], argv[:i] + argv[i + 2:]
-            if flag == "--model":
-                model = value
-            else:
-                work = value
-    fixtures = [Path(a) for a in argv if not a.startswith("--")]
-    if not fixtures or not model or not work:
-        print(__doc__.strip().splitlines()[2], file=sys.stderr)
-        return 64
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("fixtures", nargs="+", type=Path)
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--work", required=True, type=Path)
+    parser.add_argument("--harness")
+    parser.add_argument("--max-turns", type=int, default=200)
+    args = parser.parse_args(argv)
+    if args.harness:
+        os.environ["HARNESS"] = args.harness
+    if args.max_turns < 1:
+        parser.error("--max-turns must be positive")
+    suffix = (
+        _safe(args.model)[:80]
+        + "-"
+        + hashlib.sha256(
+            (os.environ.get("HARNESS", "") + args.model).encode()
+        ).hexdigest()[:8]
+    )
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", stream=sys.stderr)
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(message)s", stream=sys.stderr
+    )
     out = []
-    for f in fixtures:
-        r = run(f.resolve(), Path(work) / f"{f.name}--{model}", model)
+    score_file = args.work / f"scores-{suffix}.json"
+    if score_file.exists():
+        parser.error(f"{score_file} exists; use a new --work directory")
+    for f in args.fixtures:
+        r = run(
+            f.resolve(), args.work / f"{f.name}--{suffix}", args.model, args.max_turns
+        )
         out.append(r)
         print(json.dumps(r, indent=2, ensure_ascii=False))
-    (Path(work) / f"scores-{model}.json").write_text(json.dumps(out, indent=2, ensure_ascii=False))
-    return 0
+        score_file.write_text(json.dumps(out, indent=2, ensure_ascii=False))
+    return int(any(r["status"] != "passed" for r in out))
 
 
 if __name__ == "__main__":

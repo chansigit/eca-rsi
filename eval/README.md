@@ -101,6 +101,9 @@ out to be useful beyond ECA, split it out then, not now.
 
 ## First result
 
+The following is the historical pilot, before hashed fixtures and the current
+host rules. It is not a directly comparable score for the protocol below.
+
 `gse311521-pan-cancer-round01-B_cell` (7,297 cells, 21 clusters), recorded by
 `doubao-seed-2-1-turbo` and replayed by `claude-opus-5`:
 
@@ -128,6 +131,26 @@ Two lessons already:
    is printed next to the distribution it came from.
 
 ## Next
+
+Current replays require a `manifest.json` with content hashes. Extract into a
+new fixture directory: historical notes, annotation outputs, checkpoints and
+history directories are excluded; diagnostic plots remain available. Each
+candidate gets a fresh work directory. Existing work is refused so that partial
+submissions from another run cannot enter the comparison. Disable
+`AGENT_MODEL_POOL` for evaluation.
+
+```bash
+python eval/extract.py /path/to/round01/zoomin/Mural --out /path/to/fixtures
+HARNESS=openai python eval/replay.py /path/to/fixtures/unit-round01-Mural \
+  --model doubao-seed-2-1-turbo-260628 --work /path/to/eval-run
+```
+
+Scores record the fixture and evaluator hashes, kernel runtime, token usage,
+reported cost, host submission rejections and other tool errors separately.
+An incomplete run is saved as failed with no agreement score. A successful run
+must also pass the production cell-conservation and annotation checks. Missing
+cost is `null`, never an assumed zero. Historical agreement remains a consistency
+measure; biological accuracy needs an independently reviewed answer key.
 
 Extract fixtures that actually discriminate (removals, multi-label lineages, a plan step), and add
 the other decision types: `submit_plan` (lineage planning, where the host has a real connectivity
