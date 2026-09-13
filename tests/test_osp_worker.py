@@ -73,6 +73,52 @@ def test_deterministic_failure_is_not_retryable(tmp_path, monkeypatch):
     assert not is_done(tmp_path)
 
 
+@pytest.mark.parametrize("fail", [False, True])
+def test_pool_attempt_publication_and_failure_ledger(tmp_path, monkeypatch, fail):
+    from concurrent.futures import Future
+    from pathlib import Path
+    import osp
+    from ecarsi.pool import client
+
+    path = request(tmp_path, False)
+    original = path.read_bytes()
+    monkeypatch.setenv("OSP_COMPUTE_ENDPOINT", "pool")
+    monkeypatch.setenv("ECA_POOL_DATA_ROOT", str(tmp_path))
+
+    class Endpoint:
+        def __init__(self, **kwargs):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *exc):
+            pass
+        def submit(self, fn, *args, **kwargs):
+            f = Future()
+            f.set_result(fn(*args))
+            return f
+
+    def compute(data, **kwargs):
+        out = Path(kwargs["outdir"])
+        assert out.parent.name == ".pool-attempts" and out != tmp_path
+        if fail:
+            pd.Series({"n_cells": 7, "n_low_quality": 7}).to_csv(out / "qc_summary.csv")
+            raise ValueError("no survivors")
+        publish(out, False)
+        (out / "request.json").write_text("must not overwrite driver request")
+
+    monkeypatch.setattr(client, "PoolEndpoint", Endpoint)
+    monkeypatch.setattr(osp, "run_one_sample_pipeline", compute)
+    monkeypatch.setattr(osp, "generate_report", lambda *_: None)
+    assert osp_worker.run(path) == int(fail)
+    assert path.read_bytes() == original
+    if fail:
+        assert read_json(tmp_path / L.RUN_STATE)["failure_kind"] == "qc_zero_survivors"
+        assert list((tmp_path / ".pool-attempts").iterdir())
+    else:
+        assert is_done(tmp_path, False)
+        assert not list((tmp_path / ".pool-attempts").iterdir())
+
+
 @pytest.mark.parametrize("survived,kind", [(0, "qc_zero_survivors"), (2, "qc_too_few_survivors")])
 def test_zero_and_insufficient_qc_survivors_are_distinct(tmp_path, monkeypatch, survived, kind):
     import osp

@@ -426,3 +426,5 @@ on branch `primitive`. That generation used agents to write analysis scripts
 through Explore → Compute → Annotate → QC → Apply → Stop. Its commands,
 governance prompts, and timing examples do not describe the current `ecarsi`
 workflow. `attic-v01/` is an older archive.
+
+Manually provisioned Slurm workers can share the optional [warm pool](SLURM_POOL.md), with independent drivers and CPU/memory/GPU/time-aware admission.

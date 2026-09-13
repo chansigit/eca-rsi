@@ -297,7 +297,8 @@ def drive(pending: list[dict], out_root: Path, annotate: bool, on_done=None) -> 
 
     if not pending:
         return []
-    pending = sorted(pending, key=lambda e: -e["n_cells"])  # biggest first: it bounds the wall-clock
+    if os.environ.get("OSP_COMPUTE_ENDPOINT", "local") == "local":
+        pending = sorted(pending, key=lambda e: -e["n_cells"])  # local memory planning
     max_parallel, budget, threads = plan_concurrency(pending)
     from .resources import available_cpus, available_memory_bytes
 

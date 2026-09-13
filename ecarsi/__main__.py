@@ -39,7 +39,7 @@ from harness_bridge.control import pausable, safe_point
 
 from . import layout as L
 
-STEPS = ("organize", "persample", "crosssample", "zoomin", "loop", "ledger", "index", "serve", "umapdata", "prune")
+STEPS = ("organize", "persample", "crosssample", "zoomin", "loop", "ledger", "index", "serve", "umapdata", "prune", "pool")
 
 
 def _module(name: str):
