@@ -343,6 +343,22 @@ ZMIP's own resume checks even when lineage outputs already exist. Completed
 rounds and releases have integrity receipts; pruned historical releases can
 be checked without requiring deleted intermediate matrices.
 
+MSP and ZMIP also save accepted agent submissions after each cluster. A restart
+checks the original data, evidence and code, then revalidates the saved decisions
+and continues pending clusters. ZMIP preserves refined cluster assignments and
+reuses the completed integration of an unfinished lineage.
+
+To pause a unit, set `"pause": true` in `<unit>/loop_control.json`. New sample
+and lineage launches stop; running work finishes at an MSP step or lineage
+boundary. The command exits with code 3 and does not publish a release. Set
+`pause` to false (or remove it), then repeat the command to resume. Alternatively,
+`"pause_after_stage": "crosssample"` or `"zoomin"` pauses after that stage;
+remove the setting before resuming. `SIGTERM` requests the same cooperative
+pause. For Slurm batch wrappers, request advance notice with
+`#SBATCH --signal=B:TERM@600` and have the shell trap touch the shared
+`ECA_RSI_PAUSE_FILE` while it waits for the pipeline. A hard kill can still
+interrupt the current unsubmitted work; already accepted submissions are on disk.
+
 Use a new output root when inputs or analysis code change. Legacy outputs
 without the required identities or receipts remain browsable, but are not
 accepted as verified completion for upgraded computation.

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.10 — 2026-09-12
+
+- Add `pause` and `pause_after_stage` controls, drain running sample/lineage workers and preserve exit 3 through the driver.
+- Require MSP 0.5.1 / ZMIP 0.3.9 / bridge 0.2.14 for validated partial annotation recovery and cooperative pause.
+
 ## 0.2.9 — 2026-09-12
 
 - Keep bridge version/source as agent provenance, outside scientific runtime identity; retain provider-qualified names.

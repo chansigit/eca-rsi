@@ -18,12 +18,22 @@ import time
 from collections import deque
 from pathlib import Path
 
+from harness_bridge.control import PauseRequested, pausable, safe_point
+
 from . import cost
 from . import layout as L
 from . import policies as P
-from .run_state import digest, file_identity, read_json, developer_mode, source_provenance, write_json, writer_lock
-from .sample_mapping import SAMPLE_KEY, build_mapping, mapping_identity, obs_profile
 from .osp_contract import INPUT_CELLS, REQUEST, is_done, is_empty, is_finished
+from .run_state import (
+    developer_mode,
+    digest,
+    file_identity,
+    read_json,
+    source_provenance,
+    write_json,
+    writer_lock,
+)
+from .sample_mapping import SAMPLE_KEY, build_mapping, mapping_identity, obs_profile
 
 SAMPLE_COL_SCHEMA = {
     "type": "object",
@@ -283,6 +293,8 @@ def drive(pending: list[dict], out_root: Path, annotate: bool, on_done=None) -> 
     fallback list rather than equally-trusted alternatives."""
     import resource
 
+    from harness_bridge.control import PauseRequested, pause_requested
+
     if not pending:
         return []
     pending = sorted(pending, key=lambda e: -e["n_cells"])  # biggest first: it bounds the wall-clock
@@ -306,6 +318,7 @@ def drive(pending: list[dict], out_root: Path, annotate: bool, on_done=None) -> 
     running: dict[str, tuple] = {}  # value -> (proc, est, t0, entry, tail)
     attempts: dict[str, int] = {}
     failed: list[dict] = []
+    paused = False
     while queue or running:
         for value in list(running):
             proc, est, t0, e, tail = running[value]
@@ -322,6 +335,9 @@ def drive(pending: list[dict], out_root: Path, annotate: bool, on_done=None) -> 
                 (outdir / "compute_state.json").unlink(missing_ok=True)
                 if on_done:
                     on_done(e, took)
+            elif rc == 3:
+                paused = True
+                print(f"[drive] {value} paused after {took:.1f} min", flush=True)
             elif is_empty(outdir, e.get("identity")):
                 # QC removed every cell: nothing to cluster, nothing lost —
                 # all of them are in qc_removed.csv with a reason
@@ -342,7 +358,8 @@ def drive(pending: list[dict], out_root: Path, annotate: bool, on_done=None) -> 
                             f"command: `{shlex.join(e['command'])}`\n\n```\n" + "\n".join(tail) + "\n```\n\n")
                 failed.append(e)
         used = sum(est for _, est, _, _, _ in running.values())
-        while queue and len(running) < max_parallel:
+        paused = paused or pause_requested()
+        while queue and len(running) < max_parallel and not paused and not pause_requested():
             e = queue[0]
             est = _estimate_bytes(e["n_cells"])
             if running and used + est > budget:
@@ -366,17 +383,26 @@ def drive(pending: list[dict], out_root: Path, annotate: bool, on_done=None) -> 
             used += est
             print(f"[drive] {value} started (attempt {attempts[value]}): {e['n_cells']} cells, "
                   f"est {est / 2**30:.1f} GiB, {len(running)} running, {len(queue)} waiting", flush=True)
+        if paused and not running:
+            break
         if running:
             time.sleep(5)
     peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * 1024
     print(f"[drive] peak child RSS {peak / 2**30:.1f} GiB (largest sample {pending[0]['n_cells']} cells; "
           f"tune PERSAMPLE_MEM_PER_CELL_MB from this)", flush=True)
+    if paused:
+        error = PauseRequested()
+        error.failed_samples = failed
+        raise error
     return failed
 
 
 # ---------------------------------------------------------------- cli
 
 
+
+
+@pausable
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="ecarsi.persample", description=__doc__)
     ap.add_argument("unit")
@@ -396,6 +422,9 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
     unit = Path(args.unit).resolve()
     bare = unit.suffix == ".h5ad"
+    if not bare:
+        os.environ["ECA_RSI_CONTROL"] = str(unit / L.LOOP_CONTROL)
+    safe_point()
     if args.mirror and not bare:
         from .mirror import configure
         configure(L.base_of(unit), args.mirror)
@@ -418,9 +447,11 @@ def _kernel_runtime(py: str) -> dict:
 
 
 def _run(args, unit, h5ad, out, bare):
-    import pandas as pd
     import anndata as ad
-    from . import agent_config, model as selected_model
+    import pandas as pd
+
+    from . import agent_config
+    from . import model as selected_model
     from .upstream import validate_matrix, verify_snapshots
 
     identity = file_identity(h5ad)
@@ -523,7 +554,22 @@ def _run(args, unit, h5ad, out, bare):
         man["state"] = "running"
         write_json(path, man)
         write_subsets(h5ad, table, pending, decision.get("batch_key"))
-        failed = drive(pending, out, config["annotate"], on_done=None if bare else lambda e, took: _pages(unit))
+        try:
+            failed = drive(pending, out, config["annotate"], on_done=None if bare else lambda e, took: _pages(unit))
+        except PauseRequested as exc:
+            failed = exc.failed_samples
+            man["state"] = "failed" if failed else "paused"
+            man["failed_samples"] = [e["value"] for e in failed]
+            man["pending_samples"] = [e["value"] for e in entries
+                                      if e["value"] not in man["failed_samples"]
+                                      and not is_finished(Path(e["outdir"]), config["annotate"], e["identity"])]
+            write_json(path, man)
+            if not bare:
+                L.log_event(unit, f"persample paused: {len(man['pending_samples'])} experiments pending")
+                _pages(unit)
+            if failed:
+                return 1
+            raise
     missing = [e["value"] for e in entries if not is_finished(Path(e["outdir"]), config["annotate"], e["identity"])]
     man["state"] = "failed" if failed or missing else "complete"
     man["failed_samples"] = sorted(set(missing) | {e["value"] for e in failed})

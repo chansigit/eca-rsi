@@ -31,6 +31,7 @@ round" section (eca-rsi#5) is built from it.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from collections import OrderedDict
@@ -96,7 +97,10 @@ def _scan_line(unit: Path, step: str, line: str) -> None:
 def run_streamed(cmd: str, unit: Path, step: str) -> int:
     """subprocess.run(cmd, shell=True) with the output passed through line by
     line and every harness cost/token/backend line also recorded against `step`."""
-    proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    from harness_bridge.control import safe_point
+    safe_point()
+    env = dict(os.environ, ECA_RSI_CONTROL=str(unit / L.LOOP_CONTROL))
+    proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env)
     assert proc.stdout is not None
     for line in proc.stdout:
         print(line, end="", flush=True)

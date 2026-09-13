@@ -35,6 +35,8 @@ import os
 import sys
 from pathlib import Path
 
+from harness_bridge.control import pausable, safe_point
+
 from . import layout as L
 
 STEPS = ("organize", "persample", "crosssample", "zoomin", "loop", "ledger", "index", "serve", "umapdata", "prune")
@@ -46,6 +48,7 @@ def _module(name: str):
     return importlib.import_module(f"ecarsi.{name}")
 
 
+@pausable
 def run(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="eca-rsi run", description="organize → persample → loop for every unit (→ serve)")
     ap.add_argument("input", help="eca-pp output directory (standardize/standardized.h5ad + result.json per sample)")
@@ -63,6 +66,7 @@ def run(argv: list[str]) -> int:
     ap.add_argument("--domain", default=None, help="with --serve: reserved ngrok domain")
     ap.add_argument("--auth", default=None, help="with --serve: web-level password USER:PASS")
     a = ap.parse_args(argv)
+    safe_point()
     root = Path(a.root).resolve()
     if a.mirror:
         _module("mirror").configure(root, a.mirror)  # remembered in <root>/mirror.json; every step reads it there
@@ -89,8 +93,11 @@ def run(argv: list[str]) -> int:
         loop_args.append("--no-prune")
     failed = []
     for u in units:
+        safe_point()
         print(f"\n[eca-rsi] ===== unit {u.name}: persample =====", flush=True)
         rc = _module("persample").main([str(u)])
+        if rc == 3:
+            return 3
         if rc:
             failed.append((u.name, "persample", rc))
             continue
@@ -98,6 +105,8 @@ def run(argv: list[str]) -> int:
             continue
         print(f"\n[eca-rsi] ===== unit {u.name}: loop =====", flush=True)
         rc = _module("loop").main([str(u), *loop_args])
+        if rc == 3:
+            return 3
         if rc:
             failed.append((u.name, "loop", rc))
     _module("index").write_all(root)

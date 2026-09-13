@@ -34,8 +34,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import downstream as D
+from harness_bridge.control import pausable, safe_point
+
 from . import cost
+from . import downstream as D
 from . import layout as L
 
 MSP_CONTRACT = L.MSP_CONTRACT
@@ -55,6 +57,9 @@ def zmip_command(py: str, h5ad: Path, outdir: Path, model: str, min_cells: str |
     return " ".join(shlex.quote(c) for c in cmd)
 
 
+
+
+@pausable
 @D.locked_unit
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="ecarsi.zoomin", description=__doc__)
@@ -63,6 +68,8 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
 
     unit = Path(args.unit).resolve()
+    os.environ["ECA_RSI_CONTROL"] = str(unit / L.LOOP_CONTROL)
+    safe_point()
     if args.out:
         out_root = Path(args.out).resolve()
     else:
@@ -109,6 +116,10 @@ def main(argv: list[str]) -> int:
         return 4
 
     ret = cost.run_streamed(cmd, unit, f"{out_root.name}/{L.ZOOMIN}")
+    if ret == 3:
+        D.record_pause(zdir)
+        print("[paused] zmip reached a safe checkpoint; rerun to resume")
+        return 3
     if ret != 0:
         print(f"[fail] zmip exited {ret}")
         return 1

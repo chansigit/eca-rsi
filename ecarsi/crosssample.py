@@ -57,11 +57,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import downstream as D
-from .run_state import file_identity, read_json, write_json
-from .osp_contract import is_empty, is_finished
+from harness_bridge.control import pausable, safe_point
+
 from . import cost
+from . import downstream as D
 from . import layout as L
+from .osp_contract import is_empty, is_finished
+from .run_state import file_identity, read_json, write_json
 
 INCLUSION_SCHEMA = {
     "type": "object",
@@ -230,8 +232,8 @@ def propose_inclusion(inventories: list[dict]) -> dict:
 
 
 async def _propose(inventories: list[dict]) -> dict:
-    from .harness import ToolSpec, run_agent
     from . import model
+    from .harness import ToolSpec, run_agent
 
     brief = (Path(__file__).parent / "prompts" / "sample_inclusion.md").read_text()
     prompt = (
@@ -303,6 +305,9 @@ def msp_command(py: str, inputs: list[str], batch_col: str, outdir: Path,
     return " ".join(shlex.quote(c) for c in cmd)
 
 
+
+
+@pausable
 @D.locked_unit
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="ecarsi.crosssample", description=__doc__)
@@ -311,6 +316,8 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
 
     unit = Path(args.unit).resolve()
+    os.environ["ECA_RSI_CONTROL"] = str(unit / L.LOOP_CONTROL)
+    safe_point()
     ps = load_persample(unit)
     from . import agent_config, check_agent_config, effective_or_requested, model
 
@@ -423,6 +430,10 @@ def main(argv: list[str]) -> int:
         return 4
 
     ret = cost.run_streamed(cmd, unit, f"{out_root.name}/{L.CROSSSAMPLE}")
+    if ret == 3:
+        D.record_pause(idir)
+        print("[paused] msp reached a safe checkpoint; rerun to resume")
+        return 3
     if ret != 0:
         print(f"[fail] msp exited {ret}")
         return 1

@@ -128,6 +128,20 @@ def test_cap_raised_mid_run_extends_the_loop(driven):
     assert any("loop_control: cap 4 -> 6" in ev for _, ev in L.read_log(unit))
 
 
+@pytest.mark.parametrize("control,expected", [({"pause": True}, []),
+                                              ({"pause_after_stage": "crosssample"}, [1]),
+                                              ({"pause_after_stage": "zoomin"}, [1, 1])])
+def test_pause_safe_points_never_publish_a_release(driven, control, expected):
+    unit, ran = driven
+    (unit / L.LOOP_CONTROL).write_text(json.dumps(control))
+    assert loop.read_control(unit) == control
+    assert loop.main([str(unit), "--cap", "2"]) == 3
+    assert ran == expected and not L.release_dir(unit).exists()
+    (unit / L.LOOP_CONTROL).unlink()
+    assert loop.main([str(unit), "--cap", "2"]) == 0
+    assert (L.release_dir(unit) / "summary.md").exists()
+
+
 def test_pause_after_round_exits_3_without_release_and_resumes(driven):
     unit, ran = driven
     (unit / L.LOOP_CONTROL).write_text(json.dumps({"stop_after_round": 2}))

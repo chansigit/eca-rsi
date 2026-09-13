@@ -60,13 +60,15 @@ import sys
 import time
 from pathlib import Path
 
+from harness_bridge.control import pausable, safe_point
+
 from . import cost, crosssample, mirror, prune, review, zoomin
 from . import downstream as D
-from . import release_state as R
-from .run_state import file_identity, read_json, write_json
 from . import layout as L
+from . import release_state as R
 from .index import fmt_elapsed, read_stats, write_all
 from .ledger import run_ledger
+from .run_state import file_identity, read_json, write_json
 
 RELEASE_FRAC = 0.01        # (1) this round removed < 1% of what entered it ...
 RELEASE_MIN_REMOVED = 100  #     ... or fewer than 100 cells
@@ -111,7 +113,7 @@ def decide(n: int, stats: list[dict], rounds: int | None, cap: int, extra: int =
 
 
 CONTROL_KEYS = {"cap": int, "rounds": int, "extra_rounds_after_convergence": int, "stop_after_round": int,
-                "max_removed": int}
+                "max_removed": int, "pause": bool, "pause_after_stage": str}
 
 
 def read_control(unit: Path) -> dict:
@@ -129,6 +131,16 @@ def read_control(unit: Path) -> dict:
         for key, value in raw.items():
             if key not in CONTROL_KEYS:
                 raise ValueError(f"unknown key {key!r} (allowed: {', '.join(CONTROL_KEYS)})")
+            if key == "pause":
+                if type(value) is not bool:
+                    raise ValueError("pause must be a boolean")
+                out[key] = value
+                continue
+            if key == "pause_after_stage":
+                if value not in (None, "crosssample", "zoomin"):
+                    raise ValueError("pause_after_stage must be crosssample, zoomin or null")
+                out[key] = value
+                continue
             if value is None:
                 if key == "rounds":
                     out[key] = None
@@ -234,6 +246,8 @@ def _run_msp_from_h5ad(py: str, h5ad: Path, outdir: Path, batch_col: str, specie
                          {"batch_col": batch_col, "species": species, "options": D.options("msp")})
     unit = outdir.parent.parent.parent
     ret = cost.run_streamed(cmd_s, unit, f"{outdir.parent.name}/{L.CROSSSAMPLE}")
+    if ret == 3:
+        D.record_pause(outdir)
     if ret != 0:
         return ret
     missing = [f for f in L.MSP_CONTRACT if not (outdir / f).is_file()]
@@ -303,6 +317,7 @@ def _release(unit: Path, rounds: list[Path], stats: list[dict], forced: bool, su
 
 # ---------------------------------------------------------------- main
 
+@pausable
 @D.locked_unit
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="ecarsi.loop", description=__doc__)
@@ -318,6 +333,8 @@ def main(argv: list[str]) -> int:
                     help="keep a copy of the run root here: light files after every stage, everything at release (ecarsi.mirror)")
     args = ap.parse_args(argv)
     unit = Path(args.unit).resolve()
+    os.environ["ECA_RSI_CONTROL"] = str(unit / L.LOOP_CONTROL)
+    safe_point()
     if not L.is_unit(unit):
         print(f"[loop] {unit} is not a unit dir (no {L.INPUT}/organized.h5ad)")
         return 2
@@ -355,6 +372,7 @@ def main(argv: list[str]) -> int:
     decision = None
     n = 0
     while True:  # the limits are re-read every round, so loop_control.json can move them while we run
+        safe_point()
         n += 1
         c_rounds, c_cap, c_extra, c_stop, c_max = _controls(unit, args, seen_controls)
         if n > (c_rounds if c_rounds is not None else c_cap):
@@ -391,7 +409,7 @@ def main(argv: list[str]) -> int:
         if n == 1:
             ret = crosssample.main([str(unit), str(rdir)])
             if ret != 0:
-                _log(unit, f"round 1 crosssample failed rc={ret}")
+                _log(unit, f"round 1 crosssample {'paused' if ret == 3 else 'failed'} rc={ret}")
                 return ret
         else:
             prev = L.round_dir(unit, n - 1)
@@ -423,14 +441,16 @@ def main(argv: list[str]) -> int:
             ret = _run_msp_from_h5ad(py, inp, L.crosssample_dir(rdir), man["batch_col"], man.get("species"), model(),
                                      L.report_context(unit, rdir), design_text(unit))
             if ret != 0:
-                _log(unit, f"round {n} msp failed rc={ret}")
+                _log(unit, f"round {n} msp {'paused' if ret == 3 else 'failed'} rc={ret}")
                 return ret
         write_all(unit)
+        safe_point("crosssample")
         ret = zoomin.main([str(unit), str(rdir)])
         if ret != 0:
-            _log(unit, f"round {n} zoomin failed rc={ret}")
+            _log(unit, f"round {n} zoomin {'paused' if ret == 3 else 'failed'} rc={ret}")
             return ret
 
+        safe_point("zoomin")
         n_in = _n_obs(L.crosssample_dir(rdir) / "integrated.h5ad")
         n_out = _n_obs(L.zoomin_dir(rdir) / "annotated_zmip.h5ad")
         removed = n_in - n_out

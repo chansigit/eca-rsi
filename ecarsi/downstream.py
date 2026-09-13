@@ -1,19 +1,27 @@
 """Verified downstream runs: content identity, cell conservation and one writer."""
 from __future__ import annotations
 
-from contextlib import contextmanager
-from functools import wraps
 import importlib.metadata
 import importlib.util
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import threading
+from contextlib import contextmanager
+from functools import wraps
+from pathlib import Path
 
 from . import layout as L
-from .run_state import digest, file_identity, read_json, developer_mode, source_provenance, write_json, writer_lock
+from .run_state import (
+    developer_mode,
+    digest,
+    file_identity,
+    read_json,
+    source_provenance,
+    write_json,
+    writer_lock,
+)
 
 STATE = '.rsi-stage.json'
 _HELD = set()
@@ -299,6 +307,13 @@ def verify(py, kernel, inputs, outdir, identity=None):
         write_json(Path(outdir) / STATE, {'identity': identity, 'provenance': source_provenance(), 'agent': stage_agent(kernel),
                                           'state': 'complete', 'validation': validation, 'runtime_check': runtime_check})
     return validation
+
+
+def record_pause(outdir):
+    path = Path(outdir) / STATE
+    saved = read_json(path)
+    saved["state"] = "paused"
+    write_json(path, saved)
 
 
 def _record_files(root, paths):
