@@ -177,6 +177,7 @@ def render(data):
             f'<div><dt>Fallbacks</dt><dd>{max(0,len(data["chain"])-1)}</dd></div>'
             f'<div><dt>Previously validated</dt><dd>{data["validated_count"]}</dd></div></dl></header>'
             '<section class="block"><div class="model-tools"><h2>Calling order</h2><button class="btn plain" data-model-action="edit">Edit models</button><button class="btn plain" data-model-action="keys">Check API keys</button></div>'
+            + controls() +
             f'<p class="lede">Source: {e(data["source"])}</p><div class="model-chain">{chain}</div>'
             + ('<p class="model-note">No fallback is configured.</p>' if len(data['chain']) == 1 else '') + '</section>'
             + (f'<section class="block"><h2>Validated alternatives</h2><p class="lede">Not in the configured fallback chain.</p>'
@@ -184,6 +185,13 @@ def render(data):
             + settings(data)
             + '<p class="model-note">Recorded checks describe earlier RSI runs; live availability, account quota and concurrent calls are not monitored here. '
               'Each driver can override its model chain. Saved settings do not change running jobs. Apply the launch exports below when starting new drivers. No model requests are sent.</p>')
+
+
+def controls():
+    return ('<div id="model-admin" class="callout" hidden><label>Management key <input type="password" id="model-admin-key" autocomplete="off"></label>'
+            '<button class="btn plain" data-model-action="unlock">Unlock settings</button>'
+            '<p class="model-note">Public edits require the management key stored on the server in <code>~/.config/ecarsi/model-admin-token</code>. This is not a model API key.</p></div>'
+            '<p id="model-message" class="model-note" role="status"></p><div id="model-key-results"></div>')
 
 
 def settings(data):
@@ -199,11 +207,7 @@ def settings(data):
             f'<pre class="model-code">{e(data["exports"])}</pre></details></section>'
             '<section id="model-edit" class="block" hidden><h2>Edit calling order</h2><p class="lede">First is primary; following entries are fallbacks. API URLs are shared by models using the same backend.</p>'
             '<div id="model-rows"></div><div class="model-tools"><button class="btn plain" data-model-action="add">Add model</button>'
-            '<button class="btn" data-model-action="save">Save configuration</button><button class="btn plain" data-model-action="cancel">Cancel</button></div></section>'
-            '<div id="model-admin" class="callout" hidden><label>Management key <input type="password" id="model-admin-key" autocomplete="off"></label>'
-            '<button class="btn plain" data-model-action="unlock">Unlock settings</button>'
-            '<p class="model-note">Public edits require the management key stored on the server in <code>~/.config/ecarsi/model-admin-token</code>. This is not a model API key.</p></div>'
-            '<p id="model-message" class="model-note" role="status"></p><div id="model-key-results"></div>')
+            '<button class="btn" data-model-action="save">Save configuration</button><button class="btn plain" data-model-action="cancel">Cancel</button></div></section>')
 
 
 CSS = """
@@ -247,7 +251,7 @@ JS = r"""
  }
  async function post(action,body={}){
   const r=await fetch('/_models/'+action,{method:'POST',headers:{'Content-Type':'application/json','X-Model-Admin':managementKey},body:JSON.stringify(body),signal:AbortSignal.timeout(10000)});
-  const data=await r.json();if(r.status===403){clearTimeout(timer);el('model-admin').hidden=false;throw Error('Unlock model settings with the management key first.');}
+  const data=await r.json();if(r.status===403){clearTimeout(timer);el('model-admin').hidden=false;el('model-admin').scrollIntoView({block:'nearest'});el('model-admin-key').focus({preventScroll:true});throw Error('Unlock model settings with the management key first.');}
   if(!r.ok)throw Error(data.error||'Request failed');return data;
  }
  function addRow(model={harness:'openai',model:'',url:''}){
@@ -268,7 +272,7 @@ JS = r"""
   if(name==='save'){
    const models=[...panel.querySelectorAll('.model-edit-row')].map(row=>({harness:row.querySelector('.model-harness').value,model:row.querySelector('.model-name').value.trim(),url:row.querySelector('.model-endpoint').value.trim()}));
    await post('save',{models,revision:state.revision});if(token!==generation)return;
-   editing=false;await refresh(token);if(token===generation)el('model-message').textContent='Saved. Apply the launch exports to new drivers; running jobs are unchanged.';
+   editing=false;await refresh(token);if(token===generation){el('model-message').textContent='Saved. Apply the launch exports to new drivers; running jobs are unchanged.';el('model-message').scrollIntoView({block:'nearest'});}
   }
   if(name==='unlock'){
    managementKey=el('model-admin-key').value;await post('access');if(token!==generation)return;
@@ -280,12 +284,13 @@ JS = r"""
    const labels={present_literal:'Direct non-placeholder value found',not_found:'No direct assignment found',empty_or_placeholder:'Empty or placeholder',indirect:'Indirect expression — not evaluated'};
    el('model-key-results').innerHTML=result.keys.map(k=>`<p class="model-note"><b>${esc(k.variable)}</b><br>bashrc: ${labels[k.bashrc]}<br>Web process: ${k.process?'Variable present':'Not inherited'}</p>`).join('')||'<p class="model-note">These adapters do not require an API key variable; check their CLI login separately.</p>';
    el('model-message').textContent='Presence check only; no credential was sent to a provider.';
+   el('model-key-results').scrollIntoView({block:'nearest'});
   }
  }
  panel.addEventListener('click',async event=>{
   const button=event.target.closest('[data-model-action]');if(!button)return;
   const token=generation;button.disabled=true;
-  try{await action(button.dataset.modelAction,button);}catch(e){if(token===generation&&el('model-message'))el('model-message').textContent=e.message;}
+  try{await action(button.dataset.modelAction,button);}catch(e){if(token===generation&&el('model-message')){el('model-message').textContent=e.message;if(el('model-admin').hidden)el('model-message').scrollIntoView({block:'nearest'});}}
   finally{button.disabled=false;}
  });
  window.modelMonitor={close,isOpen:()=>!panel.hidden,open:()=>{close();return refresh(generation);}};
