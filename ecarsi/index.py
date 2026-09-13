@@ -639,17 +639,8 @@ def collection_of(path: Path) -> str:
 
 def submission(root: Path) -> dict:
     """Optional batch status supplies visibility before organize creates a run."""
-    status_path = os.environ.get("ECA_PERISCOPE_BATCH_STATUS")
-    if not status_path:
-        return {}
-    batch = _json(Path(status_path), {})
-    for row in batch.get("datasets", []):
-        if row.get("mirror") and Path(row["mirror"]).resolve() == root.resolve():
-            waiting = row.get("state") == "queued" or (
-                row.get("state") == "paused" and not batch.get("runner_finished_at")
-                and not Path(status_path).with_name("pause").exists())
-            return {**row, "waiting": waiting}
-    return {}
+    from .batch import monitor
+    return monitor()["by_mirror"].get(str(root.resolve()), {})
 
 
 def display_name(root: Path) -> str:

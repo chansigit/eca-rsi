@@ -9,6 +9,7 @@
     eca-rsi serve     [dir...] [--registry F] [--port] [--ngrok --domain D] [--auth U:P]
     eca-rsi serve     scan-add|remove|list|dump|reload ...   (edit the registry file)
     eca-rsi umapdata  <h5ad> <out.json>
+    eca-rsi batch     submit|status|retry ...   (persistent dataset queue; see BATCH_POOL.md)
 
 `run` chains everything for one dataset: organize the eca-pp products into
 <root>, then for every analysis unit persample (osp) → loop (msp + zmip
@@ -39,7 +40,7 @@ from harness_bridge.control import pausable, safe_point
 
 from . import layout as L
 
-STEPS = ("organize", "persample", "crosssample", "zoomin", "loop", "ledger", "index", "serve", "umapdata", "prune", "pool")
+STEPS = ("organize", "persample", "crosssample", "zoomin", "loop", "ledger", "index", "serve", "umapdata", "prune", "pool", "batch")
 
 
 def _module(name: str):

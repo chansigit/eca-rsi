@@ -2,24 +2,16 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import os
-from pathlib import Path
 
 
 def driver_queue():
     """Dataset admission is separate from the pool's compute-task queue."""
-    path = os.environ.get("ECA_PERISCOPE_BATCH_STATUS")
-    if not path:
-        return []
-    try:
-        batch = json.loads(Path(path).read_text())
-        return [{"name": row["name"],
-                 "reason": row.get("queue_reason", "Waiting for driver CPU/memory capacity"),
-                 "submitted": batch.get("submitted_at")}
-                for row in batch.get("datasets", []) if row.get("state") == "queued"]
-    except (OSError, ValueError, KeyError, TypeError):
-        return []
+    from .batch import monitor
+    return [{"name": row["name"],
+             "reason": row.get("queue_reason", "Assigned to a dataset execution node" if row["state"] == "assigned"
+                               else "Waiting for driver CPU/memory capacity"),
+             "submitted": row.get("submitted_at")}
+            for row in monitor()["datasets"] if row["waiting"]]
 
 
 
@@ -36,6 +28,10 @@ async def _snapshot(target):
         result["active"] = [t for t in state["tasks"].values()
                             if t["state"] in {"granted", "running"}]
         result["driver_queue"] = driver_queue()
+        from .batch import monitor
+        batch = monitor()
+        result["dataset_nodes"] = list(batch["nodes"].values())
+        result["active_datasets"] = [r for r in batch["datasets"] if r["state"] in {"assigned", "running"} or r.get("reservation_held")]
         return result
 
 
@@ -175,6 +171,14 @@ function render(data){
   document.getElementById('pool-queue').innerHTML = rows ? `<table><thead><tr><th>Task</th><th>Waiting</th><th>Requested resources</th><th>Estimated runtime</th><th>Waiting reason</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="pool-empty"><p>No compute tasks waiting for a worker.</p></div>';
   const datasets = data.driver_queue || [];
   document.getElementById('pool-driver-queue').innerHTML = datasets.length ? `<table><thead><tr><th>Dataset</th><th>Waiting</th><th>Waiting reason</th></tr></thead><tbody>${datasets.map(d=>`<tr><td>${esc(d.name)}</td><td>${esc(d.submitted==null?'—':duration(data.observed_at-d.submitted))}</td><td>${esc(d.reason)}</td></tr>`).join('')}</tbody></table>` : '<div class="pool-empty"><p>No datasets waiting for a driver.</p></div>';
+  const nodes = data.dataset_nodes || [];
+  document.getElementById('pool-dataset-nodes').innerHTML = nodes.length ? `<table><thead><tr><th>Node / job</th><th>Datasets</th><th>Reserved CPU</th><th>Reserved RAM</th><th>Driver usage</th><th>Status</th></tr></thead><tbody>${nodes.map(n=>{
+    const jobs=(data.active_datasets||[]).filter(r=>r.node===n.id);
+    const cpu=jobs.reduce((s,r)=>s+r.cpus,0), mem=jobs.reduce((s,r)=>s+r.memory_gb,0);
+    const rss=jobs.reduce((s,r)=>s+(r.rss_bytes||0),0), usage=jobs.reduce((s,r)=>s+(r.cpu_percent||0),0)/n.cpus;
+    const state=data.observed_at-n.observed_at>60?'Offline':n.draining?'Draining':`${duration(n.end_time-data.observed_at)} left`;
+    return `<tr><td>${esc(n.host)}<br>Job ${esc(n.job_id)}</td><td>${jobs.length?jobs.map(r=>esc(r.name)).join('<br>'):'No active datasets'}</td><td>${cpu} / ${n.cpus}</td><td>${number(mem)} / ${gib(n.memory)} GiB</td><td>${number(usage)}% CPU<br>${gib(rss)} GiB RSS</td><td>${esc(state)}</td></tr>`;
+  }).join('')}</tbody></table>` : '<div class="pool-empty"><p>No dataset execution nodes registered.</p></div>';
   document.getElementById('pool-updated').textContent = `Updated ${new Date(data.observed_at*1000).toLocaleTimeString()}`;
 }
 let generation = 0, timer;
@@ -183,7 +187,7 @@ function close(){
   generation++;
   clearTimeout(timer);
   panel.hidden = true;
-  for(const id of ['pool-workers','pool-gauges','pool-summary','pool-queue','pool-driver-queue']) document.getElementById(id).replaceChildren();
+  for(const id of ['pool-workers','pool-gauges','pool-summary','pool-queue','pool-driver-queue','pool-dataset-nodes']) document.getElementById(id).replaceChildren();
 }
 async function refresh(token){
   try {
@@ -221,6 +225,8 @@ def panel():
         '<div id="pool-content"><dl id="pool-summary" class="pool-summary"></dl>'
         '<div class="pool-section-heading"><h2>Workers</h2><span>Live Slurm allocations</span></div>'
         '<div id="pool-workers" class="pool-workers"></div>'
+        '<div class="pool-section-heading"><h2>Dataset execution</h2><span>Driver resources reserved separately from compute workers</span></div>'
+        '<div id="pool-dataset-nodes" class="pool-table"></div>'
         '<div class="pool-section-heading"><h2>Datasets waiting for driver</h2></div>'
         '<div id="pool-driver-queue" class="pool-table"></div>'
         '<p class="pool-note">These datasets have not reached the compute queue. Their drivers need capacity before they can submit work.</p>'
