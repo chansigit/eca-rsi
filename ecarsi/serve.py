@@ -222,25 +222,18 @@ NAV_JS = r"""
   const names = new Set(items.map(i => i.dataset.name));
   // -- sidebar <-> main pane --
   function mark(name){ items.forEach(i => i.classList.toggle("active", i.dataset.name === name));
-    document.body.classList.toggle("pool-view", name === "__pool__");
     if (home) home.classList.toggle("active", name === "__home__");
-    if (pool) pool.classList.toggle("active", name === "__pool__");
+    if (pool) pool.classList.toggle("active", name === "_warm_pool_panel");
     const cur = items.find(i => i.dataset.name === name); if (cur) { const g = cur.closest("details.group"); if (g) g.open = true; } }
-  function show(path){ if (empty) empty.style.display = "none"; frame.style.display = ""; if (frameUrl() !== path) frame.src = path; }
+  function show(path){ window.poolMonitor.close(); open.hidden = false; if (empty) empty.style.display = "none"; frame.style.display = "";
+    if (frameUrl() !== path) frame.src = path; else frame.dispatchEvent(new Event('load')); }
   function frameUrl(){ try { return frame.contentWindow.location.pathname; } catch (e) { return null; } }
   function fromHash(){
     const h = location.hash.replace(/^#/, "");
     if (h === "/__home__") return "/_home";
-    if (h === "/__pool__") return "/_pool";
     const m = h.match(/^\/([^/]+)\/(.*)$/); return m && names.has(m[1]) ? "/" + m[1] + "/" + m[2] : null; }
   frame.addEventListener("load", () => {
-    const p = frameUrl(); if (!p) return;
-    if (p === "/_pool") {
-      history.replaceState(null, "", "#/__pool__");
-      mark("__pool__"); crumb.textContent = "Warm pool"; open.href = "/_pool";
-      try { document.title = frame.contentDocument.title || "Periscope"; } catch (e) {}
-      return;
-    }
+    const p = frameUrl(); if (!p || window.poolMonitor.isOpen()) return;
     if (p === "/_home") {
       if (location.hash !== "#/__home__") history.replaceState(null, "", "#/__home__");
       mark("__home__"); crumb.textContent = "overview"; open.href = "/_home";
@@ -256,13 +249,24 @@ NAV_JS = r"""
   items.forEach(i => i.addEventListener("click", ev => { if (ev.target.closest("input.sel")) return; ev.preventDefault(); show("/" + i.dataset.name + "/"); }));
   if (home) home.addEventListener("click", ev => { ev.preventDefault(); show("/_home"); });
   if (pool) {
-    pool.addEventListener("click", () => { if (!pool.disabled) show("/_pool"); });
+    pool.addEventListener("click", async () => {
+      if (pool.disabled || !await window.poolMonitor.open()) return;
+      frame.style.display = "none"; if(empty) empty.style.display = "none";
+      mark("_warm_pool_panel"); crumb.textContent = "Warm pool"; open.hidden = true;
+      document.title = "Periscope";
+      history.replaceState(null, "", "#/__home__");
+      if (matchMedia('(max-width:760px)').matches) document.body.classList.add('sb-hidden');
+    });
     function poolAvailable(available){
       pool.disabled = !available;
       pool.setAttribute("aria-disabled", String(!available));
       pool.title = available ? "Monitor Slurm workers and task queue" : "Warm pool is not running or cannot be reached";
       $("pool-state").textContent = available ? "online" : "offline";
-      if (!available && frameUrl() === "/_pool") show("/_home");
+      if (!available) {
+        const visible = window.poolMonitor.isOpen();
+        window.poolMonitor.close();
+        if (visible || pool.classList.contains('active')) show("/_home");
+      }
     }
     async function checkPool(){
       try {
@@ -271,15 +275,13 @@ NAV_JS = r"""
       } catch(e) { poolAvailable(false); }
       setTimeout(checkPool,5000);
     }
-    window.addEventListener('message', e => {
-      if(e.origin===location.origin && e.source===frame.contentWindow && e.data?.type==='pool-unavailable') poolAvailable(false);
-    });
+    window.addEventListener('pool-unavailable', () => poolAvailable(false));
     checkPool();
   }
   const brand = $("brand"); if (brand) brand.addEventListener("click", ev => { ev.preventDefault(); show("/_home"); });
   $("sb-toggle").addEventListener("click", () => document.body.classList.toggle("sb-hidden"));
   $("sb-show").addEventListener("click", () => document.body.classList.remove("sb-hidden"));
-  $("reload").addEventListener("click", () => { try { frame.contentWindow.location.reload(); } catch (e) { frame.src = frame.src; } });
+  $("reload").addEventListener("click", () => { if(window.poolMonitor.isOpen()){pool.click();return;} try { frame.contentWindow.location.reload(); } catch (e) { frame.src = frame.src; } });
   // -- search + species filter (groups start collapsed; a group folds away when none of its
   //    datasets match and opens while a filter is active) --
   function apply(){ const t = q.value.trim().toLowerCase(), s = sp ? sp.value : "", w = st ? st.value : ""; let k = 0;
@@ -427,9 +429,6 @@ class StateCache:
 
 NAV_CSS = """
 html,body{height:100%}body{display:flex;overflow:hidden}
-body.pool-view{color-scheme:dark;--bg:#081321;--card:#0d1c2d;--ink:#e7f2ff;--ink-soft:#c9dbef;--muted:#96adc5;--line:#233b52;--line-strong:#355773;--accent:#61d9f2;--accent-ink:#9cecff;--accent-bg:#123a4b;--ok:#67dab2;--ok-bg:#14382f;--run:#f4bf76;--run-bg:#3b2d1b;--bad:#ff8999;--bad-bg:#3f2130;--none-bg:#172b40}
-body.pool-view #pool-item.active{box-shadow:inset 2px 0 var(--accent);background:linear-gradient(90deg,#18475c,#102739)}
-body.pool-view #pool-state{color:var(--ok)}
 aside.sb{width:360px;flex:0 0 360px;background:var(--card);border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0;position:relative}
 .sb-resizer{position:absolute;top:0;right:-3px;width:6px;height:100%;cursor:col-resize;z-index:6}
 .sb-resizer:hover,.sb-resizer:active{background:var(--accent);opacity:.3}
@@ -497,6 +496,7 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
     dataset's own pages (root landing page -> its units -> ...) in an iframe on
     the right. The iframe keeps the address in the hash (#/<name>/...), so
     reload / back / bookmarks land on the same page; `/` opens the overview."""
+    from . import pool_web
     e = _h.escape
     groups: dict[str, list[str]] = {}
     tally: dict[str, dict[str, int]] = {}
@@ -568,6 +568,7 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
         '<span id="crumb"></span><button class="icon" id="reload" title="reload page" aria-label="reload page">&#8635;</button>'
         '<a class="icon" id="open" href="/" target="_blank" title="open in a new tab" aria-label="open in a new tab">&#8599;</a></div>'
         '<iframe id="frame" name="frame" title="dataset"></iframe>'
+        f'{pool_web.panel()}'
         '<div id="empty" style="display:none"><h2>Nothing bound yet</h2><p>Use <b>+ Bind…</b> in the sidebar or, on the server host, '
         "<code>eca-rsi serve scan-add &lt;dir-or-glob&gt;</code>. The server picks up registry changes on the next request.</p>"
         f"<p>{hint}</p></div></main>"
@@ -575,7 +576,8 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
     return (
         '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
         f'<meta name="viewport" content="width=device-width,initial-scale=1"><title>{APP} · ECA-RSI</title>{FAVICON}'
-        f"<style>{index.CSS}{NAV_CSS}{LOGO_CSS}</style></head><body>{sidebar}{main}<script>{NAV_JS}</script></body></html>"
+        f"<style>{index.CSS}{NAV_CSS}{LOGO_CSS}{pool_web.CSS}</style></head><body>{sidebar}{main}"
+        f"<script>{pool_web.JS}</script><script>{NAV_JS}</script></body></html>"
     )
 
 
@@ -922,7 +924,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         raw = self.path.split("?", 1)[0]
         pool_path = urllib.parse.unquote(raw).rstrip("/")
         if pool_path == "/_pool" or pool_path.startswith("/_pool/"):
-            if pool_path not in {"/_pool", "/_pool/health", "/_pool/status.json"}:
+            if pool_path not in {"/_pool/health", "/_pool/status.json"}:
                 return self._json(404, {"error": "Not found"})
             from . import pool_web
             state = pool_web.snapshot(self._pool_scheduler)
@@ -930,9 +932,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._json(200, {"available": state is not None})
             if state is None:
                 return self._json(503, {"error": "Warm pool is not running or cannot be reached"})
-            if pool_path == "/_pool/status.json":
-                return self._json(200, state)
-            return self._html(pool_web.page(state))
+            return self._json(200, state)
         if raw == "/_home":
             return self._html(_home_html(self._registry.snapshot(), self._state))
         if raw == "/_history.json":  # the curve's data; ?at=YYYY-MM-DDTHH:MM (or epoch) reads it at one moment

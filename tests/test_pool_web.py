@@ -24,6 +24,9 @@ def test_unconfigured_pool_needs_no_dask(monkeypatch):
     assert not calls
     html = serve._navigator_html({}, serve.default_registry())
     assert 'id="pool-item" disabled aria-disabled="true"' in html
+    assert 'id="pool-panel" hidden' in html
+    assert '__pool__' not in serve.NAV_JS
+    assert 'color-scheme:dark' not in pool_web.CSS
 
 
 def test_monitor_routes_follow_live_pool_and_auth(tmp_path):
@@ -57,7 +60,7 @@ def test_monitor_routes_follow_live_pool_and_auth(tmp_path):
         assert get("/_pool/health", False)[0] == 401
         # A reachable ordinary Dask scheduler must not enable our pool monitor.
         assert json.loads(get("/_pool/health")[2]) == {"available": False}
-        assert get("/_pool")[0] == 503
+        assert get("/_pool")[0] == 404
         client.register_plugin(PoolScheduler())
         assert json.loads(get("/_pool/status.json")[2])["workers"] == []
         address = next(iter(client.scheduler_info()["workers"]))
@@ -71,10 +74,12 @@ def test_monitor_routes_follow_live_pool_and_auth(tmp_path):
         state = json.loads(body)
         assert state["workers"][0]["host"] == profile["host"]
         assert state["active"] == state["queued"] == []
-        status, headers, body = get("/_pool/")
+        status, headers, body = get("/")
         assert status == 200 and b"Warm pool" in body
-        assert b"node</script>" not in body  # inline JSON cannot close its script element
-        assert b"\\u003c/script>" in body
+        assert b'id="pool-panel" hidden' in body
+        assert b"node</script>" not in body  # monitoring data is fetched only after admission
+        for path in ("/_pool", "/_pool/", "/%5fpool?direct=1", "/__pool__"):
+            assert get(path)[0] == 404
         assert json.loads(get("/_pool/health")[2]) == {"available": True}
         assert get("/_pool/unknown")[0] == 404
         client.close(); cluster.close()
@@ -82,7 +87,8 @@ def test_monitor_routes_follow_live_pool_and_auth(tmp_path):
         # A stale scheduler file and previously successful reads do not grant access.
         for path in ("/_pool", "/_pool/", "/%5fpool?direct=1", "/_pool/status.json"):
             status, headers, _ = get(path)
-            assert status == 503 and headers["Cache-Control"] == "no-store"
+            assert status == (503 if path.endswith('status.json') else 404)
+            assert headers["Cache-Control"] == "no-store"
         assert json.loads(get("/_pool/health")[2]) == {"available": False}
         assert get("/")[0] == get("/_home")[0] == 200
     finally:
