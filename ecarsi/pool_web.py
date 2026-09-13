@@ -46,7 +46,7 @@ CSS = """
 #pool-link-state{display:inline-flex;align-items:center;gap:7px;color:var(--ok)}
 #pool-link-state::before{content:'';width:6px;height:6px;border-radius:50%;background:currentColor;box-shadow:0 0 9px color-mix(in srgb,var(--ok) 40%,transparent)}
 #pool-updated{color:var(--muted)}
-.pool-gauges{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;padding:18px 12px;border:1px solid var(--line);border-radius:14px;background:var(--card);box-shadow:0 0 20px color-mix(in srgb,var(--accent) 8%,transparent)}
+.pool-gauges{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;padding:18px 12px;border:1px solid var(--line);border-radius:var(--r);background:var(--card);box-shadow:0 0 20px color-mix(in srgb,var(--accent) 8%,transparent)}
 .pool-gauge{text-align:center;min-width:0;--signal:var(--accent)}.pool-gauge.ram{--signal:var(--ok)}.pool-gauge.gpu{--signal:var(--gpu)}
 .pool-dial{position:relative;width:100%;max-width:100px;aspect-ratio:1;margin:0 auto 6px}.pool-dial svg{display:block;width:100%;height:100%;transform:rotate(-90deg)}
 .pool-dial .track{fill:none;stroke:var(--line);stroke-width:6}.pool-dial .arc{fill:none;stroke:var(--signal);stroke-width:6;stroke-linecap:round;filter:drop-shadow(0 0 3px color-mix(in srgb,var(--signal) 50%,transparent))}
@@ -58,17 +58,15 @@ CSS = """
 .pool-summary dd{font-size:clamp(15px,1.6vw,21px);font-weight:550;margin:3px 0 0;font-variant-numeric:tabular-nums;white-space:nowrap;letter-spacing:-.025em}
 .pool-section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
 .pool-section-heading h2{font-size:18px;font-weight:550;display:flex;align-items:center;gap:10px}
-.pool-section-heading h2::before{content:'';width:4px;height:16px;border-radius:2px;background:var(--accent)}
 .pool-section-heading span{font-size:12px;color:var(--muted)}
 .pool-workers{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,370px),1fr));gap:18px;margin:0 0 30px}
-.pool-worker{border:1px solid var(--line);border-radius:12px;padding:20px;background:var(--card);min-width:0;position:relative;--node-color:var(--accent);transition:border-color .2s,box-shadow .2s}
-.pool-worker::before{content:'';position:absolute;top:-1px;left:20px;width:40px;height:2px;background:var(--node-color);box-shadow:0 0 14px color-mix(in srgb,var(--node-color) 35%,transparent)}
+.pool-worker{border:1px solid var(--line);border-radius:var(--r);padding:20px;background:var(--card);min-width:0;position:relative;--node-color:var(--accent);transition:border-color .2s,box-shadow .2s}
 .pool-worker.gpu-node{--node-color:var(--gpu);background:var(--card)}
 .pool-worker:hover{border-color:color-mix(in srgb,var(--node-color) 65%,var(--line));box-shadow:0 0 18px color-mix(in srgb,var(--node-color) 12%,transparent)}
 .pool-worker[data-state=stale]{border-color:var(--bad)}
 .pool-worker header{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .pool-node-title{display:flex;align-items:center;gap:11px;min-width:0}.pool-chip{width:30px;height:30px;color:var(--node-color);flex:none}
-.pool-worker h3{font-size:16px;font-weight:600}.pool-worker .pill{font-size:12px;border:1px solid color-mix(in srgb,var(--st) 20%,transparent);background:color-mix(in srgb,var(--st) 9%,transparent)}
+.pool-worker h3{font-family:var(--mono);font-size:16px;font-weight:600}.pool-worker .pill{font-size:12px;border:1px solid color-mix(in srgb,var(--st) 20%,transparent);background:color-mix(in srgb,var(--st) 9%,transparent)}
 .pool-meta{display:flex;gap:10px;flex-wrap:wrap;color:var(--muted);font-size:12px;margin:14px 0 20px;padding-bottom:14px;border-bottom:1px solid var(--line)}
 .pool-meta strong{color:var(--ink-soft);font-weight:500;margin-left:auto}
 .pool-meter{margin:13px 0;--meter-color:var(--accent)}.pool-meter.gpu{--meter-color:var(--gpu)}
@@ -82,7 +80,7 @@ CSS = """
 .pool-task-idle{display:flex;align-items:center;gap:8px}.pool-task-idle::before{content:'';width:5px;height:5px;border-radius:50%;background:var(--muted)}
 .pool-worker details{margin-top:14px;font-size:12px}.pool-worker summary{cursor:pointer;color:var(--muted)}.pool-worker summary:hover{color:var(--accent)}
 .pool-worker dl{margin:12px 0 0;display:grid;grid-template-columns:105px minmax(0,1fr);gap:8px}.pool-worker dt{color:var(--muted)}.pool-worker dd{margin:0;overflow-wrap:anywhere;color:var(--ink-soft)}
-.pool-table{overflow:auto;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+.pool-table{overflow:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--card)}
 .pool-table table{width:100%;border-collapse:collapse;font-size:var(--t3)}
 .pool-table th,.pool-table td{text-align:left;padding:14px 16px;border-bottom:1px solid var(--line);vertical-align:top}
 .pool-table th{color:var(--muted);font-size:12px;font-weight:500;background:var(--row-alt)}.pool-table td:first-child{overflow-wrap:anywhere;min-width:160px}
