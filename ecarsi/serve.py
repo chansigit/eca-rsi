@@ -83,7 +83,7 @@ def default_registry() -> Path:
 
 def _check_dataset(path: Path) -> Path:
     path = Path(path)
-    if not (L.is_root(path) or L.is_unit(path)):
+    if not (L.is_root(path) or L.is_unit(path) or index.submission(path)):
         raise ValueError(
             f"{path} is neither an organize root nor a unit dir (see ecarsi.layout)"
         )
@@ -284,7 +284,7 @@ NAV_JS = r"""
   const brand = $("brand"); if (brand) brand.addEventListener("click", ev => { ev.preventDefault(); show("/_home"); });
   $("sb-toggle").addEventListener("click", () => document.body.classList.toggle("sb-hidden"));
   $("sb-show").addEventListener("click", () => document.body.classList.remove("sb-hidden"));
-  $("reload").addEventListener("click", () => { if(window.modelMonitor.isOpen()){models.click();return;} if(window.poolMonitor.isOpen()){pool.click();return;} try { frame.contentWindow.location.reload(); } catch (e) { frame.src = frame.src; } });
+  $("reload").addEventListener("click", () => { if(window.modelMonitor.isOpen()){models.click();return;} if(window.poolMonitor.isOpen()){pool.click();return;} location.reload(); });
   // -- search + species filter (groups start collapsed; a group folds away when none of its
   //    datasets match and opens while a filter is active) --
   function apply(){ const t = q.value.trim().toLowerCase(), s = sp ? sp.value : "", w = st ? st.value : ""; let k = 0;
@@ -375,7 +375,7 @@ def _dataset_state(root: Path) -> dict:
     """Per-dataset summary read from disk (ecarsi.index), for the navigator / list."""
     blank = {"units": 0, "released": 0, "n_input": None, "final_cells": None, "rounds": 0, "species": "",
              "finished": None, "updated": None, "events": {"organize": [], "release": []}}
-    if not root.is_dir():
+    if not root.is_dir() and not index.submission(root):
         return {**blank, "stage": "missing on disk", "cls": "failed"}
     try:
         return index.dataset_state(root)
@@ -1003,6 +1003,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 explain=f"no dataset bound as {name!r}; see the navigator at /",
             )
         if not root.is_dir():
+            if index.submission(root) and parts[1:] in ([], [L.INDEX]):
+                return self._html(index.render_root(root, name))
             return self.send_error(
                 404,
                 "dataset missing",

@@ -43,3 +43,18 @@ count, RAM is summed RSS divided by summed worker budgets, and GPU utilization
 is the mean of reported device utilizations. Unknown measurements show a dash.
 Closing Periscope never shuts down the pool. Resource lifecycle remains under
 the existing [pool commands](SLURM_POOL.md).
+
+A batch can appear before its output directories exist. Set
+`ECA_PERISCOPE_BATCH_STATUS` to its status JSON, whose `datasets` entries contain
+`mirror`, `state`, and `n_cells`, then bind those mirror paths in the registry.
+Queued entries render a waiting page without creating analysis files. The
+batch runner continues to own execution and output creation; Periscope only
+reads its status. A paused entry in a still-active batch without a `pause` file
+is waiting to resume. Study outputs arranged as
+`<collection>/<study>/rsi` beside `standardize/result.json` are grouped by
+collection, as are the existing `eca-pp` trees.
+
+CPU percentages are relative to allocated CPUs, both per worker and across
+the pool. The monitor also shows equivalent CPU cores in use so a small task
+is visible within a large allocation. Model calls run in drivers and can leave
+compute workers idle between computation steps.

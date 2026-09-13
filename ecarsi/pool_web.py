@@ -131,8 +131,10 @@ function render(data){
   document.getElementById('pool-gauges').innerHTML = gauge('Worker CPU',cpu.length?cpu.reduce((n,w)=>n+w.cpu_percent*w.cpus,0)/cpu.reduce((n,w)=>n+w.cpus,0):null,'cpu')+
     gauge('Worker memory',ram.length?100*ram.reduce((n,w)=>n+w.rss_bytes,0)/ram.reduce((n,w)=>n+w.memory,0):null,'ram')+
     gauge('GPU utilization',gpu.length?gpu.reduce((n,g)=>n+g.utilization_percent,0)/gpu.length:null,'gpu');
+  const cores = cpu.reduce((n,w)=>n+w.cpu_percent*w.cpus/100,0);
   const facts = [['Workers online',`${online.length} / ${workers.length}`],['Running / assigned',data.active.length],['Queued',data.queued.length],
-    ['Worker CPUs',sum('cpus')],['Worker memory',`${gib(sum('memory'))} GiB`],['Slurm memory',`${gib([...allocations.values()].reduce((a,b)=>a+b,0))} GiB`],['GPUs',sum('gpus')]];
+    ['CPU cores in use',cpu.length?`${number(cores)} / ${sum('cpus')}`:'—'],
+    ['Worker memory',`${gib(sum('memory'))} GiB`],['Slurm memory',`${gib([...allocations.values()].reduce((a,b)=>a+b,0))} GiB`],['GPUs',sum('gpus')]];
   document.getElementById('pool-summary').innerHTML = facts.map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('');
   document.getElementById('pool-workers').innerHTML = workers.length ? workers.map(w=>{
     const task = active.get(w.address), age = Math.max(0, data.observed_at-w.observed_at);
@@ -141,7 +143,7 @@ function render(data){
         g.memory_used_mib==null?null:100*g.memory_used_mib/g.memory_total_mib,'gpu')).join('');
     return `<article class="pool-worker ${w.gpus?'gpu-node':''}" data-state="${esc(w.state)}" data-worker="${esc(w.address)}"><header><div class="pool-node-title">${chip}<h3>${esc(w.host)}</h3></div><span class="pill ${tones[w.state]||'neutral'}">${esc(w.state)}</span></header>
       <p class="pool-meta"><span>Job ${esc(w.job_id)}</span><span>${esc(w.cpus)} CPUs / ${esc(w.gpus)} GPUs</span><strong>${esc(duration(w.remaining_seconds))} left</strong></p>
-      ${meter('Worker CPU',`${number(w.cpu_percent)}%`,w.cpu_percent)}
+      ${meter('Worker CPU',`${number(w.cpu_percent)}% · ${number(w.cpu_percent==null?null:w.cpu_percent*w.cpus/100)} cores`,w.cpu_percent)}
       ${meter('Worker memory',`${gib(w.rss_bytes)} / ${gib(w.memory)} GiB`,w.rss_bytes==null?null:100*w.rss_bytes/w.memory)}${gpu}
       <p class="pool-task">${task?`<strong>${esc(task.label||task.id)}</strong><br>${task.state==='running'?'Running for':'Assigned for'} ${esc(duration(data.observed_at-(task.started||task.submitted)))}`:'<span class="pool-task-idle">No active task</span>'}</p>
       <details${expanded.has(w.address)?' open':''}><summary>Allocation details</summary><dl><dt>Requested</dt><dd>${esc(w.requested_tres)}</dd><dt>Allocated</dt><dd>${esc(w.allocated_tres)}</dd>

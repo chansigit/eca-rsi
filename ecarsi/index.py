@@ -18,6 +18,7 @@ from __future__ import annotations
 import csv
 import html as _h
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -627,11 +628,28 @@ def _when(ts: float | None) -> str:
 
 
 def collection_of(path: Path) -> str:
-    """Collection a run belongs to: the directory holding eca-pp/
-    (.../<collection>/eca-pp/<dataset>/rsi); '' for any other layout."""
-    # ponytail: fleet layout only; put it in the registry when other layouts appear
+    """Collection for eca-pp fleet trees or direct study/standardize layouts."""
     parts = Path(path).parts
-    return parts[parts.index("eca-pp") - 1] if "eca-pp" in parts[1:] else ""
+    if "eca-pp" in parts[1:]:
+        return parts[parts.index("eca-pp") - 1]
+    if path.name == "rsi" and (path.parent / "standardize" / "result.json").is_file():
+        return path.parent.parent.name
+    return ""
+
+
+def submission(root: Path) -> dict:
+    """Optional batch status supplies visibility before organize creates a run."""
+    status_path = os.environ.get("ECA_PERISCOPE_BATCH_STATUS")
+    if not status_path:
+        return {}
+    batch = _json(Path(status_path), {})
+    for row in batch.get("datasets", []):
+        if row.get("mirror") and Path(row["mirror"]).resolve() == root.resolve():
+            waiting = row.get("state") == "queued" or (
+                row.get("state") == "paused" and not batch.get("runner_finished_at")
+                and not Path(status_path).with_name("pause").exists())
+            return {**row, "waiting": waiting}
+    return {}
 
 
 def display_name(root: Path) -> str:
@@ -656,6 +674,15 @@ def dataset_state(root: Path, states: list[dict] | None = None) -> dict:
         stage, cls = "failed", "failed"
     else:
         stage, cls = (states[0]["stage"] if len(states) == 1 else f"{released}/{len(states)} released"), "running"
+    queued = submission(root)
+    if queued.get("waiting"):
+        stage, cls = "queued for driver", "neutral"
+    elif queued.get("state") in {"paused", "failed"}:
+        stage, cls = queued["state"], "failed" if queued["state"] == "failed" else "neutral"
+    elif queued.get("state") == "running" and not states:
+        stage, cls = "organizing", "running"
+    if not n_in and queued.get("n_cells"):
+        n_in = [queued["n_cells"]]
     fin = [s["finished"] for s in states if s.get("finished")]
     events = {k: [s["events"][k] for s in states if s.get("events") and s["events"][k]] for k in ("organize", "release")}
     return {"units": len(states), "released": released, "n_input": sum(n_in) if n_in else None, "events": events,
@@ -895,6 +922,8 @@ def render_root(root: Path, name: str | None = None) -> str:
                         f'<td class="muted">{e(s["last_event"])}</td></tr>')
         next_ = (f'This run has {len(units)} analysis units; open one below for its rounds, final UMAP and files.' if units
                  else "No analysis unit has been planned yet; organize has not finished.")
+        if ds["stage"] == "queued for driver":
+            next_ = "Submitted and waiting for a dataset driver. Heavy computation will use the warm pool."
         body = (_hero(ds["cls"], ds["stage"], title, "", sub, facts, next_)
                 + f'<section class="block" id="units"><h2>Units <span class="count">{ds["released"]}/{len(units)} released</span></h2>'
                 + f'<p class="lede">{EXPLAIN["units"]}</p>'
