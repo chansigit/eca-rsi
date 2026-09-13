@@ -52,6 +52,14 @@ uses the explicit two-round setting; it does not demonstrate automatic convergen
 or independently establish biological annotation accuracy. The interrupted
 checkpoint had no splits; split restoration is covered by automated tests.
 
+Release preparation subsequently corrected pre-existing MSP lint findings
+(imports, type annotations and equivalent mapping access) and formatted MSP/ZMIP
+source and tests. These changes do not alter numerical methods or parameters;
+the affected offline suites were rerun. The live run above used the preceding
+source hashes, preserved in `live/runtime-commits.json` and `live-validated-dist/`.
+It was not repeated after this cleanup. Strict resume requires those original
+artifacts; the final packages have different source hashes.
+
 Machine-readable results are in `live/events.json` and `live/verified.json` under
 the evidence root. `live/verify.log` records the independent verification. The
 saved release retains three inspection flags and three low-confidence labels.
