@@ -21,6 +21,7 @@ def test_model_order_validation_and_public_fields(tmp_path):
     assert '<script>' not in page and '<img' not in page
     assert 'never-public' not in page + json.dumps(data)
     override = model_web.snapshot({**env, 'AGENT_MODEL_POOL': 'claude:first,openai:second'})
-    assert [x['model'] for x in override['chain']] == ['first', 'second']
+    assert [x['model'] for x in override['chain']] == ['primary', 'vendor/fallback:free']
     default = model_web.snapshot({'ECA_MODEL_CATALOG': str(tmp_path / 'missing')})
-    assert len(default['chain']) == 1 and default['validated_count'] == 0
+    assert default['chain'] == [] and default['validated_count'] == 0
+    assert 'No models configured.' in model_web.render(default)

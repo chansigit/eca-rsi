@@ -8,23 +8,13 @@ from pathlib import Path
 
 
 def snapshot(environ=None):
-    from harness_bridge import parse_model_pool, resolve_agent_config
+    from harness_bridge import parse_model_pool
 
     env = os.environ if environ is None else environ
     path = Path(env.get('ECA_MODEL_CATALOG', str(Path.home() / '.config/ecarsi/model-pool.json')))
     catalog = json.loads(path.read_text()) if path.is_file() else {}
-    spec = env.get('AGENT_MODEL_POOL', '').strip()
-    source = 'Periscope process configuration'
-    if spec:
-        candidates = parse_model_pool(spec)
-    elif env.get('HARNESS') or env.get('MODEL'):
-        candidates = [resolve_agent_config(environ=env)]
-    elif catalog.get('candidates'):
-        candidates = parse_model_pool(catalog['candidates'])
-        source = str(catalog.get('source', 'Model catalog'))
-    else:
-        candidates = [resolve_agent_config(environ=env)]
-        source = 'Bridge default; no explicit pool configured'
+    candidates = parse_model_pool(catalog['candidates']) if catalog.get('candidates') else []
+    source = str(catalog.get('source', 'Model catalog' if path.is_file() else 'No model catalog configured'))
     # Only explicitly public fields leave this process. Never serialize the
     # environment, arbitrary catalog keys, provider URLs or exception details.
     verified = {}
@@ -56,7 +46,7 @@ def render(data):
         return (f'<article class="model-card"><div class="model-order">{f"{position:02d}" if position else "—"} · {label}</div>'
                 f'<h3>{e(model["model"])}</h3><p class="model-backend">{e(provider)}</p>'
                 f'<div class="model-check">{check}</div></article>')
-    chain = ''.join(card(m, m['position']) for m in data['chain'])
+    chain = ''.join(card(m, m['position']) for m in data['chain']) or '<p class="muted">No models configured.</p>'
     alternatives = ''.join(card(m) for m in data['alternatives'])
     return (f'<header class="hero"><h1>Agent model pool</h1><p class="lede">Primary and fallback models, in calling order.</p>'
             f'<dl class="facts"><div><dt>Configured models</dt><dd>{len(data["chain"])}</dd></div>'

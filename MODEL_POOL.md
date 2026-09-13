@@ -4,11 +4,12 @@ Use **Agent models**, below **Warm pool**, to see the primary model followed by
 Fallback 1, Fallback 2, and so on. The panel stays inside Periscope. It is
 independent of the Slurm compute pool and remains accessible without workers.
 
-The inventory reads `AGENT_MODEL_POOL` from the web process, then an explicit
-`HARNESS`/`MODEL`, then `candidates` in `ECA_MODEL_CATALOG` (default
-`~/.config/ecarsi/model-pool.json`), otherwise the bridge's single-model default.
-This is a displayed configuration, not a global scheduler: individual drivers
-may override it. Editing the catalog never changes a running driver's routing.
+The inventory reads only `ECA_MODEL_CATALOG` (default
+`~/.config/ecarsi/model-pool.json`). It never adds models from environment
+variables, bridge defaults or provider discovery. A missing file shows an
+empty inventory. This is a displayed configuration, not a global scheduler:
+individual drivers may use another chain. Editing the catalog never changes
+a running driver's routing.
 
 The optional catalog contains public metadata only:
 
