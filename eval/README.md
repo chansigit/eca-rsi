@@ -152,6 +152,10 @@ must also pass the production cell-conservation and annotation checks. Missing
 cost is `null`, never an assumed zero. Historical agreement remains a consistency
 measure; biological accuracy needs an independently reviewed answer key.
 
-Extract fixtures that actually discriminate (removals, multi-label lineages, a plan step), and add
-the other decision types: `submit_plan` (lineage planning, where the host has a real connectivity
-check) and the MSP inspect/annotate calls.
+The first comparison under this protocol is recorded in [RESULTS.md](RESULTS.md):
+Turbo and Pro both pass the same 15-cluster Mural task, but disagree about a
+55-cell population that both mark low confidence.
+
+Extend the suite to more lineages and an independently reviewed answer key,
+and add other decision types: `submit_plan` (lineage planning) and MSP
+inspect/annotate calls. These are not covered by the current model comparison.
