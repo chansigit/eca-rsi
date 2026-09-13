@@ -46,12 +46,15 @@ def snapshot(environ=None):
 def render(data):
     e = lambda value: html.escape(str(value), quote=True)
     def card(model, position=None):
+        provider = {'openai': 'Ark / Doubao', 'openai@openrouter': 'OpenRouter',
+                    'openai@vllm': 'Self-hosted vLLM', 'claude': 'Claude Code',
+                    'deepseek': 'dsh'}.get(model['harness'], model['harness'])
         label = ('Primary' if position == 1 else f'Fallback {position - 1}') if position else 'Validated alternative'
         validation = model.get('validation') if position else model
         check = (f'<span class="st released">Passed recorded check</span> · {e(validation["checked_at"])}'
                  f'<p>{e(validation["scope"])}</p>') if validation else '<span class="muted">No recorded validation</span>'
         return (f'<article class="model-card"><div class="model-order">{f"{position:02d}" if position else "—"} · {label}</div>'
-                f'<h3>{e(model["model"])}</h3><p class="model-backend">{e(model["harness"])}</p>'
+                f'<h3>{e(model["model"])}</h3><p class="model-backend">{e(provider)}</p>'
                 f'<div class="model-check">{check}</div></article>')
     chain = ''.join(card(m, m['position']) for m in data['chain'])
     alternatives = ''.join(card(m) for m in data['alternatives'])
