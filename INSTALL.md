@@ -10,11 +10,11 @@ ECA-PP 先独立运行；ECA-RSI 环境包含驱动包、OSP/MSP/ZMIP 三个内�
 
 | 发行名 / import 名 | 源码版本 | 关键依赖与职责 |
 | --- | --- | --- |
-| `ecarsi` / `ecarsi` | 0.2.9 | 驱动；依赖 `agent-harness-bridge[all]>=0.2.13,<0.3`、anndata、scanpy、h5py、numpy、pandas、matplotlib |
+| `ecarsi` / `ecarsi` | 0.2.10 | 驱动；依赖 `agent-harness-bridge[all]>=0.2.14,<0.3`、anndata、scanpy、h5py、numpy、pandas、matplotlib |
 | `osp-sc` / `osp` | 0.1.6 | 每样本 QC、Scrublet、内置 DecontX、聚类和注释建议；`[agent]` 安装 bridge 的全部后端依赖 |
-| `msp-sc` / `msp` | 0.5.0 | 跨样本整合与审查；依赖 `harmonypy>=2,<3`、`stanhue>=1.1.0`、`standissect-lite>=0.2.0`；`[agent]` 安装后端依赖 |
-| `zmip` / `zmip` | 0.3.8 | lineage 内重算与细化；依赖 `msp-sc>=0.5.0,<0.6` 和 `agent-harness-bridge[all]>=0.2.13,<0.3`，另有运行时 API 兼容检查 |
-| `agent-harness-bridge` / `harness_bridge` | 0.2.13 | core 无依赖；extras 为 `openai`、`claude`、`deepseek`、`all` |
+| `msp-sc` / `msp` | 0.5.1 | 跨样本整合与审查；依赖 `harmonypy>=2,<3`、`stanhue>=1.1.0`、`standissect-lite>=0.2.0`；`[agent]` 安装后端依赖 |
+| `zmip` / `zmip` | 0.3.9 | lineage 内重算与细化；依赖 `msp-sc>=0.5.1,<0.6` 和 `agent-harness-bridge[all]>=0.2.14,<0.3`，另有运行时 API 兼容检查 |
+| `agent-harness-bridge` / `harness_bridge` | 0.2.14 | core 无依赖；extras 为 `openai`、`claude`、`deepseek`、`all` |
 | `standissect-lite` / `standissect_lite` | 0.2.9 | MSP 使用的群体内部小片段检测库 |
 
 安装名是 `osp-sc` 和 `msp-sc`，import 和模块入口仍为 `osp` 和 `msp`。
@@ -44,19 +44,19 @@ numpy 由此失去 BLAS（能导入、测试全过、matmul 慢约 100 倍），
 
 ## 3. 安装发行包与驱动源码
 
-本次发布组合为 ecarsi 0.2.9、bridge 0.2.13、OSP 0.1.6、MSP 0.5.0、ZMIP 0.3.8。
-PyPI 包和 GitHub Release 分别核验，记录见 [TAKEOVER_VALIDATION.md](TAKEOVER_VALIDATION.md)。
+本次发布组合为 ecarsi 0.2.10、bridge 0.2.14、OSP 0.1.6、MSP 0.5.1、ZMIP 0.3.9。
+PyPI 包和 GitHub Release 分别核验，记录见 [CHECKPOINT_VALIDATION.md](CHECKPOINT_VALIDATION.md)。
 
 ```bash
 python -m venv /path/to/venvs/eca
 source /path/to/venvs/eca/bin/activate
 python -m pip install -U pip
 python -m pip install \
-  'agent-harness-bridge[all]==0.2.13' \
+  'agent-harness-bridge[all]==0.2.14' \
   'osp-sc[agent]==0.1.6' \
-  'msp-sc[agent]==0.5.0' \
-  'zmip==0.3.8' \
-  'ecarsi[kernels]==0.2.9'
+  'msp-sc[agent]==0.5.1' \
+  'zmip==0.3.9' \
+  'ecarsi[kernels]==0.2.10'
 ```
 
 开发时改动版本号后要重新 `pip install -e --no-deps`（用源码 checkout 而非上面的固定版本时），

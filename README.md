@@ -120,10 +120,10 @@ the study design goes to `needs_review` only.
 ## Run the workflow
 
 Use Python 3.10 or newer with ECA-RSI, its three kernels, and the shared bridge
-installed. Install the 0.2.9 package combination from PyPI:
+installed. Install the 0.2.10 package combination from PyPI:
 
 ```bash
-python -m pip install 'ecarsi[kernels]==0.2.9'
+python -m pip install 'ecarsi[kernels]==0.2.10'
 ```
 
 Follow [INSTALL.md](https://github.com/chansigit/eca-rsi/blob/main/INSTALL.md)
@@ -159,8 +159,8 @@ Use `eca-rsi --help` and `eca-rsi run --help` for available commands.
 
 ### Compatible packages
 
-The 0.2.9 combination uses bridge **0.2.13**, OSP **0.1.6**, MSP **0.5.0**,
-and ZMIP **0.3.8**. Dependency ranges are in `pyproject.toml`; the explicit
+The 0.2.10 combination uses bridge **0.2.14**, OSP **0.1.6**, MSP **0.5.1**,
+and ZMIP **0.3.9**. Dependency ranges are in `pyproject.toml`; the explicit
 installation pins are in [INSTALL.md](INSTALL.md).
 
 MSP defaults to CPU computation. `MSP_COMPUTE_ENDPOINT=dask` with
@@ -391,11 +391,15 @@ eca-rsi prune /path/to/eca-runs/study --dry-run
 
 ## Validation scope
 
-The 0.2.9 combination has offline tests for provider selection, computation
+The 0.2.10 combination has offline tests for provider selection, computation
 endpoints, resume receipts, cell conservation, and release review rendering.
 A replay of 19 saved chondroatlas rounds checks the new boundary-review contract
 without changing historical results or calling a model. Detailed release checks
-are recorded in [TAKEOVER_VALIDATION.md](TAKEOVER_VALIDATION.md).
+for the earlier 0.2.9 combination are recorded in [TAKEOVER_VALIDATION.md](TAKEOVER_VALIDATION.md).
+A fresh two-round E5.25 run verified stage pause and recovery of four accepted
+lineage submissions after SIGKILL, ending with 301 of 331 input cells and a
+verified cell ledger. Details are in [CHECKPOINT_VALIDATION.md](CHECKPOINT_VALIDATION.md).
+The fixed-task model comparison is in [eval/RESULTS.md](eval/RESULTS.md).
 
 The earlier 0.1.0 validation also checked installed-wheel resources and offline
 UMAP rendering, legend selection, and zoom.
