@@ -2,6 +2,24 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+from pathlib import Path
+
+
+def driver_queue():
+    """Dataset admission is separate from the pool's compute-task queue."""
+    path = os.environ.get("ECA_PERISCOPE_BATCH_STATUS")
+    if not path:
+        return []
+    try:
+        batch = json.loads(Path(path).read_text())
+        return [{"name": row["name"],
+                 "reason": row.get("queue_reason", "Waiting for driver CPU/memory capacity"),
+                 "submitted": batch.get("submitted_at")}
+                for row in batch.get("datasets", []) if row.get("state") == "queued"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
 
 
 
@@ -17,6 +35,7 @@ async def _snapshot(target):
         result = summarize(state, workers)
         result["active"] = [t for t in state["tasks"].values()
                             if t["state"] in {"granted", "running"}]
+        result["driver_queue"] = driver_queue()
         return result
 
 
@@ -132,7 +151,7 @@ function render(data){
     gauge('Worker memory',ram.length?100*ram.reduce((n,w)=>n+w.rss_bytes,0)/ram.reduce((n,w)=>n+w.memory,0):null,'ram')+
     gauge('GPU utilization',gpu.length?gpu.reduce((n,g)=>n+g.utilization_percent,0)/gpu.length:null,'gpu');
   const cores = cpu.reduce((n,w)=>n+w.cpu_percent*w.cpus/100,0);
-  const facts = [['Workers online',`${online.length} / ${workers.length}`],['Running / assigned',data.active.length],['Queued',data.queued.length],
+  const facts = [['Workers online',`${online.length} / ${workers.length}`],['Running / assigned',data.active.length],['Compute tasks queued',data.queued.length],
     ['CPU cores in use',cpu.length?`${number(cores)} / ${sum('cpus')}`:'—'],
     ['Worker memory',`${gib(sum('memory'))} GiB`],['Slurm memory',`${gib([...allocations.values()].reduce((a,b)=>a+b,0))} GiB`],['GPUs',sum('gpus')]];
   document.getElementById('pool-summary').innerHTML = facts.map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('');
@@ -153,7 +172,9 @@ function render(data){
   const rows = data.queued.map(t=>`<tr><td>${esc(t.label||t.id)}</td><td>${esc(duration(data.observed_at-t.submitted))}</td>
     <td>${esc(t.cpus)} CPU / ${gib(t.memory)} GiB / ${esc(t.gpus)} GPU</td><td>${esc(duration(t.seconds))}</td>
     <td>${esc((t.reason||'Waiting').split(',').map(r=>reasons[r]||r).join('; '))}</td></tr>`).join('');
-  document.getElementById('pool-queue').innerHTML = rows ? `<table><thead><tr><th>Task</th><th>Waiting</th><th>Requested resources</th><th>Estimated runtime</th><th>Waiting reason</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="pool-empty"><svg viewBox="0 0 28 28" fill="none" stroke="currentColor" aria-hidden="true"><circle cx="14" cy="14" r="11"/><path d="m9 14 3 3 7-7"/></svg><p>No tasks waiting.</p></div>';
+  document.getElementById('pool-queue').innerHTML = rows ? `<table><thead><tr><th>Task</th><th>Waiting</th><th>Requested resources</th><th>Estimated runtime</th><th>Waiting reason</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="pool-empty"><p>No compute tasks waiting for a worker.</p></div>';
+  const datasets = data.driver_queue || [];
+  document.getElementById('pool-driver-queue').innerHTML = datasets.length ? `<table><thead><tr><th>Dataset</th><th>Waiting</th><th>Waiting reason</th></tr></thead><tbody>${datasets.map(d=>`<tr><td>${esc(d.name)}</td><td>${esc(d.submitted==null?'—':duration(data.observed_at-d.submitted))}</td><td>${esc(d.reason)}</td></tr>`).join('')}</tbody></table>` : '<div class="pool-empty"><p>No datasets waiting for a driver.</p></div>';
   document.getElementById('pool-updated').textContent = `Updated ${new Date(data.observed_at*1000).toLocaleTimeString()}`;
 }
 let generation = 0, timer;
@@ -162,7 +183,7 @@ function close(){
   generation++;
   clearTimeout(timer);
   panel.hidden = true;
-  for(const id of ['pool-workers','pool-gauges','pool-summary','pool-queue']) document.getElementById(id).replaceChildren();
+  for(const id of ['pool-workers','pool-gauges','pool-summary','pool-queue','pool-driver-queue']) document.getElementById(id).replaceChildren();
 }
 async function refresh(token){
   try {
@@ -200,7 +221,10 @@ def panel():
         '<div id="pool-content"><dl id="pool-summary" class="pool-summary"></dl>'
         '<div class="pool-section-heading"><h2>Workers</h2><span>Live Slurm allocations</span></div>'
         '<div id="pool-workers" class="pool-workers"></div>'
-        '<div class="pool-section-heading"><h2>Queue</h2><span>Arrival order / first compatible worker</span></div>'
+        '<div class="pool-section-heading"><h2>Datasets waiting for driver</h2></div>'
+        '<div id="pool-driver-queue" class="pool-table"></div>'
+        '<p class="pool-note">These datasets have not reached the compute queue. Their drivers need capacity before they can submit work.</p>'
+        '<div class="pool-section-heading"><h2>Compute tasks waiting for worker</h2><span>Arrival order / first compatible worker</span></div>'
         '<div id="pool-queue" class="pool-table"></div>'
         '<p class="pool-note">Refreshes every 5 seconds. CPU is worker usage divided by assigned CPUs; '
         'memory is worker RSS. GPU and Slurm inventory refresh about every 30 seconds. '

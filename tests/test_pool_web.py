@@ -97,3 +97,19 @@ def test_monitor_routes_follow_live_pool_and_auth(tmp_path):
     finally:
         client.close(); cluster.close()
         httpd.shutdown(); httpd.server_close(); thread.join(timeout=5)
+
+
+def test_driver_queue_is_distinct_from_worker_queue(tmp_path, monkeypatch):
+    import json
+    from ecarsi import pool_web
+    status = tmp_path / 'status.json'
+    monkeypatch.setenv('ECA_PERISCOPE_BATCH_STATUS', str(status))
+    status.write_text(json.dumps({'submitted_at': 100, 'datasets': [
+        {'name': 'queued dataset', 'state': 'queued', 'queue_reason': 'Driver memory budget'},
+        {'name': 'running dataset', 'state': 'running'}]}))
+    assert pool_web.driver_queue() == [{'name': 'queued dataset', 'reason': 'Driver memory budget', 'submitted': 100}]
+    assert 'Datasets waiting for driver' in pool_web.panel()
+    assert 'Compute tasks waiting for worker' in pool_web.panel()
+    assert 'No compute tasks waiting for a worker.' in pool_web.JS
+    status.write_text('{')
+    assert pool_web.driver_queue() == []
