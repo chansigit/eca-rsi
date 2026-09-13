@@ -200,8 +200,14 @@ class PoolFuture:
             try:
                 return self.future.result(timeout=max(0, min(2, deadline - time.monotonic())))
             except TimeoutError:
-                if self.future.done() or time.monotonic() >= deadline:
+                if time.monotonic() >= deadline:
                     raise
+                if self.future.done():
+                    # Completion can race the short polling timeout, and Dask's
+                    # result transfer can take longer than that poll. Read the
+                    # completed result (or its actual exception) with the caller's budget.
+                    remaining = None if timeout is None else max(0, deadline - time.monotonic())
+                    return self.future.result(timeout=remaining)
                 task = self.client.run_on_scheduler(dispatch, "poll", self.token)
                 if task.get("worker_lost") or task["state"] in TERMINAL - {"done", "failed"}:
                     self.future.cancel()

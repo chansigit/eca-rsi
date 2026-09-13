@@ -73,6 +73,32 @@ def work(value):
     return value + 1, get_worker().address
 
 
+def test_completed_future_can_outlast_short_poll():
+    from ecarsi.pool.client import PoolFuture
+
+    class Transferring:
+        calls = 0
+
+        def done(self):
+            return True
+
+        def result(self, timeout=None):
+            self.calls += 1
+            if self.calls == 1:
+                raise TimeoutError("poll elapsed during result transfer")
+            assert timeout is None or timeout > 2
+            return 42
+
+    assert PoolFuture(None, Transferring(), {}).result() == 42
+    assert PoolFuture(None, Transferring(), {}).result(timeout=30) == 42
+    # A TimeoutError raised by the computation must still reach the driver.
+    from concurrent.futures import Future
+    failed = Future()
+    failed.set_exception(TimeoutError("computation timeout"))
+    with pytest.raises(TimeoutError, match="computation timeout"):
+        PoolFuture(None, failed, {}).result()
+
+
 def test_two_drivers_and_auto_local(monkeypatch):
     with LocalCluster(n_workers=2, threads_per_worker=1, processes=False, dashboard_address=None,
                       resources={"pool_slot": 1}, memory_limit=2 * 2**30) as cluster, Client(cluster) as c:
@@ -114,3 +140,14 @@ def test_gpu_device_minors_and_busy_status():
     text = render(result)
     assert 'OSP' in text and '37.0%' in text and 'Queued: 0' in text
     assert summarize(state, {})['workers'][0]['state'] == 'stale'
+
+
+def test_pool_driver_budget_excludes_remote_compute(tmp_path, monkeypatch):
+    from ecarsi.persample import _driver_estimate_bytes, _estimate_bytes, FIXED_BYTES_PER_CHILD
+    entry = {'n_cells': 20000, 'outdir': str(tmp_path)}
+    (tmp_path / 'subset.h5ad').write_bytes(b'x' * 1024)
+    monkeypatch.setenv('OSP_COMPUTE_ENDPOINT', 'pool')
+    assert _driver_estimate_bytes(entry) == FIXED_BYTES_PER_CHILD + 4096
+    for mode in ('local', 'auto'):
+        monkeypatch.setenv('OSP_COMPUTE_ENDPOINT', mode)
+        assert _driver_estimate_bytes(entry) == _estimate_bytes(20000)

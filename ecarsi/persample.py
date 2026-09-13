@@ -225,6 +225,19 @@ def _estimate_bytes(n_cells: int) -> int:
     return int(n_cells * per_cell) + FIXED_BYTES_PER_CHILD
 
 
+def _driver_estimate_bytes(entry: dict) -> int:
+    """Remote compute reserves worker memory separately; budget annotation here."""
+    full = _estimate_bytes(entry["n_cells"])
+    if os.environ.get("OSP_COMPUTE_ENDPOINT", "local") != "pool":
+        return full  # auto may still choose local computation
+    subset = Path(entry["outdir"]) / SUBSET_FILE
+    if not subset.is_file():
+        return full
+    # Subsets are written uncompressed. Allow copies plus Python/kernel imports;
+    # the worker still uses the full computation estimate in run_compute().
+    return min(full, FIXED_BYTES_PER_CHILD + 4 * subset.stat().st_size)
+
+
 def plan_concurrency(pending: list[dict]) -> tuple[int, int, int]:
     """(max_parallel, budget_bytes, threads_per_child) from the resources
     this process really has (same recipe as zmip's lineage pool)."""
@@ -362,7 +375,7 @@ def drive(pending: list[dict], out_root: Path, annotate: bool, on_done=None) -> 
         paused = paused or pause_requested()
         while queue and len(running) < max_parallel and not paused and not pause_requested():
             e = queue[0]
-            est = _estimate_bytes(e["n_cells"])
+            est = _driver_estimate_bytes(e)
             if running and used + est > budget:
                 break  # wait for memory; an idle pool always admits the next one
             queue.pop(0)
