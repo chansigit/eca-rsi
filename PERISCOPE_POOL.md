@@ -3,6 +3,9 @@
 The **Warm pool** button sits below **Overview** in Periscope's sidebar.
 It opens a read-only view of workers, CPU/memory/GPU use, Slurm allocations,
 remaining time, active tasks and the admission queue.
+The monitor uses a dark resource-console theme, with cyan CPU indicators and
+violet GPU indicators. The navigator follows that theme only while the pool
+page is open; dataset pages retain their usual appearance.
 
 Point the web server at an existing pool:
 
@@ -31,6 +34,9 @@ sampled about every 30 seconds; allocation details show inventory age. CPU is
 normalized by assigned CPUs, and RAM is worker process RSS. These are worker
 measurements, not a whole-host survey. Slurm memory totals count each host/job
 allocation once, even if multiple workers share it.
+Header gauges use reporting online workers: CPU is weighted by assigned CPU
+count, RAM is summed RSS divided by summed worker budgets, and GPU utilization
+is the mean of reported device utilizations. Unknown measurements show a dash.
 
 Closing the monitor never shuts down the pool. This page has no submission,
 drain or Slurm cancellation controls. Start and stop resources with the

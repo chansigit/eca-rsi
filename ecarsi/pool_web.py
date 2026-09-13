@@ -38,30 +38,63 @@ def snapshot(target):
 
 
 CSS = """
-.pool-head{display:flex;justify-content:space-between;align-items:baseline;gap:16px;flex-wrap:wrap;margin:12px 0 24px}
-.pool-head p{margin:6px 0 0;color:var(--muted)}
-.pool-summary{display:flex;gap:24px;flex-wrap:wrap;border-block:1px solid var(--line-strong);padding:16px 0;margin:0 0 24px}
-.pool-summary div{min-width:110px}.pool-summary dt{color:var(--muted);font-size:var(--t3)}
-.pool-summary dd{font-size:var(--t6);font-weight:650;margin:3px 0 0;font-variant-numeric:tabular-nums}
-.pool-workers{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,380px),1fr));gap:16px;margin:16px 0 28px}
-.pool-worker{border:1px solid var(--line);border-radius:var(--r);padding:20px;background:var(--card);min-width:0}
+:root{color-scheme:dark;--bg:#081321;--card:#0f2033;--ink:#e7f2ff;--ink-soft:#c9dbef;--muted:#96adc5;--line:#233b52;--line-strong:#355773;--accent:#61d9f2;--accent-ink:#9cecff;--accent-bg:#123a4b;--ok:#67dab2;--ok-bg:#14382f;--run:#f4bf76;--run-bg:#3b2d1b;--bad:#ff8999;--bad-bg:#3f2130;--none:#96adc5;--none-bg:#172b40;--row-hover:#19364b;--gpu:#b5a1ff}
+body{background-color:var(--bg);background-image:linear-gradient(#8ccfff05 1px,transparent 1px),linear-gradient(90deg,#8ccfff05 1px,transparent 1px);background-size:32px 32px}
+main.page{max-width:1440px;padding:28px 28px 48px}
+.pool-command{display:grid;grid-template-columns:minmax(240px,1fr) minmax(360px,1.15fr);gap:24px;align-items:center;padding:10px 0 26px;position:relative}
+.pool-head{min-width:0}.pool-head h1{font-size:clamp(30px,3vw,42px);letter-spacing:-.04em;font-weight:650;display:flex;align-items:center;gap:14px}
+.pool-symbol{width:38px;height:38px;flex:none;color:var(--accent);filter:drop-shadow(0 0 12px #61d9f230)}
+.pool-head p{margin:12px 0 18px;color:var(--muted);font-size:var(--t3);max-width:38ch;line-height:1.7}
+.pool-connection{display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:var(--t2)}
+#pool-link-state{display:inline-flex;align-items:center;gap:7px;color:var(--ok)}
+#pool-link-state::before{content:'';width:6px;height:6px;border-radius:50%;background:currentColor;box-shadow:0 0 9px #67dab266}
+#pool-updated{color:var(--muted)}
+.pool-gauges{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;padding:18px 12px;border:1px solid var(--line);border-radius:14px;background:linear-gradient(125deg,#142b43ad,#0b182b);box-shadow:inset 0 1px #d4f6ff08}
+.pool-gauge{text-align:center;min-width:0;--signal:var(--accent)}.pool-gauge.ram{--signal:#86afff}.pool-gauge.gpu{--signal:var(--gpu)}
+.pool-dial{position:relative;width:100%;max-width:100px;aspect-ratio:1;margin:0 auto 6px}.pool-dial svg{display:block;width:100%;height:100%;transform:rotate(-90deg)}
+.pool-dial .track{fill:none;stroke:#ffffff0c;stroke-width:6}.pool-dial .arc{fill:none;stroke:var(--signal);stroke-width:6;stroke-linecap:round;filter:drop-shadow(0 0 3px color-mix(in srgb,var(--signal) 50%,transparent))}
+.pool-dial strong{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:23px;font-weight:550;letter-spacing:-.04em;font-variant-numeric:tabular-nums}
+.pool-dial strong small{font-size:12px;color:var(--muted);margin:5px 0 0 3px}
+.pool-gauge>span{font-size:var(--t2);color:var(--muted)}
+.pool-summary{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:16px;border-block:1px solid var(--line);padding:20px 0;margin:0 0 30px}
+.pool-summary div{min-width:0}.pool-summary dt{color:var(--muted);font-size:12px;line-height:1.5;min-height:36px}
+.pool-summary dd{font-size:clamp(15px,1.6vw,21px);font-weight:550;margin:3px 0 0;font-variant-numeric:tabular-nums;white-space:nowrap;letter-spacing:-.025em}
+.pool-section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
+.pool-section-heading h2{font-size:18px;font-weight:550;display:flex;align-items:center;gap:10px}
+.pool-section-heading h2::before{content:'';width:4px;height:16px;border-radius:2px;background:var(--accent)}
+.pool-section-heading span{font-size:12px;color:var(--muted)}
+.pool-workers{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,370px),1fr));gap:18px;margin:0 0 30px}
+.pool-worker{border:1px solid var(--line);border-radius:12px;padding:20px;background:linear-gradient(150deg,#12283bf5,#0c1a2bf5);min-width:0;position:relative;--node-color:var(--accent);transition:border-color .2s,box-shadow .2s}
+.pool-worker::before{content:'';position:absolute;top:-1px;left:20px;width:40px;height:2px;background:var(--node-color);box-shadow:0 0 14px color-mix(in srgb,var(--node-color) 35%,transparent)}
+.pool-worker.gpu-node{--node-color:var(--gpu);background:linear-gradient(150deg,#20253af5,#0c1a2bf5)}
+.pool-worker:hover{border-color:color-mix(in srgb,var(--node-color) 65%,var(--line));box-shadow:0 6px 24px #0002}
+.pool-worker[data-state=stale]{border-color:var(--bad)}
 .pool-worker header{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
-.pool-worker h3{font-size:var(--t5)}.pool-meta{color:var(--muted);font-size:var(--t3);margin:6px 0 18px}
-.pool-meter{margin:12px 0}.pool-meter label{display:flex;justify-content:space-between;gap:12px;font-size:var(--t3)}
-.pool-meter progress{display:block;appearance:none;width:100%;height:8px;border:0;border-radius:4px;overflow:hidden;margin-top:5px;background:var(--line)}
-.pool-meter progress::-webkit-progress-bar{background:var(--line)}
-.pool-meter progress::-webkit-progress-value{background:var(--accent)}
-.pool-meter progress::-moz-progress-bar{background:var(--accent)}
-.pool-meter progress.hot::-webkit-progress-value{background:var(--run)}
-.pool-meter progress.hot::-moz-progress-bar{background:var(--run)}
-.pool-task{margin:16px 0 0;border-top:1px solid var(--line);padding-top:12px;overflow-wrap:anywhere;font-size:var(--t3)}
-.pool-worker details{margin-top:14px;font-size:var(--t3)}.pool-worker summary{cursor:pointer;color:var(--muted)}
-.pool-worker dl{margin:8px 0 0}.pool-worker dt{color:var(--muted)}.pool-worker dd{margin:0 0 8px;overflow-wrap:anywhere}
-.pool-table{overflow:auto}.pool-table table{width:100%;border-collapse:collapse;font-size:var(--t3)}
-.pool-table th,.pool-table td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
-.pool-table th{color:var(--muted);font-weight:600}.pool-table td:first-child{overflow-wrap:anywhere;min-width:160px}
-.pool-note{font-size:var(--t3);color:var(--muted);margin-top:16px;max-width:80ch}
-#pool-updated{font-size:var(--t3);color:var(--muted)}
+.pool-node-title{display:flex;align-items:center;gap:11px;min-width:0}.pool-chip{width:30px;height:30px;color:var(--node-color);flex:none}
+.pool-worker h3{font-size:16px;font-weight:600}.pool-worker .pill{font-size:12px;border:1px solid color-mix(in srgb,var(--st) 20%,transparent);background:color-mix(in srgb,var(--st) 9%,transparent)}
+.pool-meta{display:flex;gap:10px;flex-wrap:wrap;color:var(--muted);font-size:12px;margin:14px 0 20px;padding-bottom:14px;border-bottom:1px solid #accfff0c}
+.pool-meta strong{color:var(--ink-soft);font-weight:500;margin-left:auto}
+.pool-meter{margin:13px 0;--meter-color:var(--accent)}.pool-meter.gpu{--meter-color:var(--gpu)}
+.pool-meter label{display:flex;justify-content:space-between;gap:12px;font-size:12px;color:var(--muted)}.pool-meter .num{color:var(--ink-soft);white-space:nowrap}
+.pool-meter progress{display:block;appearance:none;width:100%;height:6px;border:0;border-radius:2px;overflow:hidden;margin-top:8px;background:#ffffff0b}
+.pool-meter progress::-webkit-progress-bar{background:#ffffff0b}
+.pool-meter progress::-webkit-progress-value{background:var(--meter-color);box-shadow:0 0 10px var(--meter-color)}
+.pool-meter progress::-moz-progress-bar{background:var(--meter-color)}
+.pool-meter progress.hot::-webkit-progress-value{background:var(--run)}.pool-meter progress.hot::-moz-progress-bar{background:var(--run)}
+.pool-task{margin:18px 0 0;border-top:1px solid #accfff0c;padding-top:14px;overflow-wrap:anywhere;font-size:12px;color:var(--muted)}.pool-task strong{color:var(--ink);font-weight:500}
+.pool-task-idle{display:flex;align-items:center;gap:8px}.pool-task-idle::before{content:'';width:5px;height:5px;border-radius:50%;background:var(--muted)}
+.pool-worker details{margin-top:14px;font-size:12px}.pool-worker summary{cursor:pointer;color:var(--muted)}.pool-worker summary:hover{color:var(--accent)}
+.pool-worker dl{margin:12px 0 0;display:grid;grid-template-columns:105px minmax(0,1fr);gap:8px}.pool-worker dt{color:var(--muted)}.pool-worker dd{margin:0;overflow-wrap:anywhere;color:var(--ink-soft)}
+.pool-table{overflow:auto;border:1px solid var(--line);border-radius:12px;background:#0f203399}
+.pool-table table{width:100%;border-collapse:collapse;font-size:var(--t3)}
+.pool-table th,.pool-table td{text-align:left;padding:14px 16px;border-bottom:1px solid var(--line);vertical-align:top}
+.pool-table th{color:var(--muted);font-size:12px;font-weight:500;background:#152d424d}.pool-table td:first-child{overflow-wrap:anywhere;min-width:160px}
+.pool-table tr:last-child td{border-bottom:0}.pool-table tbody tr:hover{background:#61d9f208}
+.pool-empty{padding:22px;display:flex;align-items:center;gap:12px;color:var(--muted);font-size:13px}.pool-empty svg{width:28px;height:28px;color:var(--accent);flex:none}.pool-empty p{margin:0}
+.pool-note{font-size:12px;color:var(--muted);margin-top:18px;max-width:90ch;line-height:1.7}
+@media(max-width:850px){.pool-command{grid-template-columns:1fr}.pool-gauges{max-width:540px;width:100%}.pool-summary{grid-template-columns:repeat(4,minmax(0,1fr))}.pool-summary dt{min-height:0}.pool-summary dd{font-size:18px}}
+@media(max-width:460px){main.page{padding:20px 16px 32px}.pool-command{gap:20px}.pool-head h1{font-size:32px}.pool-summary{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:20px}.pool-worker{padding:16px}.pool-section-heading span{display:none}.pool-meta strong{margin-left:0}.pool-gauges{padding:14px 6px;gap:4px}.pool-dial{max-width:85px}.pool-dial strong{font-size:20px}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important}}
 """
 
 JS = r"""
@@ -74,40 +107,53 @@ function duration(seconds){
   const mins = Math.max(0, Math.floor(seconds / 60));
   return mins >= 60 ? `${Math.floor(mins/60)}h ${mins%60}m` : `${mins}m`;
 }
-function meter(label, text, percent){
+function meter(label, text, percent, kind='cpu'){
   const known = percent != null && Number.isFinite(percent), value = known ? Math.max(0,Math.min(100,percent)) : 0;
-  return `<div class="pool-meter"><label><span>${esc(label)}</span><span class="num">${esc(text)}</span></label>
+  return `<div class="pool-meter ${kind}"><label><span>${esc(label)}</span><span class="num">${esc(text)}</span></label>
     <progress max="100" value="${value}" class="${value>=85?'hot':''}" aria-label="${esc(label+': '+text)}"></progress></div>`;
 }
+function gauge(label, percent, kind){
+  const known = percent != null && Number.isFinite(percent), value = known ? Math.max(0,Math.min(100,percent)) : 0;
+  return `<div class="pool-gauge ${kind}" role="img" aria-label="${esc(label)}: ${known?number(percent)+'%':'unavailable'}"><div class="pool-dial">
+    <svg viewBox="0 0 100 100" aria-hidden="true"><circle class="track" cx="50" cy="50" r="40"/><circle class="arc" cx="50" cy="50" r="40" stroke-dasharray="${value*2.51327} 251.327"/></svg>
+    <strong>${known?number(percent):'—'}${known?'<small>%</small>':''}</strong></div><span>${esc(label)}</span></div>`;
+}
+const chip = '<svg class="pool-chip" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><rect x="7" y="7" width="18" height="18" rx="4"/><rect x="12" y="12" width="8" height="8" rx="1"/><path d="M12 3v4m8-4v4M12 25v4m8-4v4M3 12h4m-4 8h4m18-8h4m-4 8h4"/></svg>';
 const tones = {idle:'released',running:'running',granted:'running',draining:'tone-warn',stale:'failed',expiring:'tone-warn'};
 const reasons = {busy:'Compatible workers busy',no_workers:'No workers registered',cpus:'CPU requirement',memory:'Memory requirement',
   gpus:'GPU requirement',runtime:'Software mismatch',shared_paths:'Shared paths unavailable',remaining_time:'Insufficient time remaining',draining_or_stale:'Workers draining or stale'};
 function render(data){
+  const expanded = new Set([...document.querySelectorAll('.pool-worker details[open]')].map(d=>d.closest('article').dataset.worker));
   const workers = data.workers, active = new Map(data.active.map(t=>[t.worker,t]));
   const online = workers.filter(w=>w.state!=='stale'), allocations = new Map();
   workers.forEach(w=>allocations.set(`${w.host}/${w.job_id}`,w.allocation_memory));
   const sum = key => workers.reduce((n,w)=>n+w[key],0);
+  const cpu = online.filter(w=>w.cpu_percent!=null), ram = online.filter(w=>w.rss_bytes!=null);
+  const gpu = online.flatMap(w=>w.gpu_stats||[]).filter(g=>g.utilization_percent!=null);
+  document.getElementById('pool-gauges').innerHTML = gauge('Worker CPU',cpu.length?cpu.reduce((n,w)=>n+w.cpu_percent*w.cpus,0)/cpu.reduce((n,w)=>n+w.cpus,0):null,'cpu')+
+    gauge('Worker memory',ram.length?100*ram.reduce((n,w)=>n+w.rss_bytes,0)/ram.reduce((n,w)=>n+w.memory,0):null,'ram')+
+    gauge('GPU utilization',gpu.length?gpu.reduce((n,g)=>n+g.utilization_percent,0)/gpu.length:null,'gpu');
   const facts = [['Workers online',`${online.length} / ${workers.length}`],['Running / assigned',data.active.length],['Queued',data.queued.length],
     ['Worker CPUs',sum('cpus')],['Worker memory',`${gib(sum('memory'))} GiB`],['Slurm memory',`${gib([...allocations.values()].reduce((a,b)=>a+b,0))} GiB`],['GPUs',sum('gpus')]];
   document.getElementById('pool-summary').innerHTML = facts.map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('');
   document.getElementById('pool-workers').innerHTML = workers.length ? workers.map(w=>{
     const task = active.get(w.address), age = Math.max(0, data.observed_at-w.observed_at);
-    const gpu = (w.gpu_stats||[]).map(g=>meter(g.name,`${number(g.utilization_percent)}% GPU`,g.utilization_percent)+
+    const gpu = (w.gpu_stats||[]).map(g=>meter(g.name,`${number(g.utilization_percent)}% GPU`,g.utilization_percent,'gpu')+
       meter('GPU memory',`${number(g.memory_used_mib==null?null:g.memory_used_mib/1024)} / ${number(g.memory_total_mib==null?null:g.memory_total_mib/1024)} GiB`,
-        g.memory_used_mib==null?null:100*g.memory_used_mib/g.memory_total_mib)).join('');
-    return `<article class="pool-worker"><header><h3>${esc(w.host)}</h3><span class="pill ${tones[w.state]||'neutral'}">${esc(w.state)}</span></header>
-      <p class="pool-meta">Job ${esc(w.job_id)} · ${esc(w.cpus)} CPUs · ${esc(w.gpus)} GPUs · <strong>${esc(duration(w.remaining_seconds))} left</strong></p>
+        g.memory_used_mib==null?null:100*g.memory_used_mib/g.memory_total_mib,'gpu')).join('');
+    return `<article class="pool-worker ${w.gpus?'gpu-node':''}" data-state="${esc(w.state)}" data-worker="${esc(w.address)}"><header><div class="pool-node-title">${chip}<h3>${esc(w.host)}</h3></div><span class="pill ${tones[w.state]||'neutral'}">${esc(w.state)}</span></header>
+      <p class="pool-meta"><span>Job ${esc(w.job_id)}</span><span>${esc(w.cpus)} CPUs / ${esc(w.gpus)} GPUs</span><strong>${esc(duration(w.remaining_seconds))} left</strong></p>
       ${meter('Worker CPU',`${number(w.cpu_percent)}%`,w.cpu_percent)}
       ${meter('Worker memory',`${gib(w.rss_bytes)} / ${gib(w.memory)} GiB`,w.rss_bytes==null?null:100*w.rss_bytes/w.memory)}${gpu}
-      <p class="pool-task">${task?`<strong>${esc(task.label||task.id)}</strong><br>${task.state==='running'?'Running for':'Assigned for'} ${esc(duration(data.observed_at-(task.started||task.submitted)))}`:'No active task'}</p>
-      <details><summary>Allocation details</summary><dl><dt>Requested</dt><dd>${esc(w.requested_tres)}</dd><dt>Allocated</dt><dd>${esc(w.allocated_tres)}</dd>
+      <p class="pool-task">${task?`<strong>${esc(task.label||task.id)}</strong><br>${task.state==='running'?'Running for':'Assigned for'} ${esc(duration(data.observed_at-(task.started||task.submitted)))}`:'<span class="pool-task-idle">No active task</span>'}</p>
+      <details${expanded.has(w.address)?' open':''}><summary>Allocation details</summary><dl><dt>Requested</dt><dd>${esc(w.requested_tres)}</dd><dt>Allocated</dt><dd>${esc(w.allocated_tres)}</dd>
       <dt>Slurm memory</dt><dd>${gib(w.allocation_memory)} GiB</dd><dt>Worker address</dt><dd>${esc(w.address)}</dd>
       <dt>Inventory age</dt><dd>${number(age,0)} seconds</dd></dl></details></article>`;
   }).join('') : '<p class="muted">Scheduler is running. Start a worker inside an allocated Slurm job to add capacity.</p>';
   const rows = data.queued.map(t=>`<tr><td>${esc(t.label||t.id)}</td><td>${esc(duration(data.observed_at-t.submitted))}</td>
     <td>${esc(t.cpus)} CPU / ${gib(t.memory)} GiB / ${esc(t.gpus)} GPU</td><td>${esc(duration(t.seconds))}</td>
     <td>${esc((t.reason||'Waiting').split(',').map(r=>reasons[r]||r).join('; '))}</td></tr>`).join('');
-  document.getElementById('pool-queue').innerHTML = rows ? `<table><thead><tr><th>Task</th><th>Waiting</th><th>Requested resources</th><th>Estimated runtime</th><th>Waiting reason</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="muted">No tasks waiting.</p>';
+  document.getElementById('pool-queue').innerHTML = rows ? `<table><thead><tr><th>Task</th><th>Waiting</th><th>Requested resources</th><th>Estimated runtime</th><th>Waiting reason</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="pool-empty"><svg viewBox="0 0 28 28" fill="none" stroke="currentColor" aria-hidden="true"><circle cx="14" cy="14" r="11"/><path d="m9 14 3 3 7-7"/></svg><p>No tasks waiting.</p></div>';
   document.getElementById('pool-updated').textContent = `Updated ${new Date(data.observed_at*1000).toLocaleTimeString()}`;
 }
 async function refresh(){
@@ -118,6 +164,9 @@ async function refresh(){
     setTimeout(refresh,5000);
   } catch(error) {
     document.getElementById('pool-content').replaceChildren();
+    document.getElementById('pool-gauges').replaceChildren();
+    document.getElementById('pool-link-state').textContent = 'Offline';
+    document.getElementById('pool-link-state').style.color = 'var(--bad)';
     document.getElementById('pool-updated').textContent = 'Disconnected';
     document.getElementById('pool-offline').hidden = false;
     if(parent!==window) parent.postMessage({type:'pool-unavailable'},location.origin);
@@ -134,14 +183,22 @@ def page(data):
         '<!doctype html><html lang="en"><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         f'<title>Warm pool — Periscope</title><style>{index.CSS}{CSS}</style>'
-        '<body><main class="page"><header class="pool-head"><div><h1>Warm pool</h1>'
-        '<p>Slurm workers, current tasks and available capacity.</p></div>'
-        '<span id="pool-updated" role="status"></span></header>'
+        '<body><main class="page"><div class="pool-command"><header class="pool-head"><h1>'
+        '<svg class="pool-symbol" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">'
+        '<path d="M12 12 20 20m8-8-8 8m-8 8 8-8m8 8-8-8"/><rect x="4" y="4" width="10" height="10" rx="3"/>'
+        '<rect x="26" y="4" width="10" height="10" rx="3"/><rect x="4" y="26" width="10" height="10" rx="3"/>'
+        '<rect x="26" y="26" width="10" height="10" rx="3"/><circle cx="20" cy="20" r="3" fill="currentColor"/></svg>'
+        'Warm pool</h1><p>Slurm workers, current tasks and available capacity.</p>'
+        '<div class="pool-connection"><span id="pool-link-state">Connected</span>'
+        '<span id="pool-updated" role="status"></span></div></header>'
+        '<div id="pool-gauges" class="pool-gauges"></div></div>'
         '<div id="pool-offline" class="callout tone-bad" role="alert" hidden>'
         'Warm pool is unavailable. <a href="/" target="_top">Return to Periscope</a>.</div>'
         '<div id="pool-content"><dl id="pool-summary" class="pool-summary"></dl>'
-        '<h2>Workers</h2><div id="pool-workers" class="pool-workers"></div>'
-        '<h2>Queue</h2><div id="pool-queue" class="pool-table"></div>'
+        '<div class="pool-section-heading"><h2>Workers</h2><span>Live Slurm allocations</span></div>'
+        '<div id="pool-workers" class="pool-workers"></div>'
+        '<div class="pool-section-heading"><h2>Queue</h2><span>Arrival order / first compatible worker</span></div>'
+        '<div id="pool-queue" class="pool-table"></div>'
         '<p class="pool-note">Refreshes every 5 seconds. CPU is worker usage divided by assigned CPUs; '
         'memory is worker RSS. GPU and Slurm inventory refresh about every 30 seconds. '
         'These measurements do not describe every process on the host.</p></div>'

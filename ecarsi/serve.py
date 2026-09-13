@@ -222,6 +222,7 @@ NAV_JS = r"""
   const names = new Set(items.map(i => i.dataset.name));
   // -- sidebar <-> main pane --
   function mark(name){ items.forEach(i => i.classList.toggle("active", i.dataset.name === name));
+    document.body.classList.toggle("pool-view", name === "__pool__");
     if (home) home.classList.toggle("active", name === "__home__");
     if (pool) pool.classList.toggle("active", name === "__pool__");
     const cur = items.find(i => i.dataset.name === name); if (cur) { const g = cur.closest("details.group"); if (g) g.open = true; } }
@@ -426,6 +427,9 @@ class StateCache:
 
 NAV_CSS = """
 html,body{height:100%}body{display:flex;overflow:hidden}
+body.pool-view{color-scheme:dark;--bg:#081321;--card:#0d1c2d;--ink:#e7f2ff;--ink-soft:#c9dbef;--muted:#96adc5;--line:#233b52;--line-strong:#355773;--accent:#61d9f2;--accent-ink:#9cecff;--accent-bg:#123a4b;--ok:#67dab2;--ok-bg:#14382f;--run:#f4bf76;--run-bg:#3b2d1b;--bad:#ff8999;--bad-bg:#3f2130;--none-bg:#172b40}
+body.pool-view #pool-item.active{box-shadow:inset 2px 0 var(--accent);background:linear-gradient(90deg,#18475c,#102739)}
+body.pool-view #pool-state{color:var(--ok)}
 aside.sb{width:360px;flex:0 0 360px;background:var(--card);border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0;position:relative}
 .sb-resizer{position:absolute;top:0;right:-3px;width:6px;height:100%;cursor:col-resize;z-index:6}
 .sb-resizer:hover,.sb-resizer:active{background:var(--accent);opacity:.3}
