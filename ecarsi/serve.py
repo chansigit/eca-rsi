@@ -217,21 +217,29 @@ NAV_JS = r"""
 (function(){
   const $ = id => document.getElementById(id);
   const items = [...document.querySelectorAll("#sb-list .item")], frame = $("frame"), crumb = $("crumb"), open = $("open"),
-        q = $("nav-q"), n = $("nav-n"), msg = $("nav-msg"), empty = $("empty"), home = $("home-item"),
+        q = $("nav-q"), n = $("nav-n"), msg = $("nav-msg"), empty = $("empty"), home = $("home-item"), pool = $("pool-item"),
         sort = $("nav-sort"), sp = $("nav-sp"), st = $("nav-st"), groups = [...document.querySelectorAll("#sb-list details.group")];
   const names = new Set(items.map(i => i.dataset.name));
   // -- sidebar <-> main pane --
   function mark(name){ items.forEach(i => i.classList.toggle("active", i.dataset.name === name));
     if (home) home.classList.toggle("active", name === "__home__");
+    if (pool) pool.classList.toggle("active", name === "__pool__");
     const cur = items.find(i => i.dataset.name === name); if (cur) { const g = cur.closest("details.group"); if (g) g.open = true; } }
   function show(path){ if (empty) empty.style.display = "none"; frame.style.display = ""; if (frameUrl() !== path) frame.src = path; }
   function frameUrl(){ try { return frame.contentWindow.location.pathname; } catch (e) { return null; } }
   function fromHash(){
     const h = location.hash.replace(/^#/, "");
     if (h === "/__home__") return "/_home";
+    if (h === "/__pool__") return "/_pool";
     const m = h.match(/^\/([^/]+)\/(.*)$/); return m && names.has(m[1]) ? "/" + m[1] + "/" + m[2] : null; }
   frame.addEventListener("load", () => {
     const p = frameUrl(); if (!p) return;
+    if (p === "/_pool") {
+      history.replaceState(null, "", "#/__pool__");
+      mark("__pool__"); crumb.textContent = "Warm pool"; open.href = "/_pool";
+      try { document.title = frame.contentDocument.title || "Periscope"; } catch (e) {}
+      return;
+    }
     if (p === "/_home") {
       if (location.hash !== "#/__home__") history.replaceState(null, "", "#/__home__");
       mark("__home__"); crumb.textContent = "overview"; open.href = "/_home";
@@ -246,6 +254,27 @@ NAV_JS = r"""
   window.addEventListener("hashchange", () => { const p = fromHash(); if (p) show(p); });
   items.forEach(i => i.addEventListener("click", ev => { if (ev.target.closest("input.sel")) return; ev.preventDefault(); show("/" + i.dataset.name + "/"); }));
   if (home) home.addEventListener("click", ev => { ev.preventDefault(); show("/_home"); });
+  if (pool) {
+    pool.addEventListener("click", () => { if (!pool.disabled) show("/_pool"); });
+    function poolAvailable(available){
+      pool.disabled = !available;
+      pool.setAttribute("aria-disabled", String(!available));
+      pool.title = available ? "Monitor Slurm workers and task queue" : "Warm pool is not running or cannot be reached";
+      $("pool-state").textContent = available ? "online" : "offline";
+      if (!available && frameUrl() === "/_pool") show("/_home");
+    }
+    async function checkPool(){
+      try {
+        const r = await fetch('/_pool/health', {cache:'no-store',signal:AbortSignal.timeout(8000)});
+        poolAvailable(r.ok && (await r.json()).available === true);
+      } catch(e) { poolAvailable(false); }
+      setTimeout(checkPool,5000);
+    }
+    window.addEventListener('message', e => {
+      if(e.origin===location.origin && e.source===frame.contentWindow && e.data?.type==='pool-unavailable') poolAvailable(false);
+    });
+    checkPool();
+  }
   const brand = $("brand"); if (brand) brand.addEventListener("click", ev => { ev.preventDefault(); show("/_home"); });
   $("sb-toggle").addEventListener("click", () => document.body.classList.toggle("sb-hidden"));
   $("sb-show").addEventListener("click", () => document.body.classList.remove("sb-hidden"));
@@ -417,6 +446,9 @@ details.group>summary .gn{margin-left:auto;font-weight:400;font-variant-numeric:
 .items{padding-left:var(--s1)}
 .item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:var(--r);color:var(--ink);text-decoration:none;font-size:var(--t3)}
 .item:hover{background:var(--none-bg)}.item.active{background:var(--accent-bg);color:var(--accent-ink);font-weight:600}
+#pool-item{border:0;font-family:inherit;text-align:left;cursor:pointer;background:none}
+#pool-item:disabled{opacity:.5;cursor:not-allowed}#pool-item:disabled:hover{background:none}
+#pool-item.active{background:var(--accent-bg)}#pool-item:not(:disabled):hover{background:var(--none-bg)}
 .item .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .item .cells{color:var(--muted);font-variant-numeric:tabular-nums;font-size:var(--t2);white-space:nowrap}
 .item input.sel{margin:0;flex:0 0 auto;opacity:0;transition:opacity .1s}
@@ -513,6 +545,8 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
         "</div>"
         '<a class="item home-item" id="home-item" href="/_home" data-name="__home__">'
         '<span class="nm"><b>Overview</b> · all datasets</span></a>'
+        '<button class="item home-item" id="pool-item" disabled aria-disabled="true" title="Checking warm pool availability">'
+        '<span class="nm"><b>Warm pool</b></span><span class="cells" id="pool-state">offline</span></button>'
         f'<div class="sb-list" id="sb-list">{rows or empty_note}</div>'
         '<div class="sb-foot">'
         '<div class="row"><button id="bind-open" class="btn plain">+ Bind…</button><button id="unbind-go" class="btn danger" disabled>Unbind…</button></div>'
@@ -775,10 +809,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     self.path are recomputed per request, which is safe — translate_path
     reads them fresh on every call, not cached from __init__)."""
 
-    def __init__(self, *a, registry: Registry, auth: str | None = None, states: StateCache | None = None, **kw):
+    def __init__(self, *a, registry: Registry, auth: str | None = None, states: StateCache | None = None, pool_scheduler: str | None = None, **kw):
         self._registry = registry
         self._auth = auth  # "user:pass" -> HTTP basic auth enforced here, on every request; None = open
         self._state = states.get if states else _dataset_state  # fleet pages: cached states when a warmer runs
+        self._pool_scheduler = pool_scheduler
         super().__init__(
             *a, **kw
         )  # directory defaults to cwd; do_GET always overrides it before use
@@ -818,6 +853,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def _send(self, code: int, body: bytes, ctype: str) -> None:
         self.send_response(code)
         self.send_header("Content-Type", ctype)
+        if urllib.parse.unquote(self.path).startswith("/_pool"):
+            self.send_header("Cache-Control", "no-store")
         if len(body) > 1024 and "gzip" in self.headers.get("Accept-Encoding", ""):
             body = gzip.compress(body, 5)  # rendered pages are 80-450 KB of HTML and compress ~5x; matters through the tunnel
             self.send_header("Content-Encoding", "gzip")
@@ -879,6 +916,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if not self._authorized():
             return self._demand_auth()
         raw = self.path.split("?", 1)[0]
+        pool_path = urllib.parse.unquote(raw).rstrip("/")
+        if pool_path == "/_pool" or pool_path.startswith("/_pool/"):
+            if pool_path not in {"/_pool", "/_pool/health", "/_pool/status.json"}:
+                return self._json(404, {"error": "Not found"})
+            from . import pool_web
+            state = pool_web.snapshot(self._pool_scheduler)
+            if pool_path == "/_pool/health":
+                return self._json(200, {"available": state is not None})
+            if state is None:
+                return self._json(503, {"error": "Warm pool is not running or cannot be reached"})
+            if pool_path == "/_pool/status.json":
+                return self._json(200, state)
+            return self._html(pool_web.page(state))
         if raw == "/_home":
             return self._html(_home_html(self._registry.snapshot(), self._state))
         if raw == "/_history.json":  # the curve's data; ?at=YYYY-MM-DDTHH:MM (or epoch) reads it at one moment
@@ -1017,7 +1067,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
     states = StateCache(registry)
     states.start()
     httpd = http.server.ThreadingHTTPServer(
-        (args.bind, args.port), partial(Handler, registry=registry, auth=args.auth, states=states)
+        (args.bind, args.port), partial(Handler, registry=registry, auth=args.auth, states=states,
+                                      pool_scheduler=args.pool_scheduler)
     )
     print(
         f"[serve] {APP} on http://{args.bind}:{args.port}/  ({len(items)} dataset(s); registry {reg_path}"
@@ -1313,6 +1364,8 @@ def main(argv: list[str]) -> int:
         help="extra dataset dirs to serve for this process only (name = basename)",
     )
     ap.add_argument("--port", type=int, default=8899)
+    ap.add_argument("--pool-scheduler", default=os.environ.get("ECA_POOL_SCHEDULER"),
+                    help="optional warm pool scheduler address or JSON file (default: ECA_POOL_SCHEDULER)")
     ap.add_argument(
         "--bind",
         default="127.0.0.1",
