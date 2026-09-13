@@ -473,6 +473,10 @@ a.icon{text-decoration:none}
 #sb-show{display:none}body.sb-hidden aside.sb{display:none}body.sb-hidden #sb-show{display:inline-block}
 #bind-form{margin:0}#bind-form input{width:100%;font:var(--t3) var(--mono);padding:6px 10px;border:1px solid var(--line-strong);border-radius:6px;margin:4px 0}
 #bind-form p{margin:var(--s1) 0;color:var(--muted)}
+@supports ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
+ aside.sb,.mbar{background:color-mix(in srgb,var(--card) 90%,transparent);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);box-shadow:var(--paper-shadow)}
+}
+@media (prefers-reduced-transparency:reduce){aside.sb,.mbar{background:var(--card);-webkit-backdrop-filter:none;backdrop-filter:none}}
 @media (max-width:760px){aside.sb{position:fixed;inset:0 auto 0 0;z-index:5;box-shadow:0 0 0 100vw rgba(0,0,0,.35)}}
 """
 

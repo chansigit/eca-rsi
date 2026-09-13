@@ -33,16 +33,19 @@ CSS = """
  --row-alt:#f7f3ea;--row-hover:#ece9dd;--tip-bg:#2c2a25;--tip-ink:#f4efe4;--tip-muted:#b9b3a5;--plot:#fff;
  --t1:.75rem;--t2:.8125rem;--t3:.875rem;--t4:1rem;--t5:1.125rem;--t6:1.25rem;--t7:1.5rem;--t8:1.875rem;
  --s1:8px;--s2:16px;--s3:24px;--s4:32px;--s5:48px;--r:4px;
+ --paper-light:rgba(255,250,230,.48);--glint:rgba(255,255,255,.65);--shade:rgba(82,65,36,.055);
+ --surface:linear-gradient(145deg,var(--glint),transparent 55%),color-mix(in srgb,var(--card) 94%,transparent);
+ --paper-shadow:inset 0 1px 0 var(--glint),0 3px 14px var(--shade);
  --serif:Georgia,"Iowan Old Style","Palatino Linotype",Palatino,serif;
  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
 @media (prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#1e2124;--card:#272b30;--ink:#d8d4c8;--ink-soft:#c5c0b4;--muted:#a09a8c;--line:#3a3f45;--line-strong:#4d535b;
  --accent:#6fb3c9;--accent-ink:#8fc7d8;--accent-bg:#233740;
  --ok:#7fc28b;--ok-bg:#243a2a;--run:#d9a441;--run-bg:#3d3320;--bad:#e07070;--bad-bg:#432727;--none:#a09a8c;--none-bg:#31363c;
- --row-alt:#2b3035;--row-hover:#333940;--tip-bg:#e9e4d8;--tip-ink:#1e2124;--tip-muted:#5b564c}}
+ --row-alt:#2b3035;--row-hover:#333940;--tip-bg:#e9e4d8;--tip-ink:#1e2124;--tip-muted:#5b564c;--paper-light:rgba(187,155,102,.035);--glint:rgba(255,246,220,.035);--shade:rgba(0,0,0,.14)}}
 *{box-sizing:border-box}
 html{font-size:16px}
-body{margin:0;background:var(--bg);color:var(--ink);font:var(--t4)/1.5 var(--sans)}
+body{margin:0;background:radial-gradient(ellipse at 12% 0,var(--paper-light),transparent 65%),var(--bg);color:var(--ink);font:var(--t4)/1.5 var(--sans)}
 a{color:var(--accent);text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--accent) 40%,transparent);text-underline-offset:2px}
 a:hover{text-decoration-color:var(--accent)}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
@@ -148,6 +151,12 @@ svg.sk.dim .sk-flow{opacity:.07}svg.sk.dim .sk-flow.hi{opacity:.85}
 .rv-group table{font-size:var(--t3)}table.review td.c-cells{text-align:right;font-variant-numeric:tabular-nums}table.review td.c-label{max-width:34ch}
 footer{color:var(--muted);font-size:var(--t2);margin-top:var(--s4);border-top:1px solid var(--line);padding-top:var(--s2)}
 ul.warn{margin:4px 0 0 1.2rem;padding:0}
+/* A little reflected light on paper; blur only on surfaces that float over content. */
+.hero,.stat,section.block{background:var(--surface);box-shadow:var(--paper-shadow)}
+@supports ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
+ nav.jump,.why-body{background:color-mix(in srgb,var(--card) 88%,transparent);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);box-shadow:var(--paper-shadow)}
+}
+@media (prefers-reduced-transparency:reduce){nav.jump,.why-body{background:var(--card);-webkit-backdrop-filter:none;backdrop-filter:none}.hero,.stat,section.block{background:var(--card)}}
 @media (max-width:700px){main.page{padding:var(--s2)}section.block,.hero{padding:var(--s2)}dl.files{grid-template-columns:1fr}}
 """
 

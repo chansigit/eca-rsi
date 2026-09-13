@@ -36,7 +36,7 @@ def snapshot(target):
 
 
 CSS = """
-#pool-panel{container-type:inline-size;--gpu:var(--accent-ink);flex:1;min-height:0;overflow:auto;padding:28px;background:var(--bg)}
+#pool-panel{container-type:inline-size;--gpu:var(--accent-ink);flex:1;min-height:0;overflow:auto;padding:28px;background:radial-gradient(ellipse at 12% 0,var(--paper-light),transparent 65%),var(--bg)}
 #pool-panel[hidden]{display:none}
 .pool-command{display:grid;grid-template-columns:minmax(240px,1fr) minmax(360px,1.15fr);gap:24px;align-items:center;padding:10px 0 26px;position:relative}
 .pool-head{min-width:0}.pool-head h1{font-size:clamp(30px,3vw,42px);letter-spacing:-.04em;font-weight:650;display:flex;align-items:center;gap:14px}
@@ -60,8 +60,8 @@ CSS = """
 .pool-section-heading h2{font-size:18px;font-weight:550;display:flex;align-items:center;gap:10px}
 .pool-section-heading span{font-size:12px;color:var(--muted)}
 .pool-workers{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,370px),1fr));gap:18px;margin:0 0 30px}
-.pool-worker{border:1px solid var(--line);border-radius:var(--r);padding:20px;background:var(--card);min-width:0;position:relative;--node-color:var(--accent);transition:border-color .2s,box-shadow .2s}
-.pool-worker.gpu-node{--node-color:var(--gpu);background:var(--card)}
+.pool-worker{border:1px solid var(--line);border-radius:var(--r);padding:20px;background:var(--surface);box-shadow:var(--paper-shadow);min-width:0;position:relative;--node-color:var(--accent);transition:border-color .2s,box-shadow .2s}
+.pool-worker.gpu-node{--node-color:var(--gpu)}
 .pool-worker:hover{border-color:color-mix(in srgb,var(--node-color) 65%,var(--line));box-shadow:0 0 18px color-mix(in srgb,var(--node-color) 12%,transparent)}
 .pool-worker[data-state=stale]{border-color:var(--bad)}
 .pool-worker header{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
@@ -90,6 +90,7 @@ CSS = """
 @container(max-width:850px){.pool-command{grid-template-columns:1fr}.pool-gauges{max-width:540px;width:100%}.pool-summary{grid-template-columns:repeat(4,minmax(0,1fr))}.pool-summary dt{min-height:0}.pool-summary dd{font-size:18px}}
 @media(max-width:460px){#pool-panel{padding:20px 16px 32px}}
 @container(max-width:460px){.pool-command{gap:20px}.pool-head h1{font-size:32px}.pool-summary{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:20px}.pool-worker{padding:16px}.pool-section-heading span{display:none}.pool-meta strong{margin-left:0}.pool-gauges{padding:14px 6px;gap:4px}.pool-dial{max-width:85px}.pool-dial strong{font-size:20px}}
+@media(prefers-reduced-transparency:reduce){.pool-worker{background:var(--card)}}
 @media(prefers-reduced-motion:reduce){#pool-panel *,#pool-panel *::before,#pool-panel *::after{transition:none!important;animation:none!important}}
 """
 
