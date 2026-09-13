@@ -11,10 +11,10 @@ GitHub and PyPI artifact verification is recorded separately in the evidence roo
 | bridge | 132 passed |
 | MSP | 232 passed |
 | ZMIP | 152 passed |
-| ECA-RSI | 227 passed, 2 skipped |
-| Evaluation scripts | 3 passed |
+| ECA-RSI | 230 passed, 2 skipped |
 
-The total is 746 passed and 2 skipped. The two skips are first-publication
+The total is 746 passed and 2 skipped, including three evaluation-script tests
+in the ECA-RSI count. The two skips are first-publication
 backup cases where no previous release exists. Tests used the CPU container's
 Python 3.12, candidate source trees, isolated wheel metadata and constrained
 math threads. They cover real SIGTERM delivery, worker draining, atomic writes,
