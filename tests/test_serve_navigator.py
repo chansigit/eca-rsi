@@ -1,4 +1,4 @@
-"""Sidebar of the Periscope navigator: collapsed groups with done/working/failed
+"""Sidebar of the Periscope navigator: collapsed groups with distinct state
 tallies, a species filter, and the fields the filter JS reads."""
 from pathlib import Path
 
@@ -16,15 +16,17 @@ def test_groups_collapsed_with_tallies_and_species(tmp_path):
     items = {f"x-{k}": tmp_path / "x" / k for k in ("a1", "a2", "b1", "c1", "d1")}
     html = serve._navigator_html(items, tmp_path / "reg.json", state=_state)
     assert '<details class="group">' in html and '<details class="group" open>' not in html
-    assert '<span class="st released">2 done</span> · <span class="st running">2 working</span> · <span class="st failed">1 failed</span>' in html
+    assert '<span class="st released">2 Completed</span> · <span class="st running">1 Running</span> · <span class="st neutral">1 Not started</span> · <span class="st failed">1 Failed</span>' in html
     assert 'data-species="mm"' in html and 'data-species="hs"' in html
     assert '<select id="nav-sp"><option value="">all</option>' in html
     assert '<a id="brand" href="/_home"' in html and 'brand.addEventListener("click"' in serve.NAV_JS
-    assert '<select id="nav-st"><option value="">all</option><option value="working">working</option>' in html
+    assert '<option value="running">Running</option>' in html
+    assert '<option value="queued">Queued</option>' in html
+    assert '<option value="working">' not in html
     assert "<option value=\"hs\">hs (2)</option>" in html and "<option value=\"mm\">mm (3)</option>" in html
 
 
 def test_group_tally_drops_zero_parts():
-    assert serve.group_tally({"released": 3}) == '<span class="st released">3 done</span>'
-    assert serve.group_tally({"running": 1, "neutral": 1}) == '<span class="st running">2 working</span>'
+    assert serve.group_tally({"released": 3}) == '<span class="st released">3 Completed</span>'
+    assert serve.group_tally({"running": 1, "neutral": 1}) == '<span class="st running">1 Running</span> · <span class="st neutral">1 Not started</span>'
     assert serve.group_tally({}) == ""

@@ -63,7 +63,7 @@ main.page{max-width:1200px;margin:0 auto;padding:var(--s3) var(--s3) var(--s5)}
 .released,.include{--st:var(--ok);--st-bg:var(--ok-bg)}
 .running,.tone-warn{--st:var(--run);--st-bg:var(--run-bg)}
 .failed,.exclude,.tone-bad{--st:var(--bad);--st-bg:var(--bad-bg)}
-.neutral,.empty-sample,.tone-none{--st:var(--none);--st-bg:var(--none-bg)}
+.neutral,.queued,.paused,.empty-sample,.tone-none{--st:var(--none);--st-bg:var(--none-bg)}
 .tone-info{--st:var(--accent);--st-bg:var(--accent-bg)}
 .pill{display:inline-flex;align-items:center;gap:.45em;padding:.1em .7em .1em .6em;border-radius:999px;font-size:var(--t3);font-weight:600;
  line-height:1.6;white-space:nowrap;vertical-align:middle;color:var(--st,var(--none));background:var(--st-bg,var(--none-bg))}
@@ -667,7 +667,7 @@ def dataset_state(root: Path, states: list[dict] | None = None) -> dict:
     final = [s["final_cells"] for s in states if s["final_cells"] is not None]
     n_in = [s["n_input"] for s in states if s["n_input"] is not None]
     if not states:
-        stage, cls = "no units", "neutral"
+        stage, cls = "Not started", "neutral"
     elif released == len(states):
         stage, cls = "released", "released"
     elif any(s["stage_class"] == "failed" for s in states):
@@ -676,9 +676,9 @@ def dataset_state(root: Path, states: list[dict] | None = None) -> dict:
         stage, cls = (states[0]["stage"] if len(states) == 1 else f"{released}/{len(states)} released"), "running"
     queued = submission(root)
     if queued.get("waiting"):
-        stage, cls = "queued for driver", "neutral"
+        stage, cls = "queued for driver", "queued"
     elif queued.get("state") in {"paused", "failed"}:
-        stage, cls = queued["state"], "failed" if queued["state"] == "failed" else "neutral"
+        stage = cls = queued["state"]
     elif queued.get("state") == "running" and not states:
         stage, cls = "organizing", "running"
     if not n_in and queued.get("n_cells"):

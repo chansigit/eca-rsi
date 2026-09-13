@@ -288,13 +288,13 @@ NAV_JS = r"""
   // -- search + species filter (groups start collapsed; a group folds away when none of its
   //    datasets match and opens while a filter is active) --
   function apply(){ const t = q.value.trim().toLowerCase(), s = sp ? sp.value : "", w = st ? st.value : ""; let k = 0;
-    const okw = c => !w || (w === "working" ? (c === "running" || c === "neutral") : c === w);
+    const okw = c => !w || c === w;
     for (const i of items) { const hit = (!t || i.dataset.text.includes(t)) && (!s || i.dataset.species === s) && okw(i.dataset.cls); i.style.display = hit ? "" : "none"; k += hit; }
     for (const g of groups) { const any = [...g.querySelectorAll(".item")].some(i => i.style.display !== "none"); g.style.display = any ? "" : "none"; if ((t || s || w) && any) g.open = true; }
     n.textContent = (t || s || w) ? `${k} / ${items.length}` : `${items.length}`; }
   q.addEventListener("input", apply); if (sp) sp.addEventListener("change", apply); if (st) st.addEventListener("change", apply); apply();
   // -- sort (name / cells / status), within each collection --
-  const STATUS_RANK = {released: 0, running: 1, neutral: 2, failed: 3};
+  const STATUS_RANK = {released: 0, running: 1, queued: 2, paused: 3, neutral: 4, failed: 5};
   function applySort(){
     const mode = sort ? sort.value : "name";
     const sorted = [...items].sort((a, b) => {
@@ -485,17 +485,13 @@ a.icon{text-decoration:none}
 
 
 def group_tally(counts: dict[str, int]) -> str:
-    """'12 done · 3 working · 1 failed' for a collection; zero parts are left out.
-    `neutral` (bound but not started) counts as working: it is not done and not broken."""
-    done = counts.get("released", 0)
-    working = counts.get("running", 0) + counts.get("neutral", 0)
-    failed = counts.get("failed", 0)
-    parts = [f'<span class="st released">{done} done</span>'] if done else []
-    if working:
-        parts.append(f'<span class="st running">{working} working</span>')
-    if failed:
-        parts.append(f'<span class="st failed">{failed} failed</span>')
-    return " · ".join(parts)
+    """Use the same distinct dataset states as the overview and filters."""
+    return " · ".join(f'<span class="st {cls}">{counts[cls]} {label}</span>'
+                      for cls, label in DATASET_STATES if counts.get(cls))
+
+
+DATASET_STATES = (("released", "Completed"), ("running", "Running"), ("queued", "Queued"),
+                  ("paused", "Paused"), ("neutral", "Not started"), ("failed", "Failed"))
 
 
 def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_state) -> str:
@@ -551,8 +547,9 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
         '<option value="name">name</option><option value="cells">cells</option>'
         '<option value="status">status</option></select></span>'
         f'<span class="ctl"><label for="nav-sp">species</label><select id="nav-sp"><option value="">all</option>{sp_options}</select></span>'
-        '<span class="ctl"><label for="nav-st">status</label><select id="nav-st"><option value="">all</option><option value="working">working</option>'
-        '<option value="failed">failed</option><option value="released">done</option></select></span></div>'
+        '<span class="ctl"><label for="nav-st">status</label><select id="nav-st"><option value="">all</option>'
+        + ''.join(f'<option value="{cls}">{label}</option>' for cls, label in DATASET_STATES)
+        + '</select></span></div>'
         "</div>"
         '<a class="item home-item" id="home-item" href="/_home" data-name="__home__">'
         '<span class="nm"><b>Overview</b> · all datasets</span></a>'
@@ -740,13 +737,14 @@ def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
     by = lambda c: sum(1 for s, _ in states.values() if s["cls"] == c)  # noqa: E731
     cells_in = sum(s["n_input"] or 0 for s, _ in states.values())
     cells_out = sum(s["final_cells"] or 0 for s, _ in states.values() if s["cls"] == "released")
-    stats = [(str(len(items)), "datasets", ""), (str(by("released")), "released", "released"),
-             (str(by("running")), "running", "running"), (str(by("failed")), "failed", "failed"),
+    stats = [(str(len(items)), "datasets", "")] + [
+             (str(by(cls)), label, cls)
+             for cls, label in DATASET_STATES if by(cls) or cls in {"released", "running", "queued", "failed"}] + [
              (index._n(cells_in) or "0", "cells in", ""), (index._n(cells_out) or "0", "cells released", ""),
              (f"{100 * cells_out / cells_in:.0f}%" if cells_in else "", "cells kept", "")]
     stat_html = "".join(f'<div class="stat"><span class="v{" st " + c if c and int(v) else ""}">{e(v)}</span><span class="k">{e(k)}</span></div>'
                         for v, k, c in stats)
-    rank = {"released": 0, "running": 1, "neutral": 2, "failed": 3}
+    rank = {cls: i for i, (cls, _) in enumerate(DATASET_STATES)}
     rows = []
     for name, (s, p) in sorted(states.items()):
         coll = index.collection_of(p)
