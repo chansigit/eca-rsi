@@ -11,6 +11,7 @@ import signal
 import socket
 import subprocess
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from ecarsi.resources import available_memory_bytes
@@ -21,6 +22,30 @@ def memory_bytes(value):
     if not match:
         raise ValueError(f"unrecognized Slurm memory: {value}")
     return int(float(match[1]) * 1024 ** {"": 2, "K": 1, "M": 2, "G": 3, "T": 4}[match[2]])
+
+
+def gpu_inventory(xml, visible, granted):
+    """Slurm device minors and CUDA/NVML visible ordinals are different namespaces."""
+    devices = ET.fromstring(xml).findall("gpu")
+    minors = {g.findtext("minor_number"): g.findtext("uuid") for g in devices}
+    ordinals = {str(i): g.findtext("uuid") for i, g in enumerate(devices)}
+    allowed = {minors.get(x, x) for x in granted.split(",")}
+    selected = [ordinals.get(x, x) for x in visible.split(",")]
+    if len(set(selected)) != len(selected) or not set(selected) <= allowed:
+        raise ValueError("visible GPU UUIDs do not match Slurm's device minors")
+    stats = []
+    for g in devices:
+        if g.findtext("uuid") not in selected:
+            continue
+        item = {"uuid": g.findtext("uuid"), "name": g.findtext("product_name"), "minor": g.findtext("minor_number")}
+        for key, path in (("utilization_percent", "utilization/gpu_util"),
+                          ("memory_used_mib", "fb_memory_usage/used"), ("memory_total_mib", "fb_memory_usage/total")):
+            try:
+                item[key] = float((g.findtext(path) or "N/A").split()[0])
+            except ValueError:
+                item[key] = None
+        stats.append(item)
+    return selected, stats
 
 
 def inventory(memory, cpus=None, gpu=False):
@@ -54,24 +79,23 @@ def inventory(memory, cpus=None, gpu=False):
     if not 0 < memory <= int(limit * .9):
         raise ValueError("worker memory must fit within 90% of the Slurm/cgroup memory limit")
     gpu_ids = []
+    gpu_stats = []
     if gpu:
         visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
         granted = os.environ.get("SLURM_STEP_GPUS") or os.environ.get("SLURM_JOB_GPUS")
         if not visible or not granted or visible in {"-1", "NoDevFiles"}:
             raise ValueError("GPU worker needs Slurm GPU IDs and CUDA_VISIBLE_DEVICES; start in a GPU srun step")
-        rows = subprocess.run(["nvidia-smi", "--query-gpu=index,uuid", "--format=csv,noheader,nounits"],
-                              check=True, capture_output=True, text=True, timeout=15).stdout.splitlines()
-        ids = dict(row.replace(" ", "").split(",") for row in rows)
-        allowed = {ids.get(x, x) for x in granted.split(",")}
-        gpu_ids = [ids.get(x, x) for x in visible.split(",")]
-        if len(set(gpu_ids)) != len(gpu_ids) or not set(gpu_ids) <= allowed:
-            raise ValueError("visible GPUs are not a unique subset of Slurm's GPU grant")
+        xml = subprocess.run(["nvidia-smi", "-q", "-x"], check=True,
+                             capture_output=True, text=True, timeout=15).stdout
+        gpu_ids, gpu_stats = gpu_inventory(xml, visible, granted)
     steps = re.findall(r"/step_([^/\n]+)", cgroup)
-    return {"job_id": job, "step_id": steps[0] if steps else None,
+    return {"job_id": job, "job_name": fields["JobName"], "step_id": steps[0] if steps else None,
+            "requested_tres": fields["ReqTRES"], "allocated_tres": fields["AllocTRES"],
+            "time_limit": fields["TimeLimit"],
             "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
             "host": host, "cpu_ids": affinity, "cpus": len(affinity),
             "memory": memory, "process_memory": limit, "allocation_memory": slurm_mem,
-            "gpu_ids": gpu_ids, "gpus": len(gpu_ids),
+            "gpu_ids": gpu_ids, "gpus": len(gpu_ids), "gpu_stats": gpu_stats,
             "end_time": datetime.datetime.fromisoformat(fields["EndTime"]).timestamp(),
             "observed_at": time.time()}
 

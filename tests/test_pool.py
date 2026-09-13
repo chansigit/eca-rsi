@@ -95,3 +95,22 @@ def test_two_drivers_and_auto_local(monkeypatch):
     with PoolEndpoint(mode="auto") as ep:
         assert ep.submit(sum, [1, 2], needs={"seconds": 1}).result() == 3
         assert ep.client is None
+
+
+def test_gpu_device_minors_and_busy_status():
+    from ecarsi.pool.slurm import gpu_inventory
+    from ecarsi.pool.status import render, summarize
+    xml = '<nvidia_smi_log><gpu><uuid>GPU-test</uuid><minor_number>2</minor_number><product_name>RTX</product_name><utilization><gpu_util>37 %</gpu_util></utilization><fb_memory_usage><used>1024 MiB</used><total>24576 MiB</total></fb_memory_usage></gpu></nvidia_smi_log>'
+    ids, stats = gpu_inventory(xml, '0', '2')
+    assert ids == ['GPU-test'] and stats[0]['utilization_percent'] == 37
+    with pytest.raises(ValueError):
+        gpu_inventory(xml, '0', '1')
+    p = profile()
+    p.update(cpus=4, gpu_stats=stats)
+    state = {'workers': {'a': p}, 'tasks': {'x': dict(request('x'), worker='a', state='running', label='OSP')}}
+    result = summarize(state, {'a': {'metrics': {'cpu': 200, 'memory': 2**29}}})
+    assert result['workers'][0]['cpu_percent'] == 50
+    assert result['workers'][0]['state'] == 'running'
+    text = render(result)
+    assert 'OSP' in text and '37.0%' in text and 'Queued: 0' in text
+    assert summarize(state, {})['workers'][0]['state'] == 'stale'

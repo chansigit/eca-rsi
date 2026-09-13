@@ -59,8 +59,16 @@ resource/time limit. Draining finishes active work and rejects new work:
 
 ```bash
 eca-rsi pool status --scheduler /shared/pool/scheduler.json
+eca-rsi pool status --scheduler /shared/pool/scheduler.json --json
 eca-rsi pool drain --scheduler /shared/pool/scheduler.json tcp://worker:port
 ```
+
+Status shows task occupancy, worker CPU utilization divided by its assigned CPU
+count, process RSS versus worker memory budget, Slurm memory and remaining time.
+GPU utilization and VRAM use come from the host inventory refreshed every 30
+seconds. These are your workers' metrics, not other users' load on the host.
+JSON also includes Slurm requested/allocated TRES for resource reconciliation.
+Slurm GPU device minors and CUDA visible ordinals are matched through UUIDs.
 
 After draining and observing no active task, stop the worker launcher yourself.
 This stops its processes; it does not release the Slurm allocation. New workers

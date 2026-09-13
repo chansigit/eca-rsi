@@ -61,6 +61,8 @@ def main(argv=None):
         q.add_argument("--scheduler", default=None)
         if name == "drain":
             q.add_argument("address", help="worker address shown by status; finishes active task")
+        else:
+            q.add_argument("--json", action="store_true", help="machine-readable resource and utilization snapshot")
     a = p.parse_args(argv)
     if a.command == "scheduler":
         if Path(a.scheduler_file).exists():
@@ -72,8 +74,12 @@ def main(argv=None):
         from .client import connect
         from .scheduler import dispatch
         with connect(a.scheduler) as c:
-            print(json.dumps(c.run_on_scheduler(dispatch, a.command,
-                             {"address": a.address} if a.command == "drain" else {}), indent=2))
+            if a.command == "status":
+                from .status import render, snapshot
+                state = snapshot(c)
+                print(json.dumps(state, indent=2) if a.json else render(state))
+            else:
+                print(json.dumps(c.run_on_scheduler(dispatch, "drain", {"address": a.address}), indent=2))
     return 0
 
 
