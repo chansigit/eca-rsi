@@ -890,6 +890,32 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if not self._authorized():
             return self._demand_auth()
         path = self.path.split("?", 1)[0]
+        if path.startswith("/_models/"):
+            from . import model_web
+            if path not in {"/_models/access", "/_models/save", "/_models/keys"}:
+                return self._json(404, {"error": "Not found"})
+            if not (self._admin_allowed() or model_web.admin_matches(self.headers.get("X-Model-Admin", ""))):
+                return self._json(403, {"error": "Model settings require administrator access"})
+            if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
+                return self._json(400, {"error": "Expected application/json"})
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if length < 0 or length > 32768:
+                    return self._json(413, {"error": "Request too large"})
+                req = json.loads(self.rfile.read(length) or b"{}")
+                if not isinstance(req, dict):
+                    raise ValueError("Expected a JSON object")
+                if path.endswith("/access"):
+                    return self._json(200, {"ok": True})
+                if path.endswith("/keys"):
+                    return self._json(200, model_web.key_presence())
+                return self._json(200, model_web.save_models(req.get("models"), req.get("revision")))
+            except FileExistsError:
+                return self._json(409, {"error": "Configuration changed. Reload before saving."})
+            except ValueError:
+                return self._json(400, {"error": "Invalid configuration. Check model names, duplicate entries and HTTP(S) URLs. Never include credentials in URLs. Models on the same backend must share its URL."})
+            except Exception:
+                return self._json(503, {"error": "Model configuration could not be read or saved"})
         if path not in ("/_bind", "/_unbind"):
             return self.send_error(404)
         if not self._admin_allowed():
