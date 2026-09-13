@@ -217,15 +217,16 @@ NAV_JS = r"""
 (function(){
   const $ = id => document.getElementById(id);
   const items = [...document.querySelectorAll("#sb-list .item")], frame = $("frame"), crumb = $("crumb"), open = $("open"),
-        q = $("nav-q"), n = $("nav-n"), msg = $("nav-msg"), empty = $("empty"), home = $("home-item"), pool = $("pool-item"),
+        q = $("nav-q"), n = $("nav-n"), msg = $("nav-msg"), empty = $("empty"), home = $("home-item"), pool = $("pool-item"), models = $("models-item"),
         sort = $("nav-sort"), sp = $("nav-sp"), st = $("nav-st"), groups = [...document.querySelectorAll("#sb-list details.group")];
   const names = new Set(items.map(i => i.dataset.name));
   // -- sidebar <-> main pane --
   function mark(name){ items.forEach(i => i.classList.toggle("active", i.dataset.name === name));
     if (home) home.classList.toggle("active", name === "__home__");
     if (pool) pool.classList.toggle("active", name === "_warm_pool_panel");
+    if (models) models.classList.toggle("active", name === "_model_pool_panel");
     const cur = items.find(i => i.dataset.name === name); if (cur) { const g = cur.closest("details.group"); if (g) g.open = true; } }
-  function show(path){ window.poolMonitor.close(); open.hidden = false; if (empty) empty.style.display = "none"; frame.style.display = "";
+  function show(path){ window.modelMonitor.close(); window.poolMonitor.close(); open.hidden = false; if (empty) empty.style.display = "none"; frame.style.display = "";
     if (frameUrl() !== path) frame.src = path; else frame.dispatchEvent(new Event('load')); }
   function frameUrl(){ try { return frame.contentWindow.location.pathname; } catch (e) { return null; } }
   function fromHash(){
@@ -233,7 +234,7 @@ NAV_JS = r"""
     if (h === "/__home__") return "/_home";
     const m = h.match(/^\/([^/]+)\/(.*)$/); return m && names.has(m[1]) ? "/" + m[1] + "/" + m[2] : null; }
   frame.addEventListener("load", () => {
-    const p = frameUrl(); if (!p || window.poolMonitor.isOpen()) return;
+    const p = frameUrl(); if (!p || window.poolMonitor.isOpen() || window.modelMonitor.isOpen()) return;
     if (p === "/_home") {
       if (location.hash !== "#/__home__") history.replaceState(null, "", "#/__home__");
       mark("__home__"); crumb.textContent = "overview"; open.href = "/_home";
@@ -248,15 +249,17 @@ NAV_JS = r"""
   window.addEventListener("hashchange", () => { const p = fromHash(); if (p) show(p); });
   items.forEach(i => i.addEventListener("click", ev => { if (ev.target.closest("input.sel")) return; ev.preventDefault(); show("/" + i.dataset.name + "/"); }));
   if (home) home.addEventListener("click", ev => { ev.preventDefault(); show("/_home"); });
+  async function showMonitor(monitor, other, name, title){
+    other.close();
+    if(!await monitor.open())return;
+    frame.style.display="none";if(empty)empty.style.display="none";
+    mark(name);crumb.textContent=title;open.hidden=true;document.title="Periscope";
+    history.replaceState(null,"","#/__home__");
+    if(matchMedia('(max-width:760px)').matches)document.body.classList.add('sb-hidden');
+  }
+  models.addEventListener('click',()=>showMonitor(window.modelMonitor,window.poolMonitor,'_model_pool_panel','Agent models'));
   if (pool) {
-    pool.addEventListener("click", async () => {
-      if (pool.disabled || !await window.poolMonitor.open()) return;
-      frame.style.display = "none"; if(empty) empty.style.display = "none";
-      mark("_warm_pool_panel"); crumb.textContent = "Warm pool"; open.hidden = true;
-      document.title = "Periscope";
-      history.replaceState(null, "", "#/__home__");
-      if (matchMedia('(max-width:760px)').matches) document.body.classList.add('sb-hidden');
-    });
+    pool.addEventListener("click", () => { if(!pool.disabled) showMonitor(window.poolMonitor, window.modelMonitor, "_warm_pool_panel", "Warm pool"); });
     function poolAvailable(available){
       pool.disabled = !available;
       pool.setAttribute("aria-disabled", String(!available));
@@ -281,7 +284,7 @@ NAV_JS = r"""
   const brand = $("brand"); if (brand) brand.addEventListener("click", ev => { ev.preventDefault(); show("/_home"); });
   $("sb-toggle").addEventListener("click", () => document.body.classList.toggle("sb-hidden"));
   $("sb-show").addEventListener("click", () => document.body.classList.remove("sb-hidden"));
-  $("reload").addEventListener("click", () => { if(window.poolMonitor.isOpen()){pool.click();return;} try { frame.contentWindow.location.reload(); } catch (e) { frame.src = frame.src; } });
+  $("reload").addEventListener("click", () => { if(window.modelMonitor.isOpen()){models.click();return;} if(window.poolMonitor.isOpen()){pool.click();return;} try { frame.contentWindow.location.reload(); } catch (e) { frame.src = frame.src; } });
   // -- search + species filter (groups start collapsed; a group folds away when none of its
   //    datasets match and opens while a filter is active) --
   function apply(){ const t = q.value.trim().toLowerCase(), s = sp ? sp.value : "", w = st ? st.value : ""; let k = 0;
@@ -449,9 +452,9 @@ details.group>summary .gn{margin-left:auto;font-weight:400;font-variant-numeric:
 .items{padding-left:var(--s1)}
 .item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:var(--r);color:var(--ink);text-decoration:none;font-size:var(--t3)}
 .item:hover{background:var(--none-bg)}.item.active{background:var(--accent-bg);color:var(--accent-ink);font-weight:600}
-#pool-item{border:0;font-family:inherit;text-align:left;cursor:pointer;background:none}
+#pool-item,#models-item{border:0;font-family:inherit;text-align:left;cursor:pointer;background:none}
 #pool-item:disabled{opacity:.5;cursor:not-allowed}#pool-item:disabled:hover{background:none}
-#pool-item.active{background:var(--accent-bg)}#pool-item:not(:disabled):hover{background:var(--none-bg)}
+#pool-item.active,#models-item.active{background:var(--accent-bg)}#models-item:hover,#pool-item:not(:disabled):hover{background:var(--none-bg)}
 .item .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .item .cells{color:var(--muted);font-variant-numeric:tabular-nums;font-size:var(--t2);white-space:nowrap}
 .item input.sel{margin:0;flex:0 0 auto;opacity:0;transition:opacity .1s}
@@ -500,7 +503,7 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
     dataset's own pages (root landing page -> its units -> ...) in an iframe on
     the right. The iframe keeps the address in the hash (#/<name>/...), so
     reload / back / bookmarks land on the same page; `/` opens the overview."""
-    from . import pool_web
+    from . import pool_web, model_web
     e = _h.escape
     groups: dict[str, list[str]] = {}
     tally: dict[str, dict[str, int]] = {}
@@ -555,6 +558,7 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
         '<span class="nm"><b>Overview</b> · all datasets</span></a>'
         '<button class="item home-item" id="pool-item" disabled aria-disabled="true" title="Checking warm pool availability">'
         '<span class="nm"><b>Warm pool</b></span><span class="cells" id="pool-state">offline</span></button>'
+        '<button class="item home-item" id="models-item" title="Primary and fallback model inventory"><span class="nm"><b>Agent models</b></span></button>'
         f'<div class="sb-list" id="sb-list">{rows or empty_note}</div>'
         '<div class="sb-foot">'
         '<div class="row"><button id="bind-open" class="btn plain">+ Bind…</button><button id="unbind-go" class="btn danger" disabled>Unbind…</button></div>'
@@ -572,7 +576,7 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
         '<span id="crumb"></span><button class="icon" id="reload" title="reload page" aria-label="reload page">&#8635;</button>'
         '<a class="icon" id="open" href="/" target="_blank" title="open in a new tab" aria-label="open in a new tab">&#8599;</a></div>'
         '<iframe id="frame" name="frame" title="dataset"></iframe>'
-        f'{pool_web.panel()}'
+        f'{pool_web.panel()}<section id="model-panel" hidden aria-label="Agent models"></section>'
         '<div id="empty" style="display:none"><h2>Nothing bound yet</h2><p>Use <b>+ Bind…</b> in the sidebar or, on the server host, '
         "<code>eca-rsi serve scan-add &lt;dir-or-glob&gt;</code>. The server picks up registry changes on the next request.</p>"
         f"<p>{hint}</p></div></main>"
@@ -580,8 +584,8 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
     return (
         '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
         f'<meta name="viewport" content="width=device-width,initial-scale=1"><title>{APP} · ECA-RSI</title>{FAVICON}'
-        f"<style>{index.CSS}{NAV_CSS}{LOGO_CSS}{pool_web.CSS}</style></head><body>{sidebar}{main}"
-        f"<script>{pool_web.JS}</script><script>{NAV_JS}</script></body></html>"
+        f"<style>{index.CSS}{NAV_CSS}{LOGO_CSS}{pool_web.CSS}{model_web.CSS}</style></head><body>{sidebar}{main}"
+        f"<script>{pool_web.JS}</script><script>{model_web.JS}</script><script>{NAV_JS}</script></body></html>"
     )
 
 
@@ -863,7 +867,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def _send(self, code: int, body: bytes, ctype: str) -> None:
         self.send_response(code)
         self.send_header("Content-Type", ctype)
-        if urllib.parse.unquote(self.path).startswith("/_pool"):
+        if urllib.parse.unquote(self.path).startswith(("/_pool", "/_models")):
             self.send_header("Cache-Control", "no-store")
         if len(body) > 1024 and "gzip" in self.headers.get("Accept-Encoding", ""):
             body = gzip.compress(body, 5)  # rendered pages are 80-450 KB of HTML and compress ~5x; matters through the tunnel
@@ -926,6 +930,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if not self._authorized():
             return self._demand_auth()
         raw = self.path.split("?", 1)[0]
+        if raw == "/_models/status.json":
+            from . import model_web
+            try:
+                data = model_web.snapshot()
+                return self._json(200, {**data, "html": model_web.render(data)})
+            except Exception:
+                return self._json(503, {"error": "Model configuration is unavailable"})
         pool_path = urllib.parse.unquote(raw).rstrip("/")
         if pool_path == "/_pool" or pool_path.startswith("/_pool/"):
             if pool_path not in {"/_pool/health", "/_pool/status.json"}:

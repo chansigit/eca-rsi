@@ -56,6 +56,9 @@ def test_monitor_routes_follow_live_pool_and_auth(tmp_path):
 
     try:
         assert get("/_pool", False)[0] == 401
+        assert get("/_models/status.json", False)[0] == 401
+        assert get("/_models/status.json")[0] == 200
+        assert get("/_models/status.json")[1]["Cache-Control"] == "no-store"
         assert get("/_pool/status.json", False)[0] == 401
         assert get("/_pool/health", False)[0] == 401
         # A reachable ordinary Dask scheduler must not enable our pool monitor.
