@@ -3,6 +3,40 @@
 Status: isolated development baseline and architecture proposal; no production migration.
 Branch: `feature/durable-workflows`.
 
+## Accepted execution model: option B (2026-09-14)
+
+The user selected persistent interaction state plus isolated compute attempts.
+All datasets share one logical Agent Bridge, with independent conversation and
+scientific-decision state. Model replies and tool requests are persisted before
+the next action. Waiting for a tool releases model-call capacity and does not
+retain a dataset-specific process holding expression matrices.
+
+Bridge execution replicas share global quota accounting. Configured quota groups
+represent provider/account/model limits; different keys or URLs do not imply
+independent quotas. Prefer the primary model and allow new requests to overflow
+to configured, task-eligible alternatives before overload causes timeouts.
+Preserve the actual model, retries, token use and routing reason for each call.
+Changing models must preserve compatible context and existing accepted decisions.
+
+Compute attempts run in separate processes under explicit runtime/resource
+contracts. Node disk caches may be reused; resident matrix sessions are deferred
+until measured reload costs justify their lifecycle and memory management.
+This decision does not select Temporal or HyperQueue, or authorize production
+migration before recovery acceptance.
+
+Remaining policy decisions, with proposed defaults (not yet user-approved):
+- Control-service/database placement and failover objective: prefer a stable
+  service host; otherwise recover on pre-provisioned surviving hosts. All-host
+  expiry means durable pause until a user-provided host becomes available.
+- Model eligibility and budget: configure task-purpose eligibility, quota groups,
+  concurrency and token/cost limits; never silently downgrade important decisions.
+- Repeated scientific failure/nonconvergence: bounded continuation, then a visible
+  stopped state while independent datasets continue; never mark it converged.
+- Reliable artifact destinations/retention: retain inputs, accepted decisions,
+  final results and recovery checkpoints; auto-evict only authorized caches.
+- Migration: new test runs first, then new production runs; existing runs retain
+  their executor unless an explicit validated checkpoint migration is selected.
+
 ## Isolation
 
 The production worktree stays on main. DURABLE_BASELINE.json records hashes of
