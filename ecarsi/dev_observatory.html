@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RSI v2 · Development observatory</title>
+<style>
+  :root { color-scheme: light; --paper:#f8f5ed; --sheet:#fffdf8; --ink:#30342f; --muted:#72766e; --line:#ded9ca; --green:#397b62; --amber:#b27b3f; --red:#a4514e; --aqua:#d9ebe6; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:radial-gradient(circle at 96% 4%,#e1eee7 0,transparent 29rem),radial-gradient(circle at 2% 75%,#efe7d4 0,transparent 32rem),var(--paper); color:var(--ink); font:15px/1.5 "Avenir Next","Segoe UI",sans-serif; }
+  body::before { content:""; position:fixed; inset:0; pointer-events:none; opacity:.19; background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.78' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.13'/%3E%3C/svg%3E"); }
+  main { max-width:1440px; margin:auto; padding:28px clamp(18px,3.4vw,54px) 65px; position:relative; }
+  header { display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); padding-bottom:18px; gap:16px; }
+  .brand { display:flex; align-items:baseline; gap:12px; font-family:"Iowan Old Style",Baskerville,Georgia,serif; font-size:24px; letter-spacing:-.03em; font-weight:700; }
+  .brand small { color:var(--green); text-transform:uppercase; font:700 10px/1.2 "Avenir Next",sans-serif; letter-spacing:.22em; }
+  .meta { display:flex; align-items:center; gap:14px; color:var(--muted); font-size:12px; }
+  .live-dot { width:8px; height:8px; border-radius:50%; display:inline-block; background:var(--green); box-shadow:0 0 0 4px #dcece4; margin-right:5px; }
+  h1,h2,h3,p { margin-top:0; }
+  h1,h2 { font-family:"Iowan Old Style",Baskerville,Georgia,serif; letter-spacing:-.035em; }
+  h1 { font-size:clamp(38px,5vw,69px); line-height:1.04; font-weight:500; margin-bottom:17px; }
+  h2 { font-size:26px; font-weight:500; margin-bottom:4px; }
+  h3 { font-size:15px; margin-bottom:4px; }
+  .eyebrow { text-transform:uppercase; letter-spacing:.21em; color:var(--green); font-weight:750; font-size:10px; }
+  .hero { padding:49px 0 36px; display:grid; grid-template-columns:minmax(0,1.4fr) minmax(250px,.6fr); gap:42px; align-items:end; }
+  .hero p { color:#5f665e; max-width:62ch; font-size:16px; margin-bottom:0; }
+  .hero aside { border:1px solid #d9dfd3; background:linear-gradient(145deg,#f4f8f2d8,#fffdf8b8); border-radius:18px; padding:22px 25px; box-shadow:0 10px 35px #647e5e12; }
+  .hero aside strong { display:block; font:500 26px/1.1 "Iowan Old Style",Georgia,serif; margin:9px 0; }
+  .hero aside span { color:var(--muted); font-size:13px; }
+  .path { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin:5px 0 30px; }
+  .node { position:relative; min-height:146px; border:1px solid var(--line); border-radius:17px; padding:18px 18px 15px; background:#fffdf9c7; box-shadow:0 7px 22px #6d674a0a,inset 0 1px #fff; }
+  .node:after { content:"›"; position:absolute; color:#9eb3a4; font:28px Georgia,serif; right:-13px; top:50px; z-index:1; }
+  .node:last-child:after { display:none; }
+  .node .n { color:var(--green); font:700 11px/1 monospace; }
+  .node .title { display:block; font:500 19px/1.15 "Iowan Old Style",Georgia,serif; margin:18px 0 6px; }
+  .node .detail { color:var(--muted); font-size:12px; }
+  .status { display:inline-block; font:700 10px/1.2 "Avenir Next",sans-serif; text-transform:uppercase; letter-spacing:.09em; padding:5px 8px; border-radius:99px; background:#e8ece6; color:#536259; white-space:nowrap; }
+  .status.ok { color:#276b51; background:#deeee5; }.status.warn { color:#976526; background:#f5e9d5; }.status.off { color:#7f6f65; background:#eee8df; }.status.bad { color:#a14946; background:#f5e3e0; }
+  .layout { display:grid; grid-template-columns:minmax(0,1.75fr) minmax(280px,.75fr); gap:20px; }
+  .stack { display:grid; gap:20px; align-content:start; }
+  section.panel { min-width:0; background:#fffdfaeb; border:1px solid var(--line); border-radius:20px; padding:25px; box-shadow:0 14px 38px #655b400e,inset 0 1px #fff; }
+  .panel-head { display:flex; justify-content:space-between; align-items:start; gap:12px; margin-bottom:17px; }
+  .sub { color:var(--muted); font-size:13px; }
+  .metrics { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:19px; }
+  .metric { background:#f7f5ee; border:1px solid #e8e3d7; border-radius:12px; padding:12px 14px; }
+  .metric b { display:block; font:500 26px/1.15 "Iowan Old Style",Georgia,serif; }
+  .metric span { color:var(--muted); font-size:11px; }
+  .table-wrap { overflow:auto; }
+  table { width:100%; border-collapse:collapse; min-width:520px; font-size:12px; }
+  th { color:#777d72; text-transform:uppercase; letter-spacing:.1em; font-size:10px; text-align:left; padding:8px 8px 10px; border-bottom:1px solid var(--line); }
+  td { padding:11px 8px; border-bottom:1px solid #ece8dd; vertical-align:middle; }
+  tr:last-child td { border-bottom:0; }
+  td:first-child { color:#3e4940; font-weight:650; }
+  .mono { font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; overflow-wrap:anywhere; }
+  .empty { color:var(--muted); font-style:italic; padding:17px 0; }
+  .output { display:grid; grid-template-columns:1fr auto; gap:5px 12px; padding:14px 0; border-top:1px solid #ece8dd; }
+  .output:first-of-type { border-top:0; }
+  .output small { grid-column:1/-1; color:var(--muted); overflow-wrap:anywhere; }
+  .output strong { font:500 18px "Iowan Old Style",Georgia,serif; }
+  .link { display:inline-flex; gap:8px; align-items:center; color:#296d56; font-weight:700; text-decoration:none; border:1px solid #c8ded2; background:#edf6ef; border-radius:10px; padding:10px 12px; margin:5px 0; }
+  .link:hover { background:#dff0e4; box-shadow:0 0 18px #90bd9b43; }
+  .link.disabled { opacity:.45; pointer-events:none; }
+  .note { font-size:12px; color:#7a786e; padding-top:12px; border-top:1px solid #e9e4d8; margin-top:15px; }
+  .code { background:#f2efe6; border:1px solid #e4ddce; border-radius:9px; padding:10px; font:11px/1.55 ui-monospace,monospace; overflow-wrap:anywhere; user-select:all; }
+  footer { margin-top:30px; color:#818479; font-size:12px; display:flex; justify-content:space-between; gap:20px; }
+  @media(max-width:960px) { .hero,.layout { grid-template-columns:1fr; }.path { grid-template-columns:repeat(2,1fr); }.node:nth-child(2):after { display:none; } }
+  @media(max-width:620px) { main { padding:19px 15px 40px; }.meta { display:none; }.hero { padding-top:34px; }.path { gap:8px; }.node { min-height:140px; padding:14px; }.node:after { display:none; }.metrics { grid-template-columns:repeat(3,1fr); }.metric { padding:9px; }.metric b { font-size:22px; } section.panel { padding:19px; } }
+</style>
+</head>
+<body>
+<main>
+  <header><div class="brand">RSI <small>v2 / development observatory</small></div><div class="meta"><span><i class="live-dot"></i> Read-only</span><span id="updated">Connecting…</span></div></header>
+  <div class="hero"><div><div class="eyebrow">Isolated development branch</div><h1>Where the workflow stands.</h1><p>One view of durable compute, model decisions and published Organize results. Historical records stay visible while all computation remains paused.</p></div><aside><div class="eyebrow">Current boundary</div><strong>Organize → Per-sample</strong><span>Real Organize results are published. The new OSP execution chain has not been connected yet.</span></aside></div>
+  <div class="path">
+    <div class="node"><span class="n">01 / COMPUTE</span><span class="title">Warm Pool</span><span class="detail" id="pool-node">Checking scheduler record…</span></div>
+    <div class="node"><span class="n">02 / DECISIONS</span><span class="title">Agent Bridge</span><span class="detail" id="bridge-node">Checking model receipts…</span></div>
+    <div class="node"><span class="n">03 / DEPENDENCIES</span><span class="title">Temporal</span><span class="detail" id="temporal-node">Checking history viewer…</span></div>
+    <div class="node"><span class="n">04 / OUTPUT</span><span class="title">Organize</span><span class="detail" id="organize-node">Checking publications…</span></div>
+  </div>
+  <div class="layout">
+    <div class="stack">
+      <section class="panel"><div class="panel-head"><div><div class="eyebrow">HyperQueue + RSI receipts</div><h2>Warm Pool</h2><div class="sub">Recorded requests and resource budgets; no compute is started by this page.</div></div><span class="status off" id="pool-state">Checking</span></div><div class="metrics"><div class="metric"><b id="pool-count">—</b><span>Requests</span></div><div class="metric"><b id="pool-done">—</b><span>Succeeded</span></div><div class="metric"><b id="worker-count">—</b><span>Live workers</span></div></div><div class="table-wrap"><table><thead><tr><th>Request</th><th>Operation</th><th>State</th><th>CPU / RAM</th><th>Finished</th></tr></thead><tbody id="pool-table"></tbody></table></div><div class="note" id="pool-note"></div></section>
+      <section class="panel"><div class="panel-head"><div><div class="eyebrow">Model decision records</div><h2>Agent Bridge</h2><div class="sub">Saved replies, selected models and reported token use.</div></div><span class="status off" id="bridge-state">Checking</span></div><div class="metrics"><div class="metric"><b id="bridge-count">—</b><span>Requests</span></div><div class="metric"><b id="bridge-done">—</b><span>Replies saved</span></div><div class="metric"><b id="tokens">—</b><span>Reported tokens</span></div></div><div class="table-wrap"><table><thead><tr><th>Request</th><th>State</th><th>Model</th><th>Tokens in / out</th></tr></thead><tbody id="bridge-table"></tbody></table></div><div class="note">Usage is reported by the model harness; missing values are not treated as zero.</div></section>
+    </div>
+    <div class="stack">
+      <section class="panel"><div class="eyebrow">Native workflow viewer</div><h2>Temporal</h2><p class="sub">The Web UI runs against a copy of the development SQLite database. No Coordinator Worker or computation is running.</p><a class="link disabled" id="temporal-link" href="http://127.0.0.1:8233/" target="_blank" rel="noopener">Open Temporal UI ↗</a><div class="note" id="temporal-note">Checking snapshot service…</div></section>
+      <section class="panel"><div class="eyebrow">Accepted artifacts</div><h2>Organize output</h2><p class="sub">Published after source identity, experiment mapping and cell conservation checks.</p><div id="outputs"></div></section>
+      <section class="panel"><div class="eyebrow">Recorded infrastructure trial</div><h2>Two-host recovery</h2><p class="sub">Actual Slurm allocations were used for the isolated HyperQueue trial.</p><div id="acceptance"></div></section>
+      <section class="panel"><div class="eyebrow">What is connected</div><h2>Next development slice</h2><p class="sub">Per-sample partition and one whole-sample OSP compute task, followed by Bridge annotation and Pool finalization. Cross-sample and Zoom-in remain designs.</p><div class="code">Organize ✓ &nbsp;→&nbsp; Per-sample ◌ &nbsp;→&nbsp; Cross-sample ◌ &nbsp;→&nbsp; Zoom-in ◌</div><div class="note">This observatory reads the isolated v2 state. The existing Periscope installation is a separate service.</div></section>
+    </div>
+  </div>
+  <footer><span id="host">RSI v2 isolated state</span><span>Refreshes every 10 seconds · no scheduler or model actions</span></footer>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = value => String(value ?? '—').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const when = value => value ? new Date(value * 1000).toLocaleString() : '—';
+const badge = value => { const v=String(value || 'unknown'); const cls=/succeeded|reply_saved|complete/i.test(v)?'ok':/fail|unknown|cancel/i.test(v)?'bad':/running|queued/i.test(v)?'warn':'off'; return `<span class="status ${cls}">${esc(v.replaceAll('_',' '))}</span>`; };
+async function refresh() {
+  try {
+    const response = await fetch('/api/status', {cache:'no-store'});
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const d = await response.json();
+    $('updated').textContent = `Updated ${when(d.generated_at)}`;
+    $('host').textContent = `${d.host} · isolated v2 state`;
+    const s=d.scheduler || {}, w=d.worker || {}, b=d.bridge_summary || {};
+    const poolLive=s.state==='running' && Date.now()/1000-(s.observed_at||0)<20;
+    const workerLive=w.state==='running' && Date.now()/1000-(w.observed_at||0)<20;
+    $('pool-state').textContent=poolLive?'Online':s.state==='stopped'?'Stopped':'No recent heartbeat';
+    $('pool-state').className=`status ${poolLive?'ok':'off'}`;
+    $('pool-node').textContent=`${poolLive?'Scheduler online':'Scheduler stopped'} · ${d.pool_requests.length} recorded requests`;
+    $('bridge-node').textContent=`${d.bridge_requests.filter(x=>x.state==='reply_saved').length} saved model replies`;
+    $('temporal-node').textContent=d.temporal_ui?`Web UI online · ${d.temporal_history_count} retained workflows`:'Web UI offline';
+    $('organize-node').textContent=`${d.outputs.length} published outputs`;
+    $('pool-count').textContent=d.pool_requests.length;
+    $('pool-done').textContent=d.pool_requests.filter(x=>x.state==='succeeded').length;
+    $('worker-count').textContent=workerLive?'1':'0';
+    $('pool-note').textContent=`Scheduler last recorded ${when(s.observed_at)}. Worker last recorded ${when(w.observed_at)}. HyperQueue's native dashboard is terminal-only; this table reads RSI's durable requests and receipts.`;
+    $('pool-table').innerHTML=d.pool_requests.length?d.pool_requests.map(x=>`<tr><td class="mono">${esc(x.id)}</td><td>${esc(x.operation)}</td><td>${badge(x.state)}</td><td>${esc(x.cpus)} / ${esc(x.memory_mb)} MiB</td><td>${esc(when(x.finished_at))}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No requests recorded</td></tr>';
+    const completed=d.bridge_requests.filter(x=>x.state==='reply_saved');
+    const tokenTotal=completed.reduce((n,x)=>n+(x.usage?.tokens_in||0)+(x.usage?.tokens_out||0),0);
+    $('bridge-count').textContent=d.bridge_requests.length;
+    $('bridge-done').textContent=completed.length;
+    $('tokens').textContent=tokenTotal?tokenTotal.toLocaleString():'—';
+    $('bridge-state').textContent='Recorded history';
+    $('bridge-table').innerHTML=d.bridge_requests.length?d.bridge_requests.map(x=>`<tr><td class="mono">${esc(x.id)}</td><td>${badge(x.state)}</td><td>${esc(x.model?.model||'—')}<br><span class="sub">${esc(x.model?.harness||'')}</span></td><td>${esc(x.usage?.tokens_in)} / ${esc(x.usage?.tokens_out)}</td></tr>`).join(''):'<tr><td colspan="4" class="empty">No model requests recorded</td></tr>';
+    $('temporal-link').classList.toggle('disabled',!d.temporal_ui);
+    $('temporal-link').href=`http://127.0.0.1:${d.temporal_port}/`;
+    $('temporal-note').textContent=d.temporal_ui?`${d.temporal_history_count} Workflow histories were retained in the old development database. Earlier tests used an in-memory server, so their histories are unavailable here; their accepted output receipts appear below.`:'Temporal UI is not running.';
+    $('outputs').innerHTML=d.outputs.length?d.outputs.map(x=>`<div class="output"><strong>${esc(x.name)} · ${esc(x.run)}</strong><span class="status ok">Published</span><div class="sub">${esc(x.cells.toLocaleString())} cells · ${esc(x.samples)} experiments</div><small class="mono">${esc(x.path)}</small></div>`).join(''):'<div class="empty">No accepted outputs found</div>';
+    const a=d.acceptance || {};
+    $('acceptance').innerHTML=a.passed?`<span class="status ok">Passed</span><p class="sub" style="margin:13px 0 8px">${(a.nodes||[]).map(n=>`${esc(n.host)} · CPU ${esc(n.worker_cpu)}`).join('<br>')}</p><div class="note">${(a.tests||[]).map(x=>esc(x.replaceAll('_',' '))).join(' · ')}</div>`:'<div class="empty">No accepted two-host report found</div>';
+  } catch(e) { $('updated').textContent=`Unavailable: ${e.message}`; }
+}
+refresh(); setInterval(refresh,10000);
+</script>
+</body>
+</html>
