@@ -8,8 +8,13 @@ new Pool acceptances. It can show any operation type, including future OSP,
 cross-sample and Zoom-in units. Concurrent tasks get separate lanes. The
 viewer supports a time window of up to 24 hours, a dataset filter, and a
 2,000-task response cap; narrow the window or filter when capped. Completed
-requests are cached so they are not reread on every refresh. Historical
-Organize records lack trace fields and are explicitly marked as inferred;
+requests are cached so they are not reread on every refresh. Wheel over the
+plot to zoom around the pointer (30 seconds to 24 hours); selecting a preset
+restores a live rolling window. Pool lanes use actual worker IDs, with extra
+display rows only when tasks overlap. Resource curves sit below that worker's
+tasks. Bridge lanes only separate overlapping calls; executor identity is not
+recorded. Queue wait for started tasks appears in task details, not on a future
+worker lane. Historical Organize records lack trace fields and are explicitly marked as inferred;
 historical worker lanes use host/CPU IDs.
 
 New workflow modules should set the same optional `trace` object on each Pool

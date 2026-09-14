@@ -74,7 +74,6 @@
   .timeline-bar { position:absolute; top:8px; height:25px; min-width:10px; border-radius:6px; color:white; font:700 10px/25px "Avenir Next",sans-serif; padding:0 7px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; box-shadow:0 2px 5px #5d554329; cursor:help; }
   .timeline-bar:hover,.timeline-bar:focus-visible { outline:2px solid #2d5046; outline-offset:2px; z-index:2; }
   .timeline-bar.pool { background:#477e92; }.timeline-bar.bridge { background:#ad8651; }.timeline-bar.failed { background:#ad6661; }
-  .timeline-queue { position:absolute; top:17px; height:8px; min-width:7px; border-radius:4px; background:repeating-linear-gradient(45deg,#beb8a7 0 3px,#e5dfd0 3px 6px); opacity:.9; cursor:help; }
   .timeline-spark { width:100%; height:38px; display:block; overflow:visible; }
   .timeline-resource { color:#657b70; font-weight:500; }
   .timeline-legend { display:flex; gap:14px; flex-wrap:wrap; color:var(--muted); font-size:12px; margin:0 0 15px; }
@@ -85,7 +84,7 @@
   .timeline-controls button { background:#e7efe8; cursor:pointer; }
   .timeline-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:help; }
   [data-tip-title] { cursor:help; }
-  .timeline-label:focus-visible,.timeline-queue:focus-visible { outline:2px solid var(--green); outline-offset:2px; }
+  .timeline-label:focus-visible { outline:2px solid var(--green); outline-offset:2px; }
   #timeline-popover { position:fixed; z-index:1000; width:max-content; max-width:min(390px,calc(100vw - 24px)); max-height:70vh; overflow:auto; pointer-events:none; padding:15px 17px; border:1px solid #c9d6c8; border-radius:14px; background:#fffdf8f2; color:var(--ink); box-shadow:0 16px 42px #4b59412b; backdrop-filter:blur(12px); }
   #timeline-popover[hidden] { display:none; }
   #timeline-popover strong { display:block; font:600 18px/1.25 "Iowan Old Style",Georgia,serif; margin-bottom:7px; overflow-wrap:anywhere; }
@@ -105,7 +104,7 @@
     <div class="node"><span class="n">03 / DEPENDENCIES</span><span class="title">Temporal</span><span class="detail" id="temporal-node">Checking history viewer…</span></div>
     <div class="node"><span class="n">04 / OUTPUT</span><span class="title">Organize</span><span class="detail" id="organize-node">Checking publications…</span></div>
   </div>
-  <section class="panel" style="margin-bottom:20px"><div class="panel-head"><div><div class="eyebrow">Pool and Bridge history</div><h2>Task timeline</h2><div class="sub">Worker lanes show actual task placement; resource curves share the same time axis.</div></div><span class="status off" id="timeline-state">Loading</span></div><div class="timeline-controls"><select id="timeline-range" aria-label="Time range"><option value="3600">Last hour</option><option value="14400" selected>Last 4 hours</option><option value="86400">Last 24 hours</option><option value="custom">Custom</option></select><input id="timeline-from" type="datetime-local" aria-label="From" hidden><input id="timeline-to" type="datetime-local" aria-label="To" hidden><input id="timeline-dataset" type="search" placeholder="Filter dataset…" aria-label="Filter dataset"><button id="timeline-apply" type="button">Apply</button></div><div class="timeline-legend"><span><i style="background:#477e92"></i>Pool task</span><span><i style="background:#ad8651"></i>Bridge task</span><span><i style="background:#ad6661"></i>Failed</span><span><i style="background:repeating-linear-gradient(45deg,#beb8a7 0 3px,#e5dfd0 3px 6px)"></i>Queue wait</span></div><div class="timeline-wrap"><div class="timeline" id="timeline"></div></div><div class="note" id="timeline-note"></div></section>
+  <section class="panel" style="margin-bottom:20px"><div class="panel-head"><div><div class="eyebrow">Pool and Bridge history</div><h2>Task timeline</h2><div class="sub">Worker lanes show actual task placement; resource curves share the same time axis. Wheel over the plot to zoom.</div></div><span class="status off" id="timeline-state">Loading</span></div><div class="timeline-controls"><select id="timeline-range" aria-label="Time range"><option value="3600">Last hour</option><option value="14400" selected>Last 4 hours</option><option value="86400">Last 24 hours</option><option value="custom">Custom</option></select><input id="timeline-from" type="datetime-local" aria-label="From" hidden><input id="timeline-to" type="datetime-local" aria-label="To" hidden><input id="timeline-dataset" type="search" placeholder="Filter dataset…" aria-label="Filter dataset"><button id="timeline-apply" type="button">Apply</button></div><div class="timeline-legend"><span><i style="background:#477e92"></i>Pool task</span><span><i style="background:#ad8651"></i>Bridge task</span><span><i style="background:#ad6661"></i>Failed</span></div><div class="timeline-wrap"><div class="timeline" id="timeline"></div></div><div class="note" id="timeline-note"></div></section>
   <div class="layout">
     <div class="stack">
       <section class="panel"><div class="panel-head"><div><div class="eyebrow">HyperQueue + RSI receipts</div><h2>Warm Pool</h2><div class="sub">Recorded requests and resource budgets; no compute is started by this page.</div></div><span class="status off" id="pool-state">Checking</span></div><div class="metrics"><div class="metric"><b id="pool-count">—</b><span>Requests</span></div><div class="metric"><b id="pool-done">—</b><span>Succeeded</span></div><div class="metric"><b id="worker-count">—</b><span>Live workers</span></div></div><div class="table-wrap"><table><thead><tr><th>Request</th><th>Operation</th><th>State</th><th>CPU / RAM</th><th>Finished</th></tr></thead><tbody id="pool-table"></tbody></table></div><div class="note" id="pool-note"></div></section>
@@ -150,9 +149,34 @@ $('timeline').addEventListener('focusout',hideTimelineTip);
 $('timeline').addEventListener('keydown',event=>{ if (event.key==='Escape') hideTimelineTip(); });
 document.querySelector('.timeline-wrap').addEventListener('scroll',hideTimelineTip);
 window.addEventListener('scroll',hideTimelineTip,{passive:true});
+let viewWindow=null, currentTimelineWindow=null, zoomTimer;
+const localTime=seconds=>{ const d=new Date(seconds*1000); return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16); };
+function zoomWindow(window,fraction,deltaY) {
+  const span=window.until-window.since;
+  const next=Math.max(30,Math.min(86400,span*Math.exp(Math.max(-500,Math.min(500,deltaY))*.002)));
+  const anchor=window.since+span*fraction;
+  const until=Math.min(Date.now()/1000,anchor+next*(1-fraction));
+  return {since:until-next,until};
+}
+$('timeline').addEventListener('wheel',event=>{
+  if (event.ctrlKey||event.metaKey||event.shiftKey) return;
+  const track=event.target.closest?.('.timeline-track,.timeline-scale');
+  if (!track || !currentTimelineWindow) return;
+  event.preventDefault();
+  const rect=track.getBoundingClientRect();
+  viewWindow=zoomWindow(viewWindow||currentTimelineWindow,Math.max(0,Math.min(1,(event.clientX-rect.left)/rect.width)),event.deltaY);
+  $('timeline-range').value='custom';
+  $('timeline-from').hidden=$('timeline-to').hidden=false;
+  $('timeline-from').value=localTime(viewWindow.since);
+  $('timeline-to').value=localTime(viewWindow.until);
+  clearTimeout(zoomTimer);
+  ++refreshSeq;
+  zoomTimer=setTimeout(refresh,140);
+},{passive:false});
 function renderTimeline(data) {
   hideTimelineTip();
   const from=data.since, to=data.until, span=to-from, pos=t=>100*(t-from)/span;
+  currentTimelineWindow={since:from,until:to};
   const tasks=(data.tasks||[]).filter(t=>t.started_at).sort((a,b)=>a.started_at-b.started_at);
   const laneEnds=new Map(), lanes=new Map();
   for (const task of tasks) {
@@ -166,18 +190,18 @@ function renderTimeline(data) {
     const label=ends.length===1?base:`${base} · lane ${slot+1}`;
     // The stable key keeps earlier bars on their original lane when concurrency rises.
     const key=base+'\u0000'+slot;
-    if (!lanes.has(key)) lanes.set(key,{label,items:[]});
+    if (!lanes.has(key)) lanes.set(key,{base,label,items:[]});
     lanes.get(key).items.push(task);
   }
   const ticks=[0,.25,.5,.75,1].map(f=>`<span class="timeline-tick" style="left:${f*100}%">${esc(new Date((from+f*span)*1000).toLocaleString())}</span>`).join('');
   let chart=`<div class="timeline-axis"><span>Worker / service</span><div class="timeline-scale">${ticks}</div></div>`;
-  for (const [key,lane] of [...lanes].sort((a,b)=>a[0].localeCompare(b[0]))) {
+  const taskRows=new Map();
+  const sortedLanes=[...lanes.values()].sort((a,b)=>a.base.localeCompare(b.base));
+  for (const lane of sortedLanes) {
     const items=lane.items.map(t=>{
       const start=Math.max(from,t.started_at), end=Math.min(to,t.finished_at||to);
-      const waitStart=Math.max(from,t.submitted_at), waitEnd=Math.min(to,t.started_at);
       const worker=t.worker_id||t.host||'Unassigned';
       const waitSeconds=(t.started_at-t.submitted_at).toFixed(1);
-      const queue=waitEnd>waitStart?`<span class="timeline-queue" tabindex="0" style="left:${pos(waitStart)}%;width:${pos(waitEnd)-pos(waitStart)}%" data-tip-title="${esc(t.trace.dataset_id)} · queue wait" data-tip-body="${esc(`Task: ${t.id}\nService: ${t.service}\nWaiting: ${waitSeconds} s\nSubmitted: ${when(t.submitted_at)}\nStarted: ${when(t.started_at)}\nAssigned to: ${worker}`)}"></span>`:'';
       const body=[`Workflow: ${t.trace.workflow_id||'—'}`,`Unit: ${t.trace.unit_id||t.operation||'—'}`,
         `Task: ${t.id}`,`Service: ${t.service}`,`Worker: ${worker}`,`State: ${t.state}`,
         `Submitted: ${when(t.submitted_at)}`,`Started: ${when(t.started_at)}`,
@@ -187,16 +211,18 @@ function renderTimeline(data) {
       if (t.model?.model) body.push(`Model: ${t.model.model}`);
       if (t.trace_source!=='explicit') body.push(`Identity: ${t.trace_source}`);
       const width=pos(end)-pos(start);
-      return queue+(end>start?`<span class="timeline-bar ${/fail/i.test(t.state)?'failed':t.service}" tabindex="0" style="left:${pos(start)}%;width:${Math.max(width,.3)}%" data-tip-title="${esc(t.trace.dataset_id)} · ${esc(t.operation)}" data-tip-body="${esc(body.join('\n'))}">${width>18?esc(t.trace.dataset_id):''}</span>`:'');
+      return end>start?`<span class="timeline-bar ${/fail/i.test(t.state)?'failed':t.service}" tabindex="0" style="left:${pos(start)}%;width:${Math.max(width,.3)}%" data-tip-title="${esc(t.trace.dataset_id)} · ${esc(t.operation)}" data-tip-body="${esc(body.join('\n'))}">${width>18?esc(t.trace.dataset_id):''}</span>`:'';
     }).join('');
-    chart+=`<div class="timeline-row"><div class="timeline-label" tabindex="0" data-tip-title="Worker lane" data-tip-body="${esc(lane.label)}">${esc(lane.label)}</div><div class="timeline-track">${items}</div></div>`;
+    taskRows.set(lane.base,(taskRows.get(lane.base)||'')+`<div class="timeline-row"><div class="timeline-label" tabindex="0" data-tip-title="${lane.base==='Agent Bridge'?'Display lane':'Worker lane'}" data-tip-body="${esc(lane.label)}${lane.base==='Agent Bridge'?' · overlap only; executor identity unavailable':''}">${esc(lane.label)}</div><div class="timeline-track">${items}</div></div>`);
   }
   const resourceGroups=new Map();
   for (const row of data.resources||[]) { const key=row.worker_id||row.host; if (!resourceGroups.has(key)) resourceGroups.set(key,[]); resourceGroups.get(key).push(row); }
+  const resourceRows=new Map();
   for (const [worker,samples] of resourceGroups) for (const [name,field,color] of [
     ['CPU','cpu_percent','#558d78'],['RAM','memory_percent','#ad8651'],
     ['GPU','gpu_percent','#7b719c'],['GPU memory','gpu_memory_percent','#a76f83']]) {
     const points=samples.filter(r=>r[field]!=null).map(r=>({x:pos(r.observed_at),y:r[field],t:r.observed_at,row:r}));
+    if (!points.length) continue;
     const lines=points.map((p,i)=>i&&p.t-points[i-1].t<=Math.max(90,span/200)?
       `<line x1="${points[i-1].x}" y1="${100-points[i-1].y}" x2="${p.x}" y2="${100-p.y}" stroke="${color}" stroke-width="3" vector-effect="non-scaling-stroke"/>`:'').join('');
     const dots=points.map(p=>{
@@ -206,12 +232,14 @@ function renderTimeline(data) {
       const tip=`${p.y.toFixed(1)}%${extra}\nTime: ${when(p.t)}\nMean of ${p.row.samples} sample(s)`;
       return `<rect x="${Math.max(0,p.x-.5)}" y="0" width="1" height="100" fill="transparent" pointer-events="all" tabindex="0" data-tip-title="${esc(worker)} · ${esc(name)}" data-tip-body="${esc(tip)}"></rect><rect x="${p.x-.22}" y="${100-p.y-4}" width=".44" height="8" fill="${color}" pointer-events="none"></rect>`;
     }).join('');
-    chart+=`<div class="timeline-row"><div class="timeline-label timeline-resource" tabindex="0" data-tip-title="Resource lane" data-tip-body="${esc(worker)} · ${esc(name)}">${esc(worker)} · ${esc(name)}${points.length?'':' · no data'}</div><div class="timeline-track"><svg class="timeline-spark" viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="${esc(worker)} ${esc(name)} usage">${lines}${dots}</svg></div></div>`;
+    resourceRows.set(worker,(resourceRows.get(worker)||'')+`<div class="timeline-row"><div class="timeline-label timeline-resource" tabindex="0" data-tip-title="Resource lane" data-tip-body="${esc(worker)} · ${esc(name)}">${esc(worker)} · ${esc(name)}</div><div class="timeline-track"><svg class="timeline-spark" viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="${esc(worker)} ${esc(name)} usage">${lines}${dots}</svg></div></div>`);
   }
+  for (const [worker,rows] of taskRows) { chart+=rows+(resourceRows.get(worker)||''); resourceRows.delete(worker); }
+  for (const rows of resourceRows.values()) chart+=rows;
   $('timeline').innerHTML=lanes.size||resourceGroups.size?chart:'<div class="empty">No started tasks or resource samples in this window</div>';
   $('timeline-state').textContent=`${data.total} tasks`;
   const queued=(data.tasks||[]).filter(t=>!t.started_at).length;
-  $('timeline-note').textContent=`${queued} waiting without a worker; ${data.resources?.length||0} resource points. ${data.truncated?'Results capped at 2,000 tasks; narrow the time range or filter a dataset. ':''}CPU is measured on worker-allocated cores; RAM and accessible GPUs are host-wide. Missing historical usage is not inferred from reservations. ${data.source}.`;
+  $('timeline-note').textContent=`${queued} waiting without a worker; started-task queue time is in task details. Pool rows are actual workers; extra rows only separate overlapping tasks. Bridge rows only separate overlap, because executor IDs are not recorded. ${data.resources?.length||0} resource points. ${data.truncated?'Results capped at 2,000 tasks; narrow the time range or filter a dataset. ':''}CPU is measured on worker-allocated cores; RAM and accessible GPUs are host-wide. Missing historical usage is not inferred from reservations. ${data.source}.`;
 }
 let refreshSeq=0;
 async function refresh() {
@@ -244,8 +272,8 @@ async function refresh() {
     $('bridge-state').textContent='Recorded history';
     $('bridge-table').innerHTML=d.bridge_requests.length?d.bridge_requests.map(x=>`<tr><td class="mono">${esc(x.id)}</td><td>${badge(x.state)}</td><td>${esc(x.model?.model||'—')}<br><span class="sub">${esc(x.model?.harness||'')}</span></td><td>${esc(x.usage?.tokens_in)} / ${esc(x.usage?.tokens_out)}</td></tr>`).join(''):'<tr><td colspan="4" class="empty">No model requests recorded</td></tr>';
     const now=Date.now()/1000, range=$('timeline-range').value;
-    const since=range==='custom'?Date.parse($('timeline-from').value)/1000:now-Number(range);
-    const until=range==='custom'?Date.parse($('timeline-to').value)/1000:now;
+    const since=viewWindow?viewWindow.since:range==='custom'?Date.parse($('timeline-from').value)/1000:now-Number(range);
+    const until=viewWindow?viewWindow.until:range==='custom'?Date.parse($('timeline-to').value)/1000:now;
     if (Number.isFinite(since) && Number.isFinite(until)) {
       const params=new URLSearchParams({since:String(since),until:String(until),dataset:$('timeline-dataset').value.trim()});
       const timelineResponse=await fetch('/api/timeline?'+params,{cache:'no-store'});
@@ -262,8 +290,8 @@ async function refresh() {
     $('acceptance').innerHTML=a.passed?`<span class="status ok">Passed</span><p class="sub" style="margin:13px 0 8px">${(a.nodes||[]).map(n=>`${esc(n.host)} · CPU ${esc(n.worker_cpu)}`).join('<br>')}</p><div class="note">${(a.tests||[]).map(x=>esc(x.replaceAll('_',' '))).join(' · ')}</div>`:'<div class="empty">No accepted two-host report found</div>';
   } catch(e) { if (seq===refreshSeq) $('updated').textContent=`Unavailable: ${e.message}`; }
 }
-$('timeline-range').addEventListener('change',()=>{ const custom=$('timeline-range').value==='custom'; $('timeline-from').hidden=!custom; $('timeline-to').hidden=!custom; if (custom) { const now=new Date(), from=new Date(now-3600000); const local=d=>new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16); $('timeline-from').value=local(from); $('timeline-to').value=local(now); } refresh(); });
-$('timeline-apply').addEventListener('click',refresh);
+$('timeline-range').addEventListener('change',()=>{ const custom=$('timeline-range').value==='custom'; $('timeline-from').hidden=!custom; $('timeline-to').hidden=!custom; viewWindow=null; if (custom) { const now=Date.now()/1000, window=currentTimelineWindow||{since:now-3600,until:now}; $('timeline-from').value=localTime(window.since); $('timeline-to').value=localTime(window.until); } refresh(); });
+$('timeline-apply').addEventListener('click',()=>{ if ($('timeline-range').value==='custom') { const since=Date.parse($('timeline-from').value)/1000, until=Date.parse($('timeline-to').value)/1000; if (!(until>since && until-since<=86400)) { $('timeline-state').textContent='Select up to 24 hours'; return; } viewWindow={since,until}; } else viewWindow=null; refresh(); });
 refresh(); setInterval(refresh,10000);
 </script>
 </body>
