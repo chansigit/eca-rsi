@@ -58,15 +58,23 @@ def summarize_resources(rows: list[dict], since: float, until: float) -> list[di
     for row in rows:
         gpus = row.get("gpus") or []
         gpu_total = sum(g.get("memory_total_mb") or 0 for g in gpus)
+        gpu_used = sum(g.get("memory_used_mb") or 0 for g in gpus)
         gpu_busy = [g["utilization_percent"] for g in gpus
                     if g.get("utilization_percent") is not None]
         values = {
             "cpu_percent": row.get("cpu_percent"),
+            "cpu_cores_used": row["cpu_percent"] * len(row.get("cpu_ids", [])) / 100
+                if row.get("cpu_percent") is not None else None,
+            "cpu_cores_allocated": len(row.get("cpu_ids", [])),
             "memory_percent": 100 * row["memory_used_bytes"] / row["memory_total_bytes"]
                 if row.get("memory_total_bytes") else None,
+            "memory_used_gb": row.get("memory_used_bytes", 0) / 2**30,
+            "memory_total_gb": row.get("memory_total_bytes", 0) / 2**30,
             "gpu_percent": sum(gpu_busy) / len(gpu_busy) if gpu_busy else None,
-            "gpu_memory_percent": 100 * sum(g.get("memory_used_mb") or 0 for g in gpus) / gpu_total
+            "gpu_memory_percent": 100 * gpu_used / gpu_total
                 if gpu_total else None,
+            "gpu_memory_used_gb": gpu_used / 1024 if gpu_total else None,
+            "gpu_memory_total_gb": gpu_total / 1024 if gpu_total else None,
         }
         key = (row.get("worker_id") or row["host"], int((row["observed_at"] - since) / width))
         group = bins.setdefault(key, {"worker_id": row.get("worker_id"), "host": row["host"],
@@ -81,7 +89,10 @@ def summarize_resources(rows: list[dict], since: float, until: float) -> list[di
                     "observed_at": b["observed_at"] / b["count"], "samples": b["count"],
                     **{name: (b["values"][name][0] / b["values"][name][1])
                        if name in b["values"] else None for name in (
-                           "cpu_percent", "memory_percent", "gpu_percent", "gpu_memory_percent")}}
+                           "cpu_percent", "cpu_cores_used", "cpu_cores_allocated",
+                           "memory_percent", "memory_used_gb", "memory_total_gb",
+                           "gpu_percent", "gpu_memory_percent", "gpu_memory_used_gb",
+                           "gpu_memory_total_gb")}}
                    for b in bins.values()), key=lambda b: (b["host"], b["observed_at"]))
 
 

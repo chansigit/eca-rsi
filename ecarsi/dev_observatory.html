@@ -63,7 +63,7 @@
   .code { background:#f2efe6; border:1px solid #e4ddce; border-radius:9px; padding:10px; font:11px/1.55 ui-monospace,monospace; overflow-wrap:anywhere; user-select:all; }
   .timeline-wrap { overflow-x:auto; }
   .timeline { min-width:870px; }
-  .timeline-axis,.timeline-row { display:grid; grid-template-columns:190px minmax(0,1fr); }
+  .timeline-axis,.timeline-row { display:grid; grid-template-columns:245px minmax(0,1fr); }
   .timeline-axis { color:var(--muted); font:11px ui-monospace,monospace; margin-bottom:9px; }
   .timeline-scale { position:relative; height:23px; border-bottom:1px solid var(--line); }
   .timeline-tick { position:absolute; bottom:3px; transform:translateX(-50%); white-space:nowrap; }
@@ -71,9 +71,10 @@
   .timeline-row { border-bottom:1px solid #eee9dd; min-height:41px; align-items:center; }
   .timeline-label { padding:5px 10px 5px 0; font-size:12px; font-weight:650; }
   .timeline-track { position:relative; height:40px; background:repeating-linear-gradient(to right,transparent 0,transparent calc(25% - 1px),#ece9df calc(25% - 1px),#ece9df 25%); }
-  .timeline-bar { position:absolute; top:8px; height:25px; min-width:3px; border-radius:6px; color:white; font:700 10px/25px "Avenir Next",sans-serif; padding:0 5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; box-shadow:0 2px 5px #5d554329; }
+  .timeline-bar { position:absolute; top:8px; height:25px; min-width:10px; border-radius:6px; color:white; font:700 10px/25px "Avenir Next",sans-serif; padding:0 7px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; box-shadow:0 2px 5px #5d554329; cursor:help; }
+  .timeline-bar:hover,.timeline-bar:focus-visible { outline:2px solid #2d5046; outline-offset:2px; z-index:2; }
   .timeline-bar.pool { background:#477e92; }.timeline-bar.bridge { background:#ad8651; }.timeline-bar.failed { background:#ad6661; }
-  .timeline-queue { position:absolute; top:17px; height:8px; min-width:2px; border-radius:4px; background:repeating-linear-gradient(45deg,#beb8a7 0 3px,#e5dfd0 3px 6px); opacity:.9; }
+  .timeline-queue { position:absolute; top:17px; height:8px; min-width:7px; border-radius:4px; background:repeating-linear-gradient(45deg,#beb8a7 0 3px,#e5dfd0 3px 6px); opacity:.9; cursor:help; }
   .timeline-spark { width:100%; height:38px; display:block; overflow:visible; }
   .timeline-resource { color:#657b70; font-weight:500; }
   .timeline-legend { display:flex; gap:14px; flex-wrap:wrap; color:var(--muted); font-size:12px; margin:0 0 15px; }
@@ -82,7 +83,13 @@
   .timeline-controls input,.timeline-controls select,.timeline-controls button { border:1px solid var(--line); border-radius:8px; background:var(--sheet); color:var(--ink); padding:7px 9px; font:12px "Avenir Next",sans-serif; }
   .timeline-controls input[type="search"] { min-width:180px; }
   .timeline-controls button { background:#e7efe8; cursor:pointer; }
-  .timeline-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .timeline-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:help; }
+  [data-tip-title] { cursor:help; }
+  .timeline-label:focus-visible,.timeline-queue:focus-visible { outline:2px solid var(--green); outline-offset:2px; }
+  #timeline-popover { position:fixed; z-index:1000; width:max-content; max-width:min(390px,calc(100vw - 24px)); max-height:70vh; overflow:auto; pointer-events:none; padding:15px 17px; border:1px solid #c9d6c8; border-radius:14px; background:#fffdf8f2; color:var(--ink); box-shadow:0 16px 42px #4b59412b; backdrop-filter:blur(12px); }
+  #timeline-popover[hidden] { display:none; }
+  #timeline-popover strong { display:block; font:600 18px/1.25 "Iowan Old Style",Georgia,serif; margin-bottom:7px; overflow-wrap:anywhere; }
+  #timeline-popover span { display:block; white-space:pre-line; overflow-wrap:anywhere; color:#505b50; font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; }
   footer { margin-top:30px; color:#818479; font-size:12px; display:flex; justify-content:space-between; gap:20px; }
   @media(max-width:960px) { .hero,.layout { grid-template-columns:1fr; }.path { grid-template-columns:repeat(2,1fr); }.node:nth-child(2):after { display:none; } }
   @media(max-width:620px) { main { padding:19px 15px 40px; }.meta { display:none; }.hero { padding-top:34px; }.path { gap:8px; }.node { min-height:140px; padding:14px; }.node:after { display:none; }.metrics { grid-template-columns:repeat(3,1fr); }.metric { padding:9px; }.metric b { font-size:22px; } section.panel { padding:19px; } }
@@ -105,7 +112,7 @@
       <section class="panel"><div class="panel-head"><div><div class="eyebrow">Model decision records</div><h2>Agent Bridge</h2><div class="sub">Saved replies, selected models and reported token use.</div></div><span class="status off" id="bridge-state">Checking</span></div><div class="metrics"><div class="metric"><b id="bridge-count">—</b><span>Requests</span></div><div class="metric"><b id="bridge-done">—</b><span>Replies saved</span></div><div class="metric"><b id="tokens">—</b><span>Reported tokens</span></div></div><div class="table-wrap"><table><thead><tr><th>Request</th><th>State</th><th>Model</th><th>Tokens in / out</th></tr></thead><tbody id="bridge-table"></tbody></table></div><div class="note">Usage is reported by the model harness; missing values are not treated as zero.</div></section>
     </div>
     <div class="stack">
-      <section class="panel"><div class="eyebrow">Native workflow viewer</div><h2>Temporal</h2><p class="sub">The development server now keeps new Workflow histories in persistent SQLite. No Coordinator Worker or dataset computation is running.</p><a class="link disabled" id="temporal-link" href="http://127.0.0.1:8233/" target="_blank" rel="noopener">Open Temporal UI ↗</a><div class="note" id="temporal-note">Checking history service…</div></section>
+      <section class="panel"><div class="eyebrow">Native workflow viewer</div><h2>Temporal</h2><p class="sub">The development viewer is paused while SQLite persistence is investigated. No Coordinator Worker or dataset computation is running.</p><a class="link disabled" id="temporal-link" href="http://127.0.0.1:8233/" target="_blank" rel="noopener">Open Temporal UI ↗</a><div class="note" id="temporal-note">Checking history service…</div></section>
       <section class="panel"><div class="eyebrow">Accepted artifacts</div><h2>Organize output</h2><p class="sub">Published after source identity, experiment mapping and cell conservation checks.</p><div id="outputs"></div></section>
       <section class="panel"><div class="eyebrow">Recorded infrastructure trial</div><h2>Two-host recovery</h2><p class="sub">Actual Slurm allocations were used for the isolated HyperQueue trial.</p><div id="acceptance"></div></section>
       <section class="panel"><div class="eyebrow">What is connected</div><h2>Next development slice</h2><p class="sub">Per-sample partition and one whole-sample OSP compute task, followed by Bridge annotation and Pool finalization. Cross-sample and Zoom-in remain designs.</p><div class="code">Organize ✓ &nbsp;→&nbsp; Per-sample ◌ &nbsp;→&nbsp; Cross-sample ◌ &nbsp;→&nbsp; Zoom-in ◌</div><div class="note">This observatory reads the isolated v2 state. The existing Periscope installation is a separate service.</div></section>
@@ -113,12 +120,38 @@
   </div>
   <footer><span id="host">RSI v2 isolated state</span><span>Refreshes every 10 seconds · no scheduler or model actions</span></footer>
 </main>
+<div id="timeline-popover" role="tooltip" hidden><strong id="timeline-popover-title"></strong><span id="timeline-popover-body"></span></div>
 <script>
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '—').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const when = value => value ? new Date(value * 1000).toLocaleString() : '—';
 const badge = value => { const v=String(value || 'unknown'); const cls=/succeeded|reply_saved|complete/i.test(v)?'ok':/fail|unknown|cancel/i.test(v)?'bad':/running|queued/i.test(v)?'warn':'off'; return `<span class="status ${cls}">${esc(v.replaceAll('_',' '))}</span>`; };
+let tipTarget=null;
+function hideTimelineTip() { $('timeline-popover').hidden=true; tipTarget=null; }
+function showTimelineTip(target, event) {
+  if (!target) { hideTimelineTip(); return; }
+  const popup=$('timeline-popover');
+  if (target!==tipTarget) {
+    $('timeline-popover-title').textContent=target.dataset.tipTitle;
+    $('timeline-popover-body').textContent=target.dataset.tipBody;
+    tipTarget=target;
+  }
+  popup.hidden=false;
+  const anchor=target.getBoundingClientRect(), box=popup.getBoundingClientRect();
+  const x=Number.isFinite(event?.clientX)?event.clientX:anchor.right;
+  const y=Number.isFinite(event?.clientY)?event.clientY:anchor.bottom;
+  popup.style.left=`${Math.max(12,Math.min(x+16,window.innerWidth-box.width-12))}px`;
+  popup.style.top=`${Math.max(12,y+box.height+16>window.innerHeight?y-box.height-16:y+16)}px`;
+}
+$('timeline').addEventListener('pointermove',event=>showTimelineTip(event.target.closest?.('[data-tip-title]'),event));
+$('timeline').addEventListener('pointerleave',hideTimelineTip);
+$('timeline').addEventListener('focusin',event=>showTimelineTip(event.target.closest?.('[data-tip-title]')));
+$('timeline').addEventListener('focusout',hideTimelineTip);
+$('timeline').addEventListener('keydown',event=>{ if (event.key==='Escape') hideTimelineTip(); });
+document.querySelector('.timeline-wrap').addEventListener('scroll',hideTimelineTip);
+window.addEventListener('scroll',hideTimelineTip,{passive:true});
 function renderTimeline(data) {
+  hideTimelineTip();
   const from=data.since, to=data.until, span=to-from, pos=t=>100*(t-from)/span;
   const tasks=(data.tasks||[]).filter(t=>t.started_at).sort((a,b)=>a.started_at-b.started_at);
   const laneEnds=new Map(), lanes=new Map();
@@ -142,22 +175,38 @@ function renderTimeline(data) {
     const items=lane.items.map(t=>{
       const start=Math.max(from,t.started_at), end=Math.min(to,t.finished_at||to);
       const waitStart=Math.max(from,t.submitted_at), waitEnd=Math.min(to,t.started_at);
-      const queue=waitEnd>waitStart?`<span class="timeline-queue" style="left:${pos(waitStart)}%;width:${pos(waitEnd)-pos(waitStart)}%" title="${esc(t.id)} · queue wait ${(t.started_at-t.submitted_at).toFixed(1)} s"></span>`:'';
-      const title=`${t.trace.dataset_id} · ${t.operation} · ${t.id} · ${t.state} · ${when(t.started_at)} to ${when(t.finished_at||to)} · ${t.trace_source}`;
-      return queue+(end>start?`<span class="timeline-bar ${/fail/i.test(t.state)?'failed':t.service}" style="left:${pos(start)}%;width:${Math.max(pos(end)-pos(start),.3)}%" title="${esc(title)}">${esc(t.trace.dataset_id)} · ${esc(t.operation)}</span>`:'');
+      const worker=t.worker_id||t.host||'Unassigned';
+      const waitSeconds=(t.started_at-t.submitted_at).toFixed(1);
+      const queue=waitEnd>waitStart?`<span class="timeline-queue" tabindex="0" style="left:${pos(waitStart)}%;width:${pos(waitEnd)-pos(waitStart)}%" data-tip-title="${esc(t.trace.dataset_id)} · queue wait" data-tip-body="${esc(`Task: ${t.id}\nService: ${t.service}\nWaiting: ${waitSeconds} s\nSubmitted: ${when(t.submitted_at)}\nStarted: ${when(t.started_at)}\nAssigned to: ${worker}`)}"></span>`:'';
+      const body=[`Workflow: ${t.trace.workflow_id||'—'}`,`Unit: ${t.trace.unit_id||t.operation||'—'}`,
+        `Task: ${t.id}`,`Service: ${t.service}`,`Worker: ${worker}`,`State: ${t.state}`,
+        `Submitted: ${when(t.submitted_at)}`,`Started: ${when(t.started_at)}`,
+        `Finished: ${t.finished_at?when(t.finished_at):'Running'}`,
+        `Duration: ${((t.finished_at||to)-t.started_at).toFixed(1)} s`,`Queue wait: ${waitSeconds} s`];
+      if (t.cpus) body.push(`Reserved: ${t.cpus} CPUs · ${t.memory_mb} MiB RAM`);
+      if (t.model?.model) body.push(`Model: ${t.model.model}`);
+      if (t.trace_source!=='explicit') body.push(`Identity: ${t.trace_source}`);
+      const width=pos(end)-pos(start);
+      return queue+(end>start?`<span class="timeline-bar ${/fail/i.test(t.state)?'failed':t.service}" tabindex="0" style="left:${pos(start)}%;width:${Math.max(width,.3)}%" data-tip-title="${esc(t.trace.dataset_id)} · ${esc(t.operation)}" data-tip-body="${esc(body.join('\n'))}">${width>18?esc(t.trace.dataset_id):''}</span>`:'');
     }).join('');
-    chart+=`<div class="timeline-row"><div class="timeline-label" title="${esc(lane.label)}">${esc(lane.label)}</div><div class="timeline-track">${items}</div></div>`;
+    chart+=`<div class="timeline-row"><div class="timeline-label" tabindex="0" data-tip-title="Worker lane" data-tip-body="${esc(lane.label)}">${esc(lane.label)}</div><div class="timeline-track">${items}</div></div>`;
   }
   const resourceGroups=new Map();
   for (const row of data.resources||[]) { const key=row.worker_id||row.host; if (!resourceGroups.has(key)) resourceGroups.set(key,[]); resourceGroups.get(key).push(row); }
   for (const [worker,samples] of resourceGroups) for (const [name,field,color] of [
     ['CPU','cpu_percent','#558d78'],['RAM','memory_percent','#ad8651'],
     ['GPU','gpu_percent','#7b719c'],['GPU memory','gpu_memory_percent','#a76f83']]) {
-    const points=samples.filter(r=>r[field]!=null).map(r=>({x:pos(r.observed_at),y:r[field],t:r.observed_at}));
+    const points=samples.filter(r=>r[field]!=null).map(r=>({x:pos(r.observed_at),y:r[field],t:r.observed_at,row:r}));
     const lines=points.map((p,i)=>i&&p.t-points[i-1].t<=Math.max(90,span/200)?
       `<line x1="${points[i-1].x}" y1="${100-points[i-1].y}" x2="${p.x}" y2="${100-p.y}" stroke="${color}" stroke-width="3" vector-effect="non-scaling-stroke"/>`:'').join('');
-    const dots=points.map(p=>`<circle cx="${p.x}" cy="${100-p.y}" r=".6" fill="${color}"><title>${esc(worker)} · ${esc(name)} ${p.y.toFixed(1)}% · ${esc(when(p.t))}</title></circle>`).join('');
-    chart+=`<div class="timeline-row"><div class="timeline-label timeline-resource" title="${esc(worker)} · ${esc(name)}">${esc(worker)} · ${esc(name)}${points.length?'':' · no data'}</div><div class="timeline-track"><svg class="timeline-spark" viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="${esc(worker)} ${esc(name)} usage">${lines}${dots}</svg></div></div>`;
+    const dots=points.map(p=>{
+      const extra=field==='cpu_percent'&&p.row.cpu_cores_allocated>0?`\n${p.row.cpu_cores_used.toFixed(1)} / ${p.row.cpu_cores_allocated} allocated cores`:
+        field==='memory_percent'&&p.row.memory_total_gb>0?`\n${p.row.memory_used_gb.toFixed(1)} / ${p.row.memory_total_gb.toFixed(1)} GiB host RAM`:
+        field==='gpu_memory_percent'&&p.row.gpu_memory_total_gb>0?`\n${p.row.gpu_memory_used_gb.toFixed(1)} / ${p.row.gpu_memory_total_gb.toFixed(1)} GiB GPU memory`:'';
+      const tip=`${p.y.toFixed(1)}%${extra}\nTime: ${when(p.t)}\nMean of ${p.row.samples} sample(s)`;
+      return `<rect x="${Math.max(0,p.x-.5)}" y="0" width="1" height="100" fill="transparent" pointer-events="all" tabindex="0" data-tip-title="${esc(worker)} · ${esc(name)}" data-tip-body="${esc(tip)}"></rect><rect x="${p.x-.22}" y="${100-p.y-4}" width=".44" height="8" fill="${color}" pointer-events="none"></rect>`;
+    }).join('');
+    chart+=`<div class="timeline-row"><div class="timeline-label timeline-resource" tabindex="0" data-tip-title="Resource lane" data-tip-body="${esc(worker)} · ${esc(name)}">${esc(worker)} · ${esc(name)}${points.length?'':' · no data'}</div><div class="timeline-track"><svg class="timeline-spark" viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="${esc(worker)} ${esc(name)} usage">${lines}${dots}</svg></div></div>`;
   }
   $('timeline').innerHTML=lanes.size||resourceGroups.size?chart:'<div class="empty">No started tasks or resource samples in this window</div>';
   $('timeline-state').textContent=`${data.total} tasks`;
