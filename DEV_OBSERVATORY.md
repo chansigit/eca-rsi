@@ -4,20 +4,23 @@ The read-only page combines the isolated Warm Pool request/receipt records,
 Agent Bridge replies and token usage, and published Organize outputs. It polls
 the filesystem every 10 seconds. It does not start the Scheduler, Worker,
 Coordinator, model requests or dataset computation. The page and the Temporal
-Web UI bind to loopback on the current allocated host.
+Web UI listen on the current allocated host's private cluster interface; the
+browser connects through SSH.
 
 The current host is `sh03-01n03`. Both services run in detached tmux sessions
-on `/scratch/users/chensj16/.tmux/sh03-01n03.sock`:
+on `/scratch/users/chensj16/.tmux/sh03-01n03.sock`. The observatory listens
+on the node's private cluster address; the isolated Temporal development UI
+also accepts connections from that address for one-hop SSH forwarding:
 
 - `rsi_v2_observatory`: `http://127.0.0.1:8765/`
 - `rsi_v2_temporal`: `http://127.0.0.1:8233/`
 
-From a **laptop**, open one SSH tunnel and keep the terminal open:
+From a **laptop**, open one SSH tunnel through the Sherlock login node and keep
+the terminal open. This does not require a second SSH login to the compute node:
 
 ```bash
-ssh -N -J chensj16@login.sherlock.stanford.edu \
-  -L 8765:127.0.0.1:8765 -L 8233:127.0.0.1:8233 \
-  chensj16@sh03-01n03
+ssh -N -L 8765:sh03-01n03:8765 -L 8233:sh03-01n03:8233 \
+  chensj16@login.sherlock.stanford.edu
 ```
 
 Then open `http://127.0.0.1:8765/`. The Temporal button uses the second

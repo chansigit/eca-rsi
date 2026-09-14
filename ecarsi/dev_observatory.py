@@ -15,7 +15,7 @@ from .warm_pool.state import read, status as pool_status
 PAGE = Path(__file__).with_name("dev_observatory.html")
 
 
-def snapshot(root: Path, temporal_port: int = 8233) -> dict:
+def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.0.1") -> dict:
     """Read published records; never connect to a scheduler or submit work."""
     root = Path(root)
     pool = root / "organize-v2-pool"
@@ -70,7 +70,7 @@ def snapshot(root: Path, temporal_port: int = 8233) -> dict:
                   "nodes": [{"host": n.get("host"), "worker_cpu": n.get("worker_cpu")}
                             for n in report.get("nodes", [])]}
     try:
-        with socket.create_connection(("127.0.0.1", temporal_port), timeout=0.2):
+        with socket.create_connection((temporal_host, temporal_port), timeout=0.2):
             temporal_ui = True
     except OSError:
         temporal_ui = False
@@ -94,13 +94,13 @@ def snapshot(root: Path, temporal_port: int = 8233) -> dict:
     }
 
 
-def serve(root: Path, port: int, temporal_port: int) -> None:
+def serve(root: Path, port: int, temporal_port: int, bind: str) -> None:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             if self.path == "/":
                 body, kind = PAGE.read_bytes(), "text/html; charset=utf-8"
             elif self.path == "/api/status":
-                body = json.dumps(snapshot(root, temporal_port), allow_nan=False).encode()
+                body = json.dumps(snapshot(root, temporal_port, bind), allow_nan=False).encode()
                 kind = "application/json; charset=utf-8"
             else:
                 self.send_error(404)
@@ -112,12 +112,12 @@ def serve(root: Path, port: int, temporal_port: int) -> None:
             self.end_headers()
             self.wfile.write(body)
 
-    with ThreadingHTTPServer(("127.0.0.1", port), Handler) as server:
-        print(f"RSI v2 observatory: http://127.0.0.1:{port}/", flush=True)
+    with ThreadingHTTPServer((bind, port), Handler) as server:
+        print(f"RSI v2 observatory: {bind}:{port}", flush=True)
         server.serve_forever()
 
 
-async def temporal_ui(source: Path, destination: Path, port: int, ui_port: int) -> None:
+async def temporal_ui(source: Path, destination: Path, port: int, ui_port: int, bind: str) -> None:
     """Show old workflow history without writing to the original dev database."""
     from temporalio.testing import WorkflowEnvironment
 
@@ -130,7 +130,7 @@ async def temporal_ui(source: Path, destination: Path, port: int, ui_port: int) 
         with sqlite3.connect(destination) as copy:
             original.backup(copy)
     environment = await WorkflowEnvironment.start_local(
-        ip="127.0.0.1", port=port, ui=True, ui_port=ui_port,
+        ip=bind, port=port, ui=True, ui_port=ui_port,
         dev_server_database_filename=str(destination),
         download_dest_dir=str(destination.parent),
     )
@@ -148,16 +148,18 @@ def main() -> None:
     web.add_argument("--root", type=Path, required=True)
     web.add_argument("--port", type=int, default=8765)
     web.add_argument("--temporal-ui-port", type=int, default=8233)
+    web.add_argument("--bind", default="127.0.0.1")
     history = commands.add_parser("temporal-ui")
     history.add_argument("--source-db", type=Path, required=True)
     history.add_argument("--snapshot-db", type=Path, required=True)
     history.add_argument("--port", type=int, default=7233)
     history.add_argument("--ui-port", type=int, default=8233)
+    history.add_argument("--bind", default="127.0.0.1")
     args = parser.parse_args()
     if args.command == "serve":
-        serve(args.root, args.port, args.temporal_ui_port)
+        serve(args.root, args.port, args.temporal_ui_port, args.bind)
     else:
-        asyncio.run(temporal_ui(args.source_db, args.snapshot_db, args.port, args.ui_port))
+        asyncio.run(temporal_ui(args.source_db, args.snapshot_db, args.port, args.ui_port, args.bind))
 
 
 if __name__ == "__main__":
