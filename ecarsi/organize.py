@@ -48,7 +48,7 @@ def profile_unit(unit: dict, max_levels: int = 30) -> dict:
     prof = {"name": unit["name"], "h5ad": unit["h5ad"]}
     with open(unit["standardize_result"]) as f:
         std = json.load(f)
-    from .upstream import load_evidence, validate_matrix
+    from .upstream import load_evidence, normalize, validate_matrix
 
     prof["species"] = (std.get("species") or {}).get("resolved")
     prof["n_cells"] = (std.get("metrics") or {}).get("n_cells")
@@ -62,12 +62,13 @@ def profile_unit(unit: dict, max_levels: int = 30) -> dict:
     cols = {}
     for c in a.obs.columns:
         s = a.obs[c]
-        nuniq = s.nunique(dropna=True)
-        entry: dict = {"dtype": str(s.dtype), "n_unique": int(nuniq)}
+        semantic = normalize(s) if pd.api.types.is_string_dtype(s.dtype) or isinstance(s.dtype, pd.CategoricalDtype) else s
+        nuniq = semantic.nunique(dropna=True)
+        entry: dict = {"dtype": str(s.dtype), "n_unique": int(nuniq), "n_na": int(semantic.isna().sum())}
         if nuniq <= max_levels and (pd.api.types.is_string_dtype(s.dtype) or isinstance(s.dtype, pd.CategoricalDtype)):
             # drop unused categorical levels — phantom zero counts would
             # pollute the profile the agent reasons over
-            entry["value_counts"] = {str(k): int(v) for k, v in s.value_counts().items() if v}
+            entry["value_counts"] = {str(k): int(v) for k, v in semantic.value_counts().items() if v}
         cols[str(c)] = entry
     prof["obs_columns"] = cols
     prof["n_obs"] = int(a.n_obs)

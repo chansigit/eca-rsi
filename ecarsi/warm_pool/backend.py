@@ -102,7 +102,8 @@ class HyperQueue:
                         "--pin", "taskset", "--crash-limit", "never-restart", "--directives", "off",
                         "--cwd", str(attempt), "--stdout", str(attempt / "hq-%{INSTANCE_ID}.stdout"),
                         "--stderr", str(attempt / "hq-%{INSTANCE_ID}.stderr"),
-                        "--env", "PYTHONPATH=" + str(Path(__file__).resolve().parents[2]),
+                        "--env", "PYTHONPATH=" + os.pathsep.join(filter(None, (
+                            str(Path(__file__).resolve().parents[2]), os.environ.get("PYTHONPATH", "")))),
                         self.config["executor"], "-m", "ecarsi.warm_pool.worker", "execute",
                         str(self.root), spec["request_id"], request["attempt_id"]]
                 submitted = self.call(*args)

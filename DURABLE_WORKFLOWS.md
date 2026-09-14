@@ -171,10 +171,17 @@ Untracked Slurm logs and ignored runtime data were not copied. Existing config,
 registry, scheduler endpoints, service processes, allocations and output roots
 were not changed. The copied code still has production defaults: do not launch
 it against those defaults. All experiments require explicit development endpoints,
-separate state/output roots, and fake compute/model providers initially. Do not
+separate state/output roots. Synthetic providers are for fault-injection tests;
+scientific acceptance requires real inputs and model decisions. Do not
 install this worktree into an environment used by the running system.
 
-## Initial choice: evaluate Temporal without committing to it
+## Engine direction: Temporal for the Organize-first development milestone
+
+Updated 2026-09-14: build the next Work Coordinator slice with Temporal, starting
+at Organize. This replaces the OSP-first integration order below and the earlier
+open-ended engine evaluation. Temporal integration is not implemented yet;
+production adoption still requires service/database recovery acceptance.
+The candidate comparison below records the selection rationale.
 
 This is a recommendation, not a claim of production validation. Reuse durable
 workflow execution rather than writing a new event journal, replay engine and
@@ -198,13 +205,13 @@ Official sources reviewed:
 - https://docs.prefect.io/v3/concepts/workers
 - https://distributed.dask.org/en/latest/resilience.html
 
-## Temporal implementation mapping (evaluation, not adoption)
+## Temporal implementation mapping (development target, not production validation)
 
 The updated design prefers short, idempotent submission Activities followed by
 Signals and receipt reconciliation for external Pool/Bridge work. Long-lived
 asynchronous Activity completion remains an alternative to evaluate, not a
 requirement. Temporal retry attempts must not automatically create new numerical
-attempts. If adopted, Temporal owns authoritative Workflow state; do not implement
+attempts. In this implementation, Temporal owns authoritative Workflow state; do not implement
 a competing coordinator journal or global Python leader election. External
 request deduplication and scientific output validation remain RSI obligations.
 The no-permanent-host requirement must include recovery of the Service and its
@@ -242,21 +249,95 @@ provider APIs without idempotency/result lookup cannot promise exactly-once
 billing. Never interpret a workflow engine's replay guarantees as exactly-once
 external effects.
 
-## First vertical slice
+## Next milestone: Temporal + real Organize, then per-sample
 
-1. Start with the Warm Pool Scheduler and Worker, using the approved primitive
-   and storage contracts. Verify durable requests/receipts and local process
-   recovery with pinned HyperQueue before integrating a Work Coordinator.
-   Temporal service/database validation remains a later, separate gate.
-2. One confirmed sample: OSP request -> compute receipt -> model request ->
-   annotation receipt. Use fake providers first; preserve mandatory decisions.
-3. Multiple datasets concurrently: while sample A waits for a model, sample B
-   must run compute and publish its result. Bound pending compute/model work
-   independently; do not reserve a dataset-wide peak while waiting.
-4. Exercise real process death, then attach the existing OSP numerical adapter
-   against a separate test pool/output root. No live output has two writers.
-5. Extend the same transition contracts to cross-sample and ZMIP, including model-directed
-   re-computation, branching lineages, cancellation and versioned retries.
+Development progress: [ORGANIZE_V2.md](ORGANIZE_V2.md) records the first
+Temporal + Warm Pool + Agent Bridge Organize integration. Two real standardized
+sources completed with confirmed experiment mappings, and a Coordinator process
+crash during model waiting recovered. The local Temporal development server did
+not provide production service/database failover; full Bridge turn-level controls
+and image/dependency pinning remain pending.
+
+Warm Pool v2 has passed local process and two-host Slurm recovery tests. Those
+synthetic computations do not establish scientific throughput. Organize
+output was subsequently verified on two real standardized sources;
+never fabricate experiment mappings to start OSP.
+
+### 1. Establish the real input and output contract
+
+Inspect available ECA-PP outputs and upstream records, then select one manageable
+real dataset with adequate experiment evidence. Record exact source paths,
+identities, cell counts and evidence in a development run manifest before running.
+Use a separate output root and explicit development endpoints; do not alter source
+data, production registrations, queues or existing results. A later concurrency
+test requires multiple independently verified real datasets.
+
+Keep exactly three execution blocks:
+
+| Block | Executor | Durable handoff |
+| --- | --- | --- |
+| `organize.prepare` | Warm Pool Worker | Source identities, compact metadata profiles and experiment evidence; release matrix memory before model waiting. |
+| `organize.plan` | Agent Bridge | Versioned organization plan and experiment-mapping proposal, with recorded model response and structural validation. |
+| `organize.execute` | Warm Pool Worker | Audit mapping coverage, cell conservation and experiment completeness before writing; publish organized files, manifests, confirmed mapping and exclusion ledger. |
+
+Reuse `upstream.py`, `organize.profile_unit`, `plan.propose_plan` and
+`execute.execute_plan`. The current plan schema does not yet carry the approved
+experiment-mapping contract. Move the relevant identification and completeness
+logic from `sample_mapping.py` / `persample.py` into these Organize boundaries;
+do not simply wrap the old CLI and leave experiment decisions downstream.
+Prompts remain English. Unknown sample provenance must be resolved or reported,
+not guessed. Mapping audit failures return evidence to planning with bounded
+correction attempts; the compute block exits and releases resources first.
+Source/IO/resource failures do not trigger biological replanning.
+
+### 2. Build the minimum Temporal integration
+
+Implement the three-block Workflow with short idempotent Pool/Bridge submission
+Activities, stable request identities, completion notifications and receipt
+reconciliation. Workflow history stores references and compact decisions, not
+expression matrices. Temporal owns dependency and iteration state; Pool owns
+resource placement. Do not add a second coordinator journal or scheduling engine.
+
+Implement the Bridge subset needed here: durable request acceptance, response
+storage and retrieval after reconnect, using the existing harness/model settings.
+Do not hold a Pool allocation while a model call waits. Unknown provider outcomes
+remain explicit; submission retries do not promise exactly-once provider billing.
+Bound model requests and prepared-result backlog independently of compute capacity.
+
+Verify Temporal service and supported database persistence on the actual storage
+and replacement-node setup, including exclusion of stale database writers.
+A development server may test SDK wiring but cannot satisfy this recovery gate.
+Reuse v2 resource controls and add runtime-image identity and Slurm remaining-time
+admission needed for these real tasks. User-provisioned allocations remain manual.
+
+### 3. Accept the real Organize workflow
+
+- One real dataset completes preparation, actual model planning and execution;
+  outputs, source cell IDs, confirmed experiment mapping and exclusion ledger
+  pass validation. An unknown or invalid mapping cannot be marked complete.
+- Across real datasets, A waiting for its model does not prevent B preparing or
+  C executing when dependencies and resource capacity permit. No dataset-wide
+  peak reservation persists through model waiting.
+- Restart Coordinator during model waiting and after result publication. Reuse
+  persisted replies and validated completed outputs; reconcile before retrying.
+- With Coordinator/Temporal unavailable, accepted bounded Pool work finishes and
+  saves receipts. Restore the control service/database on another authorized node
+  and recover progress. Do not equate a Python Worker restart with this test.
+- Lost acknowledgements, duplicate notifications and bounded failure retries do
+  not publish duplicate generations. Unknown executions wait for reconciliation
+  or fencing. Synthetic fault tests supplement, never replace, real-data acceptance.
+- Record compute intervals, model-wait intervals, resource reservations and
+  completion counts. Report measured overlap and remaining failures, not just
+  passing unit tests or nominal worker availability.
+
+### 4. Consume the accepted output in per-sample
+
+Only after Organize acceptance, prepare samples from its confirmed mapping and
+connect the existing OSP compute/annotation boundaries. Validate CPU Scanpy and
+eligible GPU RAPIDS execution there. Then extend to cross-sample and zoom-in.
+Advanced scheduling, complete Bridge redesign, tiered-storage expansion and UI
+work are outside this first milestone. Organize does not gain artificial GPU
+work merely to make a utilization graph busier.
 
 ## Recovery acceptance before any production cutover
 
@@ -293,15 +374,16 @@ UI changes follow recovery and throughput acceptance, not precede them.
 HyperQueue remains the preferred reuse candidate for Warm Pool scheduling and
 command execution. The Warm Pool design specifies required behavior, not a
 commitment to implementing a second scheduler. Prefer HQ server/worker with thin
-RSI adapters; reconcile its recovery gaps before adoption. Isolation experiments
-remain deferred while component design continues.
+RSI adapters; reconcile its recovery gaps before production adoption. The v2
+prototype now uses pinned HyperQueue and has passed local and two-host isolated
+acceptance; see WARM_POOL_V2.md for evidence and remaining limitations.
 
 
 The expanded design supersedes whole-stage resource admission: stages become
 compositions of primitive operations, with dynamic iteration and versioned
-artifact dependencies rather than a global round barrier. Temporal remains a
-candidate for both local and distributed deployments. HyperQueue is a
-candidate execution scheduler, with auto-allocation disabled by user policy.
+artifact dependencies rather than a global round barrier. Temporal is the next
+development target for both local and distributed workflows. HyperQueue backs
+the v2 prototype, with auto-allocation disabled by user policy.
 
 - [Primitive catalog, local modes and tiered storage](PRIMITIVE_OPERATIONS.zh-CN.md)
 - [Organize execution blocks (HTML)](design/00-organize/index.html)

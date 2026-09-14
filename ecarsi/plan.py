@@ -54,6 +54,7 @@ PLAN_SCHEMA = {
             },
         },
         "notes": {"type": "string"},
+        "sample_mapping": {"type": "object"},
     },
     "required": ["analysis_units", "notes"],
 }
@@ -71,8 +72,10 @@ def propose_plan(profiles: list[dict]) -> dict:
     return run_with_retry(_propose_validated, label="organize plan")
 
 
-async def _propose(profiles: list[dict]) -> dict:
-    brief = (Path(__file__).parent / "prompts" / "plan.md").read_text()
+async def _propose(profiles: list[dict], *, brief=None, cwd=None, full_result=False,
+                   on_submitted=None, require_sample_mapping=False):
+    if brief is None:
+        brief = (Path(__file__).parent / "prompts" / "plan.md").read_text()
     prompt = (
         brief
         + "\n\n## Unit profiles\n\n```json\n"
@@ -90,9 +93,13 @@ async def _propose(profiles: list[dict]) -> dict:
                     "is_error": True}
         try:
             _validate(plan, profiles)
+            if require_sample_mapping:
+                validate_sample_mapping(plan, profiles)
         except ValueError as exc:
             return {"content": [{"type": "text", "text": f"invalid, fix and resubmit: {exc}"}],
                     "is_error": True}
+        if on_submitted is not None:
+            on_submitted(plan)
         return {"content": [{"type": "text", "text": "plan accepted"}], "is_error": False, "_submitted": plan}
 
     tool = ToolSpec(
@@ -104,10 +111,35 @@ async def _propose(profiles: list[dict]) -> dict:
     )
     result = await run_agent(
         tools=[tool], submit_tool="submit_plan", prompt=prompt,
-        cwd=os.getcwd(), model=model(),
+        cwd=cwd or os.getcwd(), model=model(),
         max_turns=30, allowed_builtin=("read", "glob", "grep"), label="organize plan",
     )
-    return result.submitted
+    return result if full_result else result.submitted
+
+
+def validate_sample_mapping(plan: dict, profiles: list[dict]) -> None:
+    """New Organize contract; legacy plans remain readable in the old runner."""
+    from .persample import _validate_sample_column
+
+    mapping = plan.get("sample_mapping")
+    known = {p["name"]: p for p in profiles}
+    if not isinstance(mapping, dict) or set(mapping) != set(known):
+        raise ValueError("sample_mapping must name every source exactly once")
+    for source, decision in mapping.items():
+        if not isinstance(decision, dict) or set(decision) - {"sample_column", "confirmed_single", "rationale"}:
+            raise ValueError(f"{source}: invalid experiment decision")
+        error = _validate_sample_column(decision, known[source])
+        if error:
+            raise ValueError(f"{source}: {error}")
+        if decision["sample_column"] is None:
+            explicit = ("sample_id", "sample", "library_id", "library_plate",
+                        "cdna_plate", "plate.barcode", "plate_barcode")
+            conflicting = [name for name in explicit if
+                           known[source].get("obs_columns", {}).get(name, {}).get("n_unique", 0) > 1]
+            if conflicting:
+                raise ValueError(f"{source}: confirmed_single conflicts with multiple explicit "
+                                 f"sample/library groups in {', '.join(conflicting)}; choose a "
+                                 "complete experimental unit instead of merging by donor")
 
 
 def _validate(plan: dict, profiles: list[dict]) -> None:

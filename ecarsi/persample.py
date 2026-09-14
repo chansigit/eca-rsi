@@ -376,6 +376,9 @@ def _run(args, unit, h5ad, out, bare):
     runtime = _kernel_runtime(py)
     spec = read_json(Path(args.sample_map)) if args.sample_map else None
     explicit = {"sample_map": spec, "column": args.sample_column, "single": args.single_sample}
+    confirmed = None if bare else read_json(L.input_manifest(unit)).get("sample_mapping")
+    if confirmed and any((spec is not None, args.sample_column, args.single_sample)):
+        raise ValueError("experiment mapping was confirmed by Organize; overrides require a new Organize run")
     if old:
         if old["input_identity"] != identity or old.get("metadata_identity") != metadata or old["config"] != config:
             raise ValueError("input or configuration changed; use a new output directory")
@@ -392,9 +395,19 @@ def _run(args, unit, h5ad, out, bare):
         decision = old["sample_mapping"]
         recommendation = old.get("batch_key_recommendation")
     else:
-        table, decision = build_mapping(h5ad, None if bare else unit, spec, identify_sample_column,
-                                        args.sample_column, args.single_sample)
-        recommendation = None if bare or decision.get("batch_key") else _recommend_batch_key(unit, h5ad, table)
+        if confirmed:
+            from .sample_mapping import read_cell_table
+            mapping_path = L.input_manifest(unit).parent / confirmed["path"]
+            if file_identity(mapping_path) != confirmed["identity"]:
+                raise ValueError("confirmed Organize mapping changed")
+            table = read_cell_table(mapping_path)
+            if mapping_identity(table) != confirmed["mapping_identity"]:
+                raise ValueError("confirmed Organize cell mapping changed")
+            decision = confirmed["decision"]
+        else:
+            table, decision = build_mapping(h5ad, None if bare else unit, spec, identify_sample_column,
+                                            args.sample_column, args.single_sample)
+        recommendation = None if bare or confirmed or decision.get("batch_key") else _recommend_batch_key(unit, h5ad, table)
     kept = table[SAMPLE_KEY].ne("")
     counts = {str(k): int(v) for k, v in table.loc[kept, SAMPLE_KEY].value_counts().items()}
     entries = build_entries(h5ad, SAMPLE_KEY, counts, out, py, config["annotate"], selected_model())

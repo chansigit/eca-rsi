@@ -130,6 +130,40 @@ def _conservation_audit(units_by_name: dict, plan: dict) -> dict:
     return {"sources": audit, "unit_expected": unit_expected}
 
 
+def _experiment_audit(units_by_name: dict, plan: dict) -> dict:
+    """Before writing, prove each source experiment lands in one analysis unit."""
+    import anndata as ad
+    from .upstream import normalize
+
+    across = {}
+    for source, record in units_by_name.items():
+        a = ad.read_h5ad(record["h5ad"], backed="r")
+        try:
+            obs = a.obs
+            decision = plan["sample_mapping"][source]
+            col = decision["sample_column"]
+            values = normalize(obs[col]) if col is not None else None
+            if values is not None and values.isna().any():
+                raise ValueError(f"{source}: experiment column leaves cells unassigned")
+            owners = {}
+            for au in plan["analysis_units"]:
+                for member in au["members"]:
+                    if member["source"] != source:
+                        continue
+                    mask = _keep_mask(obs, member.get("obs_filter"))
+                    selected = obs.index if mask is None else obs.index[mask]
+                    selected_values = {"all"} if col is None else set(values.loc[selected].astype(str))
+                    for value in selected_values:
+                        if value in owners and owners[value] != au["name"]:
+                            raise ValueError(f"{source}/{value}: organize split a complete experiment "
+                                             f"between {owners[value]} and {au['name']}")
+                        owners[value] = au["name"]
+            across[source] = {"experiments": len(owners), "complete": True}
+        finally:
+            a.file.close()
+    return across
+
+
 def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: Path,
                  *, records: list[dict] | None = None, input_identity: str | None = None,
                  adapter_identity: str | None = None) -> None:
@@ -138,9 +172,13 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
     from .plan import _validate
     from .upstream import snapshot, validate_matrix, verify_snapshots
     _validate(plan, profiles)
+    if "sample_mapping" in plan:
+        from .plan import validate_sample_mapping
+        validate_sample_mapping(plan, profiles)
     units_by_name = {u["name"]: u for u in units}
     species_by_name = {p["name"]: p.get("species") for p in profiles}
     audit = _conservation_audit(units_by_name, plan)
+    experiment_audit = _experiment_audit(units_by_name, plan) if "sample_mapping" in plan else None
     print(
         "[audit] cell conservation OK: "
         + ", ".join(f"{k} {v['total']}" for k, v in audit["sources"].items())
@@ -154,6 +192,7 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
         "profiles": profiles,
         "plan": plan,
         "conservation_audit": audit,
+        "experiment_audit": experiment_audit,
         "units_written": [],
         "warnings": [],
     }
@@ -172,6 +211,8 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
                 raise ValueError(f"partial organize output was changed: {unit}")
             global_manifest["units_written"].append(item)
             saved = read_json(L.input_manifest(unit))
+            if "sample_mapping" in plan and "sample_mapping" not in saved:
+                raise ValueError(f"confirmed experiment mapping missing: {unit}")
             verify_snapshots(L.input_manifest(unit).parent, saved)
             global_manifest["warnings"].extend(saved.get("warnings", []))
             continue
@@ -242,6 +283,19 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
                 }
         unit_manifest["identity"] = file_identity(L.input_h5ad(unit))
         write_json(L.input_manifest(unit), unit_manifest)
+        if "sample_mapping" in plan:
+            from .sample_mapping import build_mapping, mapping_identity, SAMPLE_KEY
+            mapping_spec = {"sources": {src: plan["sample_mapping"][src] for src in src_totals}}
+            table, decision = build_mapping(L.input_h5ad(unit), unit, mapping_spec, None)
+            if len(table) != merged.n_obs or table[SAMPLE_KEY].eq("").any():
+                raise ValueError(f"{name}: confirmed experiment mapping does not cover every cell")
+            mapping_path = udir / L.SAMPLE_MAPPING
+            table.to_csv(mapping_path, index_label="cell_id")
+            unit_manifest["sample_mapping"] = {
+                "path": L.SAMPLE_MAPPING, "identity": file_identity(mapping_path),
+                "mapping_identity": mapping_identity(table), "decision": decision,
+            }
+            write_json(L.input_manifest(unit), unit_manifest)
         global_manifest["units_written"].append(
             {"name": name, "dir": str(unit), "n_cells": int(merged.n_obs),
              "identity": unit_manifest["identity"], "manifest_identity": file_identity(L.input_manifest(unit))}
