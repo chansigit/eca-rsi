@@ -2,8 +2,8 @@
 
 Status: approved architecture and isolated implementation; no production migration.
 Design branch: `feature/durable-workflows`. Implementation branch: `feature/warmpool-v2`.
-The [first Warm Pool implementation](WARM_POOL_V2.md) starts with local
-Scheduler/Worker recovery before scientific or Temporal integration.
+The [first Warm Pool implementation](WARM_POOL_V2.md) verifies local recovery
+and Scheduler relocation between two Slurm hosts before scientific or Temporal integration.
 
 ## Component names and proposed responsibility boundary
 
@@ -260,10 +260,10 @@ external effects.
 
 ## Recovery acceptance before any production cutover
 
-The local Warm Pool recovery slice is now implemented and has an opt-in real
-process failure test. Cross-host, Temporal, Agent Bridge and complete workflow
-recovery remain future acceptance gates; a passing local test does not establish
-the entire matrix below.
+The Warm Pool recovery slice has opt-in local and two-host Slurm tests, including
+Scheduler relocation, cross-host locking and automatic Worker reconnection.
+Whole-host loss, network partitions, Temporal, Agent Bridge and complete workflow
+recovery remain future acceptance gates; these tests do not establish the entire matrix below.
 
 
 | Injected fault | Required result |

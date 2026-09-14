@@ -5,10 +5,12 @@ requests over **HyperQueue 0.26.2**. HyperQueue handles CPU/memory placement and
 backfilling. RSI stores request identities, cancellation intent, execution
 receipts, and output hashes independently of the backend journal.
 
-This is the first local recovery milestone in the
+This is the CPU recovery milestone in the
 [approved component design](DURABLE_WORKFLOWS.md). It does not route existing
 datasets or change the production `ecarsi.pool` service. Commands in the
 acceptance test are synthetic; no scientific throughput claim follows from it.
+Both local recovery and a two-host Slurm trial have passed, including starting
+the replacement Scheduler on the other host while keeping the same state root.
 
 ## Run an isolated pool
 
@@ -136,15 +138,47 @@ cancellation, timeout cleanup, Worker/executor crashes, and input/output
 validation. It records `acceptance.json`, command start counts, receipts, and
 logs in its result directory and cleans up its own processes.
 
+The opt-in `tests/warm_pool_multinode.py` additionally checks execution on two
+Slurm hosts, the actual job cgroups and assigned CPUs, shared input/output
+hashes, cross-host filesystem locking, and Worker reconnection after Scheduler
+relocation. It requires SSH access, the same mounted image/code/state paths,
+and explicitly reserved CPUs. Run its controller with Python 3.11+ on a host
+with SSH and Apptainer installed:
+
+```bash
+PYTHONPATH="$PWD" python tests/warm_pool_multinode.py \
+  --plan /absolute/path/plan.json --root /absolute/durable/path/fresh-test-pool
+```
+
+Example plan (replace all host, allocation and CPU identifiers with your grants):
+
+```json
+{
+  "hq": "/absolute/path/hq",
+  "image": "/absolute/path/python312.sif",
+  "nodes": [
+    {"host": "node-a", "job_id": "12345", "worker_cpu": 0, "control_cpu": 1},
+    {"host": "node-b", "job_id": "12346", "worker_cpu": 0, "control_cpu": 1}
+  ]
+}
+```
+
+The 2026-09-14 trial used jobs `43113441` and `43316407` on `sh02-02n44`
+and `sh03-15n05`: five hash-computation tasks each executed once. The two
+25-second tasks recorded 24.73 and 24.89 CPU seconds. The Scheduler moved from
+the first host to the second, and subsequent work completed on both hosts.
+These are recorded test allocations, not reusable current resource assignments.
+The test does not automatically provision nodes or modify another pool's budgets.
+
 Before connecting scientific production workflows, the next gates are:
 
-1. Slurm allocation discovery, remaining walltime, worker drain/replacement,
+1. Automatic Slurm allocation discovery, remaining walltime, worker drain/replacement,
    CPU/GPU identities and memory budgets across workers on the same host.
 2. A pinned scientific image and kernel/code identity; CPU Scanpy and GPU
    RAPIDS operation variants, selected by declared capability.
-3. Cross-host recovery and shared filesystem locking/fencing tests. Current
-   evidence covers separate local processes on a Lustre state directory, not
-   host loss or network partition. Resource limits currently use CPU affinity
+3. Host-loss and network-partition recovery. Current evidence covers local
+   process failures and Scheduler relocation between two Slurm hosts with a
+   shared Lustre state directory; neither host was powered off. Resource limits currently use CPU affinity
    and a sampled process-group RSS watchdog, not hard cgroup isolation.
    Commands must not detach into untracked sessions; surviving uncertain
    processes block reuse rather than being assumed dead.
