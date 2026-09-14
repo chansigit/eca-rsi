@@ -5,7 +5,16 @@ import pytest
 
 from ecarsi.warm_pool.backend import check_runtime
 from ecarsi.warm_pool.worker import registered_worker_id
-from ecarsi.warm_pool.state import cancel, file_digest, read, save, status, submit
+from ecarsi.warm_pool.state import cancel, file_digest, read, save, status, submit, validate_trace
+
+
+def test_trace_dependencies_are_explicit_and_bounded():
+    trace = {"workflow_id": "organize/run-a", "dataset_id": "dataset-a",
+             "unit_id": "organize.plan", "depends_on": ["run-a.prepare"]}
+    assert validate_trace(trace) == trace
+    for parents in (["run-a.prepare", "run-a.prepare"], ["../escape"], "run-a.prepare", list(range(33))):
+        with pytest.raises(ValueError):
+            validate_trace(dict(trace, depends_on=parents))
 
 
 def test_durable_idempotent_submission_and_read_only_status(tmp_path):

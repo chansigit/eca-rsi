@@ -63,11 +63,19 @@ def identifier(value):
 
 
 def validate_trace(trace):
-    if not isinstance(trace, dict) or set(trace) != {"workflow_id", "dataset_id", "unit_id"}:
+    required = {"workflow_id", "dataset_id", "unit_id"}
+    if not isinstance(trace, dict) or not required <= trace.keys() or trace.keys() - required - {"depends_on"}:
         raise ValueError("trace requires workflow_id, dataset_id and unit_id")
-    for key, value in trace.items():
+    for key in required:
+        value = trace[key]
         if not isinstance(value, str) or not 0 < len(value) <= 256 or any(ord(c) < 32 for c in value):
             raise ValueError("trace " + key + " must be a nonempty printable string")
+    if "depends_on" in trace:
+        parents = trace["depends_on"]
+        if not isinstance(parents, list) or len(parents) > 32 or len(set(map(str, parents))) != len(parents):
+            raise ValueError("trace depends_on must be a unique list of at most 32 request IDs")
+        for parent in parents:
+            identifier(parent)
     return trace
 
 

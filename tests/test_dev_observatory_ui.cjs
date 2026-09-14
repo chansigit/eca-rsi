@@ -6,7 +6,8 @@ const html = fs.readFileSync(require('node:path').join(__dirname, '../ecarsi/dev
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1].replace(/refresh\(\); setInterval\(refresh,10000\);/, '');
 const elements = new Map();
 const element = id => {
-  if (!elements.has(id)) elements.set(id, {value: '', hidden: false, listeners: {}, addEventListener(name, fn) { this.listeners[name] = fn; }});
+  if (!elements.has(id)) elements.set(id, {value: '', hidden: false, listeners: {},
+    classList: {remove() {}}, addEventListener(name, fn) { this.listeners[name] = fn; }});
   return elements.get(id);
 };
 const context = vm.createContext({
@@ -40,3 +41,34 @@ element('timeline').listeners.wheel({target: {closest: () => ({getBoundingClient
 assert(prevented);
 assert.equal(element('timeline-range').value, 'custom');
 assert.equal(element('timeline-from').hidden, false);
+
+const stage = (id, workflow, dataset, operation, start, end, depends_on) => ({
+  id, service: operation === 'organize.plan' ? 'bridge' : 'pool', operation,
+  started_at: start, finished_at: end, state: operation === 'organize.plan' ? 'reply_saved' : 'succeeded',
+  trace: {workflow_id: workflow, dataset_id: dataset, unit_id: operation, ...(depends_on ? {depends_on} : {})},
+});
+const prepare = stage('run-a.prepare', 'organize/run-a', 'dataset-a', 'organize.prepare', 100, 150);
+const plan = stage('run-a.plan', 'organize/run-a', 'dataset-a', 'organize.plan', 170, 200, ['run-a.prepare']);
+const execute = stage('run-a.execute', 'organize/run-a', 'dataset-a', 'organize.execute', 220, 250);
+const otherRun = stage('run-b.execute', 'organize/run-b', 'dataset-a', 'organize.execute', 260, 290, ['run-a.prepare']);
+const unrelated = stage('unrelated', 'other/run', 'dataset-a', 'compute', 300, 330);
+const links = context.buildFlowEdges([prepare, plan, execute, otherRun, unrelated]);
+assert.equal(links.length, 2);
+assert.equal(links[0].source, 'recorded dependency');
+assert.equal(links[1].source, 'known Organize order');
+assert.equal(links[1].parent.id, 'run-a.plan');
+const root = element('timeline');
+root.clientWidth = 870;
+root.scrollHeight = 300;
+root.style = {setProperty() {}};
+root.getBoundingClientRect = () => ({left: 0, top: 0});
+root.querySelector = () => ({getBoundingClientRect: () => ({left: 245, right: 870, width: 625})});
+root.querySelectorAll = () => [prepare, plan, execute].map((task, index) => ({
+  dataset: {taskId: task.id}, offsetHeight: 25,
+  getBoundingClientRect: () => ({top: 50 + index * 45}),
+}));
+root.insertAdjacentHTML = (_, svg) => { root.flowSvg = svg; };
+assert.equal(context.drawFlow(links, 0, 400), 2);
+assert(root.flowSvg.includes('data-workflow="organize/run-a"'));
+assert(root.flowSvg.includes('class="flow-edge"'));
+assert(!root.flowSvg.includes('NaN'));

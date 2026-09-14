@@ -14,12 +14,21 @@ restores a live rolling window. Pool lanes use actual worker IDs, with extra
 display rows only when tasks overlap. Resource curves sit below that worker's
 tasks. Bridge lanes only separate overlapping calls; executor identity is not
 recorded. Queue wait for started tasks appears in task details, not on a future
-worker lane. Historical Organize records lack trace fields and are explicitly marked as inferred;
-historical worker lanes use host/CPU IDs.
+worker lane. Some legacy Organize records lack trace fields and are explicitly
+marked as inferred; historical worker lanes use host/CPU IDs.
+
+Curved connectors join completed upstream requests to started downstream
+requests across Pool and Bridge lanes. Future workflow modules can record
+predecessor request IDs in optional `trace.depends_on`; for example a plan
+could have `"depends_on":["run-17.prepare"]`. Existing Organize receipts use
+its known prepare → plan → execute order within the same workflow. No link is
+inferred from dataset name or submission order alone, so separate retries remain
+separate. Hover a task to highlight its workflow. On crowded timelines the
+connectors fade until a workflow is highlighted.
 
 New workflow modules should set the same optional `trace` object on each Pool
 or Bridge submission, for example `{"workflow_id":"osp/run-17",
-"dataset_id":"dataset-17","unit_id":"per-sample.compute"}`. Without it, a
+"dataset_id":"dataset-17","unit_id":"per-sample.compute","depends_on":["run-17.partition"]}`. Without it, a
 new operation is shown as `Unattributed`; the viewer never guesses a dataset
 from an arbitrary future request ID. `GET /api/timeline?since=<epoch>&until=<epoch>&dataset=<text>`
 returns the selected task records and downsampled resource points.

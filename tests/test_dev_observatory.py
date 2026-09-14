@@ -17,12 +17,14 @@ class ObservatoryTest(unittest.TestCase):
                  "trace": {"workflow_id": f"osp/{i}", "dataset_id": f"dataset-{i}",
                            "unit_id": "per-sample.compute"},
                  "submitted_at": i + 1, "started_at": i + 2, "finished_at": i + 3,
-                 "host": "node-a", "worker_id": "worker-a", "cpu_ids": [7]}
+                "host": "node-a", "worker_id": "worker-a", "cpu_ids": [7]}
                 for i in range(300)]
+        pool[42]["trace"]["depends_on"] = ["task-41"]
         timeline = task_timeline(pool, [], 0, 400, limit=2000)
         self.assertEqual(timeline["total"], 300)
         self.assertFalse(timeline["truncated"])
         self.assertEqual(timeline["tasks"][42]["trace"]["dataset_id"], "dataset-42")
+        self.assertEqual(timeline["tasks"][42]["trace"]["depends_on"], ["task-41"])
         self.assertEqual(timeline["tasks"][42]["worker_id"], "worker-a")
         self.assertEqual(task_timeline(pool, [], 0, 400, "dataset-42")["total"], 1)
         self.assertTrue(task_timeline(pool, [], 0, 400, limit=20)["truncated"])
