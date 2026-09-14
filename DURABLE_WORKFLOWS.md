@@ -14,7 +14,7 @@ it against those defaults. All experiments require explicit development endpoint
 separate state/output roots, and fake compute/model providers initially. Do not
 install this worktree into an environment used by the running system.
 
-## Initial choice: evaluate Temporal first
+## Initial choice: evaluate Temporal without committing to it
 
 This is a recommendation, not a claim of production validation. Reuse durable
 workflow execution rather than writing a new event journal, replay engine and
@@ -71,7 +71,7 @@ external effects.
 
 ## First vertical slice
 
-1. Isolated Temporal service and separate database/state, with pinned tooling.
+1. Establish primitive and storage contracts, then evaluate an isolated Temporal service and separate database/state, with pinned tooling.
    A development server is acceptable for experiments, not an HA deployment.
 2. One confirmed sample: OSP request -> compute receipt -> model request ->
    annotation receipt. Use fake providers first; preserve mandatory decisions.
@@ -105,3 +105,16 @@ Placement, backups and recovery objectives must be settled before production.
 Existing scientific checkpoints remain authoritative. No automatic resource
 allocation/release is added. Periscope will eventually observe the durable state;
 UI changes follow recovery and throughput acceptance, not precede them.
+
+## Primitive scheduling and HyperQueue evaluation
+
+The expanded design supersedes whole-stage resource admission: stages become
+compositions of primitive operations, with dynamic iteration and versioned
+artifact dependencies rather than a global round barrier. Temporal remains a
+candidate, not a required component of local-direct execution. HyperQueue is a
+candidate execution scheduler, with auto-allocation disabled by user policy.
+
+- [Primitive catalog, local modes and tiered storage](PRIMITIVE_OPERATIONS.zh-CN.md)
+- [HyperQueue evidence, recovery gaps and prototype acceptance](HYPERQUEUE_REVIEW.zh-CN.md)
+
+These are design documents, not implemented backend or recovery guarantees.
