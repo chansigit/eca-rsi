@@ -3,6 +3,49 @@
 Status: isolated development baseline and architecture proposal; no production migration.
 Branch: `feature/durable-workflows`.
 
+## Component names and proposed responsibility boundary
+
+Use four public component names: **Work Coordinator**, **Agent Bridge**,
+**Warm Pool Scheduler**, and **Warm Pool Worker**. There is no additional
+"Warm Pool Coordinator"; older generic coordinator/scheduler references below
+refer to Work Coordinator / Warm Pool Scheduler respectively. Temporal and HQ
+retain their own implementation-specific terminology.
+
+| Component | Owns | Does not own |
+| --- | --- | --- |
+| Work Coordinator | Versioned operation dependencies, validated decisions, iteration/convergence, cancellation intent, logical completion, and local/pool routing policy | Per-worker CPU/GPU grants, provider quotas, or executing numerical kernels |
+| Agent Bridge | Model request queues, shared quota groups, permitted model routing, persistent responses/conversation state | Scientific workflow progression or direct execution of heavy tools |
+| Warm Pool Scheduler | Admission of submitted ready computations, worker selection, concrete resource grants, worker lifecycle observations and execution-attempt placement | Biological dependencies, model decisions, convergence, or deciding which upstream scientific result is valid |
+| Warm Pool Worker | Execute bounded authorized attempts, runtime/resource enforcement, data preparation, process-tree supervision and result receipts | Inventing new workflow steps or requesting Slurm allocations |
+
+Two states answer different questions: Work Coordinator's `ready` means the
+scientific dependencies permit an operation; the execution backend's `queued`
+means that ready operation is waiting for execution resources. The coordinator
+stores the backend handle rather than independently predicting/assigning its
+worker or maintaining a second resource reservation for the same compute.
+
+The route is selected once per logical submission from explicit user policy
+(local/pool/auto), runtime compatibility, size and an advisory capacity report.
+Only the selected backend makes the actual resource grant. A timeout is not
+permission to submit the same operation to the other backend: reconcile or
+fence/cancel the original attempt first. Placement and backend selection do not
+change the scientific task identity unless the numerical implementation changes.
+
+With a pool: Work Coordinator -> Warm Pool Scheduler -> Warm Pool Worker.
+Without a pool: Work Coordinator -> local execution module -> local subprocess.
+Both modes use Agent Bridge for model work and the same operation/receipt
+contracts. The local execution module is library code, not a fifth mandatory
+service; it supplies bounded CPU/RAM/GPU/disk admission and process supervision.
+Warm Pool Workers reuse that execution code. Local execution need not run HQ,
+Slurm or a pool server, and control state must not require a live pool endpoint.
+Work Coordinator remains logically necessary but may share a process with the
+CLI and local execution module. Physical process boundaries may differ by mode.
+
+Resource requests cover only their operations, never a whole dataset's peak
+budget while waiting for a model. Bridge limits model calls; the selected
+compute backend limits numerical work. Shared storage capacity is accounted
+once per storage domain, independently of per-worker RAM reservations.
+
 ## Accepted execution model: option B (2026-09-14)
 
 The user selected persistent interaction state plus isolated compute attempts.
