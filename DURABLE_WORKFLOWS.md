@@ -1,7 +1,9 @@
 # Durable RSI workflows
 
-Status: isolated development baseline and architecture proposal; no production migration.
-Branch: `feature/durable-workflows`.
+Status: approved architecture and isolated implementation; no production migration.
+Design branch: `feature/durable-workflows`. Implementation branch: `feature/warmpool-v2`.
+The [first Warm Pool implementation](WARM_POOL_V2.md) starts with local
+Scheduler/Worker recovery before scientific or Temporal integration.
 
 ## Component names and proposed responsibility boundary
 
@@ -242,8 +244,10 @@ external effects.
 
 ## First vertical slice
 
-1. Establish primitive and storage contracts, then evaluate an isolated Temporal service and separate database/state, with pinned tooling.
-   A development server is acceptable for experiments, not an HA deployment.
+1. Start with the Warm Pool Scheduler and Worker, using the approved primitive
+   and storage contracts. Verify durable requests/receipts and local process
+   recovery with pinned HyperQueue before integrating a Work Coordinator.
+   Temporal service/database validation remains a later, separate gate.
 2. One confirmed sample: OSP request -> compute receipt -> model request ->
    annotation receipt. Use fake providers first; preserve mandatory decisions.
 3. Multiple datasets concurrently: while sample A waits for a model, sample B
@@ -256,8 +260,10 @@ external effects.
 
 ## Recovery acceptance before any production cutover
 
-Execution of isolation experiments is deferred by user instruction. Continue
-component design first; the acceptance scenarios below remain future work.
+The local Warm Pool recovery slice is now implemented and has an opt-in real
+process failure test. Cross-host, Temporal, Agent Bridge and complete workflow
+recovery remain future acceptance gates; a passing local test does not establish
+the entire matrix below.
 
 
 | Injected fault | Required result |

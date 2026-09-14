@@ -33,7 +33,7 @@ kernels = ["osp-sc[agent]>=0.1.3,<0.2", "msp-sc[agent]>=0.5.2,<0.6", "zmip>=0.3.
 front = ["osp-sc[agent]>=0.1.3,<0.2"]  # tested source revision is recorded in FRONT_COMPATIBILITY.json
 
 [tool.setuptools]
-packages = ["ecarsi", "ecarsi.pool"]
+packages = ["ecarsi", "ecarsi.pool", "ecarsi.warm_pool"]
 
 [tool.setuptools.package-data]
 ecarsi = ["prompts/*.md"]

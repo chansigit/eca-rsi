@@ -1,0 +1,71 @@
+"""Development Warm Pool CLI: explicit state root, native HQ, bounded runtime."""
+import argparse
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+from .backend import check_hq, join, serve
+from .state import cancel, file_digest, lock, read, save, status, submit, sync_directory
+
+
+def initialize(root, hq, runtime):
+    root = Path(root).resolve()
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if root.stat().st_uid != os.getuid() or root.stat().st_mode & 0o077:
+        raise ValueError("pool directory must be owned by this user with mode 0700")
+    runtime = str(Path(runtime).resolve(strict=True))
+    config = dict(protocol=1, hq=str(Path(hq).resolve(strict=True)), executor=sys.executable,
+                  runtime=dict(command=[runtime], files={runtime: file_digest(runtime)},
+                    version=subprocess.run([runtime, "--version"], capture_output=True, text=True,
+                                           check=True, timeout=10).stdout.strip()))
+    check_hq(config["hq"])
+    with lock(root / "init.lock"):
+        previous = read(root / "config.json")
+        if previous and previous != config:
+            raise ValueError("pool already initialized with a different runtime")
+        (root / "requests").mkdir(mode=0o700, exist_ok=True)
+        save(root / "config.json", config)
+        sync_directory(root.parent)
+    return dict(root=str(root), runtime=config["runtime"], version="0.26.2")
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--root", type=Path, required=True)
+    commands = p.add_subparsers(dest="command", required=True)
+    init = commands.add_parser("init")
+    init.add_argument("--hq", required=True)
+    init.add_argument("--runtime", default=sys.executable)
+    server = commands.add_parser("scheduler")
+    server.add_argument("--host")
+    worker = commands.add_parser("worker")
+    worker.add_argument("--cpus", required=True, help="explicit CPU IDs, e.g. 0,1")
+    worker.add_argument("--memory-mb", type=int, required=True)
+    worker.add_argument("--work-dir", type=Path, required=True, help="worker-local temporary directory")
+    submission = commands.add_parser("submit")
+    submission.add_argument("spec", type=Path)
+    inspection = commands.add_parser("status")
+    inspection.add_argument("request_id", nargs="?")
+    cancellation = commands.add_parser("cancel")
+    cancellation.add_argument("request_id")
+    a = p.parse_args(argv)
+    if a.command == "init":
+        result = initialize(a.root, a.hq, a.runtime)
+    elif a.command == "scheduler":
+        return serve(a.root, a.host)
+    elif a.command == "worker":
+        return join(a.root, [int(v) for v in a.cpus.split(",")], a.memory_mb, a.work_dir)
+    elif a.command == "submit":
+        result = submit(a.root, read(a.spec))
+    elif a.command == "cancel":
+        result = cancel(a.root, a.request_id)
+    else:
+        result = status(a.root, a.request_id)
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
