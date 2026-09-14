@@ -52,6 +52,7 @@ import argparse
 import base64
 import glob as _glob
 import gzip
+import hashlib
 import hmac
 import html as _h
 import http.server
@@ -64,6 +65,7 @@ import sys
 import threading
 import time
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 
@@ -152,6 +154,21 @@ class Registry:
 
     def get(self, name: str) -> Path | None:
         return self.snapshot().get(name)
+
+    def cached_snapshot(self) -> dict[str, Path]:
+        # Readers never wait on filesystem I/O under the registry write lock.
+        # _file is replaced atomically, not modified in place.
+        return {**self._file, **self._extra}
+
+    def start(self) -> None:
+        def refresh():
+            while True:
+                try:
+                    self.snapshot()
+                except OSError as exc:
+                    sys.stderr.write(f'[serve] registry refresh: {exc}\n')
+                time.sleep(5)
+        threading.Thread(target=refresh, daemon=True, name='registry-warmer').start()
 
     # -- writes (through to the file) --
     def bind(self, name: str, path: Path, force: bool = False) -> None:
@@ -260,12 +277,15 @@ NAV_JS = r"""
   models.addEventListener('click',()=>showMonitor(window.modelMonitor,window.poolMonitor,'_model_pool_panel','Agent Bridge'));
   if (pool) {
     pool.addEventListener("click", () => { if(!pool.disabled) showMonitor(window.poolMonitor, window.modelMonitor, "_warm_pool_panel", "Warm pool"); });
+    let poolFailures = 0, poolWasOnline = false;
     function poolAvailable(available){
+      if(available){poolFailures=0;poolWasOnline=true;} else {poolFailures++;}
       pool.disabled = !available;
       pool.setAttribute("aria-disabled", String(!available));
       pool.title = available ? "Monitor Slurm workers and task queue" : "Warm pool is not running or cannot be reached";
-      $("pool-state").textContent = available ? "online" : "offline";
+      $("pool-state").textContent = available ? "online" : poolWasOnline && poolFailures<3 ? "reconnecting" : "offline";
       if (!available) {
+        if(poolWasOnline && poolFailures<3) return;
         const visible = window.poolMonitor.isOpen();
         window.poolMonitor.close();
         if (visible || pool.classList.contains('active')) show("/_home");
@@ -278,7 +298,6 @@ NAV_JS = r"""
       } catch(e) { poolAvailable(false); }
       setTimeout(checkPool,5000);
     }
-    window.addEventListener('pool-unavailable', () => poolAvailable(false));
     checkPool();
   }
   const brand = $("brand"); if (brand) brand.addEventListener("click", ev => { ev.preventDefault(); show("/_home"); });
@@ -384,50 +403,88 @@ def _dataset_state(root: Path) -> dict:
 
 
 class StateCache:
-    """dataset_state() of every registered root, refreshed by a background
-    thread. The fleet pages (`/`, `/_home`) need all of them: ~90 stat/open
-    per dataset, and a cold Lustre metadata op costs ~8 ms on Oak (measured
-    2026-09-07: 167 datasets = 15k ops = 0.4 s warm, minutes cold — and the
-    mirror writes of running jobs keep invalidating the client cache). So the
-    warmer pays that cost off the request path every `ttl` seconds and the
-    pages read the last result; dataset / unit pages are still rendered live."""
+    """Fleet requests only read memory, including during a slow storage refresh."""
 
-    def __init__(self, registry: Registry, ttl: float = 60.0):
+    def __init__(self, registry: Registry, ttl: float = 60.0, cache_file: Path | None = None):
         self._registry, self._ttl = registry, ttl
         self._states: dict[Path, tuple[float, dict]] = {}
         self._lock = threading.Lock()
+        self._workflow_html = '<p class="muted">Loading workflow activity…</p>'
+        self._workflow_at = None
+        self._cache_file = cache_file
+        self._save_lock = threading.Lock()
+        self._last_saved = 0
+        if cache_file:
+            try:
+                stored = json.loads(cache_file.read_text())
+                self._states = {Path(root): (record[0], record[1]) for root, record in stored.items()}
+            except (OSError, ValueError, TypeError, AttributeError, IndexError):
+                pass  # a missing/corrupt disposable cache starts with explicit loading states
 
     def get(self, root: Path) -> dict:
         with self._lock:
             hit = self._states.get(root)
-        if hit and time.time() - hit[0] < 3 * self._ttl:  # warmer alive → never older than ttl; 3x = it died, recompute
-            return hit[1]
-        return self._put(root)
+        if hit:
+            return {**hit[1], 'cached_at': hit[0]}
+        return dict(units=0, released=0, n_input=None, final_cells=None, rounds=0,
+                    species='', finished=None, updated=None, events={'organize': [], 'release': []},
+                    stage='Loading status', cls='loading', collection='', cached_at=None)
 
     def _put(self, root: Path) -> dict:
         st = _dataset_state(root)
+        st['collection'] = index.collection_of(root)
         with self._lock:
             self._states[root] = (time.time(), st)
+        if self._cache_file and time.monotonic()-self._last_saved >= 5 and self._save_lock.acquire(blocking=False):
+            try:
+                self._last_saved = time.monotonic()
+                with self._lock:
+                    stored = {str(p): value for p, value in self._states.items()}
+                from .run_state import write_json
+                write_json(self._cache_file, stored)
+            except OSError as exc:
+                sys.stderr.write(f'[serve] state cache write: {exc}\n')
+            finally:
+                self._save_lock.release()
         return st
 
     def refresh(self) -> None:
         roots = set(self._registry.snapshot().values())
-        for root in roots:
-            self._put(root)
+        # Bound filesystem work independently of the number of browser requests.
+        with ThreadPoolExecutor(max_workers=4, thread_name_prefix='dataset-warmer') as workers:
+            list(workers.map(self._put, roots))
         with self._lock:
             for gone in set(self._states) - roots:
                 del self._states[gone]
 
-    def start(self) -> None:
+    def start(self, ready=None) -> None:
         def loop():
+            if ready is not None:
+                ready.wait()  # do not replace cached queue states with startup guesses
             while True:
                 try:
                     self.refresh()
-                except Exception as e:  # keep warming; a request falls back to a live read after 3*ttl
+                except Exception as e:
                     sys.stderr.write(f"[serve] state warmer: {e}\n")
                 time.sleep(self._ttl)
 
         threading.Thread(target=loop, daemon=True, name="state-warmer").start()
+        def workflows():
+            from .workflow_web import render
+            if ready is not None:
+                ready.wait()
+            while True:
+                try:
+                    value = render()
+                    self._workflow_html, self._workflow_at = value, time.time()
+                except Exception as exc:
+                    sys.stderr.write(f'[serve] workflow refresh: {exc}\n')
+                time.sleep(5)
+        threading.Thread(target=workflows, daemon=True, name='workflow-warmer').start()
+
+    def workflow(self):
+        age = f'Last data refresh: {index._when(self._workflow_at)}.' if self._workflow_at else 'Waiting for the first data refresh.'
+        return f'<p class="muted">{age}</p>'+self._workflow_html
 
 
 NAV_CSS = """
@@ -506,7 +563,7 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
     species: dict[str, int] = {}
     for name, p in sorted(items.items()):
         st = state(p)
-        coll = index.collection_of(p) or "other"
+        coll = (st['collection'] if 'collection' in st else index.collection_of(p)) or "other"
         short = name[len(coll) + 1:] if name.startswith(coll + "-") else name
         cells = index._n(st["final_cells"])
         sp = st.get("species") or ""
@@ -555,7 +612,7 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
         '<span class="nm"><b>Overview</b> · all datasets</span></a>'
         '<button class="item home-item" id="models-item" title="Primary and fallback model inventory"><span class="nm"><b>Agent Bridge</b></span></button>'
         '<button class="item home-item" id="pool-item" disabled aria-disabled="true" title="Checking warm pool availability">'
-        '<span class="nm"><b>Warm pool</b></span><span class="cells" id="pool-state">offline</span></button>'
+        '<span class="nm"><b>Warm pool</b></span><span class="cells" id="pool-state">checking</span></button>'
         f'<div class="sb-list" id="sb-list">{rows or empty_note}</div>'
         '<div class="sb-foot">'
         '<div class="row"><button id="bind-open" class="btn plain">+ Bind…</button><button id="unbind-go" class="btn danger" disabled>Unbind…</button></div>'
@@ -587,6 +644,8 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
 
 
 HOME_CSS = ("td.nw{white-space:nowrap}#ds-table td{padding:8px 10px}#ds-table .pill{white-space:normal;line-height:1.35;max-width:22ch}"
+            ".cell-glance{grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1.5fr) minmax(0,1.1fr)}.cell-glance .v{white-space:nowrap}"
+            "@media(max-width:700px){.cell-glance{grid-template-columns:repeat(2,minmax(0,1fr))}}"
             ".hist{position:relative;margin-top:var(--s1)}.hist-svg{display:block;width:100%;height:auto}"
             ".hist-svg .grid{stroke:var(--line);stroke-width:1}.hist-svg .tick{font-size:11px;fill:var(--muted)}"
             ".hist-svg .ser{fill:none;stroke-width:2.25;stroke-linejoin:round}.hist-svg .ser.in{stroke:var(--muted)}.hist-svg .ser.rel{stroke:var(--ok)}"
@@ -604,8 +663,10 @@ def fleet_history(states: dict) -> dict:
     out = {}
     for name, (s, p) in sorted(states.items()):
         ev = s.get("events") or {}
-        out[name] = {"collection": index.collection_of(p), "species": s["species"],
-                     "organize": [list(e) for e in ev.get("organize", [])], "release": [list(e) for e in ev.get("release", [])]}
+        out[name] = {"collection": s['collection'] if 'collection' in s else index.collection_of(p), "species": s["species"],
+                     "organize": [list(e) for e in ev.get("organize", [])], "release": [list(e) for e in ev.get("release", [])],
+                     "state": s["cls"], "input_cells": s.get("n_input") or 0,
+                     "final_cells": s.get("final_cells") or 0}
     return {"datasets": out}
 
 
@@ -617,6 +678,20 @@ def history_at(hist: dict, at: float) -> dict:
         r = [n for t, n in d["release"] if t <= at]
         cin += sum(o); rel += sum(r); din += bool(o); drel += bool(r)
     return {"at": at, "cells_in": cin, "cells_released": rel, "datasets_started": din, "datasets_released": drel}
+
+
+def fleet_totals(hist: dict) -> dict:
+    """Current cards and the curve share the same dated input/release events."""
+    result = history_at(hist, time.time())
+    rows = list(hist["datasets"].values())
+    result["cells_queued"] = sum(max(0, d["input_cells"] - sum(n for _, n in d["organize"]))
+                                 for d in rows if d["state"] == "queued")
+    result["undated_input"] = sum(max(0, d["input_cells"] - sum(n for _, n in d["organize"]))
+                                  for d in rows if d["state"] not in {"queued", "neutral"})
+    released = [d for d in rows if d["state"] == "released"]
+    denominator = sum(d["input_cells"] for d in released)
+    result["kept"] = 100 * sum(d["final_cells"] for d in released) / denominator if denominator else None
+    return result
 
 
 def _parse_at(text: str) -> float:
@@ -650,12 +725,29 @@ HISTORY_JS = r"""
   // -- state --
   let ev = events(), lo = null, hi = null, drag = null;
   const now = () => Date.now() / 1000;
-  function totals(t){ let cin = 0, rel = 0, din = 0, drel = 0, last = null;
-    for (const e of ev) { if (e.t > t) break; if (e.k === "in") { cin += e.n; din++; } else { rel += e.n; drel++; } last = e; }
-    return {cin, rel, din, drel, last}; }
+  function totals(t){ let cin = 0, rel = 0, last = null; const started = new Set(), released = new Set();
+    for (const e of ev) { if (e.t > t) break; if (e.k === "in") { cin += e.n; started.add(e.nm); } else { rel += e.n; released.add(e.nm); } last = e; }
+    return {cin, rel, din:started.size, drel:released.size, last}; }
+  function cards(){
+    const rows = names().map(n => D.datasets[n]).filter(Boolean), k = totals(now());
+    let pending = 0, undated = 0, releasedInput = 0, releasedOutput = 0; const counts = {};
+    for(const d of rows){ counts[d.state] = (counts[d.state] || 0)+1;
+      const missing = Math.max(0,d.input_cells-d.organize.reduce((s,e)=>s+e[1],0));
+      if(d.state === 'queued') pending += missing; else if(d.state !== 'neutral') undated += missing;
+      if(d.state === 'released'){releasedInput += d.input_cells;releasedOutput += d.final_cells;}}
+    const values = {datasets:rows.length,'cells-in':k.cin,'cells-released':k.rel,'cells-queued':pending,
+      kept:releasedInput ? (100*releasedOutput/releasedInput).toFixed(0)+'%' : '—'};
+    for(const el of document.querySelectorAll('.stat[data-stat]')){
+      const key=el.dataset.stat, value=key.startsWith('state-') ? counts[key.slice(6)] || 0 : values[key];
+      el.querySelector('.v').textContent=typeof value === 'number' ?
+        (['cells-in','cells-queued'].includes(key) && value>=10000000 ? (value/1000000).toFixed(2)+' M' : value.toLocaleString('en-US')) : value;}
+    const note=document.getElementById('hist-undated'); if(note){note.hidden=!undated;
+      note.textContent=undated.toLocaleString('en-US')+' input cells lack a recorded start time and are excluded from Cells in and the time curve.';}
+  }
   // -- drawing --
   const W = 960, H = 280, L = 64, R = 16, T = 14, B = 34;
   function draw(){
+    cards();
     box.innerHTML = "";
     if (!ev.length) { box.innerHTML = '<p class="empty">nothing to plot — no bound dataset has an organize line in its log</p>'; if (nEl) nEl.textContent = ""; return; }
     const t0 = lo ?? ev[0].t, t1 = hi ?? now(), span = Math.max(t1 - t0, 60);
@@ -684,7 +776,7 @@ HISTORY_JS = r"""
     hit.addEventListener("mousemove", e => {
       const t = Math.min(Math.max(tAt(e), t0), t1), k = totals(t); cross.setAttribute("x1", x(t)); cross.setAttribute("x2", x(t)); cross.style.display = "";
       tip.style.display = "block"; tip.innerHTML = `<b>${fmtT(t)}</b><br>cells in <b>${k.cin.toLocaleString()}</b> · released <b>${k.rel.toLocaleString()}</b>` +
-        (k.cin ? ` · kept ${(100 * k.rel / k.cin).toFixed(0)}%` : "") + `<br><span class="m">${k.din} started · ${k.drel} released</span>` +
+        (k.cin ? ` · released / in ${(100 * k.rel / k.cin).toFixed(0)}%` : "") + `<br><span class="m">${k.din} started · ${k.drel} released</span>` +
         (k.last ? `<br><span class="m">last: ${k.last.nm} ${k.last.k === "in" ? "started" : "released"} +${k.last.n.toLocaleString()} at ${fmtT(k.last.t).slice(5)}</span>` : "");
       const bx = box.getBoundingClientRect(); tip.style.left = Math.min(e.clientX - bx.left + 14, bx.width - 300) + "px"; tip.style.top = (e.clientY - bx.top + 14) + "px";
       if (drag !== null) { const a = Math.min(x(drag), x(t)), b = Math.max(x(drag), x(t)); zoom.setAttribute("x", a); zoom.setAttribute("width", b - a); zoom.style.display = ""; } });
@@ -727,27 +819,40 @@ HOME_JS = r"""
 """
 
 
-def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
+def _home_html(items: dict[str, Path], state=_dataset_state, workflow_html=None) -> str:
     """Overview: what this site is, fleet numbers, and a filterable, sortable
     table of every dataset. This is the page `/` opens."""
     import time
+    from .workflow_web import render as workflow_activity
 
     e = _h.escape
     states = {name: (state(p), p) for name, p in items.items()}
+    cached = [s.get('cached_at') for s, _ in states.values() if 'cached_at' in s]
+    freshness = ''
+    if cached:
+        known = [stamp for stamp in cached if stamp is not None]
+        oldest = index._when(min(known)) if known else 'not yet available'
+        freshness = (f'<p class="muted" role="status">Dataset summaries: {len(known)} / {len(cached)} loaded. '
+                     f'Oldest refresh: {oldest}. Showing the last available data while refreshing in the background.</p>')
     by = lambda c: sum(1 for s, _ in states.values() if s["cls"] == c)  # noqa: E731
-    cells_in = sum(s["n_input"] or 0 for s, _ in states.values())
-    cells_out = sum(s["final_cells"] or 0 for s, _ in states.values() if s["cls"] == "released")
-    stats = [(str(len(items)), "datasets", "")] + [
-             (str(by(cls)), label, cls)
-             for cls, label in DATASET_STATES if by(cls) or cls in {"released", "running", "queued", "failed"}] + [
-             (index._n(cells_in) or "0", "cells in", ""), (index._n(cells_out) or "0", "cells released", ""),
-             (f"{100 * cells_out / cells_in:.0f}%" if cells_in else "", "cells kept", "")]
-    stat_html = "".join(f'<div class="stat"><span class="v{" st " + c if c and int(v) else ""}">{e(v)}</span><span class="k">{e(k)}</span></div>'
-                        for v, k, c in stats)
+    history = fleet_history(states)
+    totals = fleet_totals(history)
+    stats = [(str(len(items)), "datasets", "", "datasets")] + [
+             (str(by(cls)), label, cls, "state-" + cls)
+             for cls, label in DATASET_STATES if by(cls) or cls in {"released", "running", "queued", "failed"}]
+    compact = lambda n: f'{n/1_000_000:.2f} M' if n >= 10_000_000 else f'{n:,}'
+    cell_stats = [
+             (compact(totals["cells_in"]), "cells in", "", "cells-in"),
+             (compact(totals["cells_queued"]), "cells awaiting start", "", "cells-queued"),
+             (index._n(totals["cells_released"]) or "0", "cells released", "", "cells-released"),
+             (f'{totals["kept"]:.0f}%' if totals["kept"] is not None else "—", "kept in completed datasets", "", "kept")]
+    def stat_html(rows):
+        return "".join(f'<div class="stat" data-stat="{key}"><span class="v{" st " + c if c and int(v) else ""}">{e(v)}</span><span class="k">{e(k)}</span></div>'
+                       for v, k, c, key in rows)
     rank = {cls: i for i, (cls, _) in enumerate(DATASET_STATES)}
     rows = []
     for name, (s, p) in sorted(states.items()):
-        coll = index.collection_of(p)
+        coll = s['collection'] if 'collection' in s else index.collection_of(p)
         short = name[len(coll) + 1:] if coll and name.startswith(coll + "-") else name  # the collection has its own column
         kept = 100 * s["final_cells"] / s["n_input"] if s["n_input"] and s["final_cells"] is not None else None
         rows.append(
@@ -776,21 +881,34 @@ def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
         "until the loop converged. A dataset page shows the numbers, the rounds, the final UMAP with coarse and fine labels, "
         "the cell-identity Sankey, the review items and where the result files live.</p>"
         '<p class="next">Pick a dataset in the table or the sidebar. Green = released, amber = still running, red = failed.</p></header>'
-        f'<div class="glance">{stat_html}</div>'
+        f'{freshness}<div class="glance">{stat_html(stats)}</div>'
+        f'<div class="glance cell-glance" aria-label="Cell counts">{stat_html(cell_stats)}</div>'
+        '<section class="block" id="workflows"><h2>Workflow activity</h2>'
+        f'<div id="workflow-status">{workflow_activity() if workflow_html is None else workflow_html}</div>'
+        '<p class="muted" id="workflow-refresh">Refreshes every 5 seconds.</p></section>'
         '<section class="block" id="history"><h2>Cells over time <span class="count" id="hist-n"></span></h2>'
-        '<p class="lede">Cells enter the curve when a dataset\'s run starts (its organize step) and are released when it releases. '
+        '<p class="lede">Cells in and this curve count cells at their recorded organize step; queued inputs are shown separately as Cells awaiting start. '
+        'Cells released counts recorded releases, including released units of a dataset still running. '
         'Read from the run logs of whatever is bound right now — unbind a dataset and it leaves the past too. '
-        'Hover to read a moment, drag to zoom, double-click to reset; the table filter below narrows the curve as well.</p>'
+        'Hover to read a moment, drag to zoom, double-click to reset. The table filter applies to both the summary cards and the curve; time zoom only changes the curve.</p>'
+        f'<p class="muted" id="hist-undated"{" hidden" if not totals["undated_input"] else ""}>'
+        f'{totals["undated_input"]:,} input cells lack a recorded start time and are excluded from Cells in and the time curve.</p>'
         '<div class="toolbar hist-range"><button type="button" data-r="1">24h</button><button type="button" data-r="7">7d</button>'
         '<button type="button" data-r="30">30d</button><button type="button" data-r="0" class="on">all</button></div>'
         '<div id="hist" class="hist"></div><div id="hist-tip" class="sk-tip" style="display:none"></div></section>'
         f'<section class="block" id="datasets"><h2>Datasets <span class="count" id="ds-n">{len(rows)} datasets</span></h2>'
-        '<p class="lede">Cells in is the number of cells the run started from; cells out is what the release keeps; kept is out / in. Click a column header to sort.</p>'
+        '<p class="lede">Input counts include declared queued inputs. Cells out shows the latest output count; kept is out / in. Click a column header to sort.</p>'
         '<div class="toolbar"><label for="ds-q">Filter</label><input id="ds-q" type="search" placeholder="name, collection, species, status…" autocomplete="off"></div>'
         f"{table}</section>"
         f'<footer>rendered {time.strftime("%Y-%m-%d %H:%M:%S")} by {APP} (ecarsi serve) from the registry · reload for the current state</footer>'
-        f"</main><script>const HISTORY_DATA = {json.dumps(fleet_history(states))};</script>"
-        f"<script>{HOME_JS}</script><script>{HISTORY_JS}</script></body></html>"
+        f"</main><script>const HISTORY_DATA = {json.dumps(history)};</script>"
+        f"<script>{HOME_JS}</script><script>{HISTORY_JS}</script>"
+        "<script>(async function refreshWorkflows(){try{const r=await fetch('/_workflows/status.json',"
+        "{cache:'no-store',signal:AbortSignal.timeout(8000)});if(!r.ok)throw Error(r.status);"
+        "document.getElementById('workflow-status').innerHTML=(await r.json()).html;"
+        "document.getElementById('workflow-refresh').textContent='Updated '+new Date().toLocaleTimeString()+' · refreshes every 5 seconds';}"
+        "catch(e){document.getElementById('workflow-refresh').textContent='Refresh failed · showing last received data · retrying';}"
+        "setTimeout(refreshWorkflows,5000);})();</script></body></html>"
     )
 
 
@@ -825,6 +943,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self._registry = registry
         self._auth = auth  # "user:pass" -> HTTP basic auth enforced here, on every request; None = open
         self._state = states.get if states else _dataset_state  # fleet pages: cached states when a warmer runs
+        self._states = states
+        self._items = registry.cached_snapshot if states else registry.snapshot
         self._pool_scheduler = pool_scheduler
         super().__init__(
             *a, **kw
@@ -865,7 +985,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def _send(self, code: int, body: bytes, ctype: str) -> None:
         self.send_response(code)
         self.send_header("Content-Type", ctype)
-        if urllib.parse.unquote(self.path).startswith(("/_pool", "/_models")):
+        if urllib.parse.unquote(self.path).startswith(("/_pool", "/_models", "/_workflows")):
             self.send_header("Cache-Control", "no-store")
         if len(body) > 1024 and "gzip" in self.headers.get("Accept-Encoding", ""):
             body = gzip.compress(body, 5)  # rendered pages are 80-450 KB of HTML and compress ~5x; matters through the tunnel
@@ -951,9 +1071,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._json(400, {"ok": False, "error": str(e)})
 
     def do_GET(self):
+        started = time.monotonic()
+        try:
+            return self._get()
+        finally:
+            elapsed = time.monotonic()-started
+            if elapsed >= 2:
+                self.log_message('slow GET %s duration=%.3fs', self.path.split('?', 1)[0], elapsed)
+
+    def _get(self):
         if not self._authorized():
             return self._demand_auth()
         raw = self.path.split("?", 1)[0]
+        if raw == "/_workflows/status.json":
+            from .workflow_web import render
+            return self._json(200, {"html": self._states.workflow() if self._states else render()})
         if raw == "/_models/status.json":
             from . import model_web
             try:
@@ -966,16 +1098,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if pool_path not in {"/_pool/health", "/_pool/status.json"}:
                 return self._json(404, {"error": "Not found"})
             from . import pool_web
-            state = pool_web.snapshot(self._pool_scheduler)
+            state = pool_web.snapshot(self._pool_scheduler, health_only=pool_path == "/_pool/health")
             if pool_path == "/_pool/health":
                 return self._json(200, {"available": state is not None})
             if state is None:
                 return self._json(503, {"error": "Warm pool is not running or cannot be reached"})
             return self._json(200, state)
         if raw == "/_home":
-            return self._html(_home_html(self._registry.snapshot(), self._state))
+            return self._html(_home_html(self._items(), self._state,
+                                        self._states.workflow() if self._states else None))
         if raw == "/_history.json":  # the curve's data; ?at=YYYY-MM-DDTHH:MM (or epoch) reads it at one moment
-            hist = fleet_history({n: (self._state(p), p) for n, p in self._registry.snapshot().items()})
+            hist = fleet_history({n: (self._state(p), p) for n, p in self._items().items()})
             at = urllib.parse.parse_qs(self.path.partition("?")[2]).get("at")
             if not at:
                 return self._json(200, hist)
@@ -986,10 +1119,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         parts = [p for p in raw.split("/") if p]
         if not parts:
             return self._html(
-                _navigator_html(self._registry.snapshot(), self._registry.path, self._state)
+                _navigator_html(self._items(), self._registry.path, self._state)
             )
         name = parts[0]
-        root = self._registry.get(name)
+        root = self._items().get(name)
         if root is None:
             # `message` (the short arg) lands in the HTTP status line and
             # must be latin-1 — anything fancier (em dash, etc.) belongs in
@@ -1092,6 +1225,10 @@ def start_ngrok(port: int, domain: str | None) -> tuple[subprocess.Popen, str]:
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
+    from .batch import start_monitor
+    monitor_ready = start_monitor()
+    from .pool_web import start_averages
+    start_averages()
     reg_path = Path(args.registry).expanduser().resolve()
     extra: dict[str, Path] = {}
     for d in args.dir:
@@ -1109,8 +1246,10 @@ def cmd_serve(args: argparse.Namespace) -> int:
         extra[p.name] = p
     registry = Registry(reg_path, extra)
     items = registry.snapshot()
-    states = StateCache(registry)
-    states.start()
+    registry.start()
+    cache_key = hashlib.sha256(str(reg_path).encode()).hexdigest()[:16]
+    states = StateCache(registry, cache_file=Path.home()/'.cache/ecarsi-periscope'/f'{cache_key}.json')
+    states.start(monitor_ready)
     httpd = http.server.ThreadingHTTPServer(
         (args.bind, args.port), partial(Handler, registry=registry, auth=args.auth, states=states,
                                       pool_scheduler=args.pool_scheduler)

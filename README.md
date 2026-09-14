@@ -428,3 +428,4 @@ governance prompts, and timing examples do not describe the current `ecarsi`
 workflow. `attic-v01/` is an older archive.
 
 Manually provisioned Slurm workers can share the optional [warm pool](SLURM_POOL.md), with independent drivers and CPU/memory/GPU/time-aware admission.
+For the complete Sherlock workflow, see [从申请节点到结束计算](SLURM_POOL_GUIDE.zh-CN.md).

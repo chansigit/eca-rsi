@@ -225,17 +225,10 @@ def _estimate_bytes(n_cells: int) -> int:
     return int(n_cells * per_cell) + FIXED_BYTES_PER_CHILD
 
 
-def _driver_estimate_bytes(entry: dict) -> int:
-    """Remote compute reserves worker memory separately; budget annotation here."""
-    full = _estimate_bytes(entry["n_cells"])
-    if os.environ.get("OSP_COMPUTE_ENDPOINT", "local") != "pool":
-        return full  # auto may still choose local computation
-    subset = Path(entry["outdir"]) / SUBSET_FILE
-    if not subset.is_file():
-        return full
-    # Subsets are written uncompressed. Allow copies plus Python/kernel imports;
-    # the worker still uses the full computation estimate in run_compute().
-    return min(full, FIXED_BYTES_PER_CHILD + 4 * subset.stat().st_size)
+def drive(*args, **kwargs):
+    from .osp_dispatch import drive as dispatch
+    return dispatch(*args, **kwargs)
+
 
 
 def plan_concurrency(pending: list[dict]) -> tuple[int, int, int]:
@@ -264,9 +257,11 @@ def write_subsets(h5ad: Path, mapping, pending: list[dict], batch: dict | None =
     for e in pending:
         outdir = Path(e["outdir"])
         outdir.mkdir(parents=True, exist_ok=True)
-        ids = mapping.index[mapping[SAMPLE_KEY] == e["value"]]
+        ids = mapping.index[mapping[SAMPLE_KEY] == e["value"]].astype(str)
         with writer_lock(outdir / ".writer.lock"):
             sub = full[ids].copy()
+            if not sub.obs_names.equals(ids):
+                raise ValueError('subset cell IDs differ from the confirmed sample mapping')
             sub.obs[SAMPLE_KEY] = e["value"]
             if batch:
                 sub.obs[batch["column"]] = batch["of_sample"][e["value"]]
@@ -289,126 +284,6 @@ def _pump(proc: subprocess.Popen, tag: str, tail: deque, unit: Path | None = Non
         if unit is not None:
             cost._scan_line(unit, f"{L.PERSAMPLE}/{tag}", line)
 
-
-def drive(pending: list[dict], out_root: Path, annotate: bool, on_done=None) -> list[dict]:
-    """Run every pending sample's command as a child process under the
-    concurrency plan; one retry per sample; failures go to failures.md.
-    Returns the entries that did not finish.
-
-    AGENT_MODEL_POOL_ROTATE=1 (with AGENT_MODEL_POOL set) hands the Nth
-    launched worker a copy of the pool rotated by N instead of the same
-    unrotated spec every worker would otherwise resolve fresh in its own
-    process -- spreads first attempts across an equally-trusted pool so
-    many concurrent samples don't all hit the same candidate at once
-    (eca-rsi#7). A retried sample gets the next launch's rotation, not the
-    one that just failed. Off by default: without it every worker prefers
-    the same primary, which is the right default for a quality-ranked
-    fallback list rather than equally-trusted alternatives."""
-    import resource
-
-    from harness_bridge.control import PauseRequested, pause_requested
-
-    if not pending:
-        return []
-    if os.environ.get("OSP_COMPUTE_ENDPOINT", "local") == "local":
-        pending = sorted(pending, key=lambda e: -e["n_cells"])  # local memory planning
-    max_parallel, budget, threads = plan_concurrency(pending)
-    from .resources import available_cpus, available_memory_bytes
-
-    print(f"[drive] {len(pending)} sample(s), up to {max_parallel} at once, {threads} thread(s) each, "
-          f"memory budget {budget / 2**30:.1f} GiB ({available_cpus()} cpu(s), "
-          f"{available_memory_bytes() / 2**30:.1f} GiB available)", flush=True)
-    env = dict(os.environ)
-    # Also supports OSP_PYTHON with only the kernel installed.
-    env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent) + os.pathsep + env.get("PYTHONPATH", "")
-    for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS",
-              "MSP_MAX_THREADS"):
-        env[k] = str(threads)
-    pool_spec = env.get("AGENT_MODEL_POOL", "")
-    rotate = bool(pool_spec) and env.get("AGENT_MODEL_POOL_ROTATE", "").strip() not in ("", "0")
-    launched = 0
-
-    queue = list(pending)
-    running: dict[str, tuple] = {}  # value -> (proc, est, t0, entry, tail)
-    attempts: dict[str, int] = {}
-    failed: list[dict] = []
-    paused = False
-    while queue or running:
-        for value in list(running):
-            proc, est, t0, e, tail = running[value]
-            rc = proc.poll()
-            if rc is None:
-                continue
-            del running[value]
-            took = (time.time() - t0) / 60
-            outdir = Path(e["outdir"])
-            if rc == 0 and is_done(outdir, annotate, e.get("identity")):
-                print(f"[drive] {value} done in {took:.1f} min", flush=True)
-                (outdir / SUBSET_FILE).unlink(missing_ok=True)
-                (outdir / "computed.h5ad").unlink(missing_ok=True)
-                (outdir / "compute_state.json").unlink(missing_ok=True)
-                if on_done:
-                    on_done(e, took)
-            elif rc == 3:
-                paused = True
-                print(f"[drive] {value} paused after {took:.1f} min", flush=True)
-            elif is_empty(outdir, e.get("identity")):
-                # QC removed every cell: nothing to cluster, nothing lost —
-                # all of them are in qc_removed.csv with a reason
-                print(f"[drive] {value}: no cell passed OSP QC after {took:.1f} min — kept as an empty sample "
-                      f"({e['n_cells']} cells, all in qc_removed.csv); not offered to integration", flush=True)
-                (outdir / SUBSET_FILE).unlink(missing_ok=True)
-                if on_done:
-                    on_done(e, took)
-            elif (attempts[value] < 2 and (outdir / L.RUN_STATE).is_file()
-                  and read_json(outdir / L.RUN_STATE).get("retryable") is True):
-                print(f"[drive] {value} FAILED (exit {rc}) after {took:.1f} min — retrying once", flush=True)
-                queue.append(e)
-            else:
-                print(f"[drive] {value} FAILED (exit {rc}) after {took:.1f} min — recorded, moving on",
-                      flush=True)
-                with open(out_root / "failures.md", "a") as f:
-                    f.write(f"## {value} ({e['n_cells']} cells) — exit {rc}, {time.strftime('%Y-%m-%d %H:%M')}\n\n"
-                            f"command: `{shlex.join(e['command'])}`\n\n```\n" + "\n".join(tail) + "\n```\n\n")
-                failed.append(e)
-        used = sum(est for _, est, _, _, _ in running.values())
-        paused = paused or pause_requested()
-        while queue and len(running) < max_parallel and not paused and not pause_requested():
-            e = queue[0]
-            est = _driver_estimate_bytes(e)
-            if running and used + est > budget:
-                break  # wait for memory; an idle pool always admits the next one
-            queue.pop(0)
-            value = e["value"]
-            outdir = Path(e["outdir"])
-            outdir.mkdir(parents=True, exist_ok=True)
-            attempts[value] = attempts.get(value, 0) + 1
-            tail: deque = deque(maxlen=40)
-            child_env = env
-            if rotate:
-                from harness_bridge import rotate_model_pool
-                child_env = {**env, "AGENT_MODEL_POOL": rotate_model_pool(pool_spec, launched)}
-            launched += 1
-            proc = subprocess.Popen(e["command"], stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, text=True, env=child_env, bufsize=1,
-                                    cwd=str(outdir))
-            threading.Thread(target=_pump, args=(proc, value, tail, out_root.parent if out_root.name == L.PERSAMPLE else None), daemon=True).start()
-            running[value] = (proc, est, time.time(), e, tail)
-            used += est
-            print(f"[drive] {value} started (attempt {attempts[value]}): {e['n_cells']} cells, "
-                  f"est {est / 2**30:.1f} GiB, {len(running)} running, {len(queue)} waiting", flush=True)
-        if paused and not running:
-            break
-        if running:
-            time.sleep(5)
-    peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * 1024
-    print(f"[drive] peak child RSS {peak / 2**30:.1f} GiB (largest sample {pending[0]['n_cells']} cells; "
-          f"tune PERSAMPLE_MEM_PER_CELL_MB from this)", flush=True)
-    if paused:
-        error = PauseRequested()
-        error.failed_samples = failed
-        raise error
-    return failed
 
 
 # ---------------------------------------------------------------- cli
@@ -436,6 +311,10 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
     unit = Path(args.unit).resolve()
     bare = unit.suffix == ".h5ad"
+    if not bare:
+        from .osp_dispatch import released
+        if released(unit):
+            return 0
     if not bare:
         os.environ["ECA_RSI_CONTROL"] = str(unit / L.LOOP_CONTROL)
     safe_point()
@@ -506,8 +385,8 @@ def _run(args, unit, h5ad, out, bare):
             print("[persample] runtime changed since this unit started; continuing (developer mode)")
         if any((spec is not None, args.sample_column, args.single_sample)) and old["explicit_mapping"] != explicit:
             raise ValueError("experiment mapping changed; use a new output directory")
-        table = pd.read_csv(out / L.SAMPLE_MAPPING, index_col=0, dtype=str, keep_default_na=False)
-        table.index = table.index.astype(str)
+        from .sample_mapping import read_cell_table
+        table = read_cell_table(out / L.SAMPLE_MAPPING)
         if mapping_identity(table) != old["mapping_identity"]:
             raise ValueError("recorded cell/sample mapping changed")
         decision = old["sample_mapping"]

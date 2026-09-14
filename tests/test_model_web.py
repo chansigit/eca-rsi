@@ -3,6 +3,25 @@ import json
 from ecarsi import model_web
 
 
+def test_agent_bridge_activity_snapshot_and_escaped_recent_calls(tmp_path, monkeypatch):
+    from harness_bridge import telemetry
+    monkeypatch.setenv('AGENT_BRIDGE_TELEMETRY_DIR', str(tmp_path / 'telemetry'))
+    telemetry.record('start', 'call1', label='<img src=x onerror=alert(1)>', cwd='/data/sample')
+    telemetry.record('attempt', 'call1', harness='openai', model='model<unsafe>')
+    telemetry.record('model_start', 'call1')
+    catalog = tmp_path / 'models.json'
+    catalog.write_text(json.dumps({'models': []}))
+    data = model_web.snapshot({'ECA_MODEL_CATALOG': str(catalog)})
+    assert len(data['activity']['active']) == 1
+    page = model_web.render(data)
+    assert 'Waiting for model' in page and 'Active turns' in page and 'By model' in page
+    assert '&lt;img' in page and '<img' not in page and 'model&lt;unsafe&gt;' in page
+    telemetry.record('success', 'call1', harness='openai', model='model<unsafe>', tokens_in=42, tokens_out=7)
+    data = model_web.snapshot({'ECA_MODEL_CATALOG': str(catalog)})
+    assert data['activity']['active'] == [] and data['activity']['tokens_in'] == 42
+    assert '42 in / 7 out' in model_web.render(data)
+
+
 def test_model_order_validation_and_public_fields(tmp_path):
     catalog = tmp_path / 'models.json'
     catalog.write_text(json.dumps({'source': '<img src=x onerror=alert(1)>',

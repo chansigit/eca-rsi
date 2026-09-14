@@ -1,4 +1,6 @@
 """Combine the admission ledger with Dask's existing worker metrics."""
+import json
+from pathlib import Path
 import time
 
 
@@ -15,7 +17,7 @@ def summarize(state, workers):
     for address, p in state["workers"].items():
         metrics = workers.get(address, {}).get("metrics", {})
         tasks = [t for t in state["tasks"].values()
-                 if t.get("worker") == address and t["state"] in {"granted", "running"}]
+                 if t.get("worker") == address and t["state"] in {"granted", "running", "stopping"}]
         status = tasks[0]["state"] if tasks else "idle"
         if p.get("draining"):
             status = "draining"
@@ -23,10 +25,25 @@ def summarize(state, workers):
             status = "stale"
         if now >= p["end_time"] - 60:
             status = "expiring"
+        usage = {}
+        pid = p.get("supervisor", {}).get("pid")
+        if type(pid) is int and pid > 0 and '/' not in p['host'] and p['host'] not in {'.', '..'}:
+            try:
+                value = json.loads((Path.home()/'.cache/ecarsi-pool'/p['host']/f'worker-{pid}.usage.json').read_text())
+                if (value.get('pid') == pid and value.get('boot_id') == p.get('boot_id')
+                        and value.get('cpu_ids') == p['cpu_ids'] and 0 <= now-value['observed_at'] < 45):
+                    usage = value
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
         rows.append({**p, "address": address, "state": status,
                      "task": tasks[0].get("label") if tasks else None,
-                     "cpu_percent": metrics.get("cpu", 0) / p["cpus"] if "cpu" in metrics else None,
-                     "rss_bytes": metrics.get("memory"), "metrics_time": metrics.get("time"),
+                     "tasks": [t.get('label', t['id']) for t in tasks],
+                     "reserved_cpus": sum(t['cpus'] for t in tasks),
+                     "reserved_memory": sum(t['memory'] for t in tasks),
+                     "cpu_percent": usage.get("cpu_percent", metrics.get("cpu", 0) / p["cpus"] if "cpu" in metrics else None),
+                     "rss_bytes": usage.get("rss_bytes", metrics.get("memory")),
+                     "metrics_time": usage.get("observed_at", metrics.get("time")),
+                     "metrics_source": "process_tree" if usage else "dask_process",
                      "remaining_seconds": max(0, int(p["end_time"] - now))})
     return {"observed_at": now, "workers": rows,
             "queued": [t for t in state["tasks"].values() if t["state"] == "queued"]}

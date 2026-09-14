@@ -12,7 +12,7 @@ REQUEST = "request.json"
 
 
 def validate_outputs(outdir: Path, annotate: bool) -> dict:
-    import anndata as ad
+    from .downstream import _data
     import numpy as np
     import pandas as pd
 
@@ -34,7 +34,12 @@ def validate_outputs(outdir: Path, annotate: bool) -> dict:
     qc = pd.read_csv(outdir / "qc_summary.csv", index_col=0, dtype=str).iloc[:, 0]
     if not qc.index.is_unique:
         raise ValueError("duplicate QC summary metrics")
-    a = ad.read_h5ad(outdir / "clustered.h5ad", backed="r")
+    # AnnData's backed reader still loads layers into RAM. Reuse the downstream
+    # metadata/sparse reader: this contract needs cell labels, not count values.
+    try:
+        a = _data(outdir / "clustered.h5ad")
+    except KeyError as exc:
+        raise ValueError("clustered H5AD lacks required metadata or counts") from exc
     try:
         survivors = set(a.obs_names)
         deleted = set(removed.cell)
@@ -44,8 +49,6 @@ def validate_outputs(outdir: Path, annotate: bool) -> dict:
             raise ValueError("QC cell conservation failed: input != survivors disjoint-union removed")
         if int(qc["n_cells"]) != len(expected) or int(qc["n_low_quality"]) != len(deleted):
             raise ValueError("QC summary disagrees with cell ledger")
-        if "counts" not in a.layers:
-            raise ValueError("clustered H5AD lacks counts")
         if annotate:
             proposal = read_json(outdir / "annotation_proposal.json")
             key = proposal.get("cluster_key")

@@ -351,7 +351,7 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
     body {
-      font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono CJK SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', monospace;
+      font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
       background: var(--bg);
       min-height: 100vh;
       padding: 2rem;
@@ -6160,7 +6160,7 @@
         // Google-Fonts <link> in the host document is unreachable from the
         // serialized SVG, so url()-sourced faces would just hang.
         var fontFallback = [400, 500, 600, 700].map(function (w) {
-          return "@font-face { font-family: 'JetBrains Mono'; font-weight: " + w +
+          return "@font-face { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-weight: " + w +
                  "; src: local('JetBrains Mono'), local('JetBrainsMono-Regular'); }";
         }).join('\n');
 
@@ -6179,7 +6179,7 @@
 
           style.textContent =
             fontFallback + "\n" +
-            "svg { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono CJK SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', monospace; }\n" +
+            "svg { font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif; }\n" +
             hostStyle + "\n" +
             ":root, svg { " + darkVars + " }\n" +
             "@media (prefers-color-scheme: light) { :root, svg { " + lightVars + " } }\n" +
@@ -6207,7 +6207,7 @@
           // Keep this order.
           style.textContent =
             fontFallback + "\n" +
-            "svg { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono CJK SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', monospace; }\n" +
+            "svg { font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif; }\n" +
             hostStyle + "\n" +
             ":root, svg { " + vars + " }\n";
 
@@ -6318,7 +6318,7 @@
       function fitCanvasText(ctx, text, maxWidth, startSize, minSize, weight) {
         var value = String(text || '').trim();
         var size = startSize;
-        var family = "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+        var family = "'Helvetica Neue', Helvetica, Arial, sans-serif";
         while (size > minSize) {
           ctx.font = (weight || '600') + ' ' + size + 'px ' + family;
           if (ctx.measureText(value).width <= maxWidth) return value;
@@ -6425,7 +6425,7 @@
               var fittedSubtitle = fitCanvasText(ctx, subtitle, SHARE_CARD_WIDTH - SHARE_CARD_PADDING * 2 - 280, 13, 11, '500');
               ctx.fillText(fittedSubtitle, SHARE_CARD_PADDING, 87);
 
-              ctx.font = "600 12px 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+              ctx.font = "600 12px 'Helvetica Neue', Helvetica, Arial, sans-serif";
               ctx.textAlign = 'right';
               ctx.fillStyle = accent;
               ctx.fillText(cardLabel, SHARE_CARD_WIDTH - SHARE_CARD_PADDING, 50);

@@ -12,6 +12,13 @@ from .upstream import normalize
 SAMPLE_KEY = "eca_sample_id"
 
 
+def read_cell_table(path):
+    """Preserve numeric-looking cell labels, including leading zeros."""
+    import pandas as pd
+    table = pd.read_csv(path, dtype=str, keep_default_na=False)
+    return table.set_index(table.columns[0])
+
+
 def obs_profile(obs) -> dict:
     cols = {}
     for col in obs:
@@ -123,8 +130,7 @@ def build_mapping(h5ad: Path, unit: Path | None, spec: dict | None, identify,
             path = L.input_manifest(unit).parent / evidence["dir"] / "source_obs.csv.gz"
             if file_identity(path) != evidence["source_obs_identity"]:
                 raise ValueError(f"source metadata snapshot changed: {source}")
-            full = pd.read_csv(path, index_col=0, dtype=str, keep_default_na=False)
-            full.index = full.index.astype(str)
+            full = read_cell_table(path)
             full_values = partition(full, full.index.to_series())
             gone = set(original_ids[(sources == source) & excluded.ne("")])  # policy-excluded, by original ID
             for value in values.unique():

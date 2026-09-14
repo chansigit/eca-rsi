@@ -1,5 +1,7 @@
 # Slurm warm pool
 
+中文完整操作流程：[从申请节点到结束计算](SLURM_POOL_GUIDE.zh-CN.md)。
+
 The pool runs work on Slurm allocations you already own. You request CPU/GPU
 resources, start workers and release allocations yourself. Drivers and the pool
 have independent lifetimes. Periscope can continue to observe driver outputs.
@@ -40,8 +42,10 @@ python -m ecarsi.pool.slurm \
 ```
 
 `--cpus` selects the first CPUs from the launcher's actual affinity; omit it to
-use the whole affinity. Each process accepts **one heavy task at a time** and
-fixes native library thread counts to that profile. CPU locks prevent these
+use the whole affinity. A worker can accept several tasks when their combined
+CPU, memory and GPU reservations fit. Each task runs in a separate Python
+process with its own CPU affinity, thread limits and visible GPU UUIDs.
+`ECA_POOL_TASK_SLOTS` can cap concurrency below the worker CPU count. CPU locks prevent these
 launchers from using the same CPU twice on a host. The scheduler also rejects
 overlapping CPU/GPU inventories and memory totals above the allocation limit.
 Resources used by unrelated processes or older Dask pools are still your
@@ -49,8 +53,27 @@ responsibility; assign separate capacity when running them together.
 
 For GPUs, start inside a GPU Slurm step and add `--gpu`. The launcher checks
 `CUDA_VISIBLE_DEVICES` against Slurm's GPU IDs and passes unique device UUIDs
-into the worker. CPU workers hide GPUs. Nanny monitors each worker's memory
-limit and terminates/restarts a worker that exceeds Dask's termination threshold.
+into the worker. CPU tasks hide GPUs. The worker monitors its entire process
+tree, including native/R children, against its memory budget; Slurm enforces
+the allocation's final limit. Resource estimates remain estimates. If a task
+times out or the tree exceeds its budget, the host fences the whole worker
+before replacement; sibling tasks resume through their drivers' checkpoints.
+
+One container image can bind several different virtual environments. To serve
+existing runs with different numerical versions, put a JSON file at
+`~/.config/ecarsi/pool-runtimes.json` mapping names to absolute Python
+interpreter paths **inside the container**. `ECA_POOL_RUNTIMES` overrides this
+path for a particular worker. For example:
+
+```json
+{"cpu": "/shared/cpu-venv/bin/python", "gpu": "/shared/gpu-venv/bin/python"}
+```
+
+The worker probes each interpreter at startup and advertises its actual source
+and dependency fingerprints. Admission selects a matching runtime, and the
+task process checks it again before computing. A missing or mismatched runtime
+is never silently substituted. Keep the Dask transport environment consistent
+across workers; the configured interpreters own the numerical computation.
 
 The host refreshes Slurm end time and cgroup limits every 30 seconds. Inventory
 older than 90 seconds stops new admissions. A task needs its estimated duration

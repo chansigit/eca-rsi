@@ -2,271 +2,188 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "eca-rsi 主线架构:ecarsi 驱动层 + osp / msp / zmip 内核",
-    "locale": "zh-CN",
+    "title": "ECA-RSI: iterative cleaning and annotation of a single-cell atlas",
+    "locale": "en",
+    "output": "architecture.html",
     "quality_profile": "showcase",
-    "repository": {
-      "url": "https://github.com/chansigit/eca-rsi",
-      "revision": "9abd4d0e4ac3487674735a24383190ea0ddf86e4"
+    "legend": {
+      "entries": {
+        "messagebus": {
+          "label": "Runs once"
+        },
+        "backend": {
+          "label": "Repeated every round"
+        },
+        "security": {
+          "label": "Infrastructure"
+        },
+        "frontend": {
+          "label": "Viewer"
+        }
+      }
     },
     "views": [
       {
-        "id": "main-path",
-        "label": "主路径",
+        "id": "pipeline",
+        "label": "Main path",
         "focus": [
           "ecapp",
           "organize",
           "persample",
           "crosssample",
           "zoomin",
-          "ledger",
-          "release",
-          "serve"
+          "release"
         ],
-        "note": "从 eca-pp 产物到 release 与网页发布。"
+        "note": "QC and clustering happen once per sample; integration and lineage refinement repeat until few cells are removed."
       },
       {
-        "id": "one-round",
-        "label": "一轮之内",
+        "id": "loop",
+        "label": "The rounds",
         "focus": [
           "crosssample",
           "zoomin",
-          "ledger"
+          "release"
         ],
-        "note": "每轮 msp → zmip → ledger;细胞数决定 continue 还是 release。"
+        "note": "Each round removes doublets, low-quality and ambient cells, then re-integrates the survivors."
       },
       {
-        "id": "agents",
-        "label": "agent 边界",
+        "id": "infra",
+        "label": "Infrastructure",
         "focus": [
-          "agentsdk",
-          "crosssample",
-          "zoomin"
+          "bridge",
+          "serve"
         ],
-        "note": "agent 只交窄决策 JSON,host 校验后才落盘;真删只在 msp annotate 与 zmip。"
+        "note": "LLM agents make narrow, host-checked decisions in every step; the viewer only reads the results."
       }
+    ],
+    "viewBox": [
+      690,
+      460
     ]
   },
   "components": [
     {
       "id": "ecapp",
       "type": "external",
-      "label": "eca-pp 产物",
-      "sublabel": "standardized.h5ad + result.json",
+      "label": "Standardized input",
+      "sublabel": "one h5ad, raw counts",
       "pos": [
-        40,
-        80
+        30,
+        40
       ],
       "size": [
         150,
         64
-      ],
-      "sources": [
-        {
-          "path": "ecarsi/organize.py",
-          "line": 28,
-          "label": "find_ecapp_units"
-        }
       ]
     },
     {
       "id": "organize",
-      "type": "backend",
-      "label": "ecarsi.organize",
-      "sublabel": "单元规划 + 细胞守恒审计",
+      "type": "messagebus",
+      "label": "Plan analysis units",
+      "sublabel": "check · split · count cells",
       "pos": [
-        250,
-        80
+        245,
+        40
       ],
       "size": [
         150,
         64
-      ],
-      "tag": "agent",
-      "sources": [
-        {
-          "path": "ecarsi/organize.py"
-        },
-        {
-          "path": "ecarsi/execute.py",
-          "label": "execute_plan"
-        }
       ]
     },
     {
       "id": "persample",
-      "type": "backend",
-      "label": "ecarsi.persample",
-      "sublabel": "逐样本 QC,只跑一次",
+      "type": "messagebus",
+      "label": "QC + cluster per sample",
+      "sublabel": "doublets · Leiden · draft labels",
+      "tag": "OSP",
       "pos": [
-        460,
-        80
+        445,
+        40
       ],
       "size": [
-        150,
+        175,
         64
-      ],
-      "tag": "kernel: osp",
-      "sources": [
-        {
-          "path": "ecarsi/persample.py"
-        }
-      ]
-    },
-    {
-      "id": "serve",
-      "type": "frontend",
-      "label": "ecarsi.serve",
-      "sublabel": "落地页 · localhost / ngrok",
-      "pos": [
-        670,
-        80
-      ],
-      "size": [
-        150,
-        64
-      ],
-      "sources": [
-        {
-          "path": "ecarsi/serve.py"
-        },
-        {
-          "path": "ecarsi/index.py"
-        }
-      ]
-    },
-    {
-      "id": "release",
-      "type": "database",
-      "label": "release/",
-      "sublabel": "final.h5ad · needs_review",
-      "pos": [
-        880,
-        80
-      ],
-      "size": [
-        150,
-        64
-      ],
-      "sources": [
-        {
-          "path": "ecarsi/loop.py",
-          "line": 156,
-          "label": "_release"
-        },
-        {
-          "path": "ecarsi/review.py"
-        }
       ]
     },
     {
       "id": "crosssample",
       "type": "backend",
-      "label": "ecarsi.crosssample",
-      "sublabel": "integrate → inspect → annotate",
+      "label": "Integrate + annotate",
+      "sublabel": "Harmony · inspect · cell types",
+      "tag": "MSP",
       "pos": [
-        460,
-        320
+        30,
+        160
       ],
       "size": [
-        150,
+        165,
         64
-      ],
-      "tag": "kernel: msp",
-      "sources": [
-        {
-          "path": "ecarsi/crosssample.py"
-        }
       ]
     },
     {
       "id": "zoomin",
       "type": "backend",
-      "label": "ecarsi.zoomin",
-      "sublabel": "逐 lineage 下钻",
+      "label": "Refine per lineage",
+      "sublabel": "re-embed · fix labels",
+      "tag": "ZMIP",
       "pos": [
-        670,
-        320
+        285,
+        160
       ],
       "size": [
         150,
         64
-      ],
-      "tag": "kernel: zmip",
-      "sources": [
-        {
-          "path": "ecarsi/zoomin.py"
-        }
       ]
     },
     {
-      "id": "ledger",
-      "type": "backend",
-      "label": "ecarsi.ledger",
-      "sublabel": "逐细胞台账 + Sankey",
+      "id": "release",
+      "type": "messagebus",
+      "label": "Final atlas",
+      "sublabel": "h5ad · per-cell ledger · review list",
       "pos": [
-        880,
-        320
+        500,
+        160
       ],
       "size": [
-        150,
+        155,
         64
-      ],
-      "sources": [
-        {
-          "path": "ecarsi/ledger.py",
-          "line": 131,
-          "label": "build_ledger"
-        },
-        {
-          "path": "ecarsi/loop.py",
-          "line": 63,
-          "label": "decide"
-        }
       ]
     },
     {
-      "id": "agentsdk",
-      "type": "cloud",
-      "label": "Claude Agent SDK",
-      "sublabel": "决策 JSON,host 校验",
+      "id": "bridge",
+      "type": "security",
+      "label": "LLM agent runtime",
+      "sublabel": "every decision is checked by the host",
+      "tag": "agent-harness-bridge",
       "pos": [
-        565,
-        520
+        30,
+        300
       ],
       "size": [
-        150,
-        64
+        280,
+        60
+      ]
+    },
+    {
+      "id": "serve",
+      "type": "frontend",
+      "label": "Web viewer",
+      "sublabel": "browse results, read-only",
+      "tag": "Periscope",
+      "pos": [
+        500,
+        300
       ],
-      "tag": "额度等待重试"
+      "size": [
+        155,
+        60
+      ]
     }
   ],
   "boundaries": [
     {
-      "kind": "region",
-      "label": "eca-rsi / ecarsi · 产物统一落在 <root>/units/<unit>/(ecarsi.layout)",
-      "wraps": [
-        "organize",
-        "persample",
-        "serve",
-        "release",
-        "crosssample",
-        "zoomin",
-        "ledger"
-      ]
-    },
-    {
-      "kind": "region",
-      "label": "ecarsi.loop · 每轮重跑,停机只看细胞数",
-      "wraps": [
-        "crosssample",
-        "zoomin",
-        "ledger"
-      ]
-    },
-    {
       "kind": "security-group",
-      "label": "真删只在这里",
+      "label": "Repeat until few cells are removed",
       "wraps": [
         "crosssample",
         "zoomin"
@@ -275,123 +192,87 @@
   ],
   "connections": [
     {
-      "id": "ecapp-organize",
+      "id": "gate",
       "from": "ecapp",
       "to": "organize",
-      "label": "守门:非 eca-pp 产物即停",
-      "variant": "emphasis",
-      "labelDy": 56
+      "label": "validated",
+      "variant": "emphasis"
     },
     {
-      "id": "organize-persample",
+      "id": "plan",
       "from": "organize",
       "to": "persample",
-      "label": "input/organized.h5ad",
-      "variant": "emphasis",
-      "labelDy": 56
+      "label": "units",
+      "variant": "emphasis"
     },
     {
-      "id": "persample-crosssample",
+      "id": "clustered",
       "from": "persample",
       "to": "crosssample",
-      "label": "round 1:clustered.h5ad ×样本",
+      "label": "clean clusters per sample",
       "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "annotated",
+      "from": "crosssample",
+      "to": "zoomin",
+      "label": "labelled cells",
+      "variant": "emphasis"
+    },
+    {
+      "id": "next-round",
+      "from": "zoomin",
+      "to": "crosssample",
+      "label": "survivors → next round",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "bottom"
+    },
+    {
+      "id": "converged",
+      "from": "zoomin",
+      "to": "release",
+      "label": "converged",
+      "variant": "emphasis"
+    },
+    {
+      "id": "browse",
+      "from": "release",
+      "to": "serve",
+      "label": "browse",
+      "variant": "dashed",
       "fromSide": "bottom",
       "toSide": "top",
       "labelDy": 24
-    },
-    {
-      "id": "crosssample-zoomin",
-      "from": "crosssample",
-      "to": "zoomin",
-      "label": "annotated.h5ad",
-      "variant": "emphasis",
-      "labelDy": 56
-    },
-    {
-      "id": "zoomin-ledger",
-      "from": "zoomin",
-      "to": "ledger",
-      "label": "annotated_zmip.h5ad",
-      "variant": "emphasis",
-      "labelDy": 56
-    },
-    {
-      "id": "ledger-crosssample",
-      "from": "ledger",
-      "to": "crosssample",
-      "label": "continue:幸存者 → 下一轮",
-      "variant": "dashed",
-      "fromSide": "top",
-      "toSide": "top",
-      "labelDx": 90
-    },
-    {
-      "id": "ledger-release",
-      "from": "ledger",
-      "to": "release",
-      "label": "收敛或触顶 → release",
-      "variant": "emphasis",
-      "fromSide": "top",
-      "toSide": "bottom",
-      "labelDy": -50
-    },
-    {
-      "id": "release-serve",
-      "from": "release",
-      "to": "serve",
-      "label": "index.html 每次请求现算",
-      "labelDy": 56
-    },
-    {
-      "id": "sdk-crosssample",
-      "from": "agentsdk",
-      "to": "crosssample",
-      "label": "inspect / annotate",
-      "variant": "dashed",
-      "fromSide": "top",
-      "toSide": "bottom"
-    },
-    {
-      "id": "sdk-zoomin",
-      "from": "agentsdk",
-      "to": "zoomin",
-      "label": "plan / lineage",
-      "variant": "dashed",
-      "fromSide": "top",
-      "toSide": "bottom"
     }
   ],
   "cards": [
     {
       "dot": "cyan",
-      "title": "停机规则(loop.decide)",
+      "title": "Main path",
       "items": [
-        "给了 --rounds N 只看轮数",
-        "否则本轮删除 < 1% 或 < 100 细胞即 release",
-        "或连续三轮删除 < 2%;--cap 触顶强制 release 并标记",
-        "round 1 永不 release;绝不中途等人,疑点只在 release/needs_review 汇总",
-        "下一轮输入 = 上轮幸存者,先验列改名 r(N-1)_* 供 agent 参考"
+        "QC and clustering run once per sample; integration and lineage refinement repeat as rounds",
+        "Each round removes doublets, low-quality and ambient cells and re-integrates the survivors",
+        "Every removed cell is recorded with a reason"
       ]
     },
     {
-      "dot": "rose",
-      "title": "记账与真删",
+      "dot": "amber",
+      "title": "When it stops",
       "items": [
-        "osp qc_removed.csv · msp annotation_removed.csv · zmip zmip_removed.csv",
-        "ledger 对齐成 cell_ledger.csv,数目必须严丝合缝",
-        "integrated.h5ad 永不改;幸存者在 annotated*.h5ad",
-        "agent 输出经 host 校验:schema / 合并图 / 覆盖率 / 软预算"
+        "A round that removes < 1% (or < 100) cells, or three rounds under 2%, and < 1000 cells",
+        "The round count can also be fixed up front or adjusted while running"
       ]
     },
     {
-      "dot": "emerald",
-      "title": "目录与页面",
+      "dot": "slate",
+      "title": "How agents are used",
       "items": [
-        "路径只在 ecarsi/layout.py 定义一次",
-        "rounds/roundNN/{crosssample, zoomin, ledger, stats.txt, decision.txt}",
-        "ecarsi.index 纯从磁盘推导,跑到一半也能看",
-        "ecarsi.serve 默认 127.0.0.1;--ngrok 可公开"
+        "LLM agents only choose labels and removals through typed tools; the host validates every submission",
+        "Batch-driven removals are downgraded to flags; uncertain calls go to a review list",
+        "Any provider (Doubao / Claude / DeepSeek) with fallback; cost is logged per step"
       ]
     }
   ]

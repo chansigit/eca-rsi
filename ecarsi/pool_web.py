@@ -2,20 +2,35 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import json
+import os
+from pathlib import Path
+import threading
+import time
 
 
-def driver_queue():
-    """Dataset admission is separate from the pool's compute-task queue."""
-    from .batch import monitor
-    return [{"name": row["name"],
-             "reason": row.get("queue_reason", "Assigned to a dataset execution node" if row["state"] == "assigned"
-                               else "Waiting for driver CPU/memory capacity"),
-             "submitted": row.get("submitted_at")}
-            for row in monitor()["datasets"] if row["waiting"]]
+_averages = None
 
 
+def start_averages():
+    """Read the observer's small summary off the HTTP request path."""
+    directory = os.environ.get('ECA_POOL_OBSERVATIONS')
+    if not directory:
+        return
+    def refresh():
+        global _averages
+        while True:
+            try:
+                value = json.loads((Path(directory)/'utilization-averages.json').read_text())
+                _averages = value if isinstance(value, dict) else None
+            except (OSError, ValueError):
+                _averages = None
+            time.sleep(15)
+    threading.Thread(target=refresh, name='pool-averages', daemon=True).start()
 
-async def _snapshot(target):
+
+async def _snapshot(target, health_only=False):
     # Optional dependencies are loaded only when a pool was configured.
     from .pool.client import connect
     from .pool.scheduler import dispatch
@@ -23,30 +38,30 @@ async def _snapshot(target):
 
     async with connect(target, asynchronous=True, timeout=2, set_as_default=False) as client:
         state = await client.run_on_scheduler(dispatch, "status")
+        if health_only:
+            return {"available": True}
         workers = (await client.scheduler.identity())["workers"]
         result = summarize(state, workers)
         result["active"] = [t for t in state["tasks"].values()
-                            if t["state"] in {"granted", "running"}]
-        result["driver_queue"] = driver_queue()
-        from .batch import monitor
-        batch = monitor()
-        result["dataset_nodes"] = list(batch["nodes"].values())
-        result["active_datasets"] = [r for r in batch["datasets"] if r["state"] in {"assigned", "running"} or r.get("reservation_held")]
+                            if t["state"] in {"granted", "running", "stopping"}]
+        result['averages'] = _averages
         return result
 
 
-def snapshot(target):
+def snapshot(target, *, health_only=False):
     """Probe on every request: a leftover scheduler file is not proof of life."""
     if not target:
         return None
 
     async def read():
-        return await asyncio.wait_for(_snapshot(target), timeout=3)
+        return await asyncio.wait_for(_snapshot(target, health_only=health_only), timeout=3)
 
     try:
         return asyncio.run(read())
-    except Exception:
+    except Exception as exc:
         # An absent, incompatible or unreachable pool must not break Periscope.
+        logging.getLogger(__name__).warning("Pool %s probe failed: %s: %s",
+                                           "health" if health_only else "status", type(exc).__name__, exc)
         return None
 
 
@@ -68,6 +83,8 @@ CSS = """
 .pool-dial strong{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:23px;font-weight:550;letter-spacing:-.04em;font-variant-numeric:tabular-nums}
 .pool-dial strong small{font-size:12px;color:var(--muted);margin:5px 0 0 3px}
 .pool-gauge>span{font-size:var(--t2);color:var(--muted)}
+.pool-average{display:block;font-size:12px;color:var(--muted);margin:5px 0 0;font-variant-numeric:tabular-nums}
+#pool-average-window{margin:0 0 20px;font-size:12px;color:var(--muted)}
 .pool-summary{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:16px;border-block:1px solid var(--line);padding:20px 0;margin:0 0 30px}
 .pool-summary div{min-width:0}.pool-summary dt{color:var(--muted);font-size:12px;line-height:1.5;min-height:36px}
 .pool-summary dd{font-size:clamp(15px,1.6vw,21px);font-weight:550;margin:3px 0 0;font-variant-numeric:tabular-nums;white-space:nowrap;letter-spacing:-.025em}
@@ -125,27 +142,39 @@ function meter(label, text, percent, kind='cpu'){
   return `<div class="pool-meter ${kind}"><label><span>${esc(label)}</span><span class="num">${esc(text)}</span></label>
     <progress max="100" value="${value}" class="${value>=85?'hot':''}" aria-label="${esc(label+': '+text)}"></progress></div>`;
 }
-function gauge(label, percent, kind){
+function gauge(label, percent, kind, average){
   const known = percent != null && Number.isFinite(percent), value = known ? Math.max(0,Math.min(100,percent)) : 0;
   return `<div class="pool-gauge ${kind}" role="img" aria-label="${esc(label)}: ${known?number(percent)+'%':'unavailable'}"><div class="pool-dial">
     <svg viewBox="0 0 100 100" aria-hidden="true"><circle class="track" cx="50" cy="50" r="40"/><circle class="arc" cx="50" cy="50" r="40" stroke-dasharray="${value*2.51327} 251.327"/></svg>
-    <strong>${known?number(percent):'—'}${known?'<small>%</small>':''}</strong></div><span>${esc(label)}</span></div>`;
+    <strong>${known?number(percent):'—'}${known?'<small>%</small>':''}</strong></div><span>${esc(label)}</span>${averageLine(average)}</div>`;
 }
+const averageLine = value => `<small class="pool-average">10 min avg · ${number(value)}${value==null?'':'%'}</small>`;
 const chip = '<svg class="pool-chip" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><rect x="7" y="7" width="18" height="18" rx="4"/><rect x="12" y="12" width="8" height="8" rx="1"/><path d="M12 3v4m8-4v4M12 25v4m8-4v4M3 12h4m-4 8h4m18-8h4m-4 8h4"/></svg>';
-const tones = {idle:'released',running:'running',granted:'running',draining:'tone-warn',stale:'failed',expiring:'tone-warn'};
+const tones = {idle:'released',running:'running',granted:'running',stopping:'tone-warn',draining:'tone-warn',stale:'failed',expiring:'tone-warn'};
 const reasons = {busy:'Compatible workers busy',no_workers:'No workers registered',cpus:'CPU requirement',memory:'Memory requirement',
   gpus:'GPU requirement',runtime:'Software mismatch',shared_paths:'Shared paths unavailable',remaining_time:'Insufficient time remaining',draining_or_stale:'Workers draining or stale'};
 function render(data){
   const expanded = new Set([...document.querySelectorAll('.pool-worker details[open]')].map(d=>d.closest('article').dataset.worker));
   const workers = data.workers, active = new Map(data.active.map(t=>[t.worker,t]));
+  const history = data.averages, fresh = history && data.observed_at-history.observed_at < 90;
+  const averages = fresh ? history.workers : {}, gpuAverages = fresh ? history.gpu_utilization_percent : {};
+  const workerAverage = w => data.observed_at-(averages[w.address]?.finished||0)<90 ? averages[w.address] : null;
   const online = workers.filter(w=>w.state!=='stale'), allocations = new Map();
   workers.forEach(w=>allocations.set(`${w.host}/${w.job_id}`,w.allocation_memory));
   const sum = key => workers.reduce((n,w)=>n+w[key],0);
   const cpu = online.filter(w=>w.cpu_percent!=null), ram = online.filter(w=>w.rss_bytes!=null);
   const gpu = online.flatMap(w=>w.gpu_stats||[]).filter(g=>g.utilization_percent!=null);
-  document.getElementById('pool-gauges').innerHTML = gauge('Worker CPU',cpu.length?cpu.reduce((n,w)=>n+w.cpu_percent*w.cpus,0)/cpu.reduce((n,w)=>n+w.cpus,0):null,'cpu')+
-    gauge('Worker memory',ram.length?100*ram.reduce((n,w)=>n+w.rss_bytes,0)/ram.reduce((n,w)=>n+w.memory,0):null,'ram')+
-    gauge('GPU utilization',gpu.length?gpu.reduce((n,g)=>n+g.utilization_percent,0)/gpu.length:null,'gpu');
+  function weightedAverage(metric, capacity){
+    const known = online.filter(w=>workerAverage(w)?.[metric]!=null);
+    return known.length ? known.reduce((n,w)=>n+workerAverage(w)[metric]*w[capacity],0)/known.reduce((n,w)=>n+w[capacity],0) : null;
+  }
+  const gpuMeans = [...new Set(online.flatMap(w=>(w.gpu_stats||[]).map(g=>g.uuid)))].map(id=>gpuAverages[id]).filter(v=>v!=null);
+  document.getElementById('pool-gauges').innerHTML = gauge('Worker CPU · now',cpu.length?cpu.reduce((n,w)=>n+w.cpu_percent*w.cpus,0)/cpu.reduce((n,w)=>n+w.cpus,0):null,'cpu',weightedAverage('cpu_percent','cpus'))+
+    gauge('Worker memory · now',ram.length?100*ram.reduce((n,w)=>n+w.rss_bytes,0)/ram.reduce((n,w)=>n+w.memory,0):null,'ram',weightedAverage('memory_percent','memory'))+
+    gauge('GPU utilization · now',gpu.length?gpu.reduce((n,g)=>n+g.utilization_percent,0)/gpu.length:null,'gpu',gpuMeans.length?gpuMeans.reduce((a,b)=>a+b,0)/gpuMeans.length:null);
+  document.getElementById('pool-average-window').textContent = fresh && history.samples ?
+    `10 min sample averages · ${new Date(history.started*1000).toLocaleTimeString()}–${new Date(history.observed_at*1000).toLocaleTimeString()} · ${history.samples} samples · largest gap ${duration(history.max_sample_gap_seconds)}. Workers added recently have shorter coverage.` :
+    history ? '10 min averages unavailable: resource log is stale or has no samples.' : '10 min averages unavailable: waiting for the resource observer.';
   const cores = cpu.reduce((n,w)=>n+w.cpu_percent*w.cpus/100,0);
   const facts = [['Workers online',`${online.length} / ${workers.length}`],['Running / assigned',data.active.length],['Compute tasks queued',data.queued.length],
     ['CPU cores in use',cpu.length?`${number(cores)} / ${sum('cpus')}`:'—'],
@@ -153,32 +182,28 @@ function render(data){
   document.getElementById('pool-summary').innerHTML = facts.map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('');
   document.getElementById('pool-workers').innerHTML = workers.length ? workers.map(w=>{
     const task = active.get(w.address), age = Math.max(0, data.observed_at-w.observed_at);
+    const average = workerAverage(w);
     const gpu = (w.gpu_stats||[]).map(g=>meter(g.name,`${number(g.utilization_percent)}% GPU`,g.utilization_percent,'gpu')+
+      averageLine(gpuAverages[g.uuid])+
       meter('GPU memory',`${number(g.memory_used_mib==null?null:g.memory_used_mib/1024)} / ${number(g.memory_total_mib==null?null:g.memory_total_mib/1024)} GiB`,
         g.memory_used_mib==null?null:100*g.memory_used_mib/g.memory_total_mib,'gpu')).join('');
     return `<article class="pool-worker ${w.gpus?'gpu-node':''}" data-state="${esc(w.state)}" data-worker="${esc(w.address)}"><header><div class="pool-node-title">${chip}<h3>${esc(w.host)}</h3></div><span class="pill ${tones[w.state]||'neutral'}">${esc(w.state)}</span></header>
       <p class="pool-meta"><span>Job ${esc(w.job_id)}</span><span>${esc(w.cpus)} CPUs / ${esc(w.gpus)} GPUs</span><strong>${esc(duration(w.remaining_seconds))} left</strong></p>
-      ${meter('Worker CPU',`${number(w.cpu_percent)}% · ${number(w.cpu_percent==null?null:w.cpu_percent*w.cpus/100)} cores`,w.cpu_percent)}
-      ${meter('Worker memory',`${gib(w.rss_bytes)} / ${gib(w.memory)} GiB`,w.rss_bytes==null?null:100*w.rss_bytes/w.memory)}${gpu}
-      <p class="pool-task">${task?`<strong>${esc(task.label||task.id)}</strong><br>${task.state==='running'?'Running for':'Assigned for'} ${esc(duration(data.observed_at-(task.started||task.submitted)))}`:'<span class="pool-task-idle">No active task</span>'}</p>
+      ${meter(w.metrics_source==='process_tree'?'Worker CPU + children':'Worker CPU (process only)',`${number(w.cpu_percent)}% · ${number(w.cpu_percent==null?null:w.cpu_percent*w.cpus/100)} cores`,w.cpu_percent)}
+      ${averageLine(average?.cpu_percent)}
+      ${meter('Worker memory',`${gib(w.rss_bytes)} / ${gib(w.memory)} GiB`,w.rss_bytes==null?null:100*w.rss_bytes/w.memory)}${averageLine(average?.memory_percent)}${gpu}
+      <p class="pool-task">${task?`<strong>${esc(task.label||task.id)}</strong><br>${task.state==='stopping'?'Stopping; elapsed':task.state==='running'?'Running for':'Assigned for'} ${esc(duration(data.observed_at-(task.started||task.submitted)))}`:'<span class="pool-task-idle">No active task</span>'}</p>
       <details${expanded.has(w.address)?' open':''}><summary>Allocation details</summary><dl><dt>Requested</dt><dd>${esc(w.requested_tres)}</dd><dt>Allocated</dt><dd>${esc(w.allocated_tres)}</dd>
       <dt>Slurm memory</dt><dd>${gib(w.allocation_memory)} GiB</dd><dt>Worker address</dt><dd>${esc(w.address)}</dd>
-      <dt>Inventory age</dt><dd>${number(age,0)} seconds</dd></dl></details></article>`;
+      <dt>Inventory age</dt><dd>${number(age,0)} seconds</dd><dt>Measurement</dt><dd>${w.metrics_source==='process_tree'?'Full process tree; memory is summed RSS':'Dask process only; child usage unavailable'}</dd></dl></details></article>`;
   }).join('') : '<p class="muted">Scheduler is running. Start a worker inside an allocated Slurm job to add capacity.</p>';
   const rows = data.queued.map(t=>`<tr><td>${esc(t.label||t.id)}</td><td>${esc(duration(data.observed_at-t.submitted))}</td>
     <td>${esc(t.cpus)} CPU / ${gib(t.memory)} GiB / ${esc(t.gpus)} GPU</td><td>${esc(duration(t.seconds))}</td>
     <td>${esc((t.reason||'Waiting').split(',').map(r=>reasons[r]||r).join('; '))}</td></tr>`).join('');
   document.getElementById('pool-queue').innerHTML = rows ? `<table><thead><tr><th>Task</th><th>Waiting</th><th>Requested resources</th><th>Estimated runtime</th><th>Waiting reason</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="pool-empty"><p>No compute tasks waiting for a worker.</p></div>';
-  const datasets = data.driver_queue || [];
-  document.getElementById('pool-driver-queue').innerHTML = datasets.length ? `<table><thead><tr><th>Dataset</th><th>Waiting</th><th>Waiting reason</th></tr></thead><tbody>${datasets.map(d=>`<tr><td>${esc(d.name)}</td><td>${esc(d.submitted==null?'—':duration(data.observed_at-d.submitted))}</td><td>${esc(d.reason)}</td></tr>`).join('')}</tbody></table>` : '<div class="pool-empty"><p>No datasets waiting for a driver.</p></div>';
-  const nodes = data.dataset_nodes || [];
-  document.getElementById('pool-dataset-nodes').innerHTML = nodes.length ? `<table><thead><tr><th>Node / job</th><th>Datasets</th><th>Reserved CPU</th><th>Reserved RAM</th><th>Driver usage</th><th>Status</th></tr></thead><tbody>${nodes.map(n=>{
-    const jobs=(data.active_datasets||[]).filter(r=>r.node===n.id);
-    const cpu=jobs.reduce((s,r)=>s+r.cpus,0), mem=jobs.reduce((s,r)=>s+r.memory_gb,0);
-    const rss=jobs.reduce((s,r)=>s+(r.rss_bytes||0),0), usage=jobs.reduce((s,r)=>s+(r.cpu_percent||0),0)/n.cpus;
-    const state=data.observed_at-n.observed_at>60?'Offline':n.draining?'Draining':`${duration(n.end_time-data.observed_at)} left`;
-    return `<tr><td>${esc(n.host)}<br>Job ${esc(n.job_id)}</td><td>${jobs.length?jobs.map(r=>esc(r.name)).join('<br>'):'No active datasets'}</td><td>${cpu} / ${n.cpus}</td><td>${number(mem)} / ${gib(n.memory)} GiB</td><td>${number(usage)}% CPU<br>${gib(rss)} GiB RSS</td><td>${esc(state)}</td></tr>`;
-  }).join('')}</tbody></table>` : '<div class="pool-empty"><p>No dataset execution nodes registered.</p></div>';
+  document.getElementById('pool-upstream').textContent = data.active.length || data.queued.length
+    ? 'Compute tasks below are scheduled independently of workflow drivers.'
+    : 'No compute task is waiting. Workflows can be preparing data or waiting for a model. See Workflow activity in Overview.';
   document.getElementById('pool-updated').textContent = `Updated ${new Date(data.observed_at*1000).toLocaleTimeString()}`;
 }
 let generation = 0, timer;
@@ -187,7 +212,7 @@ function close(){
   generation++;
   clearTimeout(timer);
   panel.hidden = true;
-  for(const id of ['pool-workers','pool-gauges','pool-summary','pool-queue','pool-driver-queue','pool-dataset-nodes']) document.getElementById(id).replaceChildren();
+  for(const id of ['pool-workers','pool-gauges','pool-summary','pool-queue']) document.getElementById(id).replaceChildren();
 }
 async function refresh(token){
   try {
@@ -196,13 +221,16 @@ async function refresh(token){
     const data = await r.json();
     if(token!==generation) return false;
     render(data);
+    document.getElementById('pool-link-state').textContent = 'Connected';
     panel.hidden = false;
     timer = setTimeout(()=>refresh(token),5000);
     return true;
   } catch(error) {
     if(token!==generation) return false;
-    close();
-    window.dispatchEvent(new Event('pool-unavailable'));
+    // A failed metrics request does not establish that the scheduler is down.
+    // Keep the last observation timestamp visible while the open panel retries.
+    document.getElementById('pool-link-state').textContent = 'Refresh failed · retrying';
+    if(!panel.hidden) timer = setTimeout(()=>refresh(token),5000);
     return false;
   }
 }
@@ -222,14 +250,10 @@ def panel():
         '<div class="pool-connection"><span id="pool-link-state">Connected</span>'
         '<span id="pool-updated" role="status"></span></div></header>'
         '<div id="pool-gauges" class="pool-gauges"></div></div>'
-        '<div id="pool-content"><dl id="pool-summary" class="pool-summary"></dl>'
+        '<div id="pool-content"><p id="pool-average-window" role="status"></p><dl id="pool-summary" class="pool-summary"></dl>'
         '<div class="pool-section-heading"><h2>Workers</h2><span>Live Slurm allocations</span></div>'
         '<div id="pool-workers" class="pool-workers"></div>'
-        '<div class="pool-section-heading"><h2>Dataset execution</h2><span>Driver resources reserved separately from compute workers</span></div>'
-        '<div id="pool-dataset-nodes" class="pool-table"></div>'
-        '<div class="pool-section-heading"><h2>Datasets waiting for driver</h2></div>'
-        '<div id="pool-driver-queue" class="pool-table"></div>'
-        '<p class="pool-note">These datasets have not reached the compute queue. Their drivers need capacity before they can submit work.</p>'
+        '<p class="pool-note" id="pool-upstream"></p>'
         '<div class="pool-section-heading"><h2>Compute tasks waiting for worker</h2><span>Arrival order / first compatible worker</span></div>'
         '<div id="pool-queue" class="pool-table"></div>'
         '<p class="pool-note">Refreshes every 5 seconds. CPU is worker usage divided by assigned CPUs; '

@@ -4,6 +4,32 @@ from pathlib import Path
 from ecarsi import index, serve
 
 
+def test_workflow_activity_shows_latest_fifteen_with_full_totals(monkeypatch):
+    from ecarsi import workflow_web
+    rows = [dict(name=f'dataset-{i:02}', output=f'/runs/{i}', state='running',
+                 last_log_at=i+1, submitted_at=100-i) for i in range(20)]
+    monkeypatch.setattr(workflow_web, 'monitor', lambda: {'datasets': rows})
+    page = workflow_web.render()
+    assert page.count('<tr><td>') == 15
+    assert '20 running' in page and 'Showing latest 15 of 20' in page
+    assert 'dataset-04' not in page
+    assert page.index('dataset-19') < page.index('dataset-05')
+
+
+def test_persistent_submission_supersedes_legacy_failure(tmp_path, monkeypatch):
+    from ecarsi import batch
+    legacy, current = tmp_path/'legacy.json', tmp_path/'status.json'
+    row = dict(name='old',output=str(tmp_path/'working'),mirror=str(tmp_path/'rsi'),state='failed')
+    legacy.write_text(json.dumps(dict(datasets=[row])))
+    current.write_text(json.dumps(dict(datasets=[dict(row,state='queued')],nodes={})))
+    monkeypatch.setenv('ECA_PERISCOPE_BATCH_STATUS',str(legacy))
+    monkeypatch.setenv('ECA_DATASET_QUEUE',str(tmp_path))
+    result = batch._read_monitor()
+    assert len(result['datasets']) == 1
+    assert result['datasets'][0]['state'] == 'queued'
+    assert result['by_mirror'][row['mirror']]['state'] == 'queued'
+
+
 def test_submitted_dataset_visible_before_output_exists(tmp_path, monkeypatch):
     study = tmp_path / 'chondroatlas' / '07_Swahnetal'
     (study / 'standardize').mkdir(parents=True)

@@ -15,6 +15,8 @@ async def serve(a):
     from .scheduler import PoolScheduler
     async with Scheduler(host=a.host, port=a.port, scheduler_file=a.scheduler_file,
                          dashboard_address=None, worker_ttl="60s", plugins=[PoolScheduler()]) as scheduler:
+        from ecarsi.run_state import write_json
+        write_json(Path(a.scheduler_file).with_suffix(".endpoint.json"), {"address": scheduler.address})
         await scheduler.finished()
 
 
@@ -22,7 +24,9 @@ async def worker(a):
     from distributed import Nanny
 
     from .client import connect, runtime
-    from .scheduler import dispatch
+    # Keep the wire callable importable by an older scheduler during a
+    # rolling service upgrade; its extension dispatch contract is stable.
+    from ecarsi.pool.scheduler import dispatch
     path = Path(a.inventory)
     profile = json.loads(path.read_text())
     if set(profile["cpu_ids"]) != set(os.sched_getaffinity(0)):
@@ -30,20 +34,45 @@ async def worker(a):
     if time.time() - profile["observed_at"] > 90:
         raise ValueError("stale Slurm inventory")
     target = {"scheduler_ip": a.scheduler} if "://" in a.scheduler else {"scheduler_file": a.scheduler}
-    async with Nanny(**target, nthreads=1, memory_limit=profile["memory"],
-                     local_directory=str(path.parent / "dask"), resources={"pool_slot": 1},
+    from .executor import runtimes
+    commands, fingerprints = runtimes()
+    os.environ['ECA_POOL_EXECUTORS'] = json.dumps(commands)
+    slots = int(os.environ.get('ECA_POOL_TASK_SLOTS', str(profile['cpus'])))
+    if not 1 <= slots <= profile['cpus']:
+        raise ValueError('task slots must fit the worker CPU allocation')
+    async with Nanny(**target, nthreads=slots, memory_limit=profile["memory"],
+                     preload=[__package__+'.executor'],
+                     local_directory=str(path.parent / "dask"), resources={"pool_slot": slots},
                      death_timeout=30) as nanny:
         async with connect(a.scheduler, asynchronous=True) as client:
             fingerprint = runtime()
             while nanny.status.name == "running":
+                import psutil
+                process = psutil.Process()
+                rss = 0
+                for child in [process, *process.children(recursive=True)]:
+                    try:
+                        rss += child.memory_info().rss
+                    except psutil.NoSuchProcess:
+                        pass
                 profile = json.loads(path.read_text())
                 profile["runtime"] = fingerprint
+                profile.update(execution_protocol=2, task_slots=slots, runtimes=fingerprints,
+                               rss_bytes=rss, usage_observed_at=time.time())
+                if rss > profile['memory']:
+                    profile['recycle_reason'] = 'worker process tree exceeded its memory budget'
+                    print('[pool] '+profile['recycle_reason'], flush=True)
                 if nanny.worker_address and nanny.worker_address in (await client.scheduler.identity())["workers"]:
-                    await client.run_on_scheduler(dispatch, "register",
-                                                  {"address": nanny.worker_address, "profile": profile})
+                    status = await client.run_on_scheduler(dispatch, "register",
+                                                           {"address": nanny.worker_address, "profile": profile})
+                    if status["workers"][nanny.worker_address].get("recycle_reason"):
+                        # Only the host launcher may replace this worker, after
+                        # killing/reaping the entire old container process group.
+                        # Nanny.restart alone can leave native/R children alive.
+                        os._exit(75)
                 if time.time() >= profile["end_time"]:
                     return
-                await asyncio.sleep(10)
+                await asyncio.sleep(2)
 
 
 def main(argv=None):
@@ -65,9 +94,22 @@ def main(argv=None):
             q.add_argument("--json", action="store_true", help="machine-readable resource and utilization snapshot")
     a = p.parse_args(argv)
     if a.command == "scheduler":
-        if Path(a.scheduler_file).exists():
-            p.error("scheduler file already exists; use a fresh path for a new pool")
-        asyncio.run(serve(a))
+        from ecarsi.run_state import writer_lock
+        from urllib.parse import urlparse
+        path = Path(a.scheduler_file)
+        with writer_lock(path.with_suffix(".lock")):
+            # Preserve the endpoint across a supervised restart. Kernel bind
+            # ownership still rejects a live server on the same address.
+            endpoint = path.with_suffix(".endpoint.json")
+            old = endpoint if endpoint.exists() else path
+            if old.exists():
+                address = urlparse(json.loads(old.read_text())["address"])
+                a.host = a.host or address.hostname
+                a.port = a.port or address.port
+            elif not a.host or not a.port:
+                # Initial ephemeral binding is recorded from the created file.
+                pass
+            asyncio.run(serve(a))
     elif a.command == "worker":
         asyncio.run(worker(a))
     else:

@@ -26,7 +26,7 @@ def runtime():
                 h.update(str(p.relative_to(root)).encode())
                 h.update(p.read_bytes())
             result[module] = h.hexdigest()
-    for dist in ("numpy", "scipy", "scanpy", "anndata", "rapids-singlecell", "cupy-cuda12x"):
+    for dist in ("numpy", "scipy", "scanpy", "anndata", "rapids-singlecell-cu12", "cupy-cuda12x"):
         try:
             result[dist] = importlib.metadata.version(dist)
         except importlib.metadata.PackageNotFoundError:
@@ -63,8 +63,10 @@ def execute(grant, fn, args, kwargs):
     finally:
         # Failure to acknowledge completion must fail the future, never publish
         # an unconfirmed result. ru_maxrss is a process high-water mark, not task RAM.
-        client.run_on_scheduler(dispatch, "finish", dict(token, ok=ok,
-                                peak_rss=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024))
+        acknowledgement = client.run_on_scheduler(dispatch, "finish", dict(token, ok=ok,
+                                   peak_rss=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024))
+        if acknowledgement["state"] not in {"done", "failed"}:
+            raise ConnectionError(f"pool execution retired: {acknowledgement.get('reason', '')}")
 
 
 def local_fits(needs):
@@ -118,6 +120,8 @@ class PoolEndpoint:
              "seconds": float(os.environ.get("ECA_POOL_TASK_SECONDS", "0")) or max(1, cells / 20),
              "roots": [], "modules": [fn.__module__.split(".")[0]]}
         n.update(needs or {})
+        if "execution_timeout" not in n and os.environ.get("ECA_POOL_EXECUTION_TIMEOUT"):
+            n["execution_timeout"] = float(os.environ["ECA_POOL_EXECUTION_TIMEOUT"])
         for key in ("cpus", "memory", "gpus", "seconds"):
             if not isinstance(n[key], (int, float)) or not math.isfinite(n[key]) or n[key] < (0 if key == "gpus" else 1):
                 raise ValueError(f"invalid requested {key}")
@@ -126,7 +130,8 @@ class PoolEndpoint:
         here = runtime()
         modules = set(n.pop("modules")) | {"python", "ecarsi", "numpy", "scipy", "scanpy", "anndata"}
         if tier == "gpu":
-            modules |= {"rapids-singlecell", "cupy-cuda12x"}
+            modules |= {"rapids-singlecell-cu12", "cupy-cuda12x"}
+            n["required_runtime"] = ["rapids-singlecell-cu12", "cupy-cuda12x"]
         n["runtime"] = {k: v for k, v in here.items() if k in modules}
         can_local = local_fits(n)
         use_local = self.mode == "local" or (self.mode == "auto" and can_local and n["seconds"] <= 5)

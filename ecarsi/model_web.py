@@ -134,6 +134,7 @@ def launch_exports(models):
 
 def snapshot(environ=None):
     from harness_bridge import parse_model_pool
+    from harness_bridge import telemetry
 
     catalog, revision = read_catalog(environ)
     models = normalized_models(catalog)
@@ -153,7 +154,60 @@ def snapshot(environ=None):
     chosen = {m['harness'] + ':' + m['model'] for m in models}
     return {'source': source, 'chain': chain, 'revision': revision, 'exports': launch_exports(models),
             'alternatives': [v for k, v in verified.items() if k not in chosen],
-            'validated_count': len(verified), 'live_availability': 'not_probed'}
+            'validated_count': len(verified), 'live_availability': 'not_probed',
+            'activity': telemetry.snapshot()}
+
+
+def activity_panel(state):
+    from datetime import datetime
+    e = lambda value: html.escape(str(value), quote=True)
+    active = state['active']
+    waiting = sum(row.get('phase') == 'waiting_for_model' for row in active)
+    clock = lambda value: datetime.fromtimestamp(value).strftime('%b %d, %H:%M:%S')
+    metrics = [('Active turns', len(active)), ('Waiting for model', waiting),
+               ('Retrying', sum(row.get('phase') == 'retrying' for row in active)),
+               ('Succeeded', state['succeeded']), ('Failed', state['failed'])]
+    facts = ''.join(f'<div><dt>{label}</dt><dd>{value:,}</dd></div>' for label, value in metrics)
+    active_models = {}
+    for row in active:
+        key = f"{row.get('harness', 'unknown')}:{row.get('model', 'unknown')}"
+        active_models[key] = active_models.get(key, 0) + 1
+    model_rows = ''.join('<tr>' + ''.join(f'<td>{e(value)}</td>' for value in (
+        name, active_models.get(name, 0), usage.get('succeeded', 0), usage.get('failed', 0),
+        f"{usage.get('tokens_in', 0):,} / {usage.get('tokens_out', 0):,}")) + '</tr>'
+        for name, usage in sorted({**{name: {} for name in active_models}, **state['by_model']}.items()))
+    model_usage = ('<div class="model-table-wrap"><table class="model-activity-table"><thead><tr>'
+                   '<th>Model</th><th>Active</th><th>Succeeded</th><th>Failed</th><th>Input / output tokens</th>'
+                   '</tr></thead><tbody>' + model_rows + '</tbody></table></div>') if model_rows else ''
+    rows = []
+    for row in [*active[:15], *state['recent'][:15]]:
+        status = ('Waiting for model' if row.get('phase') == 'waiting_for_model' else
+                  'Retrying' if row.get('phase') == 'retrying' else
+                  'Active' if 'status' not in row else row['status'].title())
+        model = f"{row.get('harness', '—')} · {row.get('model', '—')}"
+        usage = (f"{row.get('tokens_in', 0):,} in / {row.get('tokens_out', 0):,} out"
+                 if 'tokens_in' in row or 'tokens_out' in row else 'Not reported')
+        rows.append('<tr>' + ''.join(f'<td>{e(value)}</td>' for value in (
+            clock(row['at']), row.get('label', 'agent'), model, status, usage,
+            row.get('error_type', '') or row.get('cwd', ''))) + '</tr>')
+    recent = ('<div class="model-table-wrap"><table class="model-activity-table"><thead><tr>'
+              '<th>Started</th><th>Task</th><th>Model</th><th>Status</th><th>Tokens</th><th>Source / error</th>'
+              '</tr></thead><tbody>' + ''.join(rows) + '</tbody></table></div>') if rows else (
+              '<p class="model-note">No instrumented agent calls yet. Existing processes appear here after they load the updated bridge.</p>')
+    return ('<section class="block bridge-activity"><div class="model-tools"><h2>Live activity</h2>'
+            f'<span class="model-note">Updated {e(clock(state["updated_at"])) if state["updated_at"] else "when the first call arrives"}</span></div>'
+            f'<dl class="facts">{facts}</dl>'
+            f'<p class="model-note">Since activity logging began: {state["started"]:,} agent turns started · '
+            f'{state["observed_model_requests"]:,} OpenAI-compatible model requests observed · '
+            f'{state["tokens_in"]:,} input / {state["tokens_out"]:,} output tokens reported '
+            f'by {state["usage_reported"]:,} completed turns.</p>'
+            f'<p class="model-note">Reported cost: ${state.get("cost_usd", 0):,.2f} from '
+            f'{state.get("cost_reported", 0):,} completed turns. Backends without cost data are excluded.</p>'
+            '<p class="model-note">“Waiting for model” is measured by SDK request hooks. Other active turns may be running tools or retrying. '
+            'Token totals exclude backends and failed requests that did not report usage.</p>'
+            + (f'<h3 class="model-activity-title">By model</h3>{model_usage}' if model_usage else '')
+            + f'<h3 class="model-activity-title">Current and recent turns</h3>{recent}'
+            f'<p class="model-note">Event journal: <code>{e(state["journal_directory"])}</code></p></section>')
 
 
 def render(data):
@@ -180,10 +234,11 @@ def render(data):
             + controls() +
             f'<p class="lede">Source: {e(data["source"])}</p><div class="model-chain">{chain}</div>'
             + ('<p class="model-note">No fallback is configured.</p>' if len(data['chain']) == 1 else '') + '</section>'
+            + activity_panel(data['activity'])
             + (f'<section class="block"><h2>Validated alternatives</h2><p class="lede">Not in the configured fallback chain.</p>'
                f'<div class="model-chain">{alternatives}</div></section>' if alternatives else '')
             + settings(data)
-            + '<p class="model-note">Recorded checks describe earlier RSI runs; live availability, account quota and concurrent calls are not monitored here. '
+            + '<p class="model-note">Recorded checks describe earlier RSI runs; provider availability and account quota are not probed here. '
               'Each driver can override its model chain. Saved settings do not change running jobs. Apply the launch exports below when starting new drivers. No model requests are sent.</p>')
 
 
@@ -220,6 +275,12 @@ CSS = """
 .model-card h3{font-size:20px;overflow-wrap:anywhere}.model-backend{font:var(--t2) var(--mono);color:var(--muted);margin:10px 0 20px}
 .model-check{border-top:1px solid var(--line);padding-top:14px;font-size:var(--t3);color:var(--muted)}.model-check p{margin:6px 0 0}
 .model-note{color:var(--muted);font-size:var(--t3);margin:16px 0 0}
+.bridge-activity .facts{margin:16px 0}.model-activity-title{margin:22px 0 10px;font-size:var(--t1)}
+.model-table-wrap{overflow:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--surface);box-shadow:var(--paper-shadow)}
+.model-activity-table{width:100%;border-collapse:collapse;font-size:var(--t3);text-align:left}
+.model-activity-table th,.model-activity-table td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.model-activity-table th{color:var(--muted);font-weight:600;white-space:nowrap}
+.model-activity-table td{overflow-wrap:anywhere}.model-activity-table tr:last-child td{border-bottom:0}
 .model-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0}.model-tools h2{margin-right:auto}
 .model-code{overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--none-bg);padding:16px;border-radius:var(--r);font:var(--t2)/1.6 var(--mono)}
 .model-url{overflow-wrap:anywhere;font:var(--t2) var(--mono);color:var(--muted)}
@@ -243,10 +304,11 @@ JS = r"""
    const r=await fetch('/_models/status.json',{cache:'no-store',signal:AbortSignal.timeout(8000)});
    if(!r.ok)throw Error('unavailable');const data=await r.json();if(token!==generation)return false;
    state=data;const body=document.createElement('div');body.innerHTML=data.html;panel.replaceChildren(body);panel.hidden=false;
-   timer=setTimeout(()=>{if(!editing)refresh(token);},30000);return true;
+   timer=setTimeout(()=>{if(!editing)refresh(token);},10000);return true;
   }catch(e){
    if(token!==generation)return false;
-   panel.textContent='Model configuration is unavailable. Use reload to try again.';panel.hidden=false;return true;
+   panel.textContent='Agent Bridge is unavailable. Retrying in 10 seconds.';panel.hidden=false;
+   timer=setTimeout(()=>{if(!editing)refresh(token);},10000);return true;
   }
  }
  async function post(action,body={}){

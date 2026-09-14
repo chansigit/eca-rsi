@@ -7,6 +7,19 @@ import pytest
 from ecarsi.serve import NAV_JS, _home_html, _navigator_html
 
 
+@pytest.mark.parametrize('count,display', [(9_999_999, '9,999,999'), (10_000_000, '10.00 M'), (12_345_678, '12.35 M')])
+def test_cell_row_compacts_inputs_but_keeps_releases_exact(monkeypatch, count, display):
+    from ecarsi import serve
+    monkeypatch.setattr(serve, 'fleet_totals', lambda _: dict(cells_in=count, cells_queued=count,
+        cells_released=count, kept=None, undated_input=0))
+    html = _home_html({}, workflow_html='')
+    row = html.split('aria-label="Cell counts">', 1)[1].split('<section', 1)[0]
+    assert 'data-stat="datasets"' not in row
+    for key in ('cells-in', 'cells-queued'):
+        assert f'data-stat="{key}"><span class="v">{display}</span>' in row
+    assert f'data-stat="cells-released"><span class="v">{count:,}</span>' in row
+
+
 def test_home_html_renders_stats_and_no_dataset_frame():
     html = _home_html({})
     assert "<title>Periscope — overview</title>" in html
@@ -20,6 +33,27 @@ def test_navigator_includes_home_item_and_sort_control():
     assert 'id="home-item"' in html
     assert 'id="nav-sort"' in html
     assert 'id="sb-resizer"' in html
+
+
+def test_cells_cards_use_history_not_queued_inputs_or_partial_output():
+    from ecarsi.serve import fleet_history, fleet_totals, history_at
+    def state(cls, n, final, org=(), rel=()):
+        return dict(cls=cls, n_input=n, final_cells=final, species="mouse",
+                    events=dict(organize=list(org), release=list(rel)))
+    states = {
+        "queued": (state("queued", 10000, None), Path("/queued")),
+        "multi": (state("running", 300, 240, [(1,100),(2,200)], [(3,80)]), Path("/multi")),
+        "done": (state("released", 100, 70, [(1,100)], [(4,70)]), Path("/done")),
+        "undated": (state("released", 50, 40, [], [(5,40)]), Path("/undated")),
+    }
+    hist = fleet_history(states)
+    totals = fleet_totals(hist)
+    assert totals["cells_in"] == 400  # excludes queued and missing timestamps
+    assert totals["cells_queued"] == 10000 and totals["undated_input"] == 50
+    assert totals["cells_released"] == 190  # includes the released unit of an active dataset
+    assert totals["kept"] == pytest.approx(100*110/150)  # completed cohort only
+    assert history_at(hist, 6)["datasets_started"] == 2  # units are not datasets
+    assert totals["cells_in"] == history_at(hist, 6)["cells_in"]
 
 
 @pytest.mark.skipif(not shutil.which("node"), reason="node not on PATH")

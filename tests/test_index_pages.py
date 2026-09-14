@@ -159,7 +159,7 @@ def test_home_overview_has_stats_table_and_filter(tmp_path):
     html = _home_html({"coll-Organ": root, "Gone": tmp_path / "nowhere"})
     assert "<title>Periscope — overview</title>" in html and "Recursive self-improving annotation" in html
     strip = html[html.index('<div class="glance">'):html.index('<section class="block" id="datasets">')]
-    for v, k in (("2", "datasets"), ("1", "Completed"), ("0", "Running"), ("0", "Queued"), ("1", "Failed"), ("1,000", "cells in"), ("800", "cells released"), ("80%", "cells kept")):
+    for v, k in (("2", "datasets"), ("1", "Completed"), ("0", "Running"), ("0", "Queued"), ("1", "Failed"), ("1,000", "cells in"), ("800", "cells released"), ("80%", "kept in completed datasets")):
         assert f'>{v}</span><span class="k">{k}</span>' in strip, (v, k)
     assert 'id="ds-table"' in html and 'id="ds-q"' in html and 'type="search"' in html
     row = html[html.index('<tr data-text="coll-organ'):]

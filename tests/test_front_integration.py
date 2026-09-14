@@ -210,6 +210,23 @@ def test_completion_checks_content_status_and_dynamic_clusters(tmp_path):
     assert not is_done(tmp_path, True)
 
 
+def test_osp_contract_does_not_materialize_expression(tmp_path, monkeypatch):
+    import h5py
+
+    publish(tmp_path)
+    original = h5py.Dataset.__getitem__
+    def read(dataset, key, *args, **kwargs):
+        assert not dataset.name.startswith(('/X/', '/layers/', '/obsp/'))
+        return original(dataset, key, *args, **kwargs)
+    monkeypatch.setattr(h5py.Dataset, '__getitem__', read)
+    assert validate_outputs(tmp_path, True)['n_survived'] == 6
+    # Metadata-only validation must still reject a missing count matrix.
+    with h5py.File(tmp_path / 'clustered.h5ad', 'a') as f:
+        del f['layers/counts']
+    with pytest.raises(ValueError, match='counts'):
+        validate_outputs(tmp_path, True)
+
+
 @pytest.mark.parametrize("fault", ["missing", "foreign", "overlap", "duplicate", "summary", "labels"])
 def test_qc_and_annotation_must_agree(tmp_path, fault):
     a = publish(tmp_path)
@@ -427,3 +444,53 @@ def test_profile_nullable_string_missing_values_do_not_hide_tissue(tmp_path, mon
     data.write_h5ad(step / "standardized.h5ad", convert_strings_to_categoricals=False)
     units, _ = organize.find_ecapp_units(tmp_path)
     assert organize.profile_unit(units[0])["obs_columns"]["tissue"]["value_counts"] == {"bone": 3, "blood": 2}
+
+
+@pytest.mark.parametrize('namespace', ['ecarsi', 'eca_test_stages'])
+def test_separate_osp_dispatch_preserves_identity_and_finalizes(tmp_path, monkeypatch, namespace):
+    import importlib
+    import shutil
+    if namespace != 'ecarsi':
+        package = tmp_path/namespace
+        package.mkdir()
+        (package/'__init__.py').touch()
+        for name in ('osp_dispatch.py', 'osp_stage.py'):
+            shutil.copy2(Path(__file__).parents[1]/'ecarsi'/name, package/name)
+        monkeypatch.syspath_prepend(str(tmp_path))
+    osp_dispatch = importlib.import_module(namespace+'.osp_dispatch')
+    unit = organize_two(tmp_path)
+    mapping = tmp_path/'mapping.json'
+    write_json(mapping, {'sources': {s: {'sample_column': 'sample', 'rationale': 'verified'} for s in ('A', 'B')}})
+    monkeypatch.setattr(persample, '_recommend_batch_key', lambda *a: None)
+    monkeypatch.setattr(persample, '_kernel_runtime', lambda *a: {'version': 'pinned'})
+    calls = []
+    def complete(entries, out, annotate, on_done):
+        calls.append(len(entries))
+        for e in entries:
+            assert e['command'][2] == namespace+'.osp_stage'
+            p = Path(e['outdir'])
+            request = read_json(p/'request.json')
+            assert request['identity'] == e['identity']
+            assert request['runtime'] == {'version': 'pinned'}
+            a = ad.read_h5ad(p/persample.SUBSET_FILE)
+            a.obs['c'] = 'a'
+            a.obs['_ann_coarse'] = a.obs['_ann_fine'] = 'T'
+            a.obs['_qc_action'] = 'keep'
+            a.write_h5ad(p/'clustered.h5ad')
+            (p/'report.html').write_text('<html>report</html>')
+            pd.Series({'n_cells': a.n_obs, 'n_low_quality': 0}).to_csv(p/'qc_summary.csv')
+            pd.DataFrame(columns=['cell', 'qc_reason']).to_csv(p/'qc_removed.csv', index=False)
+            write_json(p/'annotation_proposal.json', {'cluster_key': 'c', 'qc_actions': [],
+                       'clusters': [{'cluster': 'a', 'label_coarse': 'T', 'label_fine': 'T'}]})
+            write_json(p/L.RUN_STATE, dict(identity=e['identity'], annotate=True, state='complete',
+                       exit_code=0, outputs=output_identities(p, True)))
+        return []
+    monkeypatch.setattr(osp_dispatch, 'drive', complete)
+    args = [str(unit), '--sample-map', str(mapping)]
+    assert osp_dispatch.main(args) == 0
+    before = read_json(L.persample_root(unit)/L.MANIFEST)
+    assert before['state'] == 'complete' and before['runtime_check'] == 'ok'
+    assert osp_dispatch.main(args) == 0
+    after = read_json(L.persample_root(unit)/L.MANIFEST)
+    assert calls == [2] and before['identity'] == after['identity']
+    assert before['samples'] == after['samples']
