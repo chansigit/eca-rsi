@@ -144,16 +144,18 @@ normalize/log1p 与部分小表校验等可融合；邻居图/Leiden/UMAP 先沿
 
 ## 本地运行与调度后端
 
-支持三个部署方式，使用同一个 operation/产物契约：
-1. local-direct：直接在本机运行数值子进程，不要求 Slurm、HQ 或 Temporal 服务。
-   有 CPU/RAM/磁盘并发限制与持久收据，进程重启可恢复；单机全失联不保证持续服务。
-2. local-pool：本机或普通机器手动启动 HQ server/worker，获得多任务调度；不需要 Slurm。
-3. slurm-pool：用户申请 allocation，启动受 allocation 限制的 worker 后加入 HQ。
-   不配置 HQ 自动申请队列，不启用闲置自动退还；机时耗尽仍必须结束。
+已确认统一使用 pool，不保留绕过调度器的 local-direct 路径：
+1. 单机 pool：四个组件部署在本机，一个额度受限的 Warm Pool Worker 执行计算。
+   提供一条命令启动，明确 CPU/RAM/GPU/磁盘预算，不要求用户逐一启动服务。
+2. 分布式 pool：普通机器和/或用户申请的 Slurm allocation 上启动 Worker 并加入。
+   不自动申请 allocation，不因空闲退还；到期停止派活并在机时内收尾。
 
-工作流持久化引擎仍待选型。第一版 local-direct 的可恢复凭据不冒充 Temporal 的
-全套 HA；若用户需要本地无人值守多服务恢复，可显式启动同一控制服务栈。
-所有后端读取独立配置，不在包导入时要求 Slurm，也不默认连接生产 scheduler。
+两种拓扑使用同一 operation/产物契约、资源准入和恢复路径。轻量控制操作仍在所属
+服务内执行，数值子进程执行库归 Worker 使用，不是另一条绕过 pool 的入口。
+同机组件独立监督与恢复，Work Coordinator 崩溃不能连带终止健康计算进程。
+工作流持久化引擎与 pool 调度引擎仍待选型；统一 pool 不等于已经选定 HQ/Temporal。
+单机全失联不保证服务连续可用；恢复后按持久记录接续。
+配置不在包导入时要求 Slurm，也不默认连接生产 scheduler。
 
 ## 多级存储：速度等级与可见范围分开
 
@@ -217,7 +219,7 @@ HQ 可承担 worker 内资源匹配和任务队列。RSI 适配层负责数据�
 以现有数值实现保证输入输出契约。并行样本与 lineage 优先；其它 primitive 逐项解包。
 不用一次同时更换科学内核、工作流引擎、调度器、数据格式。
 
-最小验证矩阵：本地直接执行；HQ本地并发；HQ用户提供Slurm worker；GPU优先与CPU回退；
+最小验证矩阵：单机pool；HQ本地并发；HQ用户提供Slurm worker；GPU优先与CPU回退；
 跨共享存储域复制；node-local丢失；磁盘满；copy中断；server journal丢最后状态；
 旧worker迟到结果；AI等待时另一个数据集完成计算；动态增加/退出worker；迭代局部失效。
 

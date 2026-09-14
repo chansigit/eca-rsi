@@ -13,7 +13,7 @@ retain their own implementation-specific terminology.
 
 | Component | Owns | Does not own |
 | --- | --- | --- |
-| Work Coordinator | Versioned operation dependencies, validated decisions, iteration/convergence, cancellation intent, logical completion, and local/pool routing policy | Per-worker CPU/GPU grants, provider quotas, or executing numerical kernels |
+| Work Coordinator | Versioned operation dependencies, validated decisions, iteration/convergence, cancellation intent, logical completion, and execution requirements | Per-worker CPU/GPU grants, provider quotas, or executing numerical kernels |
 | Agent Bridge | Model request queues, shared quota groups, permitted model routing, persistent responses/conversation state | Scientific workflow progression or direct execution of heavy tools |
 | Warm Pool Scheduler | Admission of submitted ready computations, worker selection, concrete resource grants, worker lifecycle observations and execution-attempt placement | Biological dependencies, model decisions, convergence, or deciding which upstream scientific result is valid |
 | Warm Pool Worker | Execute bounded authorized attempts, runtime/resource enforcement, data preparation, process-tree supervision and result receipts | Inventing new workflow steps or requesting Slurm allocations |
@@ -24,26 +24,31 @@ means that ready operation is waiting for execution resources. The coordinator
 stores the backend handle rather than independently predicting/assigning its
 worker or maintaining a second resource reservation for the same compute.
 
-The route is selected once per logical submission from explicit user policy
-(local/pool/auto), runtime compatibility, size and an advisory capacity report.
-Only the selected backend makes the actual resource grant. A timeout is not
-permission to submit the same operation to the other backend: reconcile or
-fence/cancel the original attempt first. Placement and backend selection do not
-change the scientific task identity unless the numerical implementation changes.
+## Accepted deployment model: a pool in every mode (2026-09-14)
 
-With a pool: Work Coordinator -> Warm Pool Scheduler -> Warm Pool Worker.
-Without a pool: Work Coordinator -> local execution module -> local subprocess.
-Both modes use Agent Bridge for model work and the same operation/receipt
-contracts. The local execution module is library code, not a fifth mandatory
-service; it supplies bounded CPU/RAM/GPU/disk admission and process supervision.
-Warm Pool Workers reuse that execution code. Local execution need not run HQ,
-Slurm or a pool server, and control state must not require a live pool endpoint.
-Work Coordinator remains logically necessary but may share a process with the
-CLI and local execution module. Physical process boundaries may differ by mode.
+All numerical execution follows one route:
+Work Coordinator -> Warm Pool Scheduler -> Warm Pool Worker.
+Local execution is a single-worker pool; distributed execution adds workers on
+ordinary machines and/or user-provisioned Slurm allocations. There is no separate
+local-direct bypass. Pool does not imply Slurm or a specific scheduler engine.
+
+Local startup should be one command with explicit CPU/RAM/GPU/disk budgets,
+not manual setup of four services or implicit use of all host resources.
+Co-located components have independent supervision: a coordinator crash must
+not terminate healthy worker computations. The subprocess execution module is
+Worker library code, not a fifth service or an alternative coordinator route.
+Lightweight control updates and validation remain within the owning service.
+
+Only Warm Pool Scheduler grants compute resources. A submission timeout does
+not authorize another attempt: reconcile or fence/cancel the original first.
+Placement does not change scientific task identity unless the numerical
+implementation changes. Both deployment topologies use the shared Agent Bridge
+and identical operation, receipt and recovery contracts. Temporal and HyperQueue
+remain implementation candidates; their local operational cost needs validation.
 
 Resource requests cover only their operations, never a whole dataset's peak
-budget while waiting for a model. Bridge limits model calls; the selected
-compute backend limits numerical work. Shared storage capacity is accounted
+budget while waiting for a model. Bridge limits model calls; Warm Pool Scheduler
+limits numerical work. Shared storage capacity is accounted
 once per storage domain, independently of per-worker RAM reservations.
 
 ## Accepted execution model: option B (2026-09-14)
@@ -235,7 +240,7 @@ UI changes follow recovery and throughput acceptance, not precede them.
 The expanded design supersedes whole-stage resource admission: stages become
 compositions of primitive operations, with dynamic iteration and versioned
 artifact dependencies rather than a global round barrier. Temporal remains a
-candidate, not a required component of local-direct execution. HyperQueue is a
+candidate for both local and distributed deployments. HyperQueue is a
 candidate execution scheduler, with auto-allocation disabled by user policy.
 
 - [Primitive catalog, local modes and tiered storage](PRIMITIVE_OPERATIONS.zh-CN.md)

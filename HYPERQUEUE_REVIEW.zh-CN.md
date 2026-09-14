@@ -12,8 +12,9 @@ Apptainer中的primitive命令。Agent Bridge处理AI请求。产物/副本目�
 供三者使用，第一版作为RSI模块而非新增一个必须常驻的第五服务。
 
 资源分配只由一个后端负责。不要保留Dask和HQ同时管理同一份CPU/GPU。
-同一个operation可以选local-direct或HQ，选择必须显式配置并有独立测试端点。
-无需Slurm的本地HQ部署是官方支持的；完全不需要HQ服务的本地direct模式由RSI保留。
+用户已确认本地也是pool，所有数值任务经过同一调度路径，不保留local-direct旁路。
+HQ仍是pool的候选实现，试验须显式配置独立端点。
+无需Slurm的本地HQ部署是官方支持的。
 [仓库说明](https://github.com/It4innovations/hyperqueue)
 
 ## 已核实的能力与边界
@@ -85,6 +86,6 @@ RSI需独立描述artifact及replica、存储可见范围、读写权限、配�
    均可恢复且结果只接受一次；明确哪些计算会重做。
 5. 三个存储域：共享A、仅部分worker可见的共享B、每节点local SSD。验证复制、
    配额、缓存失联、半文件清理，以及任务不能被分到不可读输入的worker。
-6. 真实OSP样本和MSP小任务通过同样契约，与本地直接执行的科学结果对比。
+6. 真实OSP样本和MSP小任务通过同样契约，与既有数值实现的基准结果对比。
 
 先验证这些边界，再决定HQ承担多少功能以及是否正式采用Temporal。
