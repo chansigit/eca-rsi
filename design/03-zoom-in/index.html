@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>zoom-in：按谱系并行细化</title><style>
+body { max-width: 960px; margin: 32px auto; padding: 0 18px; font: 16px/1.7 sans-serif; color: #222; }
+h1 { font-size: 26px; } h2 { font-size: 20px; margin-top: 30px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { border: 1px solid #ccc; padding: 10px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+th { background: #f5f5f5; } code { overflow-wrap: anywhere; }
+small { color: #555; } li { margin: 6px 0; }
+@media (max-width: 600px) { body { margin: 18px auto; } th, td { padding: 6px; font-size: 14px; } }
+</style></head>
+<body>
+<p><a href="../02-cross-sample/index.html">← cross-sample</a></p>
+<h1>zoom-in：按谱系并行细化</h1>
+<p><strong>准备证据 → 规划谱系 → 各谱系独立计算和注释 → 合并结果。</strong>lineage 指一个或多个相关粗类型组成的细胞谱系。谱系 A 等模型时，谱系 B 和其他数据集继续计算。</p>
+<p><small>基于现有代码整理的设计草案，尚未实现或部署。保留谱系规划职责；类型注释改用 1.0、质控使用 2.0，这是相对当前代码的明确调整。不把内部函数逐个变成调度任务。</small></p>
+<table><thead><tr><th>步骤</th><th>类型</th><th>工作与并行单位</th></tr></thead><tbody>
+<tr><td>准备规划证据</td><td>程序执行</td><td>从 cross-sample 完成的结果读取粗类型、细胞数、样本组成、邻居连接与 UMAP 岛等证据，保存紧凑摘要和图。复用已有表示，不重做整合；需要扫描大矩阵或图时进 pool。</td></tr>
+<tr><td>规划谱系</td><td>模型推理</td><td>决定哪些粗类型归为一个谱系、哪些谱系需要 zoom-in。Coordinator 校验类型覆盖、唯一归属、最小细胞数和共享 UMAP 岛的解释。有效计划保存后才派计算；等待模型不占计算资源。</td></tr>
+<tr><td>准备谱系输入与共享 markers</td><td>程序执行</td><td>按计划准备有限批次的谱系子集，复用共享读取。另按计划的谱系分组在全数据集计算 one-vs-rest markers，供外谱系信号评分使用。这是真实计算任务，不能放在 Coordinator 中无预算运行；不是照抄 cross-sample 的群体 DEG。</td></tr>
+<tr><td>各谱系计算</td><td>程序执行</td><td>每个谱系从 counts 重做归一化、HVG、PCA、Harmony、邻居图、聚类、UMAP、QC 和比较准备，在一个任务内连续执行，复用矩阵。DEG 采用 cross-sample 的比较任务方式，大比较可分发、小比较合批。外谱系评分与必要图表连续生成；计算和证据完成后释放资源。</td></tr>
+<tr><td>各谱系注释</td><td>模型推理</td><td>每个谱系一个独立 agent：先按 resolution 1.0 判断细胞类型，再按 2.0 结合 QC 和外谱系证据判断质量及误归属，提出保留、删除或改归属建议。优先查该谱系的预计算 DEG；按需补证据或子聚类。保留一个连贯会话，不为每个 cluster 新开 agent。</td></tr>
+<tr><td>应用与合并</td><td>程序执行</td><td>各谱系的有效提案分别应用并保存；全部所需谱系完成后，校验细胞守恒、标签、删除与改归属记录，合并成 annotated_zmip.h5ad 和报告。未 zoom 的谱系沿用原结果；失败谱系不能静默遗漏。</td></tr>
+</tbody></table>
+<h2>细胞排除记账〔程序执行〕</h2>
+<p>谱系计算中任何实际过滤、最终质量删除都逐细胞记账，包含 1.0 类型群、2.0 质控群、原因与证据；解离应激/濒死不能只写“remove”。未 zoom 和 reassign 的细胞继续保留，不计删除；各谱系合并时检查细胞去向完整且不重复。</p>
+<p><strong>每次过滤 → 记录 cell IDs、原因和证据 → 与输出一起保存并核对细胞守恒。</strong>这是步骤内的必做环节，不新增排队任务。无排除也记录零排除摘要；账本未通过验收，该步不能完成。详见 <a href="../cell-exclusion-ledger.md">统一细胞排除账本</a>。</p>
+<h2>类型用 1.0，质控用 2.0</h2>
+<table><thead><tr><th>用途</th><th>单位</th><th>模型产出</th></tr></thead><tbody>
+<tr><td>类型注释〔模型推理〕</td><td>谱系内 Leiden resolution 1.0</td><td>每群 coarse / fine 类型、置信与证据，以及必要的类型合并提案。不要求给每个 2.0 群单独命名。</td></tr>
+<tr><td>质量注释〔模型推理〕</td><td>谱系内 Leiden resolution 2.0</td><td>结合已接受的 1.0 类型组成，判断局部质量问题；记录保留、删除及误归属证据。发现类型矛盾时定向复核，不自动把全部类型注释升级到 2.0。</td></tr>
+<tr><td>结果应用〔程序执行〕</td><td>cell ID</td><td>每个细胞取得其 1.0 群的类型和 2.0 群的质量决定；应用经校验的删除、类型合并和改归属。保留细胞继续使用 1.0 类型，除非有明确接受的类型修订。</td></tr>
+</tbody></table>
+<p>两个 resolution 的 Leiden 群不假设严格嵌套。程序保存逐细胞对应关系及交叉计数表；若一个 2.0 群跨多个 1.0 群，展示全部类型组成，不用多数票覆盖原类型。不适用于整个质控群的决定须明确到相关细胞交集或请求必要细分。</p>
+<p>SQLite 同时保存 <code>msp_leiden_r1.0</code> 和 <code>msp_leiden_r2.0</code> 的 global / local DEG。类型判断显式查询 1.0，质量判断显式查询 2.0；不同 key 的同名 cluster 不能混用。仍为每谱系一个 agent，先完成类型提案，再做质量判断。</p>
+<h2>解离应激与濒死亚群：默认去除</h2>
+<p><strong>已确认的分析策略：</strong>在 2.0 质控单位上，判定为 tissue dissociation / cell dying 导致的亚群，默认 <code>remove</code>，而不是保留成一个 “stressed” fine 类型留到下一轮。</p>
+<p>模型优先从 2.0 的预计算 DEG 与 QC 摘要识别 high MT、HSP、JUN 等主导的亚群，结合对应 1.0 类型及同类型其他细胞的表达和 QC 判断。这里是对“解离应激 / 濒死亚群”的默认处理，不是看到某个基因表达就删，也不新增统一硬阈值。证据不足时补查已有数据；若明确认为属于应保留的生物学状态，必须记录保留理由。</p>
+<p>删除只作用于确定的质控亚群或其相关细胞，不连带删除整个 1.0 类型。保存 cell IDs、1.0/2.0 群号、解离应激或濒死原因、证据版本和最终决定；模型判断期间的 SQLite 快照不改，验收提案后统一应用。</p>
+<p><small>迁移需同时修改注释提交、进度恢复、覆盖校验和结果应用，使其区分类型 key 与质控 key；不能只把共享 BASE_KEY 常量改成 1.0。当前生产代码仍以 2.0 为基础注释单位，超限复核提示还包含保留 stress 状态的旧引导；实现时须同步修改初始 prompt 与复核提示，防止互相抵消。</small></p>
+<h2>计算怎么排？</h2>
+<p><strong>先并行多个谱系，再利用独立 DEG 比较的并行度。</strong>整合和 UMAP 不拆；不要让一个父任务占住峰值内存等待 DEG 子任务。DEG 输入保存后交接，Scheduler 按各任务 CPU、RAM、GPU 和剩余机时决定同机并发数量。</p>
+<p>共享 markers 与子集准备可并行。第一版等共享 markers 和本谱系子集就绪，再启动该谱系连续计算与外谱系评分，不等其他谱系子集全部写完，也不让 Worker 占着资源等 markers。独立 DEG 任务通过持久化输入交接；小谱系的比较合批即可，不强制分散到多台节点。</p>
+<p><strong>两套后端：</strong>CPU Scanpy / GPU RAPIDS-singlecell，沿用 cross-sample 的计算内核与契约。适用且资源合适时优先 GPU，必要的 CPU 步骤在同一 Worker 内完成。GPU 适配须验证，不假定评分和全部 QC 都有 GPU 实现。</p>
+<h2>预计算 DEG 与模型工具</h2>
+<p>每个谱系、每个计算版本保存自己的只读 <code>deg.sqlite</code>，两种视图分别为谱系内部 global / local DEG。不能把全数据集的谱系 markers 或 cross-sample 的旧 DEG 当成当前谱系重聚类后的结果。</p>
+<table><thead><tr><th>操作</th><th>类型</th><th>处理</th></tr></thead><tbody>
+<tr><td>deg_lookup / deg_sql / 已有 QC 摘要</td><td>程序执行</td><td>优先只读查询紧凑结果，不加载完整矩阵。记录版本、比较组和结果覆盖范围；top markers 中没有某基因，不等于它不表达。</td></tr>
+<tr><td>check_genes / check_deg</td><td>程序执行</td><td>匹配的已有结果直接复用；只有缺失证据才提交有预算的 pool 计算，保存结果后继续模型。</td></tr>
+<tr><td>subcluster</td><td>程序执行</td><td>仅在证据不足时对子群聚类并生成配套 DEG，一次连续执行。请求须区分类型细分或质量细分，保存版本并只失效受影响的提交；质量细分不自动产生新类型。</td></tr>
+<tr><td>submit_cluster / finalize_annotation</td><td>程序执行</td><td>提交契约需区分 1.0 类型提案与 2.0 质量提案。Coordinator 分别验证覆盖、再按 cell ID 校验合并、归属和删除保护，保存有效决定。无效提案返回模型修正，不交给 Worker 猜测。</td></tr>
+</tbody></table>
+<h2>必须保留的科学边界</h2>
+<ul>
+<li><strong>规划不是按 UMAP 随便切块。</strong>每个粗类型唯一归入一个谱系；共享岛和类型混合需结合证据解释。最小细胞数沿用配置，不把固定阈值当生物学定律。</li>
+<li><strong>外谱系信号只是证据。</strong>它可能来自真实相似性、误归属、双细胞或环境污染，不能凭评分高就删。仅样本/批次富集导致的删除请求仍受现有保护约束。</li>
+<li><strong>改归属不是删除。</strong>reassign 只能指向已规划的其他谱系粗类型；细胞本轮改标签并保留，不立刻送到目标谱系再重算，避免谱系互相等待。</li>
+<li><strong>删除须复核。</strong>保留删除比例软限制：超限先要求模型复核证据与作用范围，仍确认时记录理由和超限状态。复核也执行“解离应激 / 濒死亚群默认去除”策略，不再用旧提示要求一律保留成 stressed 类型。</li>
+<li><strong>合并不重算全局 UMAP。</strong>本阶段按已有全局表示展示汇总；是否进入下一轮 cross-sample 或结束，由 Work Coordinator 按既有收敛规则决定。</li>
+</ul>
+<h2>Agent prompts（英文）</h2>
+<ul>
+<li><a href="plan-prompt.md">Lineage planning prompt</a>：规划谱系及 zoom 选择。</li>
+<li><a href="annotation-prompt.md">Lineage annotation prompt</a>：类型、质量与改归属的连贯判断。</li>
+<li><a href="../02-cross-sample/precomputed-deg-prompt.md">Shared precomputed DEG prompt</a>：由程序注入注释 agent，优先查库。</li>
+</ul>
+<p>这里暂沿用现有单谱系注释 agent，内部先类型后质量；cross-sample 的两个 agent 不自动复制过来。若之后决定拆成两段，可沿用同一计算结果和 SQLite，无需重做数值流程。</p>
+<h2>恢复与现有代码</h2>
+<p>Work Coordinator 管计划、依赖、模型决定和合并；Agent Bridge 管模型请求；Warm Pool Scheduler 分资源；Warm Pool Worker 跑数值任务。计算完成与模型等待分开保存，某谱系注释中断不重跑已验收计算；Coordinator 中断时 Worker 完成已接受任务、保存收据并等待。</p>
+<p>现有 <code>zmip/plan.py</code> 同时准备证据并等待规划模型；<code>zmip/lineage.py:run_lineage</code> 连续重整合、评分、等待注释；<code>zmip/foreign.py</code> 计算共享 markers 与外谱系分数；<code>zmip/merge.py</code> 校验并汇总。已有子进程并行、计算收据与注释进度恢复，但尚不等于上述 pool 与 Bridge 分离已完成。</p>
+</body></html>

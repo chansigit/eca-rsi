@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Work Coordinator 与 Temporal 的结合</title><style>
+body { max-width: 960px; margin: 32px auto; padding: 0 18px; font: 16px/1.7 sans-serif; color: #222; }
+h1 { font-size: 26px; } h2 { font-size: 20px; margin-top: 30px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { border: 1px solid #ccc; padding: 10px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+th { background: #f5f5f5; } code { overflow-wrap: anywhere; }
+small { color: #555; } li { margin: 6px 0; }
+@media (max-width: 600px) { body { margin: 18px auto; } th, td { padding: 6px; font-size: 14px; } }
+</style></head>
+<body>
+<p><a href="index.html">← Work Coordinator 执行与恢复</a></p>
+<h1>Work Coordinator 与 Temporal 的结合</h1>
+<p><strong>结论：流程模型适合，部署恢复仍需验证。</strong>建议让 Temporal 承担 Work Coordinator 的持久流程执行，Scheduler / Worker 与 Agent Bridge 保持各自职责。当前最大的适配条件是没有常驻主机，必须验证 Temporal Service 和状态库一起中断、换节点后恢复。</p>
+<p><small>官方资料核对日期：2026-09-14。下文区分框架已有能力与 RSI 接入建议。仅分析设计，未安装或启动 Temporal，也未选定生产后端。</small></p>
+<h2>1. 如何对应我们的四个组件</h2>
+<table><thead><tr><th>RSI 组件</th><th>建议与 Temporal 的结合</th></tr></thead><tbody>
+<tr><td>Work Coordinator</td><td>科学依赖、模型工具循环和迭代写成 Workflow；Temporal Service 与其数据库保存事件历史，Python Workflow Worker 执行流程代码。对 Scheduler/Bridge 的短请求放在 Activity 中。</td></tr>
+<tr><td>Warm Pool Scheduler</td><td>保留 CPU/RAM/GPU/机时准入、Worker 选择、有限任务授予和执行尝试。Temporal Task Queue 不替代这些资源契约。</td></tr>
+<tr><td>Warm Pool Worker</td><td>继续运行独立数值进程和 Apptainer 环境、保存产物与收据。它不必成为 Temporal Worker，也不随 Coordinator 进程退出而退出。</td></tr>
+<tr><td>Agent Bridge</td><td>共享模型调用与会话服务，接收稳定请求 ID，保存回复/工具请求并返回。模型配额、路由和 token 统计仍由 Bridge 管。</td></tr>
+</tbody></table>
+<p>Temporal 的 Worker 是运行 Workflow/Activity 的 SDK 进程，与我们的计算 Worker 是不同角色。采用 Temporal 后，其 Service 和数据库属于 Coordinator 的内部依赖，不增加一个新的科学阶段。官方执行模型由 Service、事件历史和应用 Worker 协作完成。<a href="https://docs.temporal.io/workflow-execution">来源：Workflow Execution</a>。</p>
+<h2>2. A 的一步、B 的一步如何交错</h2>
+<p><strong>建议每个数据集有独立 Workflow，独立分析单元、OSP 样本和 zoom-in 谱系按实际并行需要使用子 Workflow。</strong>独立 DEG 比较仍是计算任务，不为每个基因、内部函数或日志再建 Workflow。</p>
+<p>每条 Workflow 只等自己的依赖。A 等模型时，B 可派整合；B 等 DEG 时，C 可派 OSP。各 Workflow 可并发，子流程可先启动后等待汇合；不能在提交循环中逐个等待子流程完成。Temporal 原生支持并发 Workflow 和异步启动子 Workflow。<a href="https://docs.temporal.io/workflow-execution">来源：并发执行</a>；<a href="https://docs.temporal.io/develop/python/workflows/child-workflows">来源：Child Workflows</a>。</p>
+<p><strong>RSI 仍决定派发政策。</strong>Temporal 不自动给出我们希望的跨数据集轮转、模型积压上限和样本准备限额。初版保持有界就绪窗口；严格轮转若需集中仲裁，可在 Coordinator 内用一个只保存就绪 ID 与派发顺序的有界调度 Workflow，不把全部数据集的科学状态放进一个全局大 Workflow。该仲裁器也不预留 Worker 资源。</p>
+<h2>3. replay 不要求重算出相同模型答案</h2>
+<p>Temporal 要求 Workflow 根据已记录事件产生一致的调度命令；LLM 调用、文件/数据库读取等外部操作应置于 Activity。我们将模型回复、结果引用和已接受决定作为事件输入，replay 时复用已记录结果；Scanpy、RAPIDS 和模型本身无需在 replay 时重新执行。<a href="https://docs.temporal.io/workflow-definition#deterministic-constraints">来源：确定性要求</a>。</p>
+<p>例如已记录“模型请求 subcluster”：恢复后仍接续该工具请求，不让模型重新决定一次。尚未可靠记录的外部调用可能重试，仍需 Bridge/Pool 的稳定请求 ID 去重。Workflow 也不能直接读取当前 squeue、文件目录或在线配置来分支；这些输入经 Activity/消息记录后再用。</p>
+<p>科学迭代可写成依赖模型结果的循环，子聚类是会话内循环，不要求固定 DAG。长历史可在安全边界 Continue-As-New，携带必要状态与产物引用；它保留 Workflow ID、使用新的 Run ID 和事件历史。业务 operation_id 不应只依赖会变化的 Run ID。<a href="https://docs.temporal.io/develop/python/workflows/continue-as-new">来源：Continue-As-New</a>。</p>
+<h2>4. 推荐接法：短提交 Activity + 消息返回结果</h2>
+<ol>
+<li>Workflow 生成稳定 operation/request ID，调一个短 Activity 向 Pool 或 Bridge 提交。相同 ID 重发只查询或返回原请求，不能新建计算尝试。</li>
+<li>外部服务持久接受后返回句柄，Activity 结束；Workflow 等待结果 Signal。等待不需要常驻 AnnData 或占住一个长 Activity 执行进程。</li>
+<li>Worker / Bridge 先保存收据或回复，由服务内的返回逻辑发送结果 Signal，内容只含身份和引用。Temporal 离线时保留待回传记录。</li>
+<li>Workflow 按操作与结果身份去重，经短验证 Activity 或已验收收据确认结果，再派下一步。Signal 提前到达时先存入按 request ID 索引的结果集合，不依赖先开始等待。</li>
+<li>事件丢失或返回服务中断时，用持久 Timer 触发短查询 Activity 对账。查询不到且无法确认原任务停止时，保持结果不明，不重派。</li>
+</ol>
+<p>Signal 是异步消息；服务接收 Signal 不等于 Workflow 已处理，更不等于 RSI 科学结果已验收。接收后仍要按我们的身份和账本契约验证。去重 ID 与“哪些结果已接受”随 Workflow 状态保存。<a href="https://docs.temporal.io/develop/python/workflows/message-passing">来源：Signals 与消息处理</a>。</p>
+<p>Temporal 另有 asynchronous Activity completion：Activity 函数返回后，外部系统通过 token 完成 Activity。它可以接计算集群，但仍保留 Activity 超时和完成身份问题。针对我们允许控制服务长时间离线的场景，优先验证上面的短提交与 Signal 接法；异步完成作为备选，不同时实现两套。<a href="https://docs.temporal.io/develop/python/activities/asynchronous-activity">来源：异步 Activity 完成</a>。</p>
+<h2>5. 重试边界必须改对</h2>
+<p>Temporal 可以因 Activity 超时安排重试。这个超时说明 Temporal 没有收到及时完成，不证明外部 Slurm/Python/R 进程已结束。若把“重新提交数值任务”直接放进默认重试的 Activity，可能产生重复计算。<a href="https://docs.temporal.io/encyclopedia/detecting-activity-failures">来源：Activity 超时与重试</a>。</p>
+<table><thead><tr><th>情况</th><th>RSI 接入策略</th></tr></thead><tbody>
+<tr><td>提交 Activity 重试</td><td>复用同一逻辑请求 ID；Pool/Bridge 查询已有接受记录。Temporal 的 Activity attempt 不直接转成新的数值 attempt。</td></tr>
+<tr><td>计算实际失败</td><td>Scheduler 对账并确认原尝试终止，按既定重试策略创建新的执行尝试；重复通知不反复触发重试。</td></tr>
+<tr><td>模型调用重试</td><td>Bridge 先查已存回复，避免重复扣费。供应方已处理但回复从未保存且不可查询时，显式记录不确定性，按配置处理。</td></tr>
+<tr><td>反复失败或输入错误</td><td>Workflow 捕获明确失败，保存受影响分析单元的暂停原因，等待修复/恢复消息；其他独立分支继续。不通过失败整个父流程取消健康兄弟任务。</td></tr>
+</tbody></table>
+<p>停止/取消也需传到外部执行端并确认，终止一个 Workflow 不保证自动终止外部计算。已经接受结果只能有一个有效发布者，迟到尝试不能覆盖新结果。收据、细胞守恒和计算环境一致性仍由 RSI 保证。</p>
+<h2>6. 没有常驻主机时怎么办</h2>
+<table><thead><tr><th>中断对象</th><th>行为与条件</th></tr></thead><tbody>
+<tr><td>仅 Coordinator 的 Python Worker</td><td>Temporal Service / 数据库若仍在，可保留流程历史和新到消息；计算 Worker 独立完成有限任务。启动兼容的 Python Worker 后重放并接续。</td></tr>
+<tr><td>Temporal Service 也停止</td><td>不再推进新 Workflow 任务。Pool / Bridge 保存可靠结果及待回传记录；Service 恢复后重连、回传、对账。</td></tr>
+<tr><td>数据库进程也停止，旧节点已消失</td><td>必须在新授权节点用可靠存储恢复已确认的数据库状态，再恢复 Service 和 Python Worker。只有本地数据目录或会丢失最近事务的备份不满足已定要求。</td></tr>
+<tr><td>原控制节点可能重新出现</td><td>新旧数据库实例与控制实例必须避免同时以旧状态发命令或写数据；“共享目录存在”不是排他恢复的证明。</td></tr>
+</tbody></table>
+<p>上述是我们的接入要求和条件推导，不是已完成的 Slurm 部署验证。Temporal 能从持久历史恢复；数据库数据本身丢失，框架不能替我们找回。控制 Worker 与发新请求的 Activity 适配器作为同一逻辑 Coordinator 管理，Coordinator 不可用时停止新派发，收据回传可以独立恢复。</p>
+<p><strong>不能用 dev server 冒充生产方案。</strong>CLI 的 <code>start-dev --db-filename</code> 可以保存开发状态，但官方明确标注不用于生产；嵌入式 SQLite 方案同样用于开发测试。生产自托管需正式 Service 与支持的数据库，例如 PostgreSQL/MySQL/Cassandra。可以用开发服务验证交互逻辑，不能据此宣称已验证换节点后的生产恢复。<a href="https://docs.temporal.io/cli/command-reference/server">来源：CLI server</a>；<a href="https://docs.temporal.io/self-hosted-guide/embedded-server">来源：嵌入式部署限制</a>。</p>
+<p><strong>建议：</strong>先评估正式 Temporal Service + PostgreSQL 随授权控制节点启动、依赖可靠持久存储并可在新节点恢复的方案。不是要求购买常驻主机，也不要求立刻搭 Kubernetes；具体数据库存储路径的锁、崩溃恢复和持久性必须另行验证。官方支持自托管服务及二进制部署，但没有替本集群保证这些存储条件。<a href="https://docs.temporal.io/self-hosted-guide/deployment">来源：自托管部署</a>。</p>
+<h2>7. 两个必须修订的 Coordinator 设计点</h2>
+<ul>
+<li><strong>不再自建第二套权威流程状态机。</strong>如果选 Temporal，Workflow 历史和状态负责操作依赖与推进；原文“先存意图、再派发”通过 Workflow 命令和 Activity 执行实现。Periscope 状态表可作为可重建展示数据，不能与 Temporal 各自决定下一步。Pool/Bridge 仍保留各自外部请求去重和收据。</li>
+<li><strong>不要求全局唯一 Python 进程。</strong>Temporal 支持多个 Workflow Worker；每个 Workflow 的状态由框架管理。原来的“唯一有效 Coordinator”应落实为每个逻辑操作只有一个被接受的决定/派发权威，以及外部服务的稳定请求去重，不再自己写另一套全局 leader 选举。</li>
+</ul>
+<p>还有两项工程约束：流程顺序变更要用版本隔离或 patch，不能直接拿新代码重放旧历史；例如旧的质量先、类型后不能无迁移地换序。子 Workflow 默认可能随父流程关闭而终止，需明确 Parent Close Policy；这与 Python Worker 崩溃不同。Continue-As-New 首版安排在子任务已收齐的边界，处理完消息后再换历史，避免遗失仍在运行子任务的跟踪。<a href="https://docs.temporal.io/workflow-definition#versioning-workflows">来源：流程版本</a>；<a href="https://docs.temporal.io/develop/python/workflows/child-workflows">来源：父子生命周期</a>；<a href="https://docs.temporal.io/develop/python/workflows/continue-as-new">来源：历史接续</a>。</p>
+<h2>8. 后续验证清单（目前暂缓）</h2>
+<p>用户已决定先继续组件设计；下列清单保留到实施阶段，不在当前阶段启动。</p>
+<ol>
+<li><strong>核心并发：</strong>两个样本 Workflow，A 等模拟模型，B 完成真实轻量计算；证明没有整个 driver 准入和等待占资源。</li>
+<li><strong>提交与通知边界：</strong>在外部接受请求后杀掉适配器；恢复后同一 ID 不重复派发。结果落盘后丢通知，能主动对账继续。</li>
+<li><strong>整套控制栈停机：</strong>关闭 Python Worker、Service 和数据库；外部有限任务继续。旧节点不可用后，在新授权节点恢复状态并验收同一结果。</li>
+<li><strong>科学与生命周期：</strong>模型工具循环、细胞账本拒收、失败分支暂停、父子关闭策略、历史续接和代码版本重放都通过后，再接真实 OSP 样本流程。</li>
+</ol>
+<p><strong>采用判断：</strong>如果正式数据库的跨节点恢复可行、运维成本可接受，Temporal 是值得采用的 Coordinator 执行引擎；它能省掉大量历史、等待和恢复代码。如果这一部署前提无法兑现，再比较更轻的持久执行方案。不要只验证 SDK 示例能跑，就宣布架构问题解决。</p>
+</body></html>

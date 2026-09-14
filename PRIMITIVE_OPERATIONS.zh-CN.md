@@ -1,6 +1,6 @@
 # 异步执行单元与多级存储草案
 
-状态：设计候选，尚未实现或部署。共 58 个候选 primitive；清单覆盖面不代表第一版全部独立执行。
+状态：设计候选，尚未实现或部署。下列 58 项是早期内部动作盘点，不是调度任务清单；实际执行边界按下述原则收敛。
 适用分支：feature/durable-workflows。现有 main、服务、配置和生产数据保持运行。
 
 ## 设计基准
@@ -8,6 +8,9 @@
 organize / per-sample / cross-sample / zoom-in 是展示与科学语义上的阶段，
 不再是资源准入容器。每个样本、整合单元、lineage 使用有版本的输入依赖。
 没有全局 round barrier；一个数据集等待模型不影响另一数据集的就绪计算。
+已确认：Coordinator 跨数据集选择就绪执行单元异步派发，每个单元内部顺序固定；具体 Worker 分配归 Scheduler。
+反复失败暂停受影响的分析单元，其他独立工作继续，不自动跳过样本或额外删细胞。
+没有长期常驻控制主机，按 Coordinator/状态库进程会中断设计，已接受状态须跨节点保留；重启后先对账、再自动接续。
 
 区分科学迭代和故障重试：新参数或新输入产生新 operation generation；
 同一任务因节点消失重试则产生新 attempt。有效的模型决定及输入都必须保留。
@@ -16,6 +19,30 @@ organize / per-sample / cross-sample / zoom-in 是展示与科学语义上的阶
 Hybrid 是 model.request → tool.validate → 数值/证据操作 → tool.resume 的组合。
 模型等待不能持有 pool 计算名额或完整表达矩阵。轻量 control 操作可在协调进程执行。
 模型结果必须经过现有科学校验，不能为了并发跳过 sample mapping、注释或删除保护。
+
+## 拆分原则与 Organize 修订
+
+目的是分离 AI 等待与固定计算，不是把函数调用各自变成调度任务。
+跨 AI 等待边界拆开；固定计算内部默认连续执行，只有明确的并行或资源切换收益才进一步拆。
+校验、日志、保存结果属于块内职责。允许重跑尚未持久化的有限计算块，不为每个内部动作增加检查点。
+
+Organize 收敛为三个块：`organize.prepare`（pool 准备证据）→ `organize.plan`（Bridge 调用模型，Coordinator 校验）→ `organize.execute`（pool 审计分配、分割合并并写出）。
+等待模型时不占计算名额、不常驻完整矩阵。已有有效计划可以跳过模型调用，但不能跳过校验。
+默认一次执行固定代码；只有独立 analysis unit 足够大且并行收益明确时才按 unit 分发。
+已确认由 Organize 同时决定 analysis units 和实验映射，在写出前完成细胞守恒、实验完整性及拆分兼容性检查。
+Per-sample 信任该结果，只核对交接版本与 cell IDs，不再设置样本确认 AI 或重新判断实验边界。
+其执行块为子集准备 → OSP 固定计算 → 注释 AI/按需工具 → 应用结果；校验、日志和保存结果归入块内。
+详见 [Organize 简洁方案](design/00-organize/index.html)。以下同阶段动作应默认合并到相应执行块，不能直接逐项提交 scheduler。
+
+已确认的计算粒度：OSP 按完整样本并行，样本内 QC、聚类、UMAP、DEG 连续执行，不再拆调度任务；仅跨模型等待保留交接。
+cross-sample 主流程为计算准备 → 类型注释 → 质量注释 → 保存；计算准备内部：整合、UMAP、QC 掩码与 PAGA 比较准备在同一任务内连续执行，复用内存中的矩阵与图；只将 DEG 拆成独立比较任务（小比较合批）并行执行。
+OSP 与 cross-sample 均设计 CPU Scanpy / GPU RAPIDS-singlecell 两套路径，保留科学契约和实际后端记录；这是待实现方案。
+两段 cross-sample agent 共用按计算版本持久化的预计算 DEG SQLite，通过 deg_lookup / deg_sql 优先查库；类型提案先保存，质量决定完成后统一应用删除与合并。
+详见 [OSP](design/01-per-sample/index.html) 与 [cross-sample](design/02-cross-sample/index.html)。
+
+zoom-in：准备规划证据 → 规划谱系（模型推理）→ 按谱系计算/注释并行 → 合并。计算与模型等待分开；整合到 UMAP 连续，独立 DEG 可分发。共享谱系 markers 是有预算的程序执行，不由 Coordinator 常驻矩阵计算。暂保留每谱系一个注释 agent，先按 Leiden 1.0 做类型注释，再按 2.0 做质量/归属判断；两套决定按 cell ID 映射，不假设聚类严格嵌套。zoom-in 的 2.0 质控默认去除判定为 tissue dissociation / cell dying 的亚群（结合 high MT、HSP、JUN 等证据），只作用于相关细胞；删除超限复核也须遵循该策略，不沿用旧的 blanket stress 保留提示。详见 [zoom-in](design/03-zoom-in/index.html)。
+
+所有步骤增加块内的细胞排除记账：实际过滤时记录逐细胞原因及决定来源，输出和账本一起验收；临时计算掩码、提案与改归属不计入实际排除。统一契约见 [细胞排除账本](design/cell-exclusion-ledger.md)。
 
 ## 候选清单
 
@@ -34,8 +61,8 @@ CPU/GPU 算法、随机种子、精度与运行环境身份必须记录，不能
 | metadata.profile | CPU/I/O | obs/var → 分组、缺失、常量列统计 | organize / sample_mapping |
 | organize.propose | AI | 输入概况 → 组织方案候选 | organize agent |
 | organize.validate | control | 候选方案 → 接受方案或错误 | 保留现有科学约束 |
-| sample_mapping.propose | AI | 样本元数据 → 样本来源候选映射 | sample_mapping agent |
-| sample_mapping.validate | control | 候选映射 → 确认映射 | 不得用实验条件自动冒充独立样本 |
+| sample_mapping.propose | AI | 样本元数据 → 样本来源候选映射 | 并入 organize.plan，不在 per-sample 另调 agent |
+| sample_mapping.validate | control/CPU | 候选映射 → 确认映射 | Organize 内完成；数据审计在 execute 开头，非独立任务 |
 | sample.extract | I/O | 确认映射与矩阵 → 样本子集 | persample.write_subsets |
 | matrix.merge | CPU/I/O | 匹配版本的样本产物 → 合并矩阵 | msp.integrate.pipeline.load_and_merge |
 
@@ -50,23 +77,23 @@ CPU/GPU 算法、随机种子、精度与运行环境身份必须记录，不能
 | qc.coarse_clusters | CPU | 计数 → DecontX 初始化标签 | osp.qc._coarse_clusters_for_decontx |
 | qc.decontaminate | CPU | 计数与初始化 → 去污染矩阵和诊断 | osp._decontx；不得默认宣称有 GPU 内核 |
 | qc.decide | control | 指标、标记与规则 → QC 决定 | 保留当前规则；不要额外强加新的 AI 门槛 |
-| cells.filter | CPU/I/O | 输入与已验证决定 → 保留/删除集合和新矩阵 | OSP/MSP 已有过滤逻辑 |
+| cells.filter | CPU/I/O | 输入与已验证决定 → 保留/删除集合和新矩阵 | OSP/cross-sample 已有过滤逻辑 |
 
 ### 共享数值操作
 
 | 操作 | 执行类别 | 输入 → 输出 | 现有入口或设计边界 |
 |---|---|---|---|
-| matrix.normalize_log | CPU | 计数 → 归一化表示 | OSP cluster / MSP _preprocess |
-| features.hvg | CPU | 表达与批次 → HVG 表 | MSP _preprocess；保留小批次处理 |
-| matrix.scale | CPU | HVG 矩阵 → 标准化表示 | OSP/MSP embedding 内部；注意稠密化峰值 |
-| embedding.pca | CPU；GPU候选 | 表示 → PCA 与参数记录 | OSP/MSP embedding 内部；GPU 需单独验证 |
-| integration.harmony | CPU/GPU已有 | PCA、批次、参数 → 校正表示 | MSP _run_harmony / _run_harmony_gpu |
-| graph.neighbors | CPU/GPU路径已有 | 表示 → 邻居图 | MSP _run_cluster / _run_cluster_gpu 内部提取 |
-| clusters.leiden | CPU/GPU路径已有 | 图与 resolutions → 聚类标签 | MSP _run_cluster / _run_cluster_gpu 内部提取 |
-| embedding.umap | CPU/GPU路径已有 | 图/表示与参数 → UMAP | OSP/MSP cluster 内部提取 |
-| graph.paga | CPU | 图与标签 → PAGA 汇总 | OSP/MSP；具体调用按契约复用 |
+| matrix.normalize_log | CPU | 计数 → 归一化表示 | OSP cluster / cross-sample _preprocess |
+| features.hvg | CPU | 表达与批次 → HVG 表 | cross-sample _preprocess；保留小批次处理 |
+| matrix.scale | CPU | HVG 矩阵 → 标准化表示 | OSP/cross-sample embedding 内部；注意稠密化峰值 |
+| embedding.pca | CPU；GPU候选 | 表示 → PCA 与参数记录 | OSP/cross-sample embedding 内部；GPU 需单独验证 |
+| integration.harmony | CPU/GPU已有 | PCA、批次、参数 → 校正表示 | cross-sample _run_harmony / _run_harmony_gpu |
+| graph.neighbors | CPU/GPU路径已有 | 表示 → 邻居图 | cross-sample _run_cluster / _run_cluster_gpu 内部提取 |
+| clusters.leiden | CPU/GPU路径已有 | 图与 resolutions → 聚类标签 | cross-sample _run_cluster / _run_cluster_gpu 内部提取 |
+| embedding.umap | CPU/GPU路径已有 | 图/表示与参数 → UMAP | OSP/cross-sample cluster 内部提取 |
+| graph.paga | CPU | 图与标签 → PAGA 汇总 | OSP/cross-sample；具体调用按契约复用 |
 | clusters.subcluster | CPU；GPU候选 | 指定子集、表示、参数 → 子聚类 | msp.evidence.subcluster_once |
-| clusters.dissect | CPU | 矩阵与聚类 → 质量诊断 | MSP _dissect / standissect-lite |
+| clusters.dissect | CPU | 矩阵与聚类 → 质量诊断 | cross-sample _dissect / standissect-lite |
 | markers.rank | CPU/GPU已有 | 表达与标签 → DEG/marker 表 | msp.integrate.deg；按现有 GPU 路径验证 |
 | markers.compare | CPU | 指定两组 → 对比证据 | osp.cluster.deg_two_groups |
 | lineage.subset | CPU/I/O | 接受的 lineage 划分 → 子集 | zmip.lineage.subset_for |
@@ -85,7 +112,7 @@ CPU/GPU 算法、随机种子、精度与运行环境身份必须记录，不能
 | model.request | AI | 不可变提示、工具模式、上下文 → 单次模型回复 | Bridge：计划/注释/审核/lineage 方案是 purpose 参数 |
 | tool.validate | control | 模型工具请求 → 合法 primitive 请求 | 白名单、权限、参数、输入版本与科学规则 |
 | tool.resume | control | 工具结果引用 → 下次模型调用上下文 | 上下文持久化；不保持计算进程等待 |
-| decision.validate | control | 模型提案 → 接受决定/退回错误 | MSP/OSP/ZMIP 既有校验规则 |
+| decision.validate | control | 模型提案 → 接受决定/退回错误 | cross-sample/OSP/ZMIP 既有校验规则 |
 | annotation.apply | CPU/I/O | 接受标签与输入 → 注释产物 | msp.annotate._apply / ZMIP 注释应用 |
 | lineage.plan_validate | control | 接受提案与证据 → lineage 计划 | zmip.plan.validate_plan |
 | convergence.evaluate | control | 版本化指标、决定与政策 → 继续/收敛/停止 | 新协调逻辑；上限停止不等于收敛 |
@@ -94,7 +121,7 @@ CPU/GPU 算法、随机种子、精度与运行环境身份必须记录，不能
 
 | 操作 | 执行类别 | 输入 → 输出 | 现有入口或设计边界 |
 |---|---|---|---|
-| artifact.validate | CPU/I/O | 候选产物 → 大小/hash/数据契约验证 | osp_contract / MSP checkpoint / ZMIP cache |
+| artifact.validate | CPU/I/O | 候选产物 → 大小/hash/数据契约验证 | osp_contract / cross-sample checkpoint / ZMIP cache |
 | artifact.publish | control/I/O | 已验证的尝试结果 → 接受的不可变版本 | 原子元数据发布与尝试任期校验 |
 | ledger.update | CPU/I/O | 接受的细胞变更 → 细胞账本 | ecarsi ledger；按版本幂等 |
 | report.render | CPU/I/O | 接受结果 → 用户报告 | 与模型必需证据分开，低优先级但纳入交付契约 |
@@ -108,6 +135,11 @@ CPU/GPU 算法、随机种子、精度与运行环境身份必须记录，不能
 | transfer.reconcile | control/I/O | 中断复制 → 恢复/重做/清理临时文件 | 不把半拷贝文件当完成 |
 
 ## 执行契约
+
+具体派发、模型工具循环、结果接受及恢复流程见 [Work Coordinator](design/work-coordinator/index.html)。这属于组件设计，不是 00–03 之后新增科学步骤。
+
+[Agent Bridge](design/agent-bridge/index.html) 统一管理跨数据集的逐次模型调用、共享额度和持久会话。模型回复、工具请求/结果分别保存；等待工具释放模型调用并发，续接仍须重新取得额度。科学提案验收归 Coordinator，重计算归 pool，不能在整段 `run_agent()` 外加队列就认为完成了拆分。
+
 
 每个 OperationSpec 保存：op_id、kind/version、dataset/unit/sample/lineage scope、
 输入 artifact IDs、parameters、科学运行身份、依赖、输出角色、资源候选、优先级、
@@ -215,7 +247,7 @@ HQ 可承担 worker 内资源匹配和任务队列。RSI 适配层负责数据�
 
 ## 第一轮实施与验收
 
-先接现有 OSP compute / model / publication 三段和 MSP Harmony / 聚类 / DEG 边界，
+先接现有 OSP compute / model / publication 三段和 cross-sample Harmony / 聚类 / DEG 边界，
 以现有数值实现保证输入输出契约。并行样本与 lineage 优先；其它 primitive 逐项解包。
 不用一次同时更换科学内核、工作流引擎、调度器、数据格式。
 

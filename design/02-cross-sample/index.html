@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cross-sample：整合程序执行与两段模型推理分开</title><style>
+body { max-width: 960px; margin: 32px auto; padding: 0 18px; font: 16px/1.7 sans-serif; color: #222; }
+h1 { font-size: 26px; } h2 { font-size: 20px; margin-top: 30px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { border: 1px solid #ccc; padding: 10px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+th { background: #f5f5f5; } code { overflow-wrap: anywhere; }
+small { color: #555; } li { margin: 6px 0; }
+@media (max-width: 600px) { body { margin: 18px auto; } th, td { padding: 6px; font-size: 14px; } }
+</style></head>
+<body>
+<p><a href="../01-per-sample/index.html">← OSP</a></p>
+<h1>cross-sample：重计算分块，模型等待分开</h1>
+<p><strong>计算准备 → 类型注释 → 质量注释 → 保存结果。</strong>主流程保留这四段；计算准备分为连续计算与并行 DEG 两部分。</p>
+<p><strong>整合 + UMAP + QC / 比较准备〔程序执行，同一个任务〕 → 多个 DEG 任务〔程序执行，并行〕 → 汇总证据〔程序执行〕。</strong></p>
+<table><thead><tr><th>步骤</th><th>类型</th><th>做什么</th></tr></thead><tbody>
+<tr><td>整合、UMAP 与比较准备</td><td>程序执行</td><td>合并输入，从 counts 开始归一化、HVG、scale/PCA、Harmony、邻居图、聚类、UMAP，继续完成 fragment / 离群 QC、冻结 DEG 排除掩码，并在排除后的集合上重建邻居图、计算 PAGA、生成比较清单。全部在同一个 Worker 任务内连续完成，复用内存中的矩阵与图，按整块峰值申请资源。最后保存 DEG 输入和证据，再释放资源。</td></tr>
+<tr><td>并行 DEG</td><td>程序执行</td><td>全局 DEG 按分辨率合批，局部 DEG 按目标群拆成多个独立任务，分发给不同 Worker 并行执行；很小的比较可以合批。共享已准备的表达数据，避免重复读入整套矩阵。完成后将预计算结果汇总到持久化 SQLite，再交给类型注释。</td></tr>
+<tr><td>类型注释</td><td>模型推理</td><td>先根据预计算 DEG 和表达证据给出细胞类型及合并提案，经校验后保存，供质量注释使用。保留/删除建议也先记录，此时不实际合并聚类或删除细胞。</td></tr>
+<tr><td>质量注释</td><td>模型推理</td><td>结合已接受的类型标签、QC 指标、样本组成和同一份预计算 DEG，判断 keep/flag/drop。需要补证据时先查库；必要的子聚类仍由 pool 执行。</td></tr>
+<tr><td>保存结果</td><td>程序执行</td><td>统一校验类型与质量决定，应用合并和删除，保存保留细胞、删除账本和报告，交给 ZMIP。</td></tr>
+</tbody></table>
+<p>类型提案的校验与交接属于<strong>程序执行</strong>。类型注释先回答“是什么细胞”，质量注释再结合身份判断“质量如何”；前面的程序 QC 指标计算仍保留，不等于提前做模型质量注释。</p>
+<h2>细胞排除记账〔程序执行〕</h2>
+<p>进入整合前，整样本不纳入的决定须展开到该样本仍存活的 cell IDs，并写明理由。DEG 临时掩码只记证据范围；最终应用类型/质量决定时，逐细胞合并所有生效的删除原因，只计一次，保留原始提案来源。</p>
+<p><strong>每次过滤 → 记录 cell IDs、原因和证据 → 与输出一起保存并核对细胞守恒。</strong>这是步骤内的必做环节，不新增排队任务。无排除也记录零排除摘要；账本未通过验收，该步不能完成。详见 <a href="../cell-exclusion-ledger.md">统一细胞排除账本</a>。</p>
+<h2>Agent prompts（英文）</h2>
+<p>两段 agent 均使用「共享 DEG 查询指引 + 各自职责 prompt + 当前输入与工具定义」。共享指引由程序直接注入，不依赖 agent 自己找文档。</p>
+<ul>
+<li><a href="type-annotation-prompt.md">Type annotation prompt</a>：先确定身份、保存类型提案，不提前删除或实际合并细胞。</li>
+<li><a href="quality-annotation-prompt.md">Quality annotation prompt</a>：读取类型提案后判断质量；必要时只复核受影响群体的类型。</li>
+<li><a href="precomputed-deg-prompt.md">Shared precomputed DEG prompt</a>：先查 SQLite；只为缺失且必要的比较请求计算。</li>
+</ul>
+<h2>两段 agent 共用预计算 DEG</h2>
+<p>并行 DEG 完成后，由汇总程序写出每个分析单元、每个计算版本的 <code>deg.sqlite</code>，验收完成后只读发布。Worker 不同时写同一数据库；agent 通过已有 <code>deg_lookup</code> / <code>deg_sql</code> 查询，不加载完整矩阵、不反复导入 CSV。</p>
+<ul>
+<li><strong>先查已有结果。</strong>按聚类 key、cluster、global/local 查询；需要组合筛选时用只读 SQL。两段 agent 都注入同一份 <a href="precomputed-deg-prompt.md">DEG 查询 prompt</a>，不另造 skill 系统。</li>
+<li><strong>查不到不等于基因不表达。</strong>表中需注明保存范围（当前实现为每群每视图 top-50）、比较组、排除掩码及输入版本。超出保存范围或需要其他参照组时，才请求补充计算。</li>
+<li><strong>版本一致才复用。</strong>类型标签和建议本身不改变预计算细胞集合；两段默认查询同一快照。子聚类或实际改变细胞集合、参照组时，旧 DEG 不能冒充新比较结果。缺失比较交给 pool，保存匹配版本的结果后再继续模型。</li>
+</ul>
+<p><small>源码现状：已有共享工具和查询引导，但 DegTables 当前从 CSV 建立内存 SQLite；原流程也是质量检查在前。本页调整顺序、持久化数据库及共享 prompt 接入均属于待实现改造。</small></p>
+<h2>哪些拆，哪些不拆？</h2>
+<p><strong>整合到 UMAP、QC 和比较准备连续执行；只把可独立并行的 DEG 拆出去。</strong>复用刚算好的矩阵与邻居图，避免为了拆分增加落盘、重载和重新排队。读写、校验、日志归各步内部，不额外造任务。</p>
+<p>这些拆分让各块按需申请 CPU、RAM 和 GPU，也允许只重试失败的块。同一数据集仍要遵守依赖；并发来自独立 DEG 比较和其他数据集，不会因为把顺序步骤拆开就自动加速。</p>
+<h2>共同规则</h2>
+<ul>
+<li><strong>两套后端：</strong>CPU Scanpy / GPU RAPIDS-singlecell。适合时优先 GPU；同一任务中必要的 CPU 步骤连续执行，不再细拆。</li>
+<li><strong>DEG 保持原比较含义：</strong>全局是目标群对其余合格细胞，局部是目标群对选定 PAGA 邻群；固定输入和排除掩码后并行，不各自重新归一化。</li>
+<li><strong>模型等待不占计算资源。</strong>其他数据集可继续整合或 DEG；补证据的工具请求才重新申请计算。</li>
+<li><strong>保留现有科学规则。</strong>类型注释使用规定的 base clusters；质量注释若细分群体，子群先关联父群类型，父群标签不能冒充子群已确认注释。需要改类型时返回相关群体做定向类型复核，再完成质量决定；不无条件重跑全流程。删除来源统一记账。后端变化需记录，不能把旧聚类的判断直接套给新聚类。</li>
+</ul>
+<p>第一轮使用完成 OSP 且通过既有纳入判定的样本；后续轮次使用上一轮 ZMIP 保留细胞，不重跑 OSP。多样本纳入判定属于模型推理，单样本直接纳入属于程序执行。</p>
+<p>Work Coordinator 管顺序和恢复，Agent Bridge 管模型请求，Warm Pool Scheduler 分配资源，Warm Pool Worker 执行计算。DEG 失败只恢复失败任务，不要求重跑整个 cross-sample。</p>
+<p><small>设计方案，尚未实现或部署；双后端适配仍需验证。这里列的是有调度价值的边界，不是内部函数清单。</small></p>
+<p><a href="../03-zoom-in/index.html">下一项：zoom-in →</a></p>
+</body></html>

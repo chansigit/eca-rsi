@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Work Coordinator：执行与恢复</title><style>
+body { max-width: 960px; margin: 32px auto; padding: 0 18px; font: 16px/1.7 sans-serif; color: #222; }
+h1 { font-size: 26px; } h2 { font-size: 20px; margin-top: 30px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { border: 1px solid #ccc; padding: 10px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+th { background: #f5f5f5; } code { overflow-wrap: anywhere; }
+small { color: #555; } li { margin: 6px 0; }
+@media (max-width: 600px) { body { margin: 18px auto; } th, td { padding: 6px; font-size: 14px; } }
+</style></head>
+<body>
+<p><a href="../00-organize/index.html">00 organize</a> · <a href="../01-per-sample/index.html">01 per-sample</a> · <a href="../02-cross-sample/index.html">02 cross-sample</a> · <a href="../03-zoom-in/index.html">03 zoom-in</a></p>
+<h1>Work Coordinator：执行与恢复</h1>
+<p><strong>根据已接受的结果派下一步，等待期间只保存状态，不保留一个数据集 driver 进程。</strong>一个样本等模型，其他样本、谱系和数据集继续计算。</p>
+<p><small>设计草案，尚未实现或部署。这里定义四个组件之间的执行契约，不先选择 Temporal 或其他框架。目录不编号：Coordinator 是管理 00–03 的组件，不是第 04 个科学步骤。</small></p>
+<h2>已确认：跨数据集异步派发</h2>
+<p><strong>每个执行单元内部按既定顺序运行；Coordinator 每次从所有数据集的就绪单元中选择下一项派发。</strong>这里的执行单元是前面拆好的计算块或模型交互，不等同于一个完整数据集，也不等同于 Organize 的 analysis unit。</p>
+<table><thead><tr><th>一次可能的派发顺序</th><th>条件</th></tr></thead><tbody>
+<tr><td>数据集 A / 单元 1</td><td>依赖已满足，提交后不等待它完成才处理其他数据集。</td></tr>
+<tr><td>数据集 B / 单元 3</td><td>B 的前置结果已经接受，因此可直接派发；不受 A 当前进度限制。</td></tr>
+<tr><td>数据集 C / 一个模型请求</td><td>证据已就绪，交给 Bridge；可与 A、B 的计算同时进行。</td></tr>
+<tr><td>数据集 A / 单元 2</td><td>等 A 的所需前置结果接受后才派发；A 未就绪时继续处理其他数据集。</td></tr>
+</tbody></table>
+<p>这里的“轮到谁”指派发机会。已启动的计算仍在自己的资源额度内连续执行，不按时间片暂停、搬走矩阵或换数据集。Coordinator 选就绪工作，Scheduler 决定何时在哪台 Worker 上执行；互相独立的工作可以同时运行。模型补证据和迭代沿已定义规则增加依赖，不改变块内算法顺序。</p>
+<p><strong>失败策略已确认：</strong>基础设施故障自动限次重试；输入错误、重试耗尽或模型始终无法形成合法决定时，暂停受影响的分析单元、保存进度并明确报错。其依赖下游等待，其他独立工作继续；不自动丢掉失败样本，也不通过额外删除细胞绕过失败。</p>
+<p><strong>部署前提已确认：</strong>没有长期运行的小主机，Coordinator 中断是正常情况。已经授予的有限计算和在途模型调用可完成并保存结果；恢复后的 Coordinator 先对账，再派新活。控制记录和收据必须留在能跨控制节点到期保留的位置。</p>
+<p>框架结合分析：<a href="temporal.html">Temporal 如何承载此设计</a>。若采用 Temporal，权威流程状态、Python Worker 并发和派发记录由该分析中的映射替代自建实现，不并行维护两套状态机。</p>
+<h2>1. 职责只到哪里</h2>
+<table><thead><tr><th>组件</th><th>负责什么</th></tr></thead><tbody>
+<tr><td>Work Coordinator</td><td>管理输入版本、依赖、科学决定、迭代和逻辑完成；把就绪计算交给 Scheduler，把模型请求交给 Bridge；验证并接受结果。</td></tr>
+<tr><td>Agent Bridge</td><td>管理模型队列、配额、路由及持久会话；返回模型回复或工具请求。不能自行派发重计算或接受科学决定。</td></tr>
+<tr><td>Warm Pool Scheduler</td><td>把已就绪的计算分配给 Worker，唯一负责具体资源授予、排队和执行尝试。Coordinator 不再预留整数据集峰值预算。</td></tr>
+<tr><td>Warm Pool Worker</td><td>在给定资源与机时内执行有限任务，保存输出、运行记录、排除账本和收据；不自己开启新的模型判断或完整数据集循环。</td></tr>
+</tbody></table>
+<p>本地也是单 Worker pool，走同一套契约。Slurm 节点由用户申请和回收。轻量状态与小表校验可在 Coordinator 内完成；扫描大矩阵、图、逐细胞对账等程序工作放在有预算的任务中。</p>
+<h2>2. 用一个 OSP 样本走通</h2>
+<table><thead><tr><th>事件</th><th>类型</th><th>Coordinator 的动作</th><th>资源状态</th></tr></thead><tbody>
+<tr><td>Organize 映射和样本输入就绪</td><td>程序执行</td><td>验证输入引用，保存 osp.compute 任务与派发意图，提交 Scheduler；收到任务句柄后记录返回。</td><td>只有 Scheduler 实际安排执行时授予样本所需资源。</td></tr>
+<tr><td>样本计算完成</td><td>程序执行</td><td>按收据核对输入/代码身份、计算产物和 QC 账本；接受计算结果，同时创建注释请求。QC 全空沿用已验证的空样本终态，不调用注释。</td><td>Worker 保存可靠结果后释放本次计算资源，无需等 Coordinator 在线确认。</td></tr>
+<tr><td>模型阅读证据</td><td>模型推理</td><td>向 Bridge 提交证据引用、英文 prompt、工具定义和会话 ID，然后等待事件。</td><td>该样本不持有 CPU/GPU 配额或完整矩阵进程；Bridge 管模型并发。</td></tr>
+<tr><td>模型调用已有证据查询</td><td>程序执行</td><td>校验工具名、参数和证据版本；受限 SQLite/小表查询直接返回。将工具结果持久化，按同一 tool_call_id 交回 Bridge。</td><td>不为轻量查询申请大矩阵任务。</td></tr>
+<tr><td>模型请求缺失 DEG 或子聚类</td><td>程序执行</td><td>先查匹配的已存结果；确需计算时创建一个依赖明确的工具任务交给 Scheduler。保存“会话等此工具结果”的关系。</td><td>等待时无模型在途调用；计算只占本工具所需配额。其他数据集正常运行。</td></tr>
+<tr><td>工具计算完成</td><td>程序执行 → 模型推理</td><td>接受结果、保存工具回执，通知 Bridge 继续同一会话；若子聚类改变群体版本，仅失效受影响的旧提交。</td><td>释放工具计算资源，再申请下一次模型调用容量。</td></tr>
+<tr><td>模型提交最终提案</td><td>模型推理 → 程序执行</td><td>按科学 schema 校验。无效则把错误反馈给原会话；有效则保存已接受决定，创建 osp.finalize。</td><td>模型一次回复完成，不代表整个样本完成。</td></tr>
+<tr><td>应用提案、保存结果</td><td>程序执行</td><td>Worker 应用标签并输出。数据、报告、账本与收据验收通过，才标记样本完成，检查其分析单元能否进入 cross-sample。</td><td>仅保存阶段申请实际资源；提案不需要重新推理。</td></tr>
+</tbody></table>
+<p>OSP 的模型 drop 在此仍是标记，实际删除留给既定下游步骤；它不能计入 OSP 实际删除数量。样本失败、过小或未完成都按明确契约呈现，不把未交代的细胞伪装成已排除。</p>
+<h2>3. 保存四类记录</h2>
+<table><thead><tr><th>记录</th><th>必要内容</th></tr></thead><tbody>
+<tr><td>运行与操作</td><td>run_id、样本/分析单元/谱系、round、operation_id、kind、输入和参数版本、依赖、状态、等待原因、输出要求。逻辑操作只定义一次；输入或科学参数改变产生新版本。</td></tr>
+<tr><td>请求与执行尝试</td><td>request_id、operation_id、attempt_id、目标组件、后端句柄、派发/确认状态、当前权威任期、错误类型。逻辑操作、网络重发和故障重试三者不能混为一件事。</td></tr>
+<tr><td>会话与决定</td><td>conversation_id、turn_id、tool_call_id、英文 prompt/工具定义版本、回复和工具结果引用、已接受提案及对应聚类版本。Bridge 保存对话本体；Coordinator 保存依赖和已接受的科学决定。</td></tr>
+<tr><td>产物与完成收据</td><td>输入、输出及代码/运行环境身份，实际执行后端，可靠副本位置，校验结果，排除账本与日志引用。不能只存“某路径存在”或一条完成通知。</td></tr>
+</tbody></table>
+<p>状态库只保存控制记录、摘要和引用，不放完整表达矩阵或数百万条 cell IDs。复用现有科学产物与校验函数，逐步补齐统一收据。</p>
+<h2>4. 操作状态与等待原因</h2>
+<p><strong>blocked → ready → submitted → running → validating → succeeded</strong>。重试等待用 retry_wait；结果不明用 unknown_external_result；需修复的失败用 failed。状态描述的是某个操作，不是把整个数据集压成一个 running。</p>
+<table><thead><tr><th>状态</th><th>含义</th></tr></thead><tbody>
+<tr><td>blocked</td><td>依赖尚未被接受，例如等某样本、模型提案或工具结果。保存所等对象的 ID。</td></tr>
+<tr><td>ready</td><td>科学依赖满足，可提交执行；尚不意味着拿到 CPU/GPU。</td></tr>
+<tr><td>submitted</td><td>目标组件已持久接受请求；可在 Scheduler 或 Bridge 中排队。只有确认收到接受结果才进入此状态。</td></tr>
+<tr><td>running</td><td>目标组件报告实际执行。模型在途调用与数值运行分别显示，工具等待不能继续冒充模型在途调用。</td></tr>
+<tr><td>validating</td><td>已发现候选结果，等待数据、身份、科学契约和账本验收；大规模校验由 Worker 完成，Coordinator 验收凭据。</td></tr>
+<tr><td>succeeded</td><td>该操作的有效结果已接受。后续操作的创建与结果接受在同一次状态事务中完成。</td></tr>
+<tr><td>retry_wait / failed</td><td>可恢复的基础设施失败按限额退避重试；输入错误、环境不兼容、反复 OOM 等给出具体原因，不无限重跑。科学决定无效先在会话内修正，不误当计算失败。</td></tr>
+<tr><td>unknown_external_result</td><td>请求可能已被接收，但当前查不到确定结果。只对账，不直接创建替代尝试。</td></tr>
+</tbody></table>
+<p>等待原因单独记录，例如 dependency、pool_capacity、model_capacity、tool_result、component_unavailable、storage_unavailable、input_invalid。来自哪个组件、已等多久、最后一次状态与下次自动重试时间一并保存；不靠“running 很久”猜瓶颈。</p>
+<h2>5. 最小派发与返回契约</h2>
+<table><thead><tr><th>方向</th><th>发送与返回</th></tr></thead><tbody>
+<tr><td>Coordinator → Scheduler</td><td>提交稳定 request_id、逻辑操作/尝试身份、不可变输入、已允许的计算实现与资源需求、有限执行范围和输出要求；返回后端句柄。相同 request_id 与相同内容重发得到同一请求；相同 ID 换内容必须拒绝。</td></tr>
+<tr><td>Scheduler / Worker → Coordinator</td><td>用 operation_id、attempt_id 和结果身份报告状态、失败或收据。通知可以重发；结果也可通过 request_id / 后端句柄主动查询和恢复发现。</td></tr>
+<tr><td>Coordinator → Bridge</td><td>提交稳定 request_id、会话/轮次 ID、证据与 prompt 版本、允许工具、路由与预算约束。提供工具结果时带原 tool_call_id 和稳定结果 ID，不能因重连开启新会话。</td></tr>
+<tr><td>Bridge → Coordinator</td><td>返回持久化回复、工具请求或调用失败/结果不明状态，附实际模型、token 用量及记录引用。工具调用文本本身不授权 Worker 执行，须经 Coordinator 校验。</td></tr>
+</tbody></table>
+<p>不要求服务持续握着连接等任务完成。每个组件保存自己的已接受请求；通知加周期性对账共同推进，丢通知不需要人重新提交。</p>
+<h2>6. 怎样避免崩溃后丢任务或做两遍</h2>
+<ol>
+<li><strong>先保存派发意图，再发请求。</strong>“任务就绪 + 待发送请求”写入同一事务。发送器可重复发送相同 request_id；后端必须持久去重。</li>
+<li><strong>先保存结果，再发完成通知。</strong>Worker 保存不可变输出和可恢复发现的收据；Bridge 保存回复和工具请求。通知不是结果本体。</li>
+<li><strong>验收只做一次。</strong>Coordinator 校验操作/尝试身份和有效输入，原子保存已接受结果及下一步派发意图。重复完成通知只返回已有验收结果。</li>
+<li><strong>旧进程不能覆盖新结果。</strong>同一状态域只允许一个有效 Coordinator 写入和发布新命令；状态存储与执行端校验其权威任期。任期用于拒绝旧控制命令，不自动撤销已经有效授予的有限任务。</li>
+<li><strong>未知结果先对账。</strong>失联或超时不证明代码停止。确认原尝试结束、被终止或已被执行端隔离后，才允许新的计算尝试；旧尝试迟到的结果不能覆盖已接受的新版本。</li>
+</ol>
+<p>目标是一次逻辑接受，不承诺所有外部动作物理上只发生一次。若 API 已处理请求但回复未被 Bridge 保存，且供应方不支持恢复查询，可能无法知道是否已扣费；保持结果不明记录，按已配置的恢复/费用策略重试，不能声称找回了原回复。</p>
+<p>文件系统与状态库不要求跨系统大事务：先写不可变产物和收据，再原子接受产物引用。结果存储可枚举未确认收据，或执行端保留可查询目录；不能只靠一个已退出 Worker 的内存知道结果在哪。输出未完全持久化前，不标记可跨节点恢复。</p>
+<h2>7. 常见中断怎么处理</h2>
+<table><thead><tr><th>中断位置</th><th>恢复动作</th></tr></thead><tbody>
+<tr><td>派发意图已存、尚未发送</td><td>恢复待发记录，使用原 request_id 发送。</td></tr>
+<tr><td>Scheduler 已接受、确认丢失</td><td>用原 ID 查询或重发；得到原任务。查不清则保持 unknown_external_result，禁止盲目另派。</td></tr>
+<tr><td>计算完成、Coordinator 离线</td><td>Worker 保存可靠输出与收据，释放计算资源并等待；重启后 Coordinator 发现并验收收据，接续模型步骤。</td></tr>
+<tr><td>Coordinator 在创建下一步前崩溃</td><td>结果接受与下一步意图同事务：要么两者都已提交，要么重做验收，不产生中间缺口。</td></tr>
+<tr><td>模型回复已存、通知丢失</td><td>按请求/轮次 ID 取回原回复；不再调用模型。提交决定也须持久且按版本去重。</td></tr>
+<tr><td>模型工具已完成、还未继续模型</td><td>恢复工具结果引用，用原 tool_call_id 交回原会话；不重算工具，也不重新请求同一轮回复。</td></tr>
+<tr><td>Worker 心跳丢失或机时到期</td><td>Scheduler 停止派新活，查询原进程、作业状态和收据。确认终止及结果状态后才重试；仅租约/心跳超时不能作为立即重算依据。</td></tr>
+<tr><td>Scheduler 或 Bridge 不可用</td><td>各自已经接受的有限工作独立完成并保存结果。Coordinator 记录待发请求并自动重连；不受其依赖影响的其他任务继续。</td></tr>
+<tr><td>Coordinator 不可用</td><td>只完成已获有效授予的有限任务/在途模型调用，不扩展新的科学步骤。尚未派到 Worker 的排队意图保留，Coordinator 恢复后核对并继续授予。</td></tr>
+<tr><td>共享存储不可用</td><td>有条件时临时保存本地结果，明确仍有节点丢失风险；可靠副本未完成前不接受全局完成。恢复后重新发布，不把半文件当产物。</td></tr>
+<tr><td>没有任何可用 Worker</td><td>持久等待用户提供节点。兼容 Worker 接入后自动继续，不申请 Slurm、不要求逐数据集重交。</td></tr>
+</tbody></table>
+<p>停止请求也需持久化。Coordinator 先阻止该范围的新步骤，再请求执行端取消在途尝试；未确认停止不能假装取消成功。停止后迟到的结果可保留供审计，不能自动推动下游。</p>
+<h2>8. 让等待数据集持续供给计算</h2>
+<ul>
+<li><strong>按依赖准入，不按整套 driver 峰值准入。</strong>输入映射、版本和样本划分确认后，即可创建样本级计算；准备动作有自己的小范围计算预算。</li>
+<li><strong>有界准备和积压。</strong>限制待准备子集、已计算但未注释结果的数量与字节，不一次物化所有数据。限制按分析单元和全局配置；给已接纳任务的工具与保存结果保留推进空间，避免它们被新输入堵死。</li>
+<li><strong>有限容量内公平推进。</strong>首版按数据集轮转提交就绪工作，保持适量 Scheduler 队列；模型调用额度由 Bridge 管，计算配额由 Scheduler 管。大样本暂时排不上，不阻塞其他已就绪的小样本。</li>
+<li><strong>不凭瞬时空闲无限超卖。</strong>Scheduler 用任务峰值需求与实际资源决定同节点多任务，Coordinator 不维护另一套资源预留。</li>
+</ul>
+<p>这些上限是背压配置，可更新后作用于后续派发；降低限额不突然杀掉正在执行的任务。无需预先设计复杂调度优化器，也不让某个模型慢的样本堵住整个数据集入口。</p>
+<h2>9. 对应已确定的四个科学阶段</h2>
+<table><thead><tr><th>阶段</th><th>Coordinator 管的依赖与汇合</th></tr></thead><tbody>
+<tr><td>00 organize</td><td>证据 → 计划 → 完整性审计与写出。映射接受后才准备 per-sample；计划校验错误回原会话。</td></tr>
+<tr><td>01 per-sample</td><td>按样本计算 → 注释/工具循环 → 应用。独立样本并行；必须有明确可接受终态，不能为进入 cross-sample 漏掉失败样本。</td></tr>
+<tr><td>02 cross-sample</td><td>样本纳入 → 连续整合/UMAP/QC → 并行 DEG 与 SQLite 发布 → 类型注释 → 质量注释 → 应用。所有预期比较必须成功或明确按规则跳过。</td></tr>
+<tr><td>03 zoom-in</td><td>规划 → 共享 markers 与谱系输入 → 谱系计算/DEG → 1.0 类型与 2.0 质量决定 → 谱系应用 → 合并。改归属不在本轮触发另一个谱系重算。</td></tr>
+<tr><td>迭代与结束</td><td>按既有收敛规则判断下一轮 cross-sample 或发布；round 与子聚类版本分开。工具补证据不等于开新 round；达到迭代/模型调用上限时显式停止，不伪造收敛。</td></tr>
+</tbody></table>
+<p>每一步实际排除细胞都须满足 <a href="../cell-exclusion-ledger.md">细胞账本契约</a>。变更输入或科学参数产生新版本，只重做受影响的下游；历史版本保留来源，旧提案不得冒充新结果。</p>
+<h2>10. 状态持久化先定要求，后定引擎</h2>
+<p>已确认没有长期常驻主机，系统不依赖 Coordinator 或控制数据库进程永远在线。同一时间只允许一个有效 Coordinator；在已有授权主机上重启或更换节点后，从持久记录恢复。状态存储必须支持事务、请求去重、单写入者约束与恢复；旧实例失去权威后不能继续写状态或派发。</p>
+<p>控制状态库与 DEG SQLite 是两回事：DEG 是只读证据，控制库负责运行状态与一致性。不能因为已有 DEG SQLite 就默认把多节点控制状态也写进共享 SQLite 文件。实现选型必须验证控制服务和状态库进程一起中断、原节点消失后的恢复。已确认接受的控制记录与去重身份不能只在节点本地盘或内存里；仅有可能丢失最新请求的周期快照不足以保证该契约。服务可暂停，可靠存储中的状态必须可重新读取；具体引擎和持久化方式在这一前提下选择。</p>
+<h2>11. 后续实现与验收（目前暂缓）</h2>
+<p>用户已要求继续设计，暂不启动隔离验证。后续实施时，先做一个隔离的 OSP 样本执行闭环，用模拟计算和模拟 Bridge 检查恢复，再接现有真实 OSP 计算。所有端点、状态和输出使用开发位置；不同时重写四个科学内核。</p>
+<table><thead><tr><th>验收场景</th><th>通过条件</th></tr></thead><tbody>
+<tr><td>A 等模型，B 原先未启动</td><td>B 自动完成输入准备、进入 pool 并产出真实计算结果，A 不持有计算配额或完整矩阵等待。</td></tr>
+<tr><td>模型请求一个工具</td><td>只派一次必要计算；结果持久化后恢复同一会话；两个资源系统各自在实际执行时计费/占用。</td></tr>
+<tr><td>在提交前后、返回前后强制停止 Coordinator</td><td>自动恢复请求和结果，无漏任务、无重复接受、无要求人工推进。</td></tr>
+<tr><td>心跳断开但计算仍活着</td><td>停止向失联 Worker 派活，原计算继续；不立即在另一节点重复执行。</td></tr>
+<tr><td>恢复旧 Coordinator 或重复发送通知</td><td>旧权威写入被拒绝，重复事件不重复应用标签或累计细胞删除。</td></tr>
+<tr><td>账本缺失、理由为空或细胞不守恒</td><td>结果不被接受，下游不启动，错误可定位；修复/重试只针对必要操作。</td></tr>
+<tr><td>Coordinator 与状态库进程一起结束，原节点不可再用</td><td>在新的授权节点恢复持久状态，发现原 Worker/Bridge 保存的结果，自动继续待发操作；不依赖旧节点本地文件或常驻控制主机。</td></tr>
+<tr><td>所有 Worker 离开后重新加入</td><td>持久队列保留，兼容 Worker 接入后自动继续；全程无 Slurm 自动申请。</td></tr>
+</tbody></table>
+<p>接入点：<code>ecarsi/osp_stage.py</code> 的计算检查点和 <code>ecarsi/osp_contract.py</code> 的校验可复用；<code>ecarsi/osp_worker.py:run_compute</code> 的同步等待与 driver 复制发布需要替换为异步请求/收据验收；矩阵常驻注释路径改成持久模型交互与独立工具任务。这是待实施的路径，不是已完成的运行能力。</p>
+<p><a href="../warm-pool/index.html">继续组件设计：Warm Pool Scheduler / Worker →</a></p>
+<p><a href="../agent-bridge/index.html">Agent Bridge：共享模型调用、工具交接与恢复 →</a></p>
+</body></html>

@@ -66,6 +66,14 @@ to configured, task-eligible alternatives before overload causes timeouts.
 Preserve the actual model, retries, token use and routing reason for each call.
 Changing models must preserve compatible context and existing accepted decisions.
 
+The [Agent Bridge design](design/agent-bridge/index.html) specifies per-provider-call
+admission, durable reply/tool boundaries, configuration reload and recovery.
+Start with one asynchronous Bridge dispatcher; adapter subprocesses are internal
+executors. Existing whole-session `run_agent()` wrappers and process-local model
+fallback do not establish this contract. Each eligible backend must demonstrate
+per-call quota control and persisted tool-boundary resumption. Unknown provider
+completion remains explicit; recorded usage and estimated usage remain separate.
+
 Compute attempts run in separate processes under explicit runtime/resource
 contracts. Node disk caches may be reused; resident matrix sessions are deferred
 until measured reload costs justify their lifecycle and memory management.
@@ -73,16 +81,37 @@ This decision does not select Temporal or HyperQueue, or authorize production
 migration before recovery acceptance.
 
 Remaining policy decisions, with proposed defaults (not yet user-approved):
-- Control-service/database placement remains open. The accepted outage behavior
-  below replaces immediate coordinator failover as a first-version requirement.
 - Model eligibility and budget: configure task-purpose eligibility, quota groups,
   concurrency and token/cost limits; never silently downgrade important decisions.
-- Repeated scientific failure/nonconvergence: bounded continuation, then a visible
-  stopped state while independent datasets continue; never mark it converged.
 - Reliable artifact destinations/retention: retain inputs, accepted decisions,
   final results and recovery checkpoints; auto-evict only authorized caches.
 - Migration: new test runs first, then new production runs; existing runs retain
   their executor unless an explicit validated checkpoint migration is selected.
+
+## Accepted dispatch, failure and hosting policy
+
+The coordinator dispatches ready execution units across datasets asynchronously:
+A/unit-1 may be followed by B/unit-3 when B's predecessors are already accepted.
+Each execution unit preserves its defined internal sequence; dependent units wait
+for their own inputs, without a global dataset or round barrier. A dispatch turn
+is not preemptive CPU time slicing. Scheduler owns concrete placement and grants;
+independent accepted computations and model calls can run concurrently.
+
+Infrastructure failures retry automatically within configured bounds. Invalid
+inputs, exhausted retries or repeated inability to obtain a valid model decision
+pause the affected analysis unit with saved progress and an explicit error.
+Dependent downstream work waits; independent work continues. Do not automatically
+omit failed samples, delete cells to bypass failures, or report false convergence.
+
+There is no permanently available small host. Coordinator interruption is an
+expected operating condition, including interruption of its state-store process.
+Already granted finite worker computations and accepted in-flight model calls
+can finish and persist results. Restart on an authorized host, reconcile recorded
+requests/receipts, then resume dispatch without per-dataset resubmission.
+Acknowledged control state and deduplication identities must survive loss of the
+original host; node-local files or periodic snapshots that can lose acknowledged
+requests are insufficient. Storage implementation remains to be selected under
+this requirement; uninterrupted service is not required.
 
 ## Accepted outage behavior (2026-09-14)
 
@@ -167,6 +196,19 @@ Official sources reviewed:
 - https://docs.prefect.io/v3/concepts/workers
 - https://distributed.dask.org/en/latest/resilience.html
 
+## Temporal implementation mapping (evaluation, not adoption)
+
+The updated design prefers short, idempotent submission Activities followed by
+Signals and receipt reconciliation for external Pool/Bridge work. Long-lived
+asynchronous Activity completion remains an alternative to evaluate, not a
+requirement. Temporal retry attempts must not automatically create new numerical
+attempts. If adopted, Temporal owns authoritative Workflow state; do not implement
+a competing coordinator journal or global Python leader election. External
+request deduplication and scientific output validation remain RSI obligations.
+The no-permanent-host requirement must include recovery of the Service and its
+production persistence database on a replacement host. Dev-server SQLite alone
+is not production evidence. See the linked integration analysis for sources.
+
 ## Four responsibilities
 
 Workflow coordination owns stage dependencies, accepted scientific decisions,
@@ -209,33 +251,45 @@ external effects.
    independently; do not reserve a dataset-wide peak while waiting.
 4. Exercise real process death, then attach the existing OSP numerical adapter
    against a separate test pool/output root. No live output has two writers.
-5. Extend the same transition contracts to MSP and ZMIP, including model-directed
+5. Extend the same transition contracts to cross-sample and ZMIP, including model-directed
    re-computation, branching lineages, cancellation and versioned retries.
 
 ## Recovery acceptance before any production cutover
+
+Execution of isolation experiments is deferred by user instruction. Continue
+component design first; the acceptance scenarios below remain future work.
+
 
 | Injected fault | Required result |
 | --- | --- |
 | Kill coordinator after compute completes but before consuming completion | Replacement advances from the stored result, without redoing successful compute. |
 | Kill/restart pool scheduler | Accepted task is discoverable; running attempts are reconciled without duplicate allocation. |
-| Kill worker / expire allocation | Lease expires; retry is bounded; obsolete attempt cannot publish over replacement. |
+| Kill worker / expire allocation | Stop new placement; reconcile receipts and confirm termination or fencing before bounded retry. Heartbeat/lease expiry alone cannot prove execution stopped; obsolete attempts cannot overwrite accepted results. |
 | Kill Agent Bridge before/after provider response persistence | Recorded reply is reused; unknown response is explicit; no fabricated success. |
 | Lose submit acknowledgement | Same task identity is accepted only once logically. |
 | Restore old coordinator or partition network | Stale process cannot commit state or command current workers. |
 | Restart durable service/database from supported persistence | Workflows recover; database availability and recovery time are separately measured. |
 | All user-provisioned hosts expire | Progress persists; execution resumes when a user-provided host is available. |
 
-The durable database/service is also infrastructure that can fail. Automatic
-continuity requires a surviving host and supported database/service failover;
-shared storage alone is not high availability. Do not place a distributed
-coordination database on shared SQLite and assume multi-host failover works.
-Placement, backups and recovery objectives must be settled before production.
+The state-store process is also expected to stop; the accepted target is recovery
+on another authorized host, not uninterrupted database availability. Acknowledged
+state must survive the old host, and recovery must exclude stale writers. Shared
+storage alone does not establish those guarantees. Do not assume a shared SQLite
+file provides multi-host failover. Validate the selected persistence and recovery
+mechanism before production.
 
 Existing scientific checkpoints remain authoritative. No automatic resource
 allocation/release is added. Periscope will eventually observe the durable state;
 UI changes follow recovery and throughput acceptance, not precede them.
 
 ## Primitive scheduling and HyperQueue evaluation
+
+HyperQueue remains the preferred reuse candidate for Warm Pool scheduling and
+command execution. The Warm Pool design specifies required behavior, not a
+commitment to implementing a second scheduler. Prefer HQ server/worker with thin
+RSI adapters; reconcile its recovery gaps before adoption. Isolation experiments
+remain deferred while component design continues.
+
 
 The expanded design supersedes whole-stage resource admission: stages become
 compositions of primitive operations, with dynamic iteration and versioned
@@ -244,6 +298,15 @@ candidate for both local and distributed deployments. HyperQueue is a
 candidate execution scheduler, with auto-allocation disabled by user policy.
 
 - [Primitive catalog, local modes and tiered storage](PRIMITIVE_OPERATIONS.zh-CN.md)
+- [Organize execution blocks (HTML)](design/00-organize/index.html)
+- [Per-sample / OSP execution blocks (HTML)](design/01-per-sample/index.html)
+- [cross-sample execution blocks (HTML)](design/02-cross-sample/index.html)
+- [zoom-in execution blocks (HTML)](design/03-zoom-in/index.html)
+- [Cell exclusion ledger and per-step conservation](design/cell-exclusion-ledger.md)
+- [Work Coordinator execution and recovery (HTML)](design/work-coordinator/index.html)
+- [Temporal integration and intermittent-host constraints (HTML)](design/work-coordinator/temporal.html)
+- [Warm Pool Scheduler / Worker contracts (HTML)](design/warm-pool/index.html)
+- [Agent Bridge shared routing, conversations and recovery (HTML)](design/agent-bridge/index.html)
 - [HyperQueue evidence, recovery gaps and prototype acceptance](HYPERQUEUE_REVIEW.zh-CN.md)
 
 These are design documents, not implemented backend or recovery guarantees.

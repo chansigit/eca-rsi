@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Bridge：共享模型调用与恢复</title><style>
+body { max-width: 960px; margin: 32px auto; padding: 0 18px; font: 16px/1.7 sans-serif; color: #222; }
+h1 { font-size: 26px; } h2 { font-size: 20px; margin-top: 30px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { border: 1px solid #ccc; padding: 10px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+th { background: #f5f5f5; } code { overflow-wrap: anywhere; }
+small { color: #555; } li { margin: 6px 0; }
+@media (max-width: 600px) { body { margin: 18px auto; } th, td { padding: 6px; font-size: 14px; } }
+</style></head>
+<body>
+<p><a href="../work-coordinator/index.html">Work Coordinator</a> · <a href="../warm-pool/index.html">Warm Pool Scheduler / Worker</a></p>
+<h1>Agent Bridge：共享模型调用与恢复</h1>
+<p><strong>所有数据集共用一个逻辑 Bridge：统一排模型请求、分配调用额度、保存对话；需要计算时把工具请求交回 Coordinator。</strong>模型等待不占 pool 计算名额，工具等待不占模型调用名额。</p>
+<p><small>设计草案，尚未实现或部署。延续已选方案 B：在模型与工具交接处持久化，独立执行计算。具体限额数值与状态存储实现尚待确定；隔离验证仍暂缓。</small></p>
+
+<h2>1. 管到哪里</h2>
+<table><thead><tr><th>组件</th><th>职责</th></tr></thead><tbody>
+<tr><td>Work Coordinator</td><td>确定哪个科学操作需要模型、提供英文 prompt 和版本化证据；校验工具请求及科学提案，决定下一步、重算范围和收敛。</td></tr>
+<tr><td>Agent Bridge</td><td>持久接受请求，选择允许的模型，管理共享额度；保存模型回复、工具调用及返回上下文。只报告候选结果，不自行接受科学决定。</td></tr>
+<tr><td>Warm Pool Scheduler / Worker</td><td>执行 Coordinator 提交的程序任务，保存结果与收据；不在数值任务中启动一个等待模型的 agent。</td></tr>
+</tbody></table>
+<p>首版一个 Bridge 调度进程即可异步管理多个在途请求，不先增加多个调度副本。后端适配器、必要的 CLI 子进程都是 Bridge 内部执行方式。将来增加执行副本也必须共用额度账本，不能每个进程各有一份“全局上限”。本地单 Worker pool 也使用同一接口。</p>
+<p><strong>会话、模型调用、科学操作是三个层次：</strong>一个样本或谱系的注释会话可以包含多次模型调用和工具交接；一次模型回复已保存，不等于注释已通过，更不等于数据集完成。</p>
+
+<h2>2. 一次注释怎样异步推进</h2>
+<table><thead><tr><th>步骤</th><th>类型</th><th>交接与资源</th></tr></thead><tbody>
+<tr><td>提交证据与请求</td><td>程序执行</td><td>Coordinator 保存派发意图，以稳定 request_id 提交 conversation_id、turn_id、英文 prompt、工具 schema、证据引用和允许模型策略。Bridge 持久保存后才确认接受。</td></tr>
+<tr><td>排队并调用模型</td><td>模型推理</td><td>Bridge 获得模型/账户额度后调用，记录实际模型和尝试身份。其他会话独立推进。</td></tr>
+<tr><td>保存回复</td><td>程序执行</td><td>先保存完整回复、工具调用、供应方返回的续接信息和用量，再通知 Coordinator。结束本次在途调用的并发占用；速率窗口中的用量不随之清零。</td></tr>
+<tr><td>查询已有证据</td><td>程序执行</td><td>Coordinator 校验工具名、参数与版本。受限小表/只读 DEG SQLite 查询直接处理，结果持久保存；不为一次轻量查询启动大矩阵任务。</td></tr>
+<tr><td>补算必要证据</td><td>程序执行</td><td>确需 DEG、子聚类或绘图时，由 Coordinator 向 pool 提交独立任务。Bridge 会话等待该 tool_call_id，既不持有模型额度，也不保留完整 AnnData。</td></tr>
+<tr><td>续接原会话</td><td>模型推理</td><td>Coordinator 接受工具结果并授权下一次调用；Bridge 按原 tool_call_id 拼接已保存结果，重新排队取得额度，不重跑已完成工具。</td></tr>
+<tr><td>接受提案并应用</td><td>程序执行</td><td>Coordinator 按科学契约校验提案；错误返回同一会话修正，合格则持久接受并安排应用/记账任务。Bridge 不直接写最终标签或删除细胞。</td></tr>
+</tbody></table>
+<p>同一会话一次只推进一个模型调用；独立会话可并发。同一回复中的多个工具，只有经 Coordinator 确认互不依赖才并行；有顺序的工具依次执行。提交提案不能越过尚未返回的必需工具结果。</p>
+<p>沿用现有英文科学 prompt：<a href="../02-cross-sample/precomputed-deg-prompt.md">优先查询预计算 DEG</a>、<a href="../02-cross-sample/type-annotation-prompt.md">类型注释</a>、<a href="../02-cross-sample/quality-annotation-prompt.md">质量注释</a>及 <a href="../03-zoom-in/annotation-prompt.md">zoom-in 注释</a>。Bridge 不另写一套生物学规则；实际细胞排除仍受 <a href="../cell-exclusion-ledger.md">逐细胞账本</a>约束，模型给范围、理由和证据，程序展开 cell IDs。</p>
+
+<h2>3. 排队与分流保持简单</h2>
+<ol>
+<li><strong>先检查可用候选。</strong>只能选配置中允许该 purpose 的模型，并检查后端能力、上下文/图像/工具支持和凭据状态。没有兼容候选就明确等待或报配置错误，不能偷偷降级。</li>
+<li><strong>数据集轮转，内部按就绪顺序。</strong>某模型配额耗尽不阻塞可用其他模型的请求；等待工具的会话不占待调用队列头。会话串行，多数据集并行，不先做复杂预测调度。</li>
+<li><strong>按调用顺序选模型。</strong>主用有额度就用主用；主用满额、冷却或不可用时，可分流到已允许的第一备用、第二备用。只允许主用的请求继续等。新会话优先主用，已有会话优先保持原模型；切换发生在已保存的交接边界，并记录原因。</li>
+<li><strong>统一限制并发和速率。</strong>每次实际供应方请求都要取得适用额度，包括重试、续接、纠错和后端内部附加调用。SDK 隐藏重试须关闭或接入同一入口，不能绕过上限。</li>
+<li><strong>积压有上限。</strong>配置排队数量、上下文/证据字节和单会话调用预算。Bridge 满时返回未接受及建议重试时间，Coordinator 保留原意图自动重试；已接受请求不得静默丢弃。</li>
+</ol>
+<p><strong>quota group 按真实共享额度划分。</strong>同一供应方账户下的不同 key、URL 或模型可能共用账户额度，同时各有模型额度；一次调用必须满足所有适用限额，不能把共享额度拆成可重复消费的多份。使用供应方限额及配置的保守余量；集中调用的作用是控制总量，不是提高账户授权额度。</p>
+<p>发出请求前持久预留并发和速率预算，收到实际用量后按供应方口径校正；不同接口的 token 计量方式由适配器说明。结果不明的调用不立即退款或清空占用：本地进程退出不证明供应方已停止处理，并发预留须按供应方确认或显式的不确定调用策略处理，速率窗口保留保守预留。策略允许再次尝试时需记录可能重复处理/计费的风险，不能声称远端调用物理上只发生一次。Bridge 重启不重置窗口。429 等限流按返回的等待时间或有界退避冷却共享组，不能多个请求同时撞回去。</p>
+<p>首版不做最优延迟预测，也不因为“备用”就假设所有模型等价。允许哪些 purpose 使用哪些候选、并发/速率/费用上限均由配置给出，本文不虚构账户容量。</p>
+
+<h2>4. 必须保存的最小记录</h2>
+<table><thead><tr><th>记录</th><th>内容及归属</th></tr></thead><tbody>
+<tr><td>会话</td><td>conversation_id、所属 run/operation/样本或谱系、科学版本、已保存轮次、英文 prompt/工具定义版本、消息与证据引用。Bridge 管对话；已接受科学决定由 Coordinator 管。</td></tr>
+<tr><td>调用与尝试</td><td>request_id、turn_id、attempt_id、输入摘要、配置版本、候选模型、实际 endpoint/model、路由理由、发送状态、供应方请求 ID、开始/结束时间、错误与下次重试时间。</td></tr>
+<tr><td>回复与工具交接</td><td>不可变回复引用、tool_call_id/参数、工具结果引用、与 Coordinator 的确认状态。包含恢复所需的可返回协议字段；不能只存临时 SDK session ID 或人类可读 transcript。</td></tr>
+<tr><td>额度与用量</td><td>适用共享组、预留、调用状态、窗口/冷却、供应方报告的 token/费用及覆盖情况。用量按尝试身份去重，不因重发事件重复相加。</td></tr>
+</tbody></table>
+<p>同 request_id 同内容重发返回已有记录，同 ID 不同内容拒绝。网络重发不新建尝试；真正重试使用新 attempt_id，并保留原尝试。每个 turn 只选定一个有效回复，迟到的旧回复可供审计，不能覆盖已交付的新回复或发出第二套工具请求。</p>
+<p>保存供应方支持恢复所需的消息、工具结果及协议数据；大图片和表格用不可变引用，不能引用会被下一轮覆盖的文件。切换模型必须检查格式、上下文容量和工具兼容性，不能把一家供应方的 session ID 当成另一家的完整上下文。上下文压缩若需要模型，也是有预算、可追踪的调用；不静默丢弃已接受决定或必要证据。</p>
+
+<h2>5. 断连、重启和失败</h2>
+<table><thead><tr><th>情况</th><th>行为</th></tr></thead><tbody>
+<tr><td>请求已接受，确认丢失</td><td>Coordinator 以原 ID 查询/重发，返回原记录；不再次向供应方发送已完成的调用。</td></tr>
+<tr><td>回复已保存，通知丢失</td><td>Bridge 重发通知，Coordinator 也定期核对未完成请求；读取原回复即可继续。</td></tr>
+<tr><td>Coordinator 中断</td><td>Bridge 只完成已授予、在有限预算内的在途调用并保存回复；排队但未授予的请求等待。遇工具或下一次模型调用边界就停，不自己展开新科学步骤。失联检测有延迟，以有效授予范围为边界。</td></tr>
+<tr><td>Bridge 调度进程中断</td><td>独立执行端如仍存活，完成当前请求并保存回复后等待。新 Bridge 先核对执行实例、未确认回复与额度，不把失联当作原调用已结束。</td></tr>
+<tr><td>Bridge 主机到期，回复未保存</td><td>供应方可能已处理甚至收费。能按请求 ID 查询则先查询；无法确认则标记 unknown_external_result。确认旧本地执行已停止/隔离后，按预配置的有界费用/重试策略另开尝试，不能承诺取回原回复或只收费一次。</td></tr>
+<tr><td>工具完成时 Bridge 离线</td><td>Coordinator 保存结果和续接意图。Bridge 回来后接收原 tool_call_id 的结果；不要求 Worker 等 Bridge 在线才结束。</td></tr>
+<tr><td>临时网络错误、供应方过载</td><td>Bridge 负责分类、限额内退避和合规候选切换。认证/配置错误停用对应候选并显示原因，其他兼容候选照常工作。</td></tr>
+<tr><td>模型提案反复不合法或预算耗尽</td><td>Coordinator 暂停受影响分析单元，保存原会话和具体校验错误；独立工作继续。不能把重试失败解释成允许丢样本或跳过判定。</td></tr>
+<tr><td>取消、版本更新或旧实例返回</td><td>按持久取消/版本记录阻止新调用和下游推进；对已发送的请求尽力取消，未确认终止不假报成功。迟到回复留档，不覆盖当前版本。</td></tr>
+</tbody></table>
+<p>Coordinator 重试“提交请求”，Bridge 重试“供应方尝试”，科学提案纠错由 Coordinator 决定，三者不能各自重跑整个 agent 循环。结果不明及不可恢复错误必须可诊断；通常恢复靠自动核对和有界策略，不靠人工逐任务点继续。</p>
+
+<h2>6. 配置、凭据与热更新</h2>
+<p>扩展现有 <code>ECA_MODEL_CATALOG</code> 指定的模型目录（默认 <code>~/.config/ecarsi/model-pool.json</code>），不另设一份相互覆盖的模型清单。以下是拟增加的配置内容，不是当前文件已经支持的 schema。</p>
+<table><thead><tr><th>内容</th><th>约定</th></tr></thead><tbody>
+<tr><td>候选与调用顺序</td><td>稳定 candidate_id、harness、model、endpoint URL、enabled、允许 purpose；列表顺序仍显示 Primary、Fallback 1、Fallback 2。模型名字和地址来自配置。</td></tr>
+<tr><td>共享组与策略</td><td>账户组/模型组、并发、速率、请求超时、重试/冷却、会话与费用预算。组关系显式设置，避免不同 URL 被误当不同账户。</td></tr>
+<tr><td>凭据引用</td><td>API 后端配置 auth_env 等变量名，页面引导用户在 bashrc 填对应值；CLI 后端显示自己的登录方式。目录和日志不保存 key 值。</td></tr>
+<tr><td>配置版本</td><td>保存前校验，以 revision 防止互相覆盖；新派发读取新配置，在途尝试保留原配置身份。降低限额暂停额外调用，让现有调用收尾。</td></tr>
+</tbody></table>
+<p>同一种适配器可以有不同 endpoint 配置，客户端按候选建立；不能在多个并发调用间改进程全局环境变量来切 URL。已排队请求重检当前启用状态和该操作允许范围；删除/禁用模型不自动扩大其他模型的科学权限，也不撤销已接受决定。</p>
+<p><strong>Check API keys 分开显示：</strong>bashrc 是否找到可识别配置、当前执行进程是否已加载、是否有实际请求验证记录及时间。文件里有 key 不等于当前进程已生效，更不等于供应方认证通过。仅检查填写状态不调用模型；单独的连接测试也须计入调用额度。</p>
+<p>修改 bashrc 不会改变已运行进程的环境。提供受控的凭据重载：通过既定启动方式更新后续调用的执行进程，保留 Bridge 队列和在途工作；检查按钮不任意执行 shell 文件。只反馈变量名、状态、加载版本和时间。既有管理权限校验继续用于改 URL/配置，模型凭据不回传浏览器。</p>
+
+<h2>7. 监控必须区分等什么</h2>
+<table><thead><tr><th>展示状态</th><th>含义</th></tr></thead><tbody>
+<tr><td>Queued</td><td>请求已接受但未发出；列明 model capacity、rate limit、cooldown、credentials、no compatible model 或 coordinator unavailable。</td></tr>
+<tr><td>In flight</td><td>供应方请求已经发出，正在等回复；它不是排队数，也不是 pool 中的计算。</td></tr>
+<tr><td>Waiting for tool</td><td>会话在等指定工具；可跳转到 Coordinator/pool 的任务和等待原因。此时无该会话的模型调用占用。</td></tr>
+<tr><td>Reply saved / Awaiting validation</td><td>模型调用已完成，候选回复等待 Coordinator 验收或处理；不能直接记为数据集成功。</td></tr>
+<tr><td>Retrying / Paused / Unknown</td><td>分别展示下次自动重试时间、需要修复的原因、结果不明的尝试；记录最后更新时间，失联不能显示成闲置。</td></tr>
+</tbody></table>
+<p>Periscope 同时展示会话数与供应方调用数，分模型/共享组显示限额、当前占用、排队时长、10 分钟内成功/失败/限流次数和响应耗时。调用成功数、科学提案通过数分开统计；Workflow activity 保持只显示最近 15 条，完整记录仍可查询。</p>
+<p>用量区显示 input/output tokens、供应方报告的费用，以及有用量报告的调用覆盖率。缓存等额外用量字段在后端提供时单列；估算费用与供应方实报分开。失败尝试已报告的消耗也要计入；未报告显示 Not reported，不能填 0，SDK 累计值与逐请求值不得重复相加。</p>
+<p>运行事件包含 dataset/unit/operation、conversation/turn/request/attempt/tool ID、模型、路由、等待原因、用量和配置版本，供跨组件定位。常规事件日志不含 prompt/回复正文或 key；恢复所需对话另存于受控持久位置。页面读小型汇总并显示更新时间，不在每次刷新时扫描全部 transcript 或科学数据目录。</p>
+
+<h2>8. 复用现有代码，但补在真实调用边界</h2>
+<table><thead><tr><th>已读到的基础</th><th>新设计要补什么</th></tr></thead><tbody>
+<tr><td><code>agent-harness-bridge/harness_bridge/harness.py</code>：ModelPool、run_agent、错误分类和工具 schema。</td><td>ModelPool 当前由调用者按阶段/进程持有，不能代表共享额度。复用后端和校验，把派发/重试收束到 Bridge；不能只给整段 run_agent 套一把锁。</td></tr>
+<tr><td><code>_harness_claude.py</code> 等适配器可在 SDK 会话内多次调用模型，并直接执行 ToolSpec.handler。</td><td>必须能在回复/工具边界保存并暂停，从保存的上下文恢复；工具 handler 不捕获常驻矩阵或直接运行重计算。所有供应方调用均经过额度入口。</td></tr>
+<tr><td><code>harness_bridge/telemetry.py</code>：内容隔离的事件日志与汇总。</td><td>保留字段和 UI 基础，改用稳定尝试身份去重并补排队原因。现有 JSON/JSONL 日志不是已确认请求、额度预留和恢复的事务账本。</td></tr>
+<tr><td><code>ecarsi/model_web.py</code>：模型目录、revision、管理权限、key 填写检查。</td><td>扩展每候选 endpoint/凭据引用/共享组和热更新；旧配置仍可迁移。现有“同 backend 共用 URL”及仅影响新 driver 的方式不能满足共享服务。</td></tr>
+</tbody></table>
+<p><strong>接入资格必须实际验证。</strong>能运行一个完整 SDK/CLI agent，不代表支持方案 B。后端需要说明并验证：逐次调用受限、工具暂停、保存上下文后恢复，以及用量能观察到什么。若只能控制整场 CLI 会话而无法在内部调用处限流/恢复，应标明尚不支持新版执行契约，不能计作已接入的可调度候选。</p>
+
+<h2>9. 与 Temporal、HyperQueue 和存储的边界</h2>
+<p>若采用 Temporal，Coordinator 用短 Activity 幂等提交/查询 Bridge，通过通知和定时核对恢复；Workflow 历史保存结果引用及科学决定，不装全量对话、模型计量事件或表达矩阵。Bridge 的共享额度和供应方尝试只有一处权威记录，Temporal Activity 自动重试不能生成新的供应方调用。</p>
+<p>HyperQueue 候选负责 pool 数值任务，Bridge 模型等待不提交成 HQ 的长任务。Bridge 持久记录可复用最终选定的可靠控制存储，在独立表/命名空间内保存；不写 Temporal 内部表，也不为每个组件再搭一种数据库。</p>
+<p>已确认的请求、完整回复和去重记录必须在原节点消失后仍可恢复，实例替换须阻止旧写入者继续派新请求；已授予的有限调用仍可保存各自收据。共享目录或原子 rename 本身不能证明满足这些要求。只在本地暂存的回复标记为未可靠发布，不能提前确认跨节点可恢复。</p>
+
+<h2>10. 后续验收与待定项</h2>
+<ul>
+<li>A 等模型或工具时，B 能持续进入 pool；样本/谱系矩阵不在 Bridge 常驻。</li>
+<li>多个数据集、多个候选共用账户组时，总调用量受同一额度约束；备用分流不突破允许 purpose。</li>
+<li>在请求发送、回复保存、工具返回和下一轮提交前后中断进程：已存回复/工具可复用，结果不明显式处理，原节点消失后可接力。</li>
+<li>Bridge 重启、通知重复、旧执行端迟到，不重复接受回复或累计用量；修改配置不冲掉在途会话。</li>
+<li>CLI 与 API 后端分别验证边界能力；没有测到的恢复或用量能力不在页面上冒充已支持。</li>
+</ul>
+<p>四个组件的职责已有完整草案。跨组件下一块应细化<strong>可靠状态与多级数据存储</strong>：哪些记录/产物必须落在可接力存储、怎样发现服务与核对版本、何时允许回收缓存；随后确定配置数值、实现选型和迁移验收。当前不启动这些实验。</p>
+<p><a href="../../DURABLE_WORKFLOWS.md">返回总体设计</a></p>
+</body></html>

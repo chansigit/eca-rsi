@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Organize：分离程序执行与模型推理</title>
+<style>
+body { max-width: 960px; margin: 32px auto; padding: 0 18px; font: 16px/1.7 sans-serif; color: #222; }
+h1 { font-size: 26px; } h2 { font-size: 20px; margin-top: 30px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { border: 1px solid #ccc; padding: 10px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+th { background: #f5f5f5; } code { overflow-wrap: anywhere; }
+small { color: #555; } li { margin: 6px 0; }
+@media (max-width: 600px) { body { margin: 18px auto; } th, td { padding: 6px; font-size: 14px; } }
+</style>
+</head>
+<body>
+<h1>Organize：分离程序执行与模型推理</h1>
+<p><strong>类型说明：</strong>「模型推理」指调用语言模型进行规划、判断或注释；「程序执行」指按代码完成数值计算、校验、查询、读写和结果应用，可使用 CPU 或 GPU。模型发起的工具调用仍属于程序执行；这些标注不增加调度步骤。</p>
+<p><strong>目的：一个数据集等待 模型 时，其他数据集的计算继续进入 pool。</strong>程序执行内部连续执行，不把校验、日志、文件写出各自变成调度任务。</p>
+<p><small>设计草案，尚未实现或部署。Organize 通常在 round 1 之前执行，同时确定 analysis units 和完整实验样本的映射，在写出前检查二者兼容；不执行 QC、聚类或细胞删除。</small></p>
+<p><strong>已确认：实验划分与完整性检查统一交给 Organize。</strong>Per-sample 信任并执行 Organize 的确认结果，不再让 模型 重新划分或审核实验样本。</p>
+<h2>细胞排除记账〔程序执行〕</h2>
+<p>Organize 执行后按来源 cell IDs 对账：默认全部分配；若执行已授权的来源/细胞排除，逐细胞保存原因与决定引用。拆分、合并和改名只记录映射，不算删除；未被计划覆盖的细胞是错误。上游已有账本继续引用，缺失历史记录需明确标注。</p>
+<p><strong>每次过滤 → 记录 cell IDs、原因和证据 → 与输出一起保存并核对细胞守恒。</strong>这是步骤内的必做环节，不新增排队任务。无排除也记录零排除摘要；账本未通过验收，该步不能完成。详见 <a href="../cell-exclusion-ledger.md">统一细胞排除账本</a>。</p>
+<h2>只分三个执行块</h2>
+<p><strong>① 准备输入证据〔程序执行〕 → ② 组织计划〔模型推理〕 → ③ 执行组织计划〔程序执行〕 → per-sample</strong></p>
+<table>
+<thead><tr><th>执行块</th><th>类型</th><th>输入 → 输出</th><th>块内连续完成的工作</th><th>执行位置</th></tr></thead>
+<tbody>
+<tr><td><strong>① 准备输入证据</strong><br><code>organize.prepare</code></td><td><strong>程序执行</strong></td><td>已标准化来源文件及上游记录 → 紧凑 metadata 摘要、来源版本和校验记录</td><td>发现来源；验证 ECA-PP 输出和 counts；解析上游列证据；同时整理器官、实验/文库信息和用户显式样本声明；统计 metadata；记录输入身份。尽量复用读取结果，摘要保存后关闭文件、释放矩阵与计算资源。</td><td>Scheduler 分配资源；Worker 执行</td></tr>
+<tr><td><strong>② 组织计划</strong><br><code>organize.plan</code></td><td><strong>模型推理</strong></td><td>摘要、组织规则、已有样本声明 → 组织计划与实验映射候选</td><td>模型结合器官和实验/文库证据，明确实验划分依据，再制定兼容的合并、拆分计划。优先复用有效映射或用户显式声明；Coordinator 校验结构、来源引用、过滤条件和物种约束。需要扫描数据的完整性审计在③开头完成，通过后才最终接受计划与映射。</td><td>Agent Bridge 调用模型；Work Coordinator 校验并推进</td></tr>
+<tr><td><strong>③ 执行组织计划</strong><br><code>organize.execute</code></td><td><strong>程序执行</strong></td><td>固定版本的来源文件、计划和实验映射 → organized.h5ad、manifest、确认的实验映射及来源证据</td><td>写出前先检查细胞守恒、映射覆盖与实验完整性，确保同一个确认实验没有被分到多个 analysis unit；冲突交回②修正。通过后接受计划与映射，再分割、合并、保存来源信息、写出、回读并记录完成结果。所有这些动作都在同一个计算块内顺序完成。</td><td>Scheduler 分配资源；Worker 执行；Coordinator 验收结果</td></tr>
+</tbody>
+</table>
+<p>三个名称表示可恢复的执行边界，不是三个新服务。② 不占计算 Worker 名额；小型校验直接在 Coordinator 中执行，需要扫描 obs 或矩阵的分配与实验完整性审计放在③开头，仍是块内检查，不增加调度任务。</p>
+<h2>真正需要等待的地方</h2>
+<ul>
+<li>①的摘要准备好，②才能调用模型。①结束后不保留完整矩阵等待回复。</li>
+<li>②有通过初步校验的计划和实验映射，③才能开始审计；完整审计通过后才能写出。已有有效计划与映射可跳过模型推理，仅执行程序校验；显式计划仍须包含或补齐实验映射，并通过同样的校验。</li>
+<li>③必须先确认每个已接受来源的细胞恰好分配一次，再开始写出。不能因 filters 漏细胞、重复分配或漏来源，也不能把同一个确认实验拆散后分别做 OSP。</li>
+<li>③的审计若发现计划有问题，将具体错误交回②修正；该计算块退出并释放资源，不能原地占着 Worker 等 模型。资源或磁盘故障则按故障恢复，不让模型重新猜计划。</li>
+<li>产物、manifest、确认的实验映射及来源证据完整验收后，交给 per-sample 直接使用。batch_key_hint 仍只是批次校正建议；实验映射是独立的正式交付结果。</li>
+</ul>
+<h2>交给 per-sample 的结果</h2>
+<p>Organize 保存每个细胞的原始来源与 cell ID、确认的 sample ID、所属 analysis unit、实验划分依据，以及对应输入/计划版本。合并跨来源实验时保留证据；来源不明确应在 Organize 内解决或报告，不能把不确定结果转交下游再猜。</p>
+<p>Per-sample 只检查收到的文件、版本和 cell IDs 是否与确认映射一致，然后准备子集并跑 OSP。它不重新调用 模型、不重新推断实验边界，也不重复审查 Organize 的组织理由。文件缺失、被修改或映射损坏属于交接错误，需报告修复，不是重新裁决 Organize。</p>
+<h2>什么时候才进一步拆？</h2>
+<p><strong>默认不拆。</strong>多个独立 analysis unit 足够大、并行收益明确且不会造成大量重复读取时，才考虑按 unit 分发③。规模小就一个任务顺序完成。不要先为尚未证实的收益增加调度和中间文件。</p>
+<p>①→②→③意味着必要时要跨 模型 边界再次读取输入，这是释放矩阵和计算资源的代价；可复用磁盘缓存，但不为等待模型常驻一个大内存进程。应测量整体吞吐与重复 I/O，而不是追求更多任务数。</p>
+<h2>恢复边界</h2>
+<table>
+<thead><tr><th>情况</th><th>恢复方式</th></tr></thead>
+<tbody>
+<tr><td>准备完成后中断</td><td>输入版本不变时复用准备摘要与校验记录，不重新规划数据范围。</td></tr>
+<tr><td>等待模型时中断</td><td>恢复持久交互；已有回复或已接受计划先复用，不无条件重复请求。</td></tr>
+<tr><td>执行到一半 Worker 退出</td><td>复用已验收 unit，重跑尚未完成的部分；允许重做未持久化的块内动作，不强制每个函数都存检查点。</td></tr>
+<tr><td>结果写完但通知丢失</td><td>先核对输出及收据，再推进下游；不直接重新计算。</td></tr>
+</tbody>
+</table>
+<h2>哪个组件负责？</h2>
+<ul>
+<li><strong>Work Coordinator：</strong>管理这三个块的依赖、组织计划与实验映射的接受、恢复和下游推进。</li>
+<li><strong>Agent Bridge：</strong>管理②的模型请求、并发、分流及回复持久化。</li>
+<li><strong>Warm Pool Scheduler：</strong>给①和③分配已有资源。</li>
+<li><strong>Warm Pool Worker：</strong>执行①和③的固定代码。校验、日志和保存收据是块内职责。</li>
+</ul>
+<h2>复用哪些现有代码？</h2>
+<p>①复用 <code>ecarsi/upstream.py</code> 的发现、校验与来源证据解析，以及 <code>ecarsi/organize.py:profile_unit</code>；②复用 <code>ecarsi/plan.py</code>；③复用 <code>ecarsi/execute.py:execute_plan</code>。另将现有 <code>ecarsi/sample_mapping.py</code> 和 <code>ecarsi/persample.py</code> 中的实验识别与完整性检查迁入 Organize 的三个块内，不新增独立服务或执行块。这是拟议职责调整，尚未修改执行代码。</p>
+<p>实现重点是解除这三块之间的进程和内存绑定，保存必要的交接结果；不是重写原有科学计算，也不是把每个内部函数变成独立任务。</p>
+<p><a href="../01-per-sample/index.html">下一项：Per-sample / OSP 方案 →</a></p>
+</body>
+</html>

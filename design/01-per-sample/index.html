@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Per-sample / OSP：按样本计算，模型等待不占 pool</title><style>
+body { max-width: 960px; margin: 32px auto; padding: 0 18px; font: 16px/1.7 sans-serif; color: #222; }
+h1 { font-size: 26px; } h2 { font-size: 20px; margin-top: 30px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { border: 1px solid #ccc; padding: 10px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+th { background: #f5f5f5; } code { overflow-wrap: anywhere; }
+small { color: #555; } li { margin: 6px 0; }
+@media (max-width: 600px) { body { margin: 18px auto; } th, td { padding: 6px; font-size: 14px; } }
+</style></head>
+<body>
+<p><a href="../00-organize/index.html">← Organize 方案</a></p>
+<h1>Per-sample / OSP：按样本计算，模型等待不占 pool</h1>
+<p><strong>类型说明：</strong>「模型推理」指调用语言模型进行规划、判断或注释；「程序执行」指按代码完成数值计算、校验、查询、读写和结果应用，可使用 CPU 或 GPU。模型发起的工具调用仍属于程序执行；这些标注不增加调度步骤。</p>
+<p><strong>目的：样本 A 等待模型注释时，样本 B、C 以及其他数据集继续计算。</strong>每个完整实验样本是一块 OSP 数值任务，QC、聚类、DEG 连续执行，不分别排队。</p>
+<p><small>设计草案，尚未实现或部署。Per-sample 通常在 round 1 之前执行；后续 cross-sample → ZMIP 的迭代不意味着每轮重新跑 OSP。这里的 sample 是有证据支持的完整实验池/文库，不能直接用细胞类型、实验条件或 Organize 的器官分组代替。</small></p>
+<h2>细胞排除记账〔程序执行〕</h2>
+<p>子集准备的显式排除、OSP 各个 QC 过滤动作都逐细胞记录原因，汇总为本步排除账本。模型 drop 仅保存提案，实际应用后才计入排除；不能提前计数。QC 全空或极小样本也必须交代每个输入细胞的去向，不能仅写“skipped”。</p>
+<p><strong>每次过滤 → 记录 cell IDs、原因和证据 → 与输出一起保存并核对细胞守恒。</strong>这是步骤内的必做环节，不新增排队任务。无排除也记录零排除摘要；账本未通过验收，该步不能完成。详见 <a href="../cell-exclusion-ledger.md">统一细胞排除账本</a>。</p>
+<h2>直接使用 Organize 确认的实验映射</h2>
+<p><strong>已确认：样本识别、实验完整性与 analysis unit 拆分兼容性统一在 Organize 完成。</strong>Per-sample 不再设置样本确认 模型，也不重新裁决 Organize 的结果；仅核对交接版本、文件和 cell IDs 与确认映射是否一致。</p>
+<p><strong>① 准备样本子集〔程序执行〕 → ② OSP 计算〔程序执行〕 → ③ 注释〔模型推理〕 → ④ 应用并保存注释〔程序执行〕。</strong></p>
+<table>
+<thead><tr><th>执行块</th><th>类型</th><th>连续完成的工作与输出</th><th>执行位置 / 粒度</th></tr></thead>
+<tbody>
+<tr><td><strong>① 准备样本子集</strong><br><code>persample.partition</code></td><td><strong>程序执行</strong></td><td>读取 Organize 已确认的样本映射，核对文件与版本、cell IDs、样本数量是否一致；沿用上游来源和排除记录。按确定的 cell IDs 写出有限批次的样本子集、输入名单和请求凭据。不重新推断实验边界，不重复做科学完整性裁决。</td><td>Pool 程序执行；共享读取、按有界批次准备</td></tr>
+<tr><td><strong>② 单样本 OSP 计算</strong><br><code>osp.compute</code></td><td><strong>程序执行</strong></td><td>校验子集；执行 QC（含配置启用的 Scrublet / DecontX）、保留通过细胞、归一化、HVG、PCA、邻居图、Leiden、UMAP、DEG/PAGA 和必要证据图。保存计算检查点、QC 删除记录及模型所需证据，然后释放计算资源。</td><td>Pool 程序执行；每个完整样本一个任务</td></tr>
+<tr><td><strong>③ 样本注释</strong><br><code>osp.annotate</code></td><td><strong>模型推理</strong></td><td>模型阅读固定版本证据，提出细胞标签与 QC action。需要补证据时进入下述工具回路。保存每次回复、工具结果和有效聚类版本；必须通过提交校验才能结束。此处 模型 负责细胞注释，不重新做 Organize 的样本划分。</td><td>Agent Bridge 调模型；Coordinator 校验、推进；不持有完整 AnnData 等待</td></tr>
+<tr><td><strong>④ 应用注释并发布</strong><br><code>osp.finalize</code></td><td><strong>程序执行</strong></td><td>读取有效计算版本和接受的提案，应用标签及 keep/flag/drop 标记，写出 H5AD、提案、必要报告和完成收据；验收输入 cell IDs 与 QC 删除记录的对应关系。校验与写出都属于这一块。</td><td>Pool 程序执行；每个样本，Coordinator 接受结果</td></tr>
+</tbody>
+</table>
+<p>这是<strong>共享子集准备一块 + 各样本执行三块</strong>。①单独存在是为了复用共享输入读取；一次只准备有限批次，不等所有子集写完才开始②，也不一次物化几百个大文件。小输入或单样本可在不跨 模型 边界的前提下融合①和②。</p>
+<h2>注释中的工具调用怎么处理？</h2>
+<p><strong>生成工具请求〔模型推理〕 → 校验请求〔程序执行〕 → 查询或计算〔程序执行〕 → 保存结果〔程序执行〕 → 继续判断〔模型推理〕。</strong>工具等待与模型等待分别释放各自的执行容量；不会让整个 osp.annotate 挂在 Worker 上等待。</p>
+<table>
+<thead><tr><th>现有工具</th><th>类型</th><th>新设计中的执行方式</th></tr></thead>
+<tbody>
+<tr><td><code>check_qc_scores</code> / 读取已有证据</td><td>程序执行</td><td>如果已有紧凑表能直接回答，在服务内读取返回；需要重新扫描大量 obs 时才派一个有预算的证据任务。不额外占一个大矩阵 Worker。</td></tr>
+<tr><td><code>check_genes</code></td><td>程序执行</td><td>需要读取表达矩阵时，提交一次 <code>osp.evidence</code> 计算，返回指定基因的统计表，释放资源后再继续模型；相同输入与查询可复用结果。</td></tr>
+<tr><td><code>subcluster</code></td><td>程序执行</td><td>提交一次 <code>osp.refine</code>：对子群聚类并计算配套区分基因，作为一个连续任务。成功细分产生新的工作聚类版本，后续工具和最终提案必须引用新版本，不重新跑整个样本 QC。</td></tr>
+<tr><td><code>submit_annotation</code></td><td>程序执行</td><td>Coordinator 执行现有提案校验；无效则返回具体错误，合法才推进④。校验不必单独排队。需要扫描矩阵的校验放在有预算的程序执行中。</td></tr>
+</tbody>
+</table>
+<p>不会为每个 cluster 默认创建一个独立 agent。先保留每个样本一个连贯注释上下文；并发主要来自多个样本、多个数据集。</p>
+<h2>程序执行内部不再继续拆</h2>
+<ul>
+<li>②中的 QC、Scrublet、DecontX、PCA、邻居图、聚类、UMAP 和 DEG 连续执行；日志保留各步名称，但不把日志中的每一步当成调度任务。</li>
+<li>Scrublet、DecontX 等按配置和数据适用条件执行。单群体的 DEG/PAGA 跳过规则沿用现有实现，不为了画流程强制执行。</li>
+<li>样本之间并行，样本内不再按算法或 CPU/GPU 切换拆调度任务，OSP 的 DEG 也留在样本任务内。计算与模型等待仍分开；模型临时请求的补证据或子聚类沿用上述工具回路。</li>
+<li>复用已完成的 compute 检查点；注释失败只恢复注释或 finalization，不无条件从 QC 重算。版本化子聚类和工具结果的独立恢复仍需实现。</li>
+</ul>
+<h2>同一个样本任务，两套计算路径</h2>
+<table><thead><tr><th>路径</th><th>类型</th><th>执行方式</th></tr></thead><tbody>
+<tr><td>CPU：Scanpy</td><td>程序执行</td><td>沿用 CPU 数值流程及配套 QC 工具，在一个 Worker 内连续完成整个 osp.compute；不要求 GPU，本地 CPU Worker 同样可运行。</td></tr>
+<tr><td>GPU：RAPIDS-singlecell</td><td>程序执行</td><td>适用的数值步骤采用经过验证的 GPU 实现；Scrublet / DecontX 等按各自适用实现执行，不假定所有 QC 都能转 GPU。需要 CPU 的部分在同一 Worker 内连续执行，整个样本仍只提交一个计算任务。</td></tr>
+</tbody></table>
+<p>后端由配置指定，可选择自动 GPU 优先或显式 CPU/GPU。自动模式结合 RAM、VRAM、剩余机时、排队及搬运成本选择；没有合适 GPU 时允许 CPU 推进。显式 GPU 配置不能静默改成 CPU。任务按整样本峰值申请资源，多个样本是否同机并行由 Scheduler 按资源决定。</p>
+<p>两套路径保持相同输入/输出、QC 账本与注释交接契约，不保证数值或聚类标签完全相同。保存实际后端、依赖版本、参数和随机设置；更换后端产生新的计算结果身份，不能套用旧聚类的模型决定。运行失败不能直接靠切 CPU 掩盖，须先记录原因并按配置恢复。</p>
+<p><small>这是双后端的设计要求；各数值步骤的 GPU 适配和科学契约验证仍待实施，不代表当前 OSP 已具备完整 GPU 路径。</small></p>
+<h2>并发与必要的汇合点</h2>
+<table>
+<thead><tr><th>情况</th><th>处理</th></tr></thead>
+<tbody>
+<tr><td>A 等 模型，B 的子集已经就绪</td><td>B 可立即由 Scheduler 按资源匹配进入计算；A 不占计算名额。单 Worker 资源足够时可接多个样本任务。</td></tr>
+<tr><td>模型服务慢，计算很快</td><td>允许有限数量/字节的 computed 样本积压。上限控制磁盘和 Bridge 队列，不重新引入整个 dataset 的峰值预算准入。</td></tr>
+<tr><td>个别样本故障</td><td>独立样本继续；基础设施故障按限额自动重试，科学输入错误保留为待解决状态，不擅自排除该样本。</td></tr>
+<tr><td>一个分析单元要进入 cross-sample</td><td>保留必要的样本集合完整性：所有计划样本都有可接受的终态，且完成纳入判定后再整合。不能为了提前启动 cross-sample 静默漏掉慢样本或失败样本。其他分析单元照常推进。</td></tr>
+<tr><td>Coordinator 崩溃，Worker 仍可用</td><td>Worker 完成预先接受的有限计算并保存收据，随后等待；不能自行发起尚未授权的新模型回合。恢复后先对账再派活。</td></tr>
+</tbody>
+</table>
+<h2>必须保留的科学边界</h2>
+<ul>
+<li><strong>信任 Organize：</strong>实验划分、完整性及跨来源合并证据在 Organize 写出前确认，结果随输入一起交付。Per-sample 不再根据完整 source_obs 重新判定组织方案，不把这项决定交给另一个 agent。</li>
+<li><strong>仅保留交接一致性检查：</strong>确认映射缺失、文件版本变化或子集 cell IDs 不符时报告交接错误；修复或由 Organize 发布新版本后继续，不在 per-sample 私自修改样本划分。正常路径直接计算。</li>
+<li><strong>两种删除不混淆：</strong>②中的规则 QC 会实际去除细胞并写 qc_removed.csv；③的 模型 drop 是建议，④仅应用标记，不在 OSP 注释处再物理删除，后续仍按既有 cross-sample 规则处理。</li>
+<li><strong>空样本不当运行故障反复重试：</strong>沿用已验证的空样本结果契约与细胞账本。QC 后只剩 1–2 个细胞的既有停止和记录规则也要单独保留，不能伪造正常聚类或注释完成。</li>
+<li><strong>排除规则可追溯：</strong>沿用 Organize 交付的排除记录（如有），保存 cell ID、原因和提出方；不为凑齐映射自行删除细胞。</li>
+<li><strong>批次建议不是前置门槛：</strong>现有 _recommend_batch_key 是 advisory，失败不应阻塞 OSP。新设计将它作为可选 Bridge 工作，不能阻塞已经确认样本的计算，也不自动替换生效批次设置。</li>
+</ul>
+<h2>已有基础与需要修改的地方</h2>
+<p>已有：<code>ecarsi/persample.py</code> 的子集写出、<code>ecarsi/sample_mapping.py</code> 的实验映射保护、<code>ecarsi/osp_stage.py</code> 的 compute/annotation 恢复边界，以及 <code>osp/cluster.py</code> 的整样本数值流程。</p>
+<p><strong>核心改动：</strong>当前 <code>osp/annotate.py:propose_annotation</code> 先加载 clustered.h5ad，再等待 agent，并在同一进程处理工具与最终写出。应把这条路径分成持久模型交互、按需工具计算和最终应用，让等待回复时不再留着 AnnData。样本识别与实验完整性判断迁到 Organize；这里删除重复的样本确认模型调用，读取 Organize 的正式映射。迁移前的旧代码行为与本设计不同，不能把文档更新当作已完成部署。</p>
+<p>总体由 <strong>Work Coordinator</strong> 管依赖与科学状态；<strong>Agent Bridge</strong> 管模型交互；<strong>Warm Pool Scheduler</strong> 管资源；<strong>Warm Pool Worker</strong> 跑固定代码。本页不新增服务，不要求第一版重写 QC 或聚类算法。</p>
+<p><a href="../02-cross-sample/index.html">下一项：cross-sample 方案 →</a></p>
+</body></html>

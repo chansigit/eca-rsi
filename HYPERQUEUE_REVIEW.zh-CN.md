@@ -5,6 +5,11 @@
 stable 文档与 main 快照可能不同；实际试验要固定发布版本并验证 API。
 目前完成文档和源码检查，尚未运行 HQ 故障注入或跨节点试验。
 
+设计阶段补充：用户已要求暂缓隔离验证，继续设计。HQ 是 Warm Pool 的优先复用候选，
+不默认自研第二套底层调度器；具体职责映射与本次官方 stable 文档核对见
+[Warm Pool 组件设计](design/warm-pool/index.html)。上面的 commit/version 仍是原源码快照，
+不表示本次更新了 HQ 版本或运行状态。
+
 ## 适配位置
 
 工作流协调器（Temporal仍为候选）→ RSI operation适配层 → HQ server/worker →

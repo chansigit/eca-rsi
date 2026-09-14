@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Warm Pool：调度与执行</title><style>
+body { max-width: 960px; margin: 32px auto; padding: 0 18px; font: 16px/1.7 sans-serif; color: #222; }
+h1 { font-size: 26px; } h2 { font-size: 20px; margin-top: 30px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { border: 1px solid #ccc; padding: 10px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+th { background: #f5f5f5; } code { overflow-wrap: anywhere; }
+small { color: #555; } li { margin: 6px 0; }
+@media (max-width: 600px) { body { margin: 18px auto; } th, td { padding: 6px; font-size: 14px; } }
+</style></head>
+<body>
+<p><a href="../work-coordinator/index.html">← Work Coordinator</a></p>
+<h1>Warm Pool：调度与执行</h1>
+<p><strong>Coordinator 决定什么可以算；Scheduler 决定交给谁；Worker 按明确额度把这块算完。</strong>同一 Worker 可以同时运行多个任务，前提是 CPU、RAM、GPU、机时和磁盘均满足要求。</p>
+<p><small>设计草案，尚未实现或部署。隔离验证已按用户要求暂缓；本页只确定接口和行为，不启动服务、不提交计算。Temporal / HyperQueue 尚未正式选定。</small></p>
+<h2>实现方向：优先复用 HyperQueue（HQ）</h2>
+<p><strong>本页是 RSI 对 pool 的行为要求，不是决定从头写一个调度器。</strong>此前已提出优先评估 HyperQueue：先复用 HQ server / worker，通过 RSI 薄适配层补接口；确有无法覆盖的必要能力，再考虑补丁或 fork。隔离验证仍暂缓，尚未正式选定或部署 HQ。</p>
+<p><strong>Work Coordinator（Temporal 候选） → RSI 任务适配 → HQ server → HQ worker → Apptainer 内的计算命令。</strong>Agent Bridge 是独立的模型分支。任务适配与节点监督属于既定四组件内部代码，不另加一个资源调度服务。</p>
+<table><thead><tr><th>部分</th><th>优先复用</th><th>RSI 需要补的职责</th></tr></thead><tbody>
+<tr><td>Warm Pool Scheduler</td><td>HQ 任务队列、CPU/通用资源匹配、时间需求与单节点多任务调度。</td><td>将任务需求、允许的 CPU/GPU 实现、输入位置与稳定请求身份转换成 HQ 任务；实际资源授予仍只归 HQ，不能另叠一套占用账本来重复分配。</td></tr>
+<tr><td>Warm Pool Worker</td><td>HQ worker 接任务、在资源额度内启动命令；本地和用户已申请的 Slurm allocation 均可手动加入。</td><td>注册实际额度、容器环境、数据可见性；任务包装器保存收据/账本/日志，节点监督负责在 allocation 仍有效时接力注册。</td></tr>
+<tr><td>动态流程</td><td>HQ 可动态追加任务，适合持续接收就绪计算。</td><td>模型等待、科学依赖、迭代和细胞结果验收仍归 Coordinator；不把整个数据集作为一个阻塞 HQ 任务。</td></tr>
+</tbody></table>
+<p>上述复用能力来自本次核对的官方 <a href="https://it4innovations.github.io/hyperqueue/stable/jobs/resources/">资源文档</a>、<a href="https://it4innovations.github.io/hyperqueue/stable/deployment/worker/">Worker 文档</a>及 <a href="https://it4innovations.github.io/hyperqueue/stable/jobs/openjobs/">动态任务文档</a>。资源数字不等于操作系统内存硬隔离；下文的精确 GPU 策略、热更新和存储规则仍需逐项适配，不能宣称 HQ 已原生覆盖全部要求。</p>
+<p><strong>主要适配缺口是恢复：</strong>官方 stable 文档的手动 Worker 默认失联即停止任务；<code>finish-running</code> 可完成在途任务后退出，尚不是“原 Worker 等待后自动接回”。server journal 可恢复任务，但不恢复原 Worker 连接，且崩溃可能丢最近进度。RSI 必须补稳定任务映射、结果收据核对、接力监督与旧尝试隔离；启动新 HQ server 前后都不能让未确认停止的旧计算被重复派发。<a href="https://it4innovations.github.io/hyperqueue/stable/deployment/server/">来源：server 恢复</a>；<a href="https://it4innovations.github.io/hyperqueue/stable/deployment/worker/#lost-connection-to-the-server">来源：失联策略</a>。</p>
+<p>关闭 HQ 自动申请资源功能，不启用空闲退出来替用户回收 allocation。下文的简单排队原则用于评估 HQ 是否满足需求；优先采用已有行为，不为追求某个排序细节先重写 HQ。若它的自动重试/恢复无法满足不重复执行的约束，必须补足后再采用，不能用包一层接口就宣称问题解决。</p>
+<h2>1. 一次计算只走这条路径</h2>
+<p><strong>提交就绪任务 → 持久排队 → 选择 Worker 与后端 → 授予资源 → Worker 接受并执行 → 保存结果与收据 → Coordinator 验收。</strong></p>
+<table><thead><tr><th>边界</th><th>谁负责</th><th>约定</th></tr></thead><tbody>
+<tr><td>科学依赖与任务顺序</td><td>Work Coordinator</td><td>只提交已就绪、输入和允许实现明确的有限任务。模型等待在 Bridge，不占 pool 计算名额。</td></tr>
+<tr><td>等待顺序与资源匹配</td><td>Warm Pool Scheduler</td><td>维护持久请求记录，按可用资源放置任务；同一资源不再由 Coordinator 或另一个后端重复预留。</td></tr>
+<tr><td>执行与机时收尾</td><td>Warm Pool Worker</td><td>接收确定的 CPU/GPU 分配、内存和时间上限，运行隔离子进程。完成原任务不依赖 driver 连接仍在。</td></tr>
+<tr><td>科学完成</td><td>Work Coordinator</td><td>Worker 的计算成功是候选结果；数据、账本和收据符合该步骤契约后，才推进下一步。</td></tr>
+</tbody></table>
+<h2>2. Worker 加入时必须说明什么</h2>
+<table><thead><tr><th>信息</th><th>内容</th></tr></thead><tbody>
+<tr><td>身份</td><td>worker_id、启动实例、主机、Slurm job/step（本地为空）、所属 allocation。重连不靠主机名猜是不是同一个进程。</td></tr>
+<tr><td>资源额度</td><td>允许使用的 CPU IDs、RAM、GPU/MIG IDs 与显存、任务并发上限、机时截止及收尾余量。以用户额度、Slurm/cgroup 和实际可见设备的有效交集为准。</td></tr>
+<tr><td>执行环境</td><td>可运行的镜像/软件身份、CPU/GPU 后端能力及必要驱动兼容信息。镜像名字相同不代表依赖相同，启动探查结果需随注册记录保存。</td></tr>
+<tr><td>可见存储</td><td>store_id、路径映射、读写能力、剩余空间及数据副本。共享存储额度按存储域记一次，不在每台节点重复增加容量。</td></tr>
+<tr><td>当前状态</td><td>已有执行尝试、待发送收据、资源实测与采样时间、是否停止接新活。Scheduler 恢复时先核对这些记录，再授予新任务。</td></tr>
+</tbody></table>
+<p>本地 Worker 使用用户显式设置的 CPU/RAM/GPU/磁盘预算，可没有 Slurm 截止时间；不能因本地运行就默认吃满整台机器。用户启动 Worker 后自动注册；节点申请与回收不归 pool。</p>
+<h2>3. 每个任务的提交内容</h2>
+<ul>
+<li><strong>身份：</strong>request_id、operation_id、科学版本、数据集/样本/谱系范围；同 ID 同内容重发返回原记录，同 ID 换内容拒绝。</li>
+<li><strong>输入与输出：</strong>不可变数据引用、所需存储、输出角色、排除账本和验收要求；默认传文件引用，小数组在配置范围内可直接传。</li>
+<li><strong>允许实现：</strong>例如 CPU Scanpy 或 GPU RAPIDS-singlecell，各自的资源/时间估计与运行环境。由 Coordinator 明确允许哪些实现，Scheduler 不能任意替换科学算法。</li>
+<li><strong>资源与时间：</strong>每种实现的 CPU、峰值 RAM、GPU/VRAM、预计搬运和计算时间、输出空间、独立执行超时及收尾余量。估计耗时用于选节点，不当作精确杀进程时间。</li>
+<li><strong>派发信息：</strong>提交顺序、可选优先级、重试边界和取消范围。一次任务是前面拆好的执行块，不能暗中包含完整数据集及模型等待循环。</li>
+</ul>
+<p>数值 attempt_id 由 Scheduler 在真正创建新尝试时生成并持久保存。Coordinator/Temporal 的网络重发次数不等于新计算尝试。选择 CPU/GPU 后记录实际实现身份，后续产物与模型证据按该身份验收。</p>
+<h2>4. 排队算法先保持简单</h2>
+<ol>
+<li><strong>先筛能运行的节点。</strong>在线且信息新鲜、运行环境匹配、输入可读或可先完成搬运、时间够、资源能容纳，才成为候选。</li>
+<li><strong>较早任务优先，放不下就向后扫描。</strong>大内存任务等胖节点时，小内存任务可以在其他节点递补；不能让队首一个任务阻塞整个队列。</li>
+<li><strong>为能运行的任务选择合适节点。</strong>优先满足 GPU 策略，再考虑预留压力、已有数据副本和预计完成时间；CPU-only 工作优先合适的 CPU 节点。</li>
+<li><strong>原子预留后授予。</strong>Scheduler 同时记录尝试、目标实例和资源额度，Worker 复核授予身份及剩余机时后接受。未确认是否接受的任务先对账，不能重新分发到另一节点。</li>
+</ol>
+<p>首版不承诺全局最短排队时间。对于长期被小任务递补的大任务，记录等待年龄和阻塞原因；若出现持续饥饿，再在一台可容纳它的节点上增加临时资源积累策略，不为此一开始预留所有节点。</p>
+<h2>5. 同节点多任务如何算预算</h2>
+<p><strong>取消“整个 Worker 永远只能接一个任务”的默认限制。</strong>每次接活同时检查已授予、正在运行和停止待确认任务的资源占用，再加新任务的峰值需求与系统余量。task_slots 只是额外并发上限，不能代替资源账本。</p>
+<p>CPU 核心和 GPU 分配不能重叠占用；RAM 预留覆盖各任务峰值。实测压力用于阻止危险追加及修正未来任务估计，不能因为当前 RSS 低就把已经承诺的峰值内存再借给新任务。allocation 实测与任务预留不能简单重复相加，缓存、系统余量与任务占用要区分。</p>
+<p>例如一个可用额度为 32 CPU、120 GiB 的 Worker，两个分别申请 8 CPU/40 GiB 的任务可以并行；再来一个 4 CPU/50 GiB 的任务要等，而 4 CPU/20 GiB 的任务仍可能放入。实际还需通过资源实测、存储与机时检查。</p>
+<p>初版每个 GPU 或已划分的 MIG 实例独占授予；同节点的 CPU 任务和不同 GPU 任务仍可并行。同一 GPU 多任务共享不默认启用，只有提供明确隔离和峰值显存预算的运行模式才允许，不能用“GPU utilization 低”推断可安全塞入更多任务。</p>
+<h2>6. GPU 优先如何落地</h2>
+<table><thead><tr><th>配置</th><th>行为</th></tr></thead><tbody>
+<tr><td>自动，GPU 优先</td><td>已验证且适合该任务规模的 GPU 路径优先。若没有合适 GPU 或预计等待/搬运成本明显抵消收益，在配置的 GPU 等待上限内转用已允许的 CPU 路径；记录选择理由。</td></tr>
+<tr><td>显式 GPU</td><td>等待满足需求的 GPU，不静默降成 CPU；提供具体缺口，例如显存、运行环境或剩余机时。</td></tr>
+<tr><td>显式 CPU / 仅有 CPU 实现</td><td>先找合适 CPU 节点；GPU 节点有富余 CPU/RAM 时也可承接，但不能挤掉已经就绪且适配的 GPU 任务所需宿主资源。</td></tr>
+</tbody></table>
+<p>CPU/GPU 是实际执行内核选择，不只是给 Python 设置 GPU 可见。启动时核对后端和设备，收据记录真实使用路径。换后端时使用新的数值结果身份；不能从 CPU 聚类检查点接一份不匹配的 GPU DEG，或把旧模型提案套到新聚类。</p>
+<p>GPU 节点没有适配 GPU 任务时，可用其空闲 CPU/RAM 做 CPU 任务；不为尚不存在的 GPU 工作无限保留整个节点。若有已就绪 GPU 工作，则为它保留明确所需的宿主资源。</p>
+<h2>7. Worker 接受任务之后</h2>
+<ol>
+<li>持久保存接受记录，核对目标 Worker 实例、输入、后端、CPU/GPU IDs 和时间额度；超过启动窗口的旧授予不能直接启动。</li>
+<li>在指定环境内运行独立子进程，线程数和 CPU 绑定遵守额度，GPU 仅暴露已授予设备。已有 grant 下调用内部计算直接使用本地内核，不再持有资源向同一个 pool 递归排队。</li>
+<li>记录阶段名、stdout/stderr、子进程树、资源采样与错误；Python 拉起的 R 等子进程也计入该任务。日志按 attempt 留在可靠位置，主日志引用它，不能只在成功返回时转发。</li>
+<li>保存输出、细胞排除账本及完成收据到独立 attempt 位置。运行进程结束后释放 CPU/GPU；仍在搬运的阶段保留实际需要的 I/O、磁盘和缓冲内存预算。</li>
+<li>可靠结果准备好后持久发送完成通知，Coordinator 未在线时保留待确认收据。Worker 的计算结束、结果已可靠保存、科学结果已接受三个状态分别记录。</li>
+</ol>
+<p>采用 Apptainer 路径时，任务入口、依赖和子进程使用已登记的容器环境；不能从提交端的 dl2025 或任意 PYTHONPATH 偷渡另一套库。镜像/代码/依赖不匹配时拒绝运行并说明原因；没有匹配的 Worker 就等待或报配置错误，不运行后才碰运气。</p>
+<p>RAM 额度需有实际执行约束或可证明的隔离方式。若只能得到整个 Slurm allocation 的 cgroup 上限，必须明确标注任务级内存隔离不足并保守限制并发，不能把账面预留说成内核级硬限制。</p>
+<h2>8. 到期、失联与接力</h2>
+<table><thead><tr><th>情况</th><th>处理</th></tr></thead><tbody>
+<tr><td>机时将尽</td><td>停止接受预计无法在收尾余量前完成的任务；已接受任务按独立执行截止运行。优先写可靠收据与必要产物，不因节点将过期擅自开启新科学步骤。</td></tr>
+<tr><td>Coordinator 断连</td><td>不因 client/driver 断连杀掉 Worker 计算。已经授予的有限工作完成后等待；队列持久保留，Coordinator 恢复授权后继续派发。</td></tr>
+<tr><td>Scheduler 中断</td><td>Worker 仍能执行本地已接受任务并遵守本地时间/资源限额；保存收据、停止领取新活，自动重连。不能要求每次保存结果都先成功调用 Scheduler RPC。</td></tr>
+<tr><td>Worker 心跳丢失</td><td>停止新派发并隔离该实例；原进程状态视为不明，资源不能立即当成空闲重复授予。检查 Slurm、进程身份与收据，确认停止或隔离后才重试。</td></tr>
+<tr><td>Worker 确认终止</td><td>已可靠保存的结果先验收；未完成任务按限额创建新 attempt。磁盘上半成品不能冒充完整结果，旧 attempt 不可覆盖新结果。</td></tr>
+<tr><td>新节点或原 Worker 重连</td><td>注册实例、资源、运行环境和存储；先枚举运行任务及未确认收据，恢复资源账本，再接新活。不能仅因主机名一样就覆盖旧实例。</td></tr>
+</tbody></table>
+<p>“启动窗口过期”只阻止未启动任务，不能据此认定正在运行的任务已消失。Worker 本地执行超时应涵盖整个进程树的停止确认；进程未结束前保持资源占用。节点主机时钟的截止信息需转换成保守的本地剩余时间，不能忽略时钟差异直接比较。</p>
+<h2>9. 热更新与可解释的监控</h2>
+<p>排队优先级、GPU 等待策略、采样周期、未来任务预算和并发上限可热更新，记录配置版本。降低限额时先停止额外接活，让在途任务完成；不偷改正在执行任务的镜像、CPU/GPU 分配或科学参数。变更不兼容的运行环境时，停止新活、收尾并以新实例注册。</p>
+<p>监控同时展示<strong>资源总额度、已预留、实时实测、10 分钟平均、采样时间和缺失情况</strong>。CPU 使用率按获授核心数解释；内存展示实际占用与预留；GPU 展示各设备使用率和显存。无采样不显示成 0，平均值覆盖不足要说明。详细遥测单独存储，不灌入 Temporal Workflow 历史。</p>
+<p>每个排队任务给出具体原因：no_workers、cpu_capacity、memory_capacity、gpu_capacity、vram_capacity、remaining_time、runtime_mismatch、storage_unavailable 或 worker_draining。记录选择 CPU/GPU 的理由及排队、搬运、计算、结果保存耗时；“低利用率”才能定位到缺活、等资源还是 I/O。</p>
+<h2>10. 与现有实现及后端候选的关系</h2>
+<p>隔离分支中的 <code>ecarsi/pool/scheduler.py</code> 已有资源匹配和任务名额，但任务表驻内存、client 断连会停止任务；<code>executor.py</code> 在结束时同步通知 Scheduler。新设计需改为独立任务生命周期、持久请求/收据及断连后继续执行。这些是已读到的分支代码现状，不代表刚检查了线上运行实例。</p>
+<p>原有 <code>slurm.py</code> 的资源探查和 <code>observe.py</code> 的监控可以作为基础。Dask 或 HyperQueue 只能有一个负责同一份实际资源授予。HQ 是优先复用候选，先用接口适配；已有 <a href="../../HYPERQUEUE_REVIEW.zh-CN.md">HQ 评估</a>记录较早源码快照，本页开头另补本次官方文档核对。两者都未完成运行验证，其默认断连策略不能覆盖本页要求。</p>
+<p>与 <a href="../work-coordinator/temporal.html">Temporal 结合</a>时，Activity 的提交重试只查原请求；Scheduler 才管理数值尝试。产物、账本与科学决定仍遵守 RSI 契约。模型分支详见 <a href="../agent-bridge/index.html">Agent Bridge：共享队列、持久会话与工具交接 →</a>。</p>
+</body></html>
