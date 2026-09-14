@@ -61,6 +61,28 @@
   .link.disabled { opacity:.45; pointer-events:none; }
   .note { font-size:12px; color:#7a786e; padding-top:12px; border-top:1px solid #e9e4d8; margin-top:15px; }
   .code { background:#f2efe6; border:1px solid #e4ddce; border-radius:9px; padding:10px; font:11px/1.55 ui-monospace,monospace; overflow-wrap:anywhere; user-select:all; }
+  .timeline-wrap { overflow-x:auto; }
+  .timeline { min-width:870px; }
+  .timeline-axis,.timeline-row { display:grid; grid-template-columns:190px minmax(0,1fr); }
+  .timeline-axis { color:var(--muted); font:11px ui-monospace,monospace; margin-bottom:9px; }
+  .timeline-scale { position:relative; height:23px; border-bottom:1px solid var(--line); }
+  .timeline-tick { position:absolute; bottom:3px; transform:translateX(-50%); white-space:nowrap; }
+  .timeline-tick:first-child { transform:none; }.timeline-tick:last-child { transform:translateX(-100%); }
+  .timeline-row { border-bottom:1px solid #eee9dd; min-height:41px; align-items:center; }
+  .timeline-label { padding:5px 10px 5px 0; font-size:12px; font-weight:650; }
+  .timeline-track { position:relative; height:40px; background:repeating-linear-gradient(to right,transparent 0,transparent calc(25% - 1px),#ece9df calc(25% - 1px),#ece9df 25%); }
+  .timeline-bar { position:absolute; top:8px; height:25px; min-width:3px; border-radius:6px; color:white; font:700 10px/25px "Avenir Next",sans-serif; padding:0 5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; box-shadow:0 2px 5px #5d554329; }
+  .timeline-bar.pool { background:#477e92; }.timeline-bar.bridge { background:#ad8651; }.timeline-bar.failed { background:#ad6661; }
+  .timeline-queue { position:absolute; top:17px; height:8px; min-width:2px; border-radius:4px; background:repeating-linear-gradient(45deg,#beb8a7 0 3px,#e5dfd0 3px 6px); opacity:.9; }
+  .timeline-spark { width:100%; height:38px; display:block; overflow:visible; }
+  .timeline-resource { color:#657b70; font-weight:500; }
+  .timeline-legend { display:flex; gap:14px; flex-wrap:wrap; color:var(--muted); font-size:12px; margin:0 0 15px; }
+  .timeline-legend i { display:inline-block; width:11px; height:11px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
+  .timeline-controls { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 16px; }
+  .timeline-controls input,.timeline-controls select,.timeline-controls button { border:1px solid var(--line); border-radius:8px; background:var(--sheet); color:var(--ink); padding:7px 9px; font:12px "Avenir Next",sans-serif; }
+  .timeline-controls input[type="search"] { min-width:180px; }
+  .timeline-controls button { background:#e7efe8; cursor:pointer; }
+  .timeline-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   footer { margin-top:30px; color:#818479; font-size:12px; display:flex; justify-content:space-between; gap:20px; }
   @media(max-width:960px) { .hero,.layout { grid-template-columns:1fr; }.path { grid-template-columns:repeat(2,1fr); }.node:nth-child(2):after { display:none; } }
   @media(max-width:620px) { main { padding:19px 15px 40px; }.meta { display:none; }.hero { padding-top:34px; }.path { gap:8px; }.node { min-height:140px; padding:14px; }.node:after { display:none; }.metrics { grid-template-columns:repeat(3,1fr); }.metric { padding:9px; }.metric b { font-size:22px; } section.panel { padding:19px; } }
@@ -76,13 +98,14 @@
     <div class="node"><span class="n">03 / DEPENDENCIES</span><span class="title">Temporal</span><span class="detail" id="temporal-node">Checking history viewer…</span></div>
     <div class="node"><span class="n">04 / OUTPUT</span><span class="title">Organize</span><span class="detail" id="organize-node">Checking publications…</span></div>
   </div>
+  <section class="panel" style="margin-bottom:20px"><div class="panel-head"><div><div class="eyebrow">Pool and Bridge history</div><h2>Task timeline</h2><div class="sub">Worker lanes show actual task placement; resource curves share the same time axis.</div></div><span class="status off" id="timeline-state">Loading</span></div><div class="timeline-controls"><select id="timeline-range" aria-label="Time range"><option value="3600">Last hour</option><option value="14400" selected>Last 4 hours</option><option value="86400">Last 24 hours</option><option value="custom">Custom</option></select><input id="timeline-from" type="datetime-local" aria-label="From" hidden><input id="timeline-to" type="datetime-local" aria-label="To" hidden><input id="timeline-dataset" type="search" placeholder="Filter dataset…" aria-label="Filter dataset"><button id="timeline-apply" type="button">Apply</button></div><div class="timeline-legend"><span><i style="background:#477e92"></i>Pool task</span><span><i style="background:#ad8651"></i>Bridge task</span><span><i style="background:#ad6661"></i>Failed</span><span><i style="background:repeating-linear-gradient(45deg,#beb8a7 0 3px,#e5dfd0 3px 6px)"></i>Queue wait</span></div><div class="timeline-wrap"><div class="timeline" id="timeline"></div></div><div class="note" id="timeline-note"></div></section>
   <div class="layout">
     <div class="stack">
       <section class="panel"><div class="panel-head"><div><div class="eyebrow">HyperQueue + RSI receipts</div><h2>Warm Pool</h2><div class="sub">Recorded requests and resource budgets; no compute is started by this page.</div></div><span class="status off" id="pool-state">Checking</span></div><div class="metrics"><div class="metric"><b id="pool-count">—</b><span>Requests</span></div><div class="metric"><b id="pool-done">—</b><span>Succeeded</span></div><div class="metric"><b id="worker-count">—</b><span>Live workers</span></div></div><div class="table-wrap"><table><thead><tr><th>Request</th><th>Operation</th><th>State</th><th>CPU / RAM</th><th>Finished</th></tr></thead><tbody id="pool-table"></tbody></table></div><div class="note" id="pool-note"></div></section>
       <section class="panel"><div class="panel-head"><div><div class="eyebrow">Model decision records</div><h2>Agent Bridge</h2><div class="sub">Saved replies, selected models and reported token use.</div></div><span class="status off" id="bridge-state">Checking</span></div><div class="metrics"><div class="metric"><b id="bridge-count">—</b><span>Requests</span></div><div class="metric"><b id="bridge-done">—</b><span>Replies saved</span></div><div class="metric"><b id="tokens">—</b><span>Reported tokens</span></div></div><div class="table-wrap"><table><thead><tr><th>Request</th><th>State</th><th>Model</th><th>Tokens in / out</th></tr></thead><tbody id="bridge-table"></tbody></table></div><div class="note">Usage is reported by the model harness; missing values are not treated as zero.</div></section>
     </div>
     <div class="stack">
-      <section class="panel"><div class="eyebrow">Native workflow viewer</div><h2>Temporal</h2><p class="sub">The Web UI runs against a copy of the development SQLite database. No Coordinator Worker or computation is running.</p><a class="link disabled" id="temporal-link" href="http://127.0.0.1:8233/" target="_blank" rel="noopener">Open Temporal UI ↗</a><div class="note" id="temporal-note">Checking snapshot service…</div></section>
+      <section class="panel"><div class="eyebrow">Native workflow viewer</div><h2>Temporal</h2><p class="sub">The development server now keeps new Workflow histories in persistent SQLite. No Coordinator Worker or dataset computation is running.</p><a class="link disabled" id="temporal-link" href="http://127.0.0.1:8233/" target="_blank" rel="noopener">Open Temporal UI ↗</a><div class="note" id="temporal-note">Checking history service…</div></section>
       <section class="panel"><div class="eyebrow">Accepted artifacts</div><h2>Organize output</h2><p class="sub">Published after source identity, experiment mapping and cell conservation checks.</p><div id="outputs"></div></section>
       <section class="panel"><div class="eyebrow">Recorded infrastructure trial</div><h2>Two-host recovery</h2><p class="sub">Actual Slurm allocations were used for the isolated HyperQueue trial.</p><div id="acceptance"></div></section>
       <section class="panel"><div class="eyebrow">What is connected</div><h2>Next development slice</h2><p class="sub">Per-sample partition and one whole-sample OSP compute task, followed by Bridge annotation and Pool finalization. Cross-sample and Zoom-in remain designs.</p><div class="code">Organize ✓ &nbsp;→&nbsp; Per-sample ◌ &nbsp;→&nbsp; Cross-sample ◌ &nbsp;→&nbsp; Zoom-in ◌</div><div class="note">This observatory reads the isolated v2 state. The existing Periscope installation is a separate service.</div></section>
@@ -95,11 +118,60 @@ const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '—').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const when = value => value ? new Date(value * 1000).toLocaleString() : '—';
 const badge = value => { const v=String(value || 'unknown'); const cls=/succeeded|reply_saved|complete/i.test(v)?'ok':/fail|unknown|cancel/i.test(v)?'bad':/running|queued/i.test(v)?'warn':'off'; return `<span class="status ${cls}">${esc(v.replaceAll('_',' '))}</span>`; };
+function renderTimeline(data) {
+  const from=data.since, to=data.until, span=to-from, pos=t=>100*(t-from)/span;
+  const tasks=(data.tasks||[]).filter(t=>t.started_at).sort((a,b)=>a.started_at-b.started_at);
+  const laneEnds=new Map(), lanes=new Map();
+  for (const task of tasks) {
+    const base=task.service==='bridge'?'Agent Bridge':task.worker_id||
+      (task.host?`${task.host} · CPU ${(task.cpu_ids||[]).join(',')||'?'}`:'Pool worker unknown');
+    const ends=laneEnds.get(base)||[];
+    let slot=ends.findIndex(end=>end<=task.started_at);
+    if (slot<0) slot=ends.length;
+    ends[slot]=task.finished_at||to;
+    laneEnds.set(base,ends);
+    const label=ends.length===1?base:`${base} · lane ${slot+1}`;
+    // The stable key keeps earlier bars on their original lane when concurrency rises.
+    const key=base+'\u0000'+slot;
+    if (!lanes.has(key)) lanes.set(key,{label,items:[]});
+    lanes.get(key).items.push(task);
+  }
+  const ticks=[0,.25,.5,.75,1].map(f=>`<span class="timeline-tick" style="left:${f*100}%">${esc(new Date((from+f*span)*1000).toLocaleString())}</span>`).join('');
+  let chart=`<div class="timeline-axis"><span>Worker / service</span><div class="timeline-scale">${ticks}</div></div>`;
+  for (const [key,lane] of [...lanes].sort((a,b)=>a[0].localeCompare(b[0]))) {
+    const items=lane.items.map(t=>{
+      const start=Math.max(from,t.started_at), end=Math.min(to,t.finished_at||to);
+      const waitStart=Math.max(from,t.submitted_at), waitEnd=Math.min(to,t.started_at);
+      const queue=waitEnd>waitStart?`<span class="timeline-queue" style="left:${pos(waitStart)}%;width:${pos(waitEnd)-pos(waitStart)}%" title="${esc(t.id)} · queue wait ${(t.started_at-t.submitted_at).toFixed(1)} s"></span>`:'';
+      const title=`${t.trace.dataset_id} · ${t.operation} · ${t.id} · ${t.state} · ${when(t.started_at)} to ${when(t.finished_at||to)} · ${t.trace_source}`;
+      return queue+(end>start?`<span class="timeline-bar ${/fail/i.test(t.state)?'failed':t.service}" style="left:${pos(start)}%;width:${Math.max(pos(end)-pos(start),.3)}%" title="${esc(title)}">${esc(t.trace.dataset_id)} · ${esc(t.operation)}</span>`:'');
+    }).join('');
+    chart+=`<div class="timeline-row"><div class="timeline-label" title="${esc(lane.label)}">${esc(lane.label)}</div><div class="timeline-track">${items}</div></div>`;
+  }
+  const resourceGroups=new Map();
+  for (const row of data.resources||[]) { const key=row.worker_id||row.host; if (!resourceGroups.has(key)) resourceGroups.set(key,[]); resourceGroups.get(key).push(row); }
+  for (const [worker,samples] of resourceGroups) for (const [name,field,color] of [
+    ['CPU','cpu_percent','#558d78'],['RAM','memory_percent','#ad8651'],
+    ['GPU','gpu_percent','#7b719c'],['GPU memory','gpu_memory_percent','#a76f83']]) {
+    const points=samples.filter(r=>r[field]!=null).map(r=>({x:pos(r.observed_at),y:r[field],t:r.observed_at}));
+    const lines=points.map((p,i)=>i&&p.t-points[i-1].t<=Math.max(90,span/200)?
+      `<line x1="${points[i-1].x}" y1="${100-points[i-1].y}" x2="${p.x}" y2="${100-p.y}" stroke="${color}" stroke-width="3" vector-effect="non-scaling-stroke"/>`:'').join('');
+    const dots=points.map(p=>`<circle cx="${p.x}" cy="${100-p.y}" r=".6" fill="${color}"><title>${esc(worker)} · ${esc(name)} ${p.y.toFixed(1)}% · ${esc(when(p.t))}</title></circle>`).join('');
+    chart+=`<div class="timeline-row"><div class="timeline-label timeline-resource" title="${esc(worker)} · ${esc(name)}">${esc(worker)} · ${esc(name)}${points.length?'':' · no data'}</div><div class="timeline-track"><svg class="timeline-spark" viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="${esc(worker)} ${esc(name)} usage">${lines}${dots}</svg></div></div>`;
+  }
+  $('timeline').innerHTML=lanes.size||resourceGroups.size?chart:'<div class="empty">No started tasks or resource samples in this window</div>';
+  $('timeline-state').textContent=`${data.total} tasks`;
+  const queued=(data.tasks||[]).filter(t=>!t.started_at).length;
+  $('timeline-note').textContent=`${queued} waiting without a worker; ${data.resources?.length||0} resource points. ${data.truncated?'Results capped at 2,000 tasks; narrow the time range or filter a dataset. ':''}CPU is measured on worker-allocated cores; RAM and accessible GPUs are host-wide. Missing historical usage is not inferred from reservations. ${data.source}.`;
+}
+let refreshSeq=0;
 async function refresh() {
+  const seq=++refreshSeq;
   try {
     const response = await fetch('/api/status', {cache:'no-store'});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const d = await response.json();
+    if (seq!==refreshSeq) return;
     $('updated').textContent = `Updated ${when(d.generated_at)}`;
     $('host').textContent = `${d.host} · isolated v2 state`;
     const s=d.scheduler || {}, w=d.worker || {}, b=d.bridge_summary || {};
@@ -107,30 +179,42 @@ async function refresh() {
     const workerLive=w.state==='running' && Date.now()/1000-(w.observed_at||0)<20;
     $('pool-state').textContent=poolLive?'Online':s.state==='stopped'?'Stopped':'No recent heartbeat';
     $('pool-state').className=`status ${poolLive?'ok':'off'}`;
-    $('pool-node').textContent=`${poolLive?'Scheduler online':'Scheduler stopped'} · ${d.pool_requests.length} recorded requests`;
-    $('bridge-node').textContent=`${d.bridge_requests.filter(x=>x.state==='reply_saved').length} saved model replies`;
-    $('temporal-node').textContent=d.temporal_ui?`Web UI online · ${d.temporal_history_count} retained workflows`:'Web UI offline';
-    $('organize-node').textContent=`${d.outputs.length} published outputs`;
-    $('pool-count').textContent=d.pool_requests.length;
-    $('pool-done').textContent=d.pool_requests.filter(x=>x.state==='succeeded').length;
-    $('worker-count').textContent=workerLive?'1':'0';
+    $('pool-node').textContent=`${poolLive?'Scheduler online':'Scheduler stopped'} · ${d.pool_total} recorded requests`;
+    $('bridge-node').textContent=`${d.bridge_saved} saved model replies`;
+    $('temporal-node').textContent=d.temporal_ui?'Web UI online · persistence unverified':'Web UI offline';
+    $('organize-node').textContent=`${d.outputs_total} published outputs`;
+    $('pool-count').textContent=d.pool_total;
+    $('pool-done').textContent=d.pool_succeeded;
+    $('worker-count').textContent=d.worker_live_count || (workerLive?1:0);
     $('pool-note').textContent=`Scheduler last recorded ${when(s.observed_at)}. Worker last recorded ${when(w.observed_at)}. HyperQueue's native dashboard is terminal-only; this table reads RSI's durable requests and receipts.`;
     $('pool-table').innerHTML=d.pool_requests.length?d.pool_requests.map(x=>`<tr><td class="mono">${esc(x.id)}</td><td>${esc(x.operation)}</td><td>${badge(x.state)}</td><td>${esc(x.cpus)} / ${esc(x.memory_mb)} MiB</td><td>${esc(when(x.finished_at))}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No requests recorded</td></tr>';
-    const completed=d.bridge_requests.filter(x=>x.state==='reply_saved');
-    const tokenTotal=completed.reduce((n,x)=>n+(x.usage?.tokens_in||0)+(x.usage?.tokens_out||0),0);
-    $('bridge-count').textContent=d.bridge_requests.length;
-    $('bridge-done').textContent=completed.length;
+    const tokenTotal=d.bridge_tokens_total;
+    $('bridge-count').textContent=d.bridge_total;
+    $('bridge-done').textContent=d.bridge_saved;
     $('tokens').textContent=tokenTotal?tokenTotal.toLocaleString():'—';
     $('bridge-state').textContent='Recorded history';
     $('bridge-table').innerHTML=d.bridge_requests.length?d.bridge_requests.map(x=>`<tr><td class="mono">${esc(x.id)}</td><td>${badge(x.state)}</td><td>${esc(x.model?.model||'—')}<br><span class="sub">${esc(x.model?.harness||'')}</span></td><td>${esc(x.usage?.tokens_in)} / ${esc(x.usage?.tokens_out)}</td></tr>`).join(''):'<tr><td colspan="4" class="empty">No model requests recorded</td></tr>';
+    const now=Date.now()/1000, range=$('timeline-range').value;
+    const since=range==='custom'?Date.parse($('timeline-from').value)/1000:now-Number(range);
+    const until=range==='custom'?Date.parse($('timeline-to').value)/1000:now;
+    if (Number.isFinite(since) && Number.isFinite(until)) {
+      const params=new URLSearchParams({since:String(since),until:String(until),dataset:$('timeline-dataset').value.trim()});
+      const timelineResponse=await fetch('/api/timeline?'+params,{cache:'no-store'});
+      if (!timelineResponse.ok) throw new Error(`Timeline HTTP ${timelineResponse.status}`);
+      const timeline=await timelineResponse.json();
+      if (seq!==refreshSeq) return;
+      renderTimeline(timeline);
+    }
     $('temporal-link').classList.toggle('disabled',!d.temporal_ui);
     $('temporal-link').href=`http://127.0.0.1:${d.temporal_port}/`;
-    $('temporal-note').textContent=d.temporal_ui?`${d.temporal_history_count} Workflow histories were retained in the old development database. Earlier tests used an in-memory server, so their histories are unavailable here; their accepted output receipts appear below.`:'Temporal UI is not running.';
+    $('temporal-note').textContent=d.temporal_ui?'Development UI is online, but SQLite persistence is not yet validated. Earlier in-memory Organize histories cannot be restored; their Pool and Bridge receipts appear in the task timeline.':'Temporal UI is stopped while shared-filesystem SQLite errors are investigated.';
     $('outputs').innerHTML=d.outputs.length?d.outputs.map(x=>`<div class="output"><strong>${esc(x.name)} · ${esc(x.run)}</strong><span class="status ok">Published</span><div class="sub">${esc(x.cells.toLocaleString())} cells · ${esc(x.samples)} experiments</div><small class="mono">${esc(x.path)}</small></div>`).join(''):'<div class="empty">No accepted outputs found</div>';
     const a=d.acceptance || {};
     $('acceptance').innerHTML=a.passed?`<span class="status ok">Passed</span><p class="sub" style="margin:13px 0 8px">${(a.nodes||[]).map(n=>`${esc(n.host)} · CPU ${esc(n.worker_cpu)}`).join('<br>')}</p><div class="note">${(a.tests||[]).map(x=>esc(x.replaceAll('_',' '))).join(' · ')}</div>`:'<div class="empty">No accepted two-host report found</div>';
-  } catch(e) { $('updated').textContent=`Unavailable: ${e.message}`; }
+  } catch(e) { if (seq===refreshSeq) $('updated').textContent=`Unavailable: ${e.message}`; }
 }
+$('timeline-range').addEventListener('change',()=>{ const custom=$('timeline-range').value==='custom'; $('timeline-from').hidden=!custom; $('timeline-to').hidden=!custom; if (custom) { const now=new Date(), from=new Date(now-3600000); const local=d=>new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16); $('timeline-from').value=local(from); $('timeline-to').value=local(now); } refresh(); });
+$('timeline-apply').addEventListener('click',refresh);
 refresh(); setInterval(refresh,10000);
 </script>
 </body>

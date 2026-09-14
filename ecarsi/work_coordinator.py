@@ -17,11 +17,17 @@ SHORT = timedelta(seconds=30)
 RETRY = RetryPolicy(maximum_attempts=3)
 
 
+def task_trace(spec, unit_id):
+    return {"workflow_id": "organize/" + spec["run_id"],
+            "dataset_id": spec.get("dataset_id", spec["run_id"]), "unit_id": unit_id}
+
+
 @activity.defn
 def submit_prepare(spec: dict) -> str:
     from .warm_pool.state import submit
     request_id = spec["run_id"] + ".prepare"
     submit(spec["pool_root"], dict(request_id=request_id, operation_id="organize.prepare",
+        trace=task_trace(spec, "organize.prepare"),
         args=["-m", "ecarsi.organize_v2", "prepare", spec["input_root"], "prepared.json"],
         cpus=spec["prepare_cpus"], memory_mb=spec["prepare_memory_mb"],
         timeout_seconds=spec["prepare_timeout_seconds"], inputs=[], outputs=["prepared.json"]))
@@ -37,6 +43,7 @@ def submit_plan(spec: dict, prepared_path: str) -> str:
         raise ValueError("prepared input identity does not match this dataset")
     request_id = spec["run_id"] + ".plan"
     submit(spec["bridge_root"], dict(request_id=request_id, operation_id="organize.plan",
+                                   trace=task_trace(spec, "organize.plan"),
                                    profiles=prepared["profiles"], cwd=spec["input_root"]))
     return request_id
 
@@ -46,6 +53,7 @@ def submit_execute(spec: dict, prepared_path: str, reply_path: str) -> str:
     from .warm_pool.state import file_digest, submit
     request_id = spec["run_id"] + ".execute"
     submit(spec["pool_root"], dict(request_id=request_id, operation_id="organize.execute",
+        trace=task_trace(spec, "organize.execute"),
         args=["-m", "ecarsi.organize_v2", "execute", prepared_path, reply_path, "."],
         cpus=spec["execute_cpus"], memory_mb=spec["execute_memory_mb"],
         timeout_seconds=spec["execute_timeout_seconds"],
@@ -142,12 +150,16 @@ ACTIVITIES = [submit_prepare, submit_plan, submit_execute, check_pool, check_bri
 def validate_spec(spec):
     from .warm_pool.state import identifier, pool_root
     from .agent_bridge import root_path
-    if not isinstance(spec, dict) or set(spec) != {
+    required = {
         "run_id", "input_root", "output_root", "pool_root", "bridge_root",
         "prepare_cpus", "prepare_memory_mb", "prepare_timeout_seconds",
-        "execute_cpus", "execute_memory_mb", "execute_timeout_seconds"}:
+        "execute_cpus", "execute_memory_mb", "execute_timeout_seconds"}
+    if not isinstance(spec, dict) or not required <= spec.keys() or spec.keys() - required - {"dataset_id"}:
         raise ValueError("Organize Workflow requires explicit input, output, services and resource budgets")
     identifier(spec["run_id"])
+    if "dataset_id" in spec:
+        from .warm_pool.state import validate_trace
+        validate_trace(task_trace(spec, "organize"))
     src = Path(spec["input_root"])
     dst = Path(spec["output_root"])
     if not src.is_absolute() or not src.is_dir() or not dst.is_absolute() or dst.exists() or src in dst.parents:

@@ -145,8 +145,11 @@ class DurableBridgeTest(unittest.TestCase):
             bridge.save(catalog, {'models': []})
             root = bridge.init(base / 'bridge', catalog)
             spec = dict(request_id='saved', operation_id='organize.plan', cwd=str(base),
+                        trace={'workflow_id': 'organize/saved', 'dataset_id': 'dataset-a',
+                               'unit_id': 'organize.plan'},
                         profiles=[{'name': 'test', 'h5ad': '/test-only/input.h5ad'}])
             bridge.submit(root, spec)
+            self.assertEqual(bridge.read(root / 'requests/saved/request.json')['spec']['trace']['dataset_id'], 'dataset-a')
             bridge.save(root / 'requests/saved/state.json', {'state': 'running'})
             with patch.object(bridge, 'run_organize', return_value={'usage': None}) as provider:
                 bridge.execute(root, 'saved')

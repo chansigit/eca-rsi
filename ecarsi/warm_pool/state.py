@@ -62,6 +62,15 @@ def identifier(value):
     return value
 
 
+def validate_trace(trace):
+    if not isinstance(trace, dict) or set(trace) != {"workflow_id", "dataset_id", "unit_id"}:
+        raise ValueError("trace requires workflow_id, dataset_id and unit_id")
+    for key, value in trace.items():
+        if not isinstance(value, str) or not 0 < len(value) <= 256 or any(ord(c) < 32 for c in value):
+            raise ValueError("trace " + key + " must be a nonempty printable string")
+    return trace
+
+
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
@@ -86,7 +95,7 @@ def pool_root(root):
 
 def validate(spec):
     allowed = {"request_id", "operation_id", "args", "cpus", "memory_mb", "timeout_seconds",
-               "time_request_seconds", "inputs", "outputs"}
+               "time_request_seconds", "inputs", "outputs", "trace"}
     if not isinstance(spec, dict) or not {"request_id", "operation_id"} <= spec.keys():
         raise ValueError("request must be an object with request_id and operation_id")
     if set(spec) - allowed:
@@ -94,6 +103,8 @@ def validate(spec):
     spec = dict(spec)
     for key in ("request_id", "operation_id"):
         identifier(spec[key])
+    if "trace" in spec:
+        validate_trace(spec["trace"])
     if not isinstance(spec.get("args"), list) or not spec["args"] or not all(isinstance(a, str) and "\0" not in a for a in spec["args"]):
         raise ValueError("args must be a nonempty argument list for the configured runtime")
     for key in ("cpus", "memory_mb", "timeout_seconds"):

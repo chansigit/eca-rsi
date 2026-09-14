@@ -14,7 +14,7 @@ import subprocess
 import sys
 import time
 
-from .warm_pool.state import digest, file_digest, identifier, lock, read, save, sync_directory
+from .warm_pool.state import digest, file_digest, identifier, lock, read, save, sync_directory, validate_trace
 
 
 def root_path(root):
@@ -48,10 +48,13 @@ def init(root, catalog, concurrency=2):
 
 def submit(root, spec):
     root = root_path(root)
-    if not isinstance(spec, dict) or set(spec) != {"request_id", "operation_id", "profiles", "cwd"}:
+    required = {"request_id", "operation_id", "profiles", "cwd"}
+    if not isinstance(spec, dict) or not required <= spec.keys() or spec.keys() - required - {"trace"}:
         raise ValueError("Expected request_id, operation_id, profiles and cwd")
     identifier(spec["request_id"])
     identifier(spec["operation_id"])
+    if "trace" in spec:
+        validate_trace(spec["trace"])
     profiles = spec["profiles"]
     if not isinstance(profiles, list) or not profiles or not all(
         isinstance(p, dict) and isinstance(p.get("name"), str) and

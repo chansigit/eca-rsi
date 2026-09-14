@@ -1,8 +1,10 @@
 import time
+import socket
 
 import pytest
 
 from ecarsi.warm_pool.backend import check_runtime
+from ecarsi.warm_pool.worker import registered_worker_id
 from ecarsi.warm_pool.state import cancel, file_digest, read, save, status, submit
 
 
@@ -11,10 +13,12 @@ def test_durable_idempotent_submission_and_read_only_status(tmp_path):
     (tmp_path / "requests").mkdir()
     save(tmp_path / "config.json", {"runtime": {"command": ["/usr/bin/python3"], "version": "test"}})
     spec = dict(request_id="sample-a", operation_id="osp-a", args=["-c", "pass"],
-                cpus=1, memory_mb=128, timeout_seconds=10, outputs=["result.json"])
+                cpus=1, memory_mb=128, timeout_seconds=10, outputs=["result.json"],
+                trace={"workflow_id": "osp/run-a", "dataset_id": "dataset-a", "unit_id": "osp-a"})
     first = submit(tmp_path, spec)
     path = tmp_path / "requests/sample-a/request.json"
     before = path.read_bytes()
+    assert read(path)["spec"]["trace"]["dataset_id"] == "dataset-a"
     assert submit(tmp_path, spec)["attempt_id"] == first["attempt_id"]
     assert status(tmp_path, "sample-a")["state"] == "queued"
     assert path.read_bytes() == before
@@ -43,6 +47,19 @@ def test_partial_json_never_overwrites_an_acknowledged_record(tmp_path):
     with pytest.raises(ValueError):
         save(path, {"bad": float("nan")})
     assert read(path) == {"acknowledged": True}
+
+
+def test_worker_identity_resolves_only_an_unambiguous_cpu_grant(tmp_path):
+    host = socket.gethostname().split(".")[0]
+    for name, cpus in (("worker-a", [1, 2]), ("worker-b", [3, 4])):
+        folder = tmp_path / "workers" / name
+        folder.mkdir(parents=True)
+        save(folder / "identity.json", {"worker_id": name, "host": host, "cpu_ids": cpus})
+    assert registered_worker_id(tmp_path, [2]) == "worker-a"
+    assert registered_worker_id(tmp_path, [5]) is None
+    save(tmp_path / "workers/worker-b/identity.json",
+         {"worker_id": "worker-b", "host": host, "cpu_ids": [2, 3]})
+    assert registered_worker_id(tmp_path, [2]) is None
 
 
 def test_changed_runtime_rejected_before_its_probe_can_execute(tmp_path):

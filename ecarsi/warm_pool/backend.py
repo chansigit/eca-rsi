@@ -1,5 +1,6 @@
 """Pinned HyperQueue CLI adapter. HQ alone grants CPU and memory resources."""
 import ctypes
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -35,6 +36,37 @@ def check_hq(binary):
     result = subprocess.run([binary, "--version"], capture_output=True, text=True, check=True, timeout=10)
     if result.stdout.strip() != "hyperqueue v0.26.2":
         raise ValueError("this adapter is validated against HyperQueue 0.26.2")
+
+
+def resource_sample(cpu_ids, previous=None):
+    """Cheap host measurements on a worker's allocated CPUs, every 30 seconds."""
+    counters = {}
+    for line in Path("/proc/stat").read_text().splitlines():
+        fields = line.split()
+        if fields[0].startswith("cpu") and fields[0][3:].isdigit() and int(fields[0][3:]) in cpu_ids:
+            values = list(map(int, fields[1:]))
+            counters[fields[0]] = (sum(values), values[3] + (values[4] if len(values) > 4 else 0))
+    busy = None
+    if previous:
+        total = sum(counters[c][0] - previous[c][0] for c in counters.keys() & previous.keys())
+        idle = sum(counters[c][1] - previous[c][1] for c in counters.keys() & previous.keys())
+        if total > 0:
+            busy = round(100 * (total - idle) / total, 1)
+    memory = {parts[0].rstrip(":"): int(parts[1]) * 1024 for line in Path("/proc/meminfo").read_text().splitlines()
+              if (parts := line.split()) and parts[0] in {"MemTotal:", "MemAvailable:"}}
+    gpus = []
+    try:
+        result = subprocess.run(["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total",
+                                 "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=3, check=True)
+        for line in result.stdout.splitlines():
+            utilization, used, total = (int(v.strip()) if v.strip().isdigit() else None
+                                        for v in line.split(","))
+            gpus.append(dict(utilization_percent=utilization, memory_used_mb=used, memory_total_mb=total))
+    except (FileNotFoundError, subprocess.SubprocessError, ValueError):
+        pass
+    return dict(observed_at=time.time(), host=socket.gethostname().split(".")[0], cpu_ids=cpu_ids,
+                cpu_percent=busy, memory_used_bytes=memory.get("MemTotal", 0) - memory.get("MemAvailable", 0),
+                memory_total_bytes=memory.get("MemTotal"), gpus=gpus), counters
 
 
 class HyperQueue:
@@ -168,6 +200,11 @@ def join(root, cpu_ids, memory_mb, work_dir):
     work_dir = Path(work_dir).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
     host = socket.gethostname().split(".")[0]
+    worker_id = host + "-" + digest(str(work_dir))[:12]
+    telemetry_dir = backend.root / "workers" / worker_id
+    telemetry_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    save(telemetry_dir / "identity.json", dict(worker_id=worker_id, host=host,
+         cpu_ids=cpu_ids, memory_mb=memory_mb, work_dir=str(work_dir)))
     locks = Path.home() / ".cache" / "ecarsi-pool" / host
     locks.mkdir(parents=True, exist_ok=True)
     stopping = False
@@ -182,8 +219,21 @@ def join(root, cpu_ids, memory_mb, work_dir):
         os.sched_setaffinity(0, set(cpu_ids))
         log = stack.enter_context((work_dir / "worker.log").open("a"))
         proc = None
+        previous_counters, last_sample = None, 0
         try:
             while not stopping:
+                if time.monotonic() - last_sample >= 30:
+                    try:
+                        sample, previous_counters = resource_sample(cpu_ids, previous_counters)
+                        sample["worker_id"] = worker_id
+                        day = datetime.fromtimestamp(sample["observed_at"], timezone.utc).strftime("%Y-%m-%d")
+                        with (telemetry_dir / (day + ".jsonl")).open("a", encoding="utf-8") as stream:
+                            stream.write(json.dumps(sample, separators=(",", ":")) + "\n")
+                    except Exception as exc:
+                        log.write(f"Resource observation skipped: {type(exc).__name__}: {exc}\n")
+                        log.flush()
+                    finally:
+                        last_sample = time.monotonic()
                 if proc is not None and proc.poll() is None:
                     time.sleep(.5)
                     continue  # finish old work before re-registering its CPUs
@@ -204,6 +254,7 @@ def join(root, cpu_ids, memory_mb, work_dir):
                         "--resource", f"runtime/{digest(runtime)}=sum({len(cpu_ids)})",
                         "--on-server-lost", "finish-running", "--heartbeat", "1s", "--overview-interval", "5s",
                         "--work-dir", str(work_dir)],
+                        env=dict(os.environ, ECA_POOL_WORKER_ID=worker_id),
                         stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
                         preexec_fn=parent_death_signal(os.getpid()))
                 save(work_dir / "worker.json", dict(state="connecting", pid=os.getpid(),

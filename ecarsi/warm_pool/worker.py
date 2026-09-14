@@ -23,6 +23,17 @@ def identity(pid):
         return None
 
 
+def registered_worker_id(root, cpus):
+    """Resolve a worker by its exclusive CPU grant when HQ omits parent env."""
+    host = socket.gethostname().split(".")[0]
+    matches = []
+    for path in (root / "workers").glob("*/identity.json"):
+        record = read(path, {})
+        if record.get("host") == host and set(cpus) <= set(record.get("cpu_ids", [])):
+            matches.append(record.get("worker_id"))
+    return matches[0] if len(matches) == 1 else None
+
+
 def group_usage(pgid):
     ticks = rss = members = 0
     for path in Path("/proc").glob("[0-9]*/stat"):
@@ -166,7 +177,9 @@ def run(folder, request, ownership):
             if read(folder / "cancel.json") or stopping:
                 receipt["state"] = "cancelled"
                 return 0
-            accepted = dict(host=socket.gethostname().split(".")[0], identity=identity(os.getpid()),
+            accepted = dict(host=socket.gethostname().split(".")[0],
+                            worker_id=os.environ.get("ECA_POOL_WORKER_ID") or
+                            registered_worker_id(folder.parent.parent, cpus), identity=identity(os.getpid()),
                             cpu_ids=cpus, started_at=time.time())
             save(attempt / "accepted.json", accepted)
         env = {k: v for k, v in os.environ.items() if not k.startswith(("ECA_DRIVER_", "ECA_POOL_"))}

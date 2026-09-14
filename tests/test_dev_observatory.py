@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from ecarsi.dev_observatory import snapshot
+from ecarsi.dev_observatory import resource_history, snapshot, summarize_resources, task_timeline
 
 
 def put(path, value):
@@ -12,6 +12,38 @@ def put(path, value):
 
 
 class ObservatoryTest(unittest.TestCase):
+    def test_generic_timeline_window_filter_limit_and_resources(self):
+        pool = [{"id": f"task-{i}", "operation": "per-sample.compute", "state": "succeeded",
+                 "trace": {"workflow_id": f"osp/{i}", "dataset_id": f"dataset-{i}",
+                           "unit_id": "per-sample.compute"},
+                 "submitted_at": i + 1, "started_at": i + 2, "finished_at": i + 3,
+                 "host": "node-a", "worker_id": "worker-a", "cpu_ids": [7]}
+                for i in range(300)]
+        timeline = task_timeline(pool, [], 0, 400, limit=2000)
+        self.assertEqual(timeline["total"], 300)
+        self.assertFalse(timeline["truncated"])
+        self.assertEqual(timeline["tasks"][42]["trace"]["dataset_id"], "dataset-42")
+        self.assertEqual(timeline["tasks"][42]["worker_id"], "worker-a")
+        self.assertEqual(task_timeline(pool, [], 0, 400, "dataset-42")["total"], 1)
+        self.assertTrue(task_timeline(pool, [], 0, 400, limit=20)["truncated"])
+        self.assertEqual(task_timeline(pool, [], 100, 110)["total"], 13)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "workers/worker-a/1970-01-01.jsonl"
+            path.parent.mkdir(parents=True)
+            path.write_text('{"observed_at": 2, "host": "node-a", "worker_id": "worker-a", "cpu_percent": 25, "memory_used_bytes": 50, "memory_total_bytes": 100, "gpus": [{"utilization_percent": 40, "memory_used_mb": 30, "memory_total_mb": 100}]}\n')
+            rows = resource_history(Path(directory), 0, 10)
+            self.assertEqual(rows[0]["cpu_percent"], 25)
+            summary = summarize_resources(rows, 0, 10)[0]
+            self.assertEqual((summary["memory_percent"], summary["gpu_percent"],
+                              summary["gpu_memory_percent"]), (50, 40, 30))
+            with path.open("a") as stream:
+                stream.write('{"observed_at": 4')
+            cache = {}
+            self.assertEqual(len(resource_history(Path(directory), 0, 10, cache)), 1)
+            with path.open("a") as stream:
+                stream.write(', "host": "node-a", "worker_id": "worker-a"}\n')
+            self.assertEqual(len(resource_history(Path(directory), 0, 10, cache)), 2)
+
     def test_snapshot_is_bounded_to_public_status_fields(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
