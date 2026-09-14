@@ -25,9 +25,8 @@ This decision does not select Temporal or HyperQueue, or authorize production
 migration before recovery acceptance.
 
 Remaining policy decisions, with proposed defaults (not yet user-approved):
-- Control-service/database placement and failover objective: prefer a stable
-  service host; otherwise recover on pre-provisioned surviving hosts. All-host
-  expiry means durable pause until a user-provided host becomes available.
+- Control-service/database placement remains open. The accepted outage behavior
+  below replaces immediate coordinator failover as a first-version requirement.
 - Model eligibility and budget: configure task-purpose eligibility, quota groups,
   concurrency and token/cost limits; never silently downgrade important decisions.
 - Repeated scientific failure/nonconvergence: bounded continuation, then a visible
@@ -36,6 +35,54 @@ Remaining policy decisions, with proposed defaults (not yet user-approved):
   final results and recovery checkpoints; auto-evict only authorized caches.
 - Migration: new test runs first, then new production runs; existing runs retain
   their executor unless an explicit validated checkpoint migration is selected.
+
+## Accepted outage behavior (2026-09-14)
+
+The user requires independent components that finish their pre-authorized work,
+wait without tearing down healthy workers, and reconcile automatically when a
+service returns. Immediate replacement of a failed coordinator by a worker is
+not required. Nodes and allocations remain user-provisioned.
+
+| Failure | Required behavior |
+| --- | --- |
+| Coordinator unavailable | Scheduler stops expanding dispatch beyond the already granted bounded work. Workers finish their accepted work and persist receipts, then remain idle and reconnect while their allocations remain valid. Bridge likewise finishes accepted, budgeted model calls and retains replies. Neither invents new scientific decisions or tool work. |
+| Bridge unavailable | Compute already runnable from accepted inputs continues. Only operations requiring new model results wait. Coordinator persists pending model intents for replay by stable ID; restarted Bridge reconciles recorded replies before retrying. |
+| Worker unavailable or allocation expired | Stop assigning to that worker; keep pending work. Other eligible workers continue. Replacement workers automatically advertise identity, resources, runtime and visible stores, then receive work after reconciliation. |
+| Scheduler unavailable | Worker numerical processes finish their bounded grants independently of scheduler RPCs. Persist receipts and wait for reconnect; do not kill healthy computation solely because dispatch service disappeared. |
+| All eligible workers absent | Queue waits durably. No automatic Slurm submission or allocation release. Resume automatically once a user starts compatible workers. |
+
+"Pre-authorized work" is a finite manifest already accepted by the executor:
+operation/attempt IDs, immutable inputs, allowed local dependencies, resource
+limits, runtime, outputs and execution deadline. It may include a small bounded
+bundle, not an unbounded dataset loop. No dependency on a new model decision
+can be crossed while that decision is unavailable. External dependencies such
+as required storage must still be available; otherwise checkpoint or stop safely.
+
+Each component runs under a supervisor that restarts its process on an existing
+authorized host, with bounded backoff and visible persistent failures. It checks
+allocation validity before restarting workers. Heartbeat loss disables new
+dispatch; it does not by itself prove an already granted attempt stopped.
+Never release its resources or reissue the attempt solely on a missed heartbeat.
+Reconcile the executor, process fencing, grant deadline and durable receipts
+before authorizing a replacement; no reliance on lease expiry alone to stop code.
+
+On reconnect: establish current service identity, enumerate accepted/running
+attempts and pending receipts, verify result identities, acknowledge accepted
+results, then issue new work. Receipts survive missed notifications. If central
+storage is temporarily unavailable, spool locally without claiming global
+durability; loss of that node may require recomputation. Expiring nodes prioritize
+publishing required persistent replicas within their remaining time.
+
+If a service host expires, automatic process restart cannot bring that host back.
+Restart on another already authorized host when placement permits, or wait for a
+user-provided host. Discovery/reconnect and reconciliation require no manual
+per-dataset resubmission or address editing. The first-version requirement is
+recoverable waiting and automatic resumption, not uninterrupted coordination.
+
+Acceptance must cover asymmetric network loss, crash between result write and
+acknowledgement, prolonged coordinator/Bridge downtime with useful compute still
+finishing, worker expiry, no-worker waiting, and automatic reconnection. Verify
+no duplicate accepted result, no stale publication and no unintended allocation.
 
 ## Isolation
 

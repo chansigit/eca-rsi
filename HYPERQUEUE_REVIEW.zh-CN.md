@@ -45,6 +45,12 @@ worker默认on-server-lost=stop；finish-running允许正在运行的任务结�
 不是原worker自动重连到新server。[server](https://it4innovations.github.io/hyperqueue/stable/deployment/server/)、
 [worker](https://it4innovations.github.io/hyperqueue/stable/deployment/worker/)。
 
+用户已选定的恢复行为比这个默认行为更明确：完成预先接受的有限工作后等待，
+服务恢复时自动重连、核对结果并领取新任务。finish-running之后HQ worker退出
+可以由节点supervisor重新连接，但仅这一项不足以证明满足要求：仍需验证正在运行
+任务不会被server清理路径杀掉、已接受的有限队列如何处理、以及恢复前不会重复派发。
+这些属于采用HQ前的必要验收，不以它的默认恢复行为替代用户需求。
+
 因此采用HQ仍须设计：
 - operation ID ↔ server generation/job/task/instance ID的持久映射；提交应答丢失后先核对再提交。
 - 每个attempt输出独立目录；只有当前有效generation可以接受发布。
