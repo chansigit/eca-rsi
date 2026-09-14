@@ -43,11 +43,13 @@ import logging
 import os
 import re
 import time
+import uuid
 import dataclasses
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Literal, Mapping, TypeVar, cast
 
 from ._logging import ensure_logging
+from . import telemetry
 
 ToolHandler = Callable[[dict], Awaitable[dict]]
 T = TypeVar("T")
@@ -61,6 +63,18 @@ BuiltinCapability = Literal["read", "glob", "grep", "tasks"]
 
 
 log = logging.getLogger(__name__)
+_telemetry_warning_sent = False
+
+
+def _record_activity(kind: str, call_id: str | None = None, **fields) -> None:
+    """Observability failure must never change a scientific decision."""
+    global _telemetry_warning_sent
+    try:
+        telemetry.record(kind, call_id, **fields)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        if not _telemetry_warning_sent:
+            log.warning("agent telemetry unavailable: %s", type(exc).__name__)
+            _telemetry_warning_sent = True
 
 
 class AgentTimeout(RuntimeError):
@@ -720,28 +734,33 @@ async def run_agent(
     tool_times: dict[str, list[float]] = {}
     tools = [_timed(spec, tool_times, label) for spec in tools]
     started = time.monotonic()
+    call_id = uuid.uuid4().hex
+    context_token = telemetry.CURRENT_CALL.set(call_id)
+    _record_activity("start", call_id, label=label, cwd=cwd)
 
     async def _attempt() -> AgentRunResult:
         config = pool.current() if pool is not None else single_config
-        adapter = importlib.import_module(_BACKENDS[config.harness][0], __package__)
-        coro = adapter.run_agent(
-            tools=tools, submit_tool=submit_tool, prompt=prompt, system_prompt=system_prompt,
-            cwd=cwd, model=config.model, effort=effort, max_turns=max_turns,
-            allowed_builtin=allowed_builtin, label=label, max_buffer_size=max_buffer_size,
-            wall_seconds=wall, **({"provider": config.provider} if config.provider else {}),
-        )
-        if wall is None:
-            result = await coro
-        else:
-            try:
-                # the backend enforces the budget itself (dsh: watchdog closes
-                # the runtime; claude: cancellation tears the CLI down); this
-                # is the backstop that also covers a backend stuck in its own
-                # teardown
-                result = await asyncio.wait_for(coro, timeout=wall + 120)
-            except asyncio.TimeoutError:
-                raise AgentTimeout(f"[{label}] agent run exceeded the wall-clock budget of "
-                                   f"{wall / 60:g} min (AGENT_WALL_MIN)") from None
+        _record_activity("attempt", harness=config.backend, model=config.model)
+        try:
+            adapter = importlib.import_module(_BACKENDS[config.harness][0], __package__)
+            coro = adapter.run_agent(
+                tools=tools, submit_tool=submit_tool, prompt=prompt, system_prompt=system_prompt,
+                cwd=cwd, model=config.model, effort=effort, max_turns=max_turns,
+                allowed_builtin=allowed_builtin, label=label, max_buffer_size=max_buffer_size,
+                wall_seconds=wall, **({"provider": config.provider} if config.provider else {}),
+            )
+            if wall is None:
+                result = await coro
+            else:
+                try:
+                    # The backend enforces its own budget; this also covers teardown.
+                    result = await asyncio.wait_for(coro, timeout=wall + 120)
+                except asyncio.TimeoutError:
+                    raise AgentTimeout(f"[{label}] agent run exceeded the wall-clock budget of "
+                                       f"{wall / 60:g} min (AGENT_WALL_MIN)") from None
+        except BaseException as exc:
+            _record_activity("attempt_error", error_type=type(exc).__name__)
+            raise
         result.effective_config = config
         # The one line every caller can scrape off subprocess stdout to learn which
         # {harness, model} actually answered -- printed for every backend, unlike the
@@ -752,6 +771,14 @@ async def run_agent(
         return result
 
     try:
-        return await retry_transient(_attempt, label, pool=pool)
+        result = await retry_transient(_attempt, label, pool=pool)
+        config = result.effective_config
+        _record_activity("success", harness=config.backend, model=config.model,
+                         tokens_in=result.tokens_in, tokens_out=result.tokens_out, cost_usd=result.cost_usd)
+        return result
+    except BaseException as exc:
+        _record_activity("failure", error_type=type(exc).__name__)
+        raise
     finally:
+        telemetry.CURRENT_CALL.reset(context_token)
         _log_tool_summary(label, tool_times, time.monotonic() - started)

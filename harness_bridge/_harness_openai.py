@@ -60,7 +60,7 @@ import re
 from typing import Any
 
 from ._harness_host_tools import served_tools, with_runtime_instructions
-from .harness import AgentIncompleteError, AgentRunResult, AgentTimeout, ToolSpec, _env_float
+from .harness import AgentIncompleteError, AgentRunResult, AgentTimeout, ToolSpec, _env_float, _record_activity
 
 log = logging.getLogger(__name__)
 
@@ -404,6 +404,10 @@ async def run_agent(
                         f"{submit_tool} call"
                     )
                 turns_used += 1
+                _record_activity("model_start", harness=hname, model=model)
+
+            async def on_llm_end(self, context, agent, response):
+                _record_activity("model_end")
 
         request_budget = RequestBudget()
         while True:
