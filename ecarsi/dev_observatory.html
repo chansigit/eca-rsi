@@ -72,14 +72,14 @@
   .timeline-row { border-bottom:1px solid #eee9dd; min-height:41px; align-items:center; }
   .timeline-label { padding:5px 10px 5px 0; font-size:12px; font-weight:650; }
   .timeline-track { position:relative; height:40px; background:repeating-linear-gradient(to right,transparent 0,transparent calc(25% - 1px),#ece9df calc(25% - 1px),#ece9df 25%); }
-  .timeline-bar { position:absolute; top:8px; height:25px; min-width:10px; border-radius:6px; color:white; font:700 10px/25px "Avenir Next",sans-serif; padding:0 7px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; box-shadow:inset 0 -3px var(--flow-color,#ffffff88),0 2px 5px #5d554329; cursor:help; transition:opacity .15s,filter .15s; }
+  .timeline-bar { position:absolute; top:8px; height:25px; min-width:10px; border-radius:6px; color:white; font:700 10px/25px "Avenir Next",sans-serif; padding:0 7px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; box-shadow:0 2px 5px #5d554329; cursor:help; transition:opacity .15s,filter .15s; }
   .timeline-bar:hover,.timeline-bar:focus-visible { outline:2px solid #2d5046; outline-offset:2px; z-index:2; }
-  .timeline-bar.pool { background:#477e92; }.timeline-bar.bridge { background:#ad8651; }.timeline-bar.failed { background:#ad6661; }
+  .timeline-bar.failed { outline:2px solid #a4514e; outline-offset:-2px; }
   .timeline-flow { position:absolute; inset:0; width:100%; height:100%; z-index:0; pointer-events:none; overflow:visible; }
   .timeline-flow .flow-edge { opacity:var(--flow-idle-opacity,.55); transition:opacity .15s; }
   .timeline.flow-focused .flow-edge:not(.flow-active) { opacity:.06; }
   .timeline.flow-focused .timeline-bar:not(.flow-active) { opacity:.28; }
-  .timeline.flow-focused .flow-edge.flow-active { opacity:1; filter:drop-shadow(0 0 4px currentColor); }
+  .timeline.flow-focused .flow-edge.flow-active { opacity:1; }
   .timeline.flow-focused .timeline-bar.flow-active { filter:brightness(1.13); }
   .timeline-spark { width:100%; height:38px; display:block; overflow:visible; }
   .timeline-resource { color:#657b70; font-weight:500; }
@@ -111,7 +111,7 @@
     <div class="node"><span class="n">03 / DEPENDENCIES</span><span class="title">Temporal</span><span class="detail" id="temporal-node">Checking history viewer…</span></div>
     <div class="node"><span class="n">04 / OUTPUT</span><span class="title">Organize</span><span class="detail" id="organize-node">Checking publications…</span></div>
   </div>
-  <section class="panel" style="margin-bottom:20px"><div class="panel-head"><div><div class="eyebrow">Pool and Bridge history</div><h2>Task timeline</h2><div class="sub">Worker lanes show actual task placement; resource curves share the same time axis. Wheel to zoom; hover a task to trace its workflow.</div></div><span class="status off" id="timeline-state">Loading</span></div><div class="timeline-controls"><select id="timeline-range" aria-label="Time range"><option value="3600">Last hour</option><option value="14400" selected>Last 4 hours</option><option value="86400">Last 24 hours</option><option value="custom">Custom</option></select><input id="timeline-from" type="datetime-local" aria-label="From" hidden><input id="timeline-to" type="datetime-local" aria-label="To" hidden><input id="timeline-dataset" type="search" placeholder="Filter dataset…" aria-label="Filter dataset"><button id="timeline-apply" type="button">Apply</button></div><div class="timeline-legend"><span><i style="background:#477e92"></i>Pool task</span><span><i style="background:#ad8651"></i>Bridge task</span><span><i style="background:#ad6661"></i>Failed</span><span><i style="background:#71ab87;height:3px;vertical-align:3px;box-shadow:0 0 6px #71ab87"></i>Workflow handoff</span></div><div class="timeline-wrap"><div class="timeline" id="timeline"></div></div><div class="note" id="timeline-note"></div></section>
+  <section class="panel" style="margin-bottom:20px"><div class="panel-head"><div><div class="eyebrow">Pool and Bridge history</div><h2>Task timeline</h2><div class="sub">Worker lanes show actual task placement; resource curves share the same time axis. Wheel to zoom; hover a task to trace its workflow.</div></div><span class="status off" id="timeline-state">Loading</span></div><div class="timeline-controls"><select id="timeline-range" aria-label="Time range"><option value="auto" selected>Latest activity</option><option value="3600">Last hour</option><option value="14400">Last 4 hours</option><option value="86400">Last 24 hours</option><option value="custom">Custom</option></select><input id="timeline-from" type="datetime-local" aria-label="From" hidden><input id="timeline-to" type="datetime-local" aria-label="To" hidden><input id="timeline-dataset" type="search" placeholder="Filter dataset…" aria-label="Filter dataset"><button id="timeline-apply" type="button">Apply</button></div><div class="timeline-legend"><span><i style="background:linear-gradient(90deg,#607f93 0 33%,#a77a55 33% 66%,#88739a 66%)"></i>Dataset color</span><span><i style="background:transparent;border:2px solid #a4514e"></i>Failed</span><span><i style="background:#a77a55;height:3px;vertical-align:3px"></i>Workflow handoff</span></div><div class="timeline-wrap"><div class="timeline" id="timeline"></div></div><div class="note" id="timeline-note"></div></section>
   <div class="layout">
     <div class="stack">
       <section class="panel"><div class="panel-head"><div><div class="eyebrow">HyperQueue + RSI receipts</div><h2>Warm Pool</h2><div class="sub">Recorded requests and resource budgets; no compute is started by this page.</div></div><span class="status off" id="pool-state">Checking</span></div><div class="metrics"><div class="metric"><b id="pool-count">—</b><span>Requests</span></div><div class="metric"><b id="pool-done">—</b><span>Succeeded</span></div><div class="metric"><b id="worker-count">—</b><span>Live workers</span></div></div><div class="table-wrap"><table><thead><tr><th>Request</th><th>Operation</th><th>State</th><th>CPU / RAM</th><th>Finished</th></tr></thead><tbody id="pool-table"></tbody></table></div><div class="note" id="pool-note"></div></section>
@@ -136,12 +136,11 @@ let tipTarget=null;
 function hideTimelineTip() { $('timeline-popover').hidden=true; tipTarget=null; }
 function showTimelineTip(target, event) {
   if (!target) { hideTimelineTip(); return; }
+  if (target===tipTarget) return;
   const popup=$('timeline-popover');
-  if (target!==tipTarget) {
-    $('timeline-popover-title').textContent=target.dataset.tipTitle;
-    $('timeline-popover-body').textContent=target.dataset.tipBody;
-    tipTarget=target;
-  }
+  $('timeline-popover-title').textContent=target.dataset.tipTitle;
+  $('timeline-popover-body').textContent=target.dataset.tipBody;
+  tipTarget=target;
   popup.hidden=false;
   const anchor=target.getBoundingClientRect(), box=popup.getBoundingClientRect();
   const x=Number.isFinite(event?.clientX)?event.clientX:anchor.right;
@@ -173,8 +172,21 @@ function zoomWindow(window,fraction,deltaY) {
   const until=Math.min(Date.now()/1000,anchor+next*(1-fraction));
   return {since:until-next,until};
 }
-const flowPalette=['#71ab87','#ddb16f','#9d91ba','#d98679','#68a9ad','#b8aa70'];
-function flowColor(dataset) { let hash=0; for (const ch of dataset||'') hash=(hash*31+ch.charCodeAt(0))|0; return flowPalette[(hash>>>0)%flowPalette.length]; }
+function latestActivityWindow(tasks,now=Date.now()/1000) {
+  const intervals=tasks.filter(t=>t.started_at).sort((a,b)=>a.started_at-b.started_at);
+  if (!intervals.length) return null;
+  let start=intervals[0].started_at, end=intervals[0].finished_at||now;
+  for (const task of intervals.slice(1)) {
+    if (task.started_at>end+300) { start=task.started_at; end=task.finished_at||now; }
+    else end=Math.max(end,task.finished_at||now);
+  }
+  const activity=Math.max(1,end-start), span=Math.max(120,activity*1.16);
+  let since=start-(span-activity)/2, until=since+span;
+  if (until>now) { since-=until-now; until=now; }
+  return {since,until};
+}
+const datasetPalette=['#607f93','#a77a55','#88739a','#ad6f6b','#647f86','#987f58'];
+function datasetColor(dataset) { let hash=0; for (const ch of dataset||'') hash=(hash*31+ch.charCodeAt(0))|0; return datasetPalette[(hash>>>0)%datasetPalette.length]; }
 function buildFlowEdges(tasks) {
   const byId=new Map(tasks.map(task=>[task.id,task]));
   const byUnit=new Map(tasks.filter(task=>task.trace?.workflow_id).map(task=>[task.trace.workflow_id+'\u0000'+task.trace.unit_id,task]));
@@ -213,7 +225,7 @@ function drawFlow(edges,from,to) {
     if (x1<scale.left-bounds.left || x2>scale.right-bounds.left) continue;
     const y1=a.getBoundingClientRect().top-bounds.top+a.offsetHeight/2;
     const y2=b.getBoundingClientRect().top-bounds.top+b.offsetHeight/2;
-    const bend=Math.max(12,(x2-x1)*.5), color=flowColor(edge.child.trace.dataset_id);
+    const bend=Math.max(12,(x2-x1)*.5), color=datasetColor(edge.child.trace.dataset_id);
     const tip=x2-x1>12?`<path d="M ${x2-6} ${y2-4} L ${x2} ${y2} L ${x2-6} ${y2+4}" stroke-width="2.5"/>`:`<circle cx="${x2}" cy="${y2}" r="3" fill="${color}" stroke="none"/>`;
     paths.push(`<g class="flow-edge" data-workflow="${esc(edge.child.trace.workflow_id)}" style="color:${color}" fill="none" stroke="${color}" stroke-width="2"><path d="M ${x1} ${y1} C ${x1+bend} ${y1}, ${x2-bend} ${y2}, ${x2} ${y2}"/><circle cx="${x1}" cy="${y1}" r="3" fill="${color}" stroke="none"/>${tip}</g>`);
   }
@@ -282,7 +294,7 @@ function renderTimeline(data) {
       if (parentsByChild.has(t.id)) body.push(`Upstream: ${parentsByChild.get(t.id).join(', ')}`);
       if (t.trace_source!=='explicit') body.push(`Identity: ${t.trace_source}`);
       const width=pos(end)-pos(start);
-      return end>start?`<span class="timeline-bar ${/fail/i.test(t.state)?'failed':t.service}" tabindex="0" style="left:${pos(start)}%;width:${Math.max(width,.3)}%;--flow-color:${flowColor(t.trace.dataset_id)}" data-task-id="${esc(t.id)}" data-workflow="${esc(t.trace.workflow_id)}" data-tip-title="${esc(t.trace.dataset_id)} · ${esc(t.operation)}" data-tip-body="${esc(body.join('\n'))}">${width>18?esc(t.trace.dataset_id):''}</span>`:'';
+      return end>start?`<span class="timeline-bar ${/fail/i.test(t.state)?'failed':t.service}" tabindex="0" style="left:${pos(start)}%;width:${Math.max(width,.3)}%;background:${datasetColor(t.trace.dataset_id)}" data-task-id="${esc(t.id)}" data-workflow="${esc(t.trace.workflow_id)}" data-tip-title="${esc(t.trace.dataset_id)} · ${esc(t.operation)}" data-tip-body="${esc(body.join('\n'))}">${width>6?esc(t.trace.unit_id.split('.').pop()):''}</span>`:'';
     }).join('');
     taskRows.set(lane.base,(taskRows.get(lane.base)||'')+`<div class="timeline-row"><div class="timeline-label" tabindex="0" data-tip-title="${lane.base==='Agent Bridge'?'Display lane':'Worker lane'}" data-tip-body="${esc(lane.label)}${lane.base==='Agent Bridge'?' · overlap only; executor identity unavailable':''}">${esc(lane.label)}</div><div class="timeline-track">${items}</div></div>`);
   }
@@ -294,9 +306,16 @@ function renderTimeline(data) {
     ['GPU','gpu_percent','#7b719c'],['GPU memory','gpu_memory_percent','#a76f83']]) {
     const points=samples.filter(r=>r[field]!=null).map(r=>({x:pos(r.observed_at),y:r[field],t:r.observed_at,row:r}));
     if (!points.length) continue;
-    const lines=points.map((p,i)=>i&&p.t-points[i-1].t<=Math.max(90,span/200)?
-      `<line x1="${points[i-1].x}" y1="${100-points[i-1].y}" x2="${p.x}" y2="${100-p.y}" stroke="${color}" stroke-width="3" vector-effect="non-scaling-stroke"/>`:'').join('');
-    const dots=points.map(p=>{
+    const segments=[];
+    for (const point of points) {
+      if (!segments.length || point.t-segments.at(-1).at(-1).t>Math.max(90,span/200)) segments.push([]);
+      segments.at(-1).push(point);
+    }
+    const lines=segments.filter(part=>part.length>1).map(part=>`<polyline points="${part.map(p=>`${p.x},${100-p.y}`).join(' ')}" stroke="${color}" stroke-width="3" vector-effect="non-scaling-stroke" fill="none"/>`).join('');
+    const stride=Math.max(1,Math.ceil(points.length/40));
+    const hitPoints=points.filter((_,index)=>index%stride===0);
+    hitPoints[hitPoints.length-1]=points.at(-1);
+    const dots=hitPoints.map(p=>{
       const extra=field==='cpu_percent'&&p.row.cpu_cores_allocated>0?`\n${p.row.cpu_cores_used.toFixed(1)} / ${p.row.cpu_cores_allocated} allocated cores`:
         field==='memory_percent'&&p.row.memory_total_gb>0?`\n${p.row.memory_used_gb.toFixed(1)} / ${p.row.memory_total_gb.toFixed(1)} GiB host RAM`:
         field==='gpu_memory_percent'&&p.row.gpu_memory_total_gb>0?`\n${p.row.gpu_memory_used_gb.toFixed(1)} / ${p.row.gpu_memory_total_gb.toFixed(1)} GiB GPU memory`:'';
@@ -313,7 +332,7 @@ function renderTimeline(data) {
   const queued=(data.tasks||[]).filter(t=>!t.started_at).length;
   $('timeline-note').textContent=`${linked} visible workflow handoffs. Connections use recorded dependencies, or the known Organize order for older runs; hover a task to isolate its workflow. ${queued} waiting without a worker; started-task queue time is in task details. Pool rows are actual workers; extra rows only separate overlapping tasks. Bridge rows only separate overlap, because executor IDs are not recorded. ${data.resources?.length||0} resource points. ${data.truncated?'Results capped at 2,000 tasks; narrow the time range or filter a dataset. ':''}CPU is measured on worker-allocated cores; RAM and accessible GPUs are host-wide. Missing historical usage is not inferred from reservations. ${data.source}.`;
 }
-let refreshSeq=0;
+let refreshSeq=0, timelineSignature='';
 async function refresh() {
   const seq=++refreshSeq;
   try {
@@ -344,15 +363,19 @@ async function refresh() {
     $('bridge-state').textContent='Recorded history';
     $('bridge-table').innerHTML=d.bridge_requests.length?d.bridge_requests.map(x=>`<tr><td class="mono">${esc(x.id)}</td><td>${badge(x.state)}</td><td>${esc(x.model?.model||'—')}<br><span class="sub">${esc(x.model?.harness||'')}</span></td><td>${esc(x.usage?.tokens_in)} / ${esc(x.usage?.tokens_out)}</td></tr>`).join(''):'<tr><td colspan="4" class="empty">No model requests recorded</td></tr>';
     const now=Date.now()/1000, range=$('timeline-range').value;
-    const since=viewWindow?viewWindow.since:range==='custom'?Date.parse($('timeline-from').value)/1000:now-Number(range);
-    const until=viewWindow?viewWindow.until:range==='custom'?Date.parse($('timeline-to').value)/1000:now;
+    const dataset=$('timeline-dataset').value.trim();
+    const recent=[...d.pool_requests,...d.bridge_requests].filter(t=>!dataset||t.trace?.dataset_id?.toLowerCase().includes(dataset.toLowerCase()));
+    const latest=range==='auto'?latestActivityWindow(recent,now):null;
+    const since=viewWindow?viewWindow.since:latest?latest.since:range==='custom'?Date.parse($('timeline-from').value)/1000:now-Number(range||14400);
+    const until=viewWindow?viewWindow.until:latest?latest.until:range==='custom'?Date.parse($('timeline-to').value)/1000:now;
     if (Number.isFinite(since) && Number.isFinite(until)) {
-      const params=new URLSearchParams({since:String(since),until:String(until),dataset:$('timeline-dataset').value.trim()});
+      const params=new URLSearchParams({since:String(since),until:String(until),dataset});
       const timelineResponse=await fetch('/api/timeline?'+params,{cache:'no-store'});
       if (!timelineResponse.ok) throw new Error(`Timeline HTTP ${timelineResponse.status}`);
       const timeline=await timelineResponse.json();
       if (seq!==refreshSeq) return;
-      renderTimeline(timeline);
+      const signature=JSON.stringify(timeline);
+      if (signature!==timelineSignature) { renderTimeline(timeline); timelineSignature=signature; }
     }
     $('temporal-link').classList.toggle('disabled',!d.temporal_ui);
     $('temporal-link').href=`http://127.0.0.1:${d.temporal_port}/`;

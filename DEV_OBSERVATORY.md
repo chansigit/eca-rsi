@@ -10,12 +10,16 @@ viewer supports a time window of up to 24 hours, a dataset filter, and a
 2,000-task response cap; narrow the window or filter when capped. Completed
 requests are cached so they are not reread on every refresh. Wheel over the
 plot to zoom around the pointer (30 seconds to 24 hours); selecting a preset
-restores a live rolling window. Pool lanes use actual worker IDs, with extra
+restores a live rolling window. The default `Latest activity` view finds the
+last group of executed tasks separated from earlier work by at least five
+minutes, then fits that interval with modest padding. Pool lanes use actual worker IDs, with extra
 display rows only when tasks overlap. Resource curves sit below that worker's
 tasks. Bridge lanes only separate overlapping calls; executor identity is not
 recorded. Queue wait for started tasks appears in task details, not on a future
 worker lane. Some legacy Organize records lack trace fields and are explicitly
 marked as inferred; historical worker lanes use host/CPU IDs.
+Task bars and connectors use one stable muted color per dataset; service is
+expressed by the lane, while a red inset outline marks failure.
 
 Curved connectors join completed upstream requests to started downstream
 requests across Pool and Bridge lanes. Future workflow modules can record

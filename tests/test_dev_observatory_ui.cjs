@@ -41,6 +41,13 @@ element('timeline').listeners.wheel({target: {closest: () => ({getBoundingClient
 assert(prevented);
 assert.equal(element('timeline-range').value, 'custom');
 assert.equal(element('timeline-from').hidden, false);
+const fitted = context.latestActivityWindow([
+  {started_at: 100, finished_at: 150}, {started_at: 200, finished_at: 250},
+  {started_at: 1000, finished_at: 1040}, {started_at: 1080, finished_at: 1120},
+], 2000);
+assert(fitted.since < 1000 && fitted.since > 900);
+assert(fitted.until > 1120 && fitted.until < 1200);
+assert.equal(Math.round(fitted.until-fitted.since), 139);
 
 const stage = (id, workflow, dataset, operation, start, end, depends_on) => ({
   id, service: operation === 'organize.plan' ? 'bridge' : 'pool', operation,
@@ -72,3 +79,13 @@ assert.equal(context.drawFlow(links, 0, 400), 2);
 assert(root.flowSvg.includes('data-workflow="organize/run-a"'));
 assert(root.flowSvg.includes('class="flow-edge"'));
 assert(!root.flowSvg.includes('NaN'));
+assert.equal(context.datasetColor('dataset-a'), context.datasetColor('dataset-a'));
+
+context.renderTimeline({since: 0, until: 1000, tasks: [], total: 0, source: 'test', resources:
+  Array.from({length: 240}, (_, i) => ({worker_id: 'worker-a', observed_at: i * 4,
+    cpu_percent: i % 100, memory_percent: 20, gpu_percent: null, gpu_memory_percent: null,
+    cpu_cores_allocated: 4, cpu_cores_used: 2, memory_total_gb: 16, memory_used_gb: 3, samples: 1}))});
+const denseChart = element('timeline').innerHTML;
+assert(denseChart.includes('<polyline'));
+assert((denseChart.match(/pointer-events="all"/g)||[]).length <= 80);
+assert(!denseChart.includes('<line '));
