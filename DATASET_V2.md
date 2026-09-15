@@ -47,6 +47,22 @@ At a round boundary, `continue_as_new` bounds the analysis unit's Temporal histo
 
 Each completed round checks both upstream publication identity and cell-count conservation before proceeding. Failed units retain their artifacts and do not cancel successful siblings. Once siblings finish, a dataset with failed units publishes an incomplete record and fails visibly. Unknown external outcomes are not automatically duplicated or treated as successful exclusions.
 
+## Resume a terminal failure
+
+Ordinary Coordinator/service restarts recover running workflows automatically. A terminal scientific failure first needs its cause corrected and any failed external request reconciled. Then use the same dataset run ID:
+
+```bash
+python -m ecarsi.work_coordinator --service-root /shared/rsi/control \
+  --task-queue ecarsi-durable-v2 resume-dataset RUN_ID \
+  --reason 'Confirmed failure corrected; existing accepted outputs retained'
+```
+
+This starts a new Temporal run under the same workflow ID and immutable dataset specification. It does not create a new dataset directory. The preflight traverses child histories, including continued runs, and rejects active descendants or unresolved failed/unknown requests. Accepted or still-running external requests keep their stable IDs; resuming does not duplicate them. For a confirmed failed Pool program, the existing `warm_pool retry` command records a new attempt and can explicitly adopt a corrected runtime with `--use-current-runtime`. It preserves the original input hashes and failure receipt.
+
+Completed Organize, per-sample, cross-sample and Zoom-in stages are reused only after checking their specifications, upstream references, accepted Pool outputs and cell totals. These checks traverse stage boundaries; they do not repeat numerical work or model decisions. Downstream workers retain the normal artifact-integrity checks. Incomplete stages reuse their existing operation IDs and saved agent sessions. A changed input/configuration or an unaccepted output blocks recovery instead of silently overwriting it.
+
+The dataset keeps recovery intent and new Temporal run IDs in `recoveries/`. Before replacing an incomplete `publication.json`, it archives the previous record as `publication-<digest>.json`. Completed publications cannot be replaced by different results. Recovery does not relax scientific validation or resolve an uncertain provider call by assuming it failed.
+
 ## Acceptance scope
 
 Unit checks cover unchanged convergence decisions, source/count continuity, preservation of string cell IDs and prior annotations, skipping Organize/per-sample in subsequent rounds, preserving a running sibling after another unit fails, and service discovery reconnection. Existing CPU numerical, DEG, exclusion-accounting, and legacy loop-control checks also pass.
@@ -54,6 +70,8 @@ Unit checks cover unchanged convergence decisions, source/count continuity, pres
 Real Prostate and Uterus acceptance runs were submitted as dataset workflows on 2026-09-15, using two fixed rounds and the explicitly reduced Zoom-in `min_cells=50` for these small inputs. The template retains the normal `min_cells=800`. Their final outcomes are recorded below after verification.
 
 Both runs completed Organize and per-sample automatically: Prostate retained 507 of 625 cells; Uterus retained 441 of 666. Both first cross-sample integrations and their 48 independent DEG tasks completed. Full two-round acceptance remains in progress.
+
+Uterus subsequently exposed a singleton parent-core DEG comparison in first-round Zoom-in. MSP `e19e777` now skips statistically untestable comparisons, records their reasons, and retains the cells. The corrected computation succeeded in science image 7. `resume-dataset` then restarted the failed dataset under the same workflow ID, with 279 existing Organize/per-sample/cross-sample request records unchanged; the resumed unit started only its unfinished Zoom-in child. Evidence is in `durable-control-20260915/dataset-terminal-recovery.json`. This verifies recovery into actual computation; full two-round publication acceptance is still separate.
 
 A separate numerical acceptance used the previously accepted Prostate Zoom-in publication to exercise `compute-round` on 433 real surviving cells. Reintegration completed on a Pool CPU worker in 31.6 seconds. All 42,128 genes and their raw counts were unchanged, source/sample identities and archived annotations matched, and PCA/UMAP values were finite (`numerical-round2-acceptance.json`). This checks the new reintegration adapter; it is separate from the two running dataset workflows.
 
@@ -67,4 +85,4 @@ python tests/check_dataset_publication.py /shared/rsi/dataset/publication.json
 
 It verifies artifact identities, exact kept/excluded cell sets across every stage and round, original source IDs, nonempty exclusion reasons, retained skipped lineages, and preservation of previous-round annotations.
 
-Remaining production gates include dataset-level restart after a terminal scientific failure, large-dataset budget/history calibration, legacy release presentation and aggregation of scientific review advisories, and sustained multi-dataset throughput. The `forced_release` flag refers only to the convergence safety cap; scientific advisory details remain in stage artifacts. Ordinary Coordinator or Temporal service interruption while a workflow is running is recovered through the [shared control service](DURABLE_CONTROL.md), and does not require dataset resubmission.
+Remaining production gates include completion of both live two-round workflows and their final artifact checks, large-dataset budget/history calibration, legacy release presentation and aggregation of scientific review advisories, and sustained multi-dataset throughput. The `forced_release` flag refers only to the convergence safety cap; scientific advisory details remain in stage artifacts. Ordinary Coordinator or Temporal service interruption while a workflow is running is recovered through the [shared control service](DURABLE_CONTROL.md), and does not require dataset resubmission.

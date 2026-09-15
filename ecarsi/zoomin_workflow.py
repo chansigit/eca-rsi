@@ -7,7 +7,7 @@ from temporalio import activity, workflow
 from .persample_workflow import await_pool, call
 
 
-def validate_spec(spec):
+def validate_spec(spec, *, resume=False):
     from .agent_session import verified
     from .warm_pool.state import identifier, pool_root
     from .agent_bridge import root_path
@@ -23,7 +23,7 @@ def validate_spec(spec):
                             unit_id='zoom-in.prepare', depends_on=spec['depends_on']))
     if len(spec['run_id']) > 60 or not isinstance(spec['dataset_id'],str) or not spec['dataset_id'].strip():
         raise ValueError('Use a run ID up to 60 characters and a dataset label')
-    if not Path(spec['output_root']).is_absolute() or Path(spec['output_root']).exists():
+    if not Path(spec['output_root']).is_absolute() or (Path(spec['output_root']).exists() and not resume):
         raise ValueError('Use a fresh absolute output directory')
     source = verified(spec['input'])
     if source.get('state') != 'complete' or 'annotated.h5ad' not in source.get('files',{}):

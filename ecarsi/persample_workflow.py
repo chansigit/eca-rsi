@@ -8,7 +8,7 @@ from temporalio.common import RetryPolicy
 from temporalio.exceptions import ApplicationError
 
 
-def validate_spec(spec):
+def validate_spec(spec, *, resume=False):
     from .agent_session import reference
     from .warm_pool.state import identifier, pool_root, read
     from .agent_bridge import root_path
@@ -25,7 +25,7 @@ def validate_spec(spec):
     if len(spec["run_id"]) > 60 or not isinstance(spec["dataset_id"], str) or not spec["dataset_id"].strip():
         raise ValueError("Use a run ID up to 60 characters and a dataset label")
     unit, output = Path(spec["unit"]), Path(spec["output_root"])
-    if not unit.is_absolute() or not output.is_absolute() or output.exists() or output.is_relative_to(unit):
+    if not unit.is_absolute() or not output.is_absolute() or (output.exists() and not resume) or output.is_relative_to(unit):
         raise ValueError("Use an existing absolute input unit and fresh output outside it")
     metadata = read(unit / "input/manifest.json")
     if not metadata or not metadata.get("sample_mapping"):

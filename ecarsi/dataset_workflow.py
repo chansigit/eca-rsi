@@ -49,10 +49,115 @@ def validate_spec(spec):
     return spec
 
 
+async def resume_dataset(client, identity, task_queue, reason):
+    """New Temporal run, same immutable dataset and accepted external request IDs."""
+    from temporalio.common import WorkflowIDReusePolicy
+    from .agent_session import immutable, reference
+    from .warm_pool.state import read, status
+    from .agent_bridge import status as bridge_status
+    if not reason.strip():
+        raise ValueError('A recovery reason is required')
+    previous = client.get_workflow_handle(identity)
+    info = await previous.describe()
+    if info.status.name != 'FAILED':
+        raise ValueError('Dataset resume requires a failed workflow')
+    history = await client.get_workflow_handle(identity, run_id=info.run_id).fetch_history()
+    inputs = await client.data_converter.decode(history.events[0].workflow_execution_started_event_attributes.input.payloads)
+    spec = inputs[0]
+    root = Path(spec['output_root'])
+    if read(root / 'spec.json') != spec:
+        raise ValueError('Saved dataset specification changed')
+    pending, visited, identities = [(identity, info.run_id)], set(), set()
+    while pending:
+        key = pending.pop()
+        if key in visited:
+            continue
+        visited.add(key)
+        identities.add(key[0])
+        handle = client.get_workflow_handle(key[0], run_id=key[1])
+        if (await client.get_workflow_handle(key[0]).describe()).status.name == 'RUNNING':
+            raise ValueError('Dataset still has an active workflow: ' + key[0])
+        for event in (await handle.fetch_history()).events:
+            if event.HasField('child_workflow_execution_started_event_attributes'):
+                child = event.child_workflow_execution_started_event_attributes.workflow_execution
+                pending.append((child.workflow_id, child.run_id))
+            elif event.HasField('workflow_execution_continued_as_new_event_attributes'):
+                pending.append((key[0], event.workflow_execution_continued_as_new_event_attributes.new_execution_run_id))
+    # Earlier recovery runs may have skipped completed children. Their stable stage IDs
+    # still own Pool/Bridge requests, so include their sealed specifications as well.
+    identities.add('organize/' + spec['run_id'] + '-organize')
+    for pattern, prefix in (('units/*/01-per-sample/spec.json', 'persample/'),
+                            ('units/*/rounds/*/02-cross-sample/spec.json', 'cross-sample/'),
+                            ('units/*/rounds/*/03-zoom-in/spec.json', 'zoom-in/')):
+        for path in root.glob(pattern):
+            stage = read(path)
+            if any(stage[key] != spec[key] for key in ('dataset_id', 'pool_root', 'bridge_root')):
+                raise ValueError('Saved stage belongs to another dataset or service')
+            identities.add(prefix + stage['run_id'])
+    requests = []
+    for service, inspect, allowed in (
+        ('pool_root', status, {'queued', 'running', 'succeeded'}),
+        ('bridge_root', bridge_status, {'queued', 'running', 'reply_saved'}),
+    ):
+        for path in sorted((Path(spec[service]) / 'requests').glob('*/request.json')):
+            if read(path)['spec'].get('trace', {}).get('workflow_id') in identities:
+                state = inspect(spec[service], path.parent.name)['state']
+                if state not in allowed:
+                    raise ValueError(f'Reconcile {path.parent.name} ({state}) before resume')
+                requests.append(dict(service=service, request_id=path.parent.name, state=state))
+    from uuid import uuid4
+    audit = root / 'recoveries' / (uuid4().hex + '.json')
+    audit.parent.mkdir(mode=0o700, exist_ok=True)
+    intent = immutable(audit, dict(workflow_id=identity, failed_run_id=info.run_id, reason=reason,
+        spec=reference(root / 'spec.json'), previous_publication=reference(root / 'publication.json')
+        if (root / 'publication.json').exists() else None,
+        workflows=sorted(visited), requests=requests))
+    handle = await client.start_workflow(DatasetWorkflow.run, args=[spec, True], id=identity,
+        task_queue=task_queue, id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY)
+    immutable(audit.with_suffix('.started.json'), dict(intent=intent, run_id=handle.result_run_id))
+    return handle
+
+
 @activity.defn
 def dataset_step(action, args):
     from .agent_session import immutable, reference, verified
-    from .warm_pool.state import digest
+    from .warm_pool.state import digest, read, save, lock
+    if action == 'completed':
+        stage, spec = args
+        root = Path(spec['output_root'])
+        path = root / 'publication.json'
+        publication = read(path)
+        if publication is None or publication.get('state') == 'incomplete':
+            return None
+        from .work_coordinator import check_pool
+        def accepted(ref):
+            request = Path(ref['path']).relative_to(Path(spec['pool_root']) / 'requests').parts[0]
+            result = check_pool(spec['pool_root'], request, Path(ref['path']).name)
+            if result['state'] != 'ready' or reference(result['path']) != ref:
+                raise ValueError('Cached stage output is no longer accepted')
+            return verified(ref)
+        if stage == 'organize':
+            result = check_pool(spec['pool_root'], spec['run_id'] + '.execute', 'completion.json')
+            if result['state'] != 'ready' or verified(reference(result['path'])) != publication:
+                raise ValueError('Organize publication no longer matches its accepted execution')
+            return str(root)
+        if read(root / 'spec.json') != spec:
+            raise ValueError('Saved stage specification changed')
+        if publication.get('state') != 'complete' or publication['input'] != spec.get('input', spec.get('input_manifest')):
+            raise ValueError('Cached stage input changed or is incomplete')
+        if stage == 'per_sample':
+            if publication.get('failed_samples') or read(root / ('publication-' + digest(publication) + '.json')) != publication:
+                raise ValueError('Per-sample publication is not an accepted revision')
+            for ref in publication['samples']:
+                accepted(ref)
+            ref = publication['partition_exclusions']
+            if reference(ref['path']) != ref:
+                raise ValueError('Partition exclusion ledger changed')
+        elif publication != {**accepted(publication['result']), 'result': publication['result']}:
+            raise ValueError('Publication differs from its accepted worker result')
+        if publication['n_input'] != publication['n_survived'] + publication['n_removed']:
+            raise ValueError('Cached stage does not conserve cells')
+        return str(path)
     if action == 'organize':
         spec, = args
         root = Path(spec['output_root'])
@@ -76,8 +181,15 @@ def dataset_step(action, args):
                 raise ValueError('Organize unit manifest changed before scheduling')
             units.append(dict(name=entry['name'], path=str(directory), organize=published, manifest=reference(manifest)))
         return units
-    if action == 'stage':
+    if action in {'stage', 'resume_stage'}:
         spec, unit, stage, source, round_number = args
+        resume = action == 'resume_stage'
+        def validated(settings, validate):
+            result = validate(settings, resume=resume)
+            root = Path(result['output_root'])
+            if resume and root.exists() and read(root / 'spec.json') != result:
+                raise ValueError('Saved stage specification changed; resume cannot change inputs or settings')
+            return result
         verified(unit['organize'])
         directory = Path(spec['output_root']) / 'units' / unit['name']
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -86,8 +198,8 @@ def dataset_step(action, args):
         common['run_id'] = spec['run_id'][:20] + '-' + digest([spec['run_id'], unit['name'], stage, round_number])[:20]
         if stage == 'per_sample':
             from .persample_workflow import validate_spec as validate
-            return validate({**template, **common, 'unit': unit['path'], 'output_root': str(directory / '01-per-sample'),
-                             'depends_on': [spec['run_id'] + '-organize.execute']})
+            return validated({**template, **common, 'unit': unit['path'], 'output_root': str(directory / '01-per-sample'),
+                             'depends_on': [spec['run_id'] + '-organize.execute']}, validate)
         metadata = verified(unit['manifest'])
         from .sample_mapping import SAMPLE_KEY
         derived = dict(species=metadata['species'],
@@ -114,7 +226,7 @@ def dataset_step(action, args):
             settings['output_root'] = str(directory / '03-zoom-in')
         else:
             raise ValueError('Unknown dataset stage')
-        return validate(settings)
+        return validated(settings, validate)
     if action == 'round':
         from .round_policy import decide
         spec, unit, progress, cross_path, zoom_path = args
@@ -150,10 +262,19 @@ def dataset_step(action, args):
         publications = [reference(p) for p in sorted(results)]
         units = [verified(p) for p in publications]
         path = Path(spec['output_root']) / 'publication.json'
-        immutable(path, dict(state='incomplete' if failures else 'complete', dataset_id=spec['dataset_id'],
+        publication = dict(state='incomplete' if failures else 'complete', dataset_id=spec['dataset_id'],
             units=publications, failed_units=failures, forced_release=any(u['forced_release'] for u in units),
             n_input=sum(u['n_input'] for u in units), n_survived=sum(u['n_survived'] for u in units),
-            n_removed=sum(u['n_removed'] for u in units)))
+            n_removed=sum(u['n_removed'] for u in units))
+        # Same revision contract as per-sample: retain failed publications and seal successes.
+        with lock(path.parent / 'publication.lock'):
+            previous = read(path)
+            if previous and previous != publication:
+                if previous['state'] == 'complete':
+                    raise ValueError('Cannot replace a completed publication with different results')
+                immutable(path.parent / ('publication-' + digest(previous) + '.json'), previous)
+            immutable(path.parent / ('publication-' + digest(publication) + '.json'), publication)
+            save(path, publication)
         return str(path)
     raise ValueError('Unknown dataset operation')
 
@@ -165,28 +286,32 @@ class AnalysisUnitWorkflow:
         return getattr(self, '_stage', 'created')
 
     @workflow.run
-    async def run(self, spec, unit, progress=None):
+    async def run(self, spec, unit, progress=None, resume=False):
         from .persample_workflow import PersampleWorkflow
         from .crosssample_workflow import CrosssampleWorkflow
         from .zoomin_workflow import ZoominWorkflow
+        async def execute(kind, source, number, run, prefix):
+            stage = await call(dataset_step, 'resume_stage' if resume else 'stage', [spec, unit, kind, source, number])
+            if resume:
+                completed = await call(dataset_step, 'completed', [kind, stage])
+                if completed:
+                    return completed
+            return await workflow.execute_child_workflow(run, stage, id=prefix + stage['run_id'])
         if progress is None:
             self._stage = 'per-sample'
-            stage = await call(dataset_step, 'stage', [spec, unit, 'per_sample', None, 0])
-            output = await workflow.execute_child_workflow(PersampleWorkflow.run, stage, id='persample/' + stage['run_id'])
+            output = await execute('per_sample', None, 0, PersampleWorkflow.run, 'persample/')
             progress = dict(per_sample=output, input=output, stats=[], rounds=[])
         number = len(progress['stats']) + 1
         self._stage = f'round {number}: cross-sample'
-        stage = await call(dataset_step, 'stage', [spec, unit, 'cross_sample', progress['input'], number])
-        cross = await workflow.execute_child_workflow(CrosssampleWorkflow.run, stage, id='cross-sample/' + stage['run_id'])
+        cross = await execute('cross_sample', progress['input'], number, CrosssampleWorkflow.run, 'cross-sample/')
         self._stage = f'round {number}: zoom-in'
-        stage = await call(dataset_step, 'stage', [spec, unit, 'zoom_in', cross, number])
-        zoom = await workflow.execute_child_workflow(ZoominWorkflow.run, stage, id='zoom-in/' + stage['run_id'])
+        zoom = await execute('zoom_in', cross, number, ZoominWorkflow.run, 'zoom-in/')
         progress = await call(dataset_step, 'round', [spec, unit, progress, cross, zoom])
         if 'publication' in progress:
             self._stage = 'complete'
             return progress['publication']
         # Bound each unit's Temporal history; continued runs preserve the child result contract.
-        workflow.continue_as_new(args=[spec, unit, progress])
+        workflow.continue_as_new(args=[spec, unit, progress, True] if resume else [spec, unit, progress])
 
 
 @workflow.defn
@@ -196,15 +321,17 @@ class DatasetWorkflow:
         return getattr(self, '_stage', 'created')
 
     @workflow.run
-    async def run(self, spec):
+    async def run(self, spec, resume=False):
         from .work_coordinator import OrganizeWorkflow
         self._stage = 'organize'
         stage = await call(dataset_step, 'organize', [spec])
-        organized = await workflow.execute_child_workflow(OrganizeWorkflow.run, stage, id='organize/' + stage['run_id'])
+        organized = await call(dataset_step, 'completed', ['organize', stage]) if resume else None
+        if organized is None:
+            organized = await workflow.execute_child_workflow(OrganizeWorkflow.run, stage, id='organize/' + stage['run_id'])
         units = await call(dataset_step, 'units', [organized])
         pending = {}
         for index, unit in enumerate(units):
-            child = await workflow.start_child_workflow(AnalysisUnitWorkflow.run, args=[spec, unit],
+            child = await workflow.start_child_workflow(AnalysisUnitWorkflow.run, args=[spec, unit, None, True] if resume else [spec, unit],
                 id=workflow.info().workflow_id + '/unit-' + str(index))
             pending[child] = unit['name']
         results, failures = [], []

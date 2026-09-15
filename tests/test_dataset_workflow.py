@@ -58,6 +58,106 @@ def test_next_round_does_not_repeat_organize_or_per_sample(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_resume_reuses_complete_stages_and_only_starts_unfinished_zoom(monkeypatch):
+    import ecarsi.dataset_workflow as module
+
+    async def scenario():
+        started = []
+        async def call(fn, action, args):
+            if action == 'resume_stage':
+                return {'run_id': args[2]}
+            if action == 'completed':
+                return None if args[0] == 'zoom_in' else args[0] + '.json'
+            assert action == 'round'
+            return {'publication': 'complete.json'}
+        async def child(fn, spec, **kwargs):
+            started.append(kwargs['id'])
+            return 'zoom.json'
+        monkeypatch.setattr(module, 'call', call)
+        monkeypatch.setattr(module.workflow, 'execute_child_workflow', child)
+        assert await AnalysisUnitWorkflow().run({}, {}, resume=True) == 'complete.json'
+        assert started == ['zoom-in/zoom_in']
+    asyncio.run(scenario())
+
+
+def test_dataset_publication_preserves_incomplete_revision_and_seals_success(tmp_path):
+    from ecarsi.warm_pool.state import read, digest
+    spec = dict(output_root=str(tmp_path), dataset_id='test')
+    path = dataset_step('publish', [spec, [], [{'unit': 'U', 'error': 'failed'}]])
+    previous = read(path)
+    dataset_step('publish', [spec, [], []])
+    assert read(tmp_path / ('publication-' + digest(previous) + '.json')) == previous
+    assert read(path)['state'] == 'complete'
+    with pytest.raises(ValueError, match='completed publication'):
+        dataset_step('publish', [spec, [], [{'unit': 'U', 'error': 'failed'}]])
+
+
+def test_completed_stage_requires_same_input_spec_and_accepted_result(tmp_path, monkeypatch):
+    import ecarsi.work_coordinator as coordinator
+    pool = tmp_path / 'pool'
+    output = pool / 'requests' / 'compute' / 'attempt' / 'final.json'
+    output.parent.mkdir(parents=True)
+    source = tmp_path / 'source.json'
+    save(source, {'state': 'complete'})
+    bundle = dict(state='complete', input=reference(source), n_input=5, n_removed=1, n_survived=4)
+    save(output, bundle)
+    spec = dict(output_root=str(tmp_path / 'stage'), pool_root=str(pool), input=reference(source))
+    root = tmp_path / 'stage'
+    root.mkdir()
+    save(root / 'spec.json', spec)
+    save(root / 'publication.json', {**bundle, 'result': reference(output)})
+    monkeypatch.setattr(coordinator, 'check_pool', lambda *args: {'state': 'ready', 'path': str(output)})
+    assert dataset_step('completed', ['zoom_in', spec]) == str(root / 'publication.json')
+    with pytest.raises(ValueError, match='specification changed'):
+        dataset_step('completed', ['zoom_in', {**spec, 'config': {'changed': True}}])
+    save(output, {**bundle, 'n_survived': 3})
+    with pytest.raises(ValueError, match='no longer accepted'):
+        dataset_step('completed', ['zoom_in', spec])
+
+
+def test_resume_rejects_unreconciled_requests_and_audits_new_run(tmp_path, monkeypatch):
+    from types import SimpleNamespace as NS
+    import ecarsi.warm_pool.state as pool
+    import ecarsi.dataset_workflow as module
+    from temporalio.common import WorkflowIDReusePolicy
+    spec = dict(output_root=str(tmp_path), pool_root=str(tmp_path / 'pool'),
+                bridge_root=str(tmp_path / 'bridge'), run_id='test')
+    save(tmp_path / 'spec.json', spec)
+    request = tmp_path / 'pool/requests/compute/request.json'
+    request.parent.mkdir(parents=True)
+    save(request, {'spec': {'trace': {'workflow_id': 'dataset/test'}}})
+    class Event:
+        workflow_execution_started_event_attributes = NS(input=NS(payloads=[]))
+        def HasField(self, name):
+            return False
+    class Client:
+        data_converter = None
+        def __init__(self):
+            self.data_converter = self
+            self.started = []
+        def get_workflow_handle(self, *args, **kwargs):
+            return self
+        async def decode(self, *args):
+            return [spec]
+        async def describe(self):
+            return NS(status=NS(name='FAILED'), run_id='old')
+        async def fetch_history(self):
+            return NS(events=[Event()])
+        async def start_workflow(self, *args, **kwargs):
+            self.started.append(kwargs)
+            return NS(result_run_id='new')
+    client = Client()
+    monkeypatch.setattr(pool, 'status', lambda *args: {'state': 'unknown_external_result'})
+    with pytest.raises(ValueError, match='Reconcile'):
+        asyncio.run(module.resume_dataset(client, 'dataset/test', 'queue', 'confirmed fix'))
+    assert not client.started
+    monkeypatch.setattr(pool, 'status', lambda *args: {'state': 'succeeded'})
+    asyncio.run(module.resume_dataset(client, 'dataset/test', 'queue', 'confirmed fix'))
+    assert client.started == [dict(args=[spec, True], id='dataset/test', task_queue='queue',
+        id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY)]
+    assert len(list((tmp_path / 'recoveries').glob('*.started.json'))) == 1
+
+
 def test_failed_unit_does_not_cancel_its_running_sibling(monkeypatch):
     import ecarsi.dataset_workflow as module
     from types import SimpleNamespace

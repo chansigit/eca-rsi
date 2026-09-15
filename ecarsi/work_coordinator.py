@@ -371,6 +371,9 @@ async def main():
     p.add_argument("spec", type=Path)
     p = commands.add_parser("start-dataset")
     p.add_argument("spec", type=Path)
+    p = commands.add_parser("resume-dataset")
+    p.add_argument("run_id")
+    p.add_argument("--reason", required=True)
     for name in ("status", "status-agent", "status-persample", "resume-persample", "status-crosssample", "resume-crosssample", "status-zoomin", "resume-zoomin", "status-dataset"):
         p = commands.add_parser(name)
         p.add_argument("run_id")
@@ -412,6 +415,11 @@ async def main():
                       id=identity, task_queue=args.task_queue,
                       id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE)
         print(handle.id)
+    elif args.command == 'resume-dataset':
+        from .dataset_workflow import resume_dataset
+        from .warm_pool.state import identifier
+        handle = await resume_dataset(client, 'dataset/' + identifier(args.run_id), args.task_queue, args.reason)
+        print(json.dumps(dict(workflow_id=handle.id, run_id=handle.result_run_id)))
     elif args.command in {"resume-persample", "resume-crosssample", "resume-zoomin"}:
         from .persample_workflow import PersampleWorkflow
         from .crosssample_workflow import CrosssampleWorkflow

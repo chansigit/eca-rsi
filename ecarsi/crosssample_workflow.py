@@ -8,7 +8,7 @@ from temporalio.exceptions import ApplicationError
 from .persample_workflow import await_pool, call
 
 
-def validate_spec(spec):
+def validate_spec(spec, *, resume=False):
     from .agent_session import verified
     from .warm_pool.state import identifier, pool_root
     from .agent_bridge import root_path
@@ -25,7 +25,7 @@ def validate_spec(spec):
     if len(spec['run_id']) > 60 or not isinstance(spec['dataset_id'], str) or not spec['dataset_id'].strip():
         raise ValueError('Use a run ID up to 60 characters and a dataset label')
     output = Path(spec['output_root'])
-    if not output.is_absolute() or output.exists():
+    if not output.is_absolute() or (output.exists() and not resume):
         raise ValueError('Use a fresh absolute output directory')
     publication = verified(spec['input'])
     if 'previous_round' in spec:
