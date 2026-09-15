@@ -84,7 +84,9 @@ root.insertAdjacentHTML = (_, svg) => { root.flowSvg = svg; };
 assert.equal(context.drawFlow(links, 0, 400), 2);
 assert(root.flowSvg.includes('data-workflow="organize/run-a"'));
 assert(root.flowSvg.includes('class="flow-edge"'));
-assert(root.flowSvg.includes(' Z" fill='));
+assert(root.flowSvg.includes('stroke-width="6"'));
+assert(!root.flowSvg.includes('<circle'));
+assert(!root.flowSvg.includes(' Z"'));
 assert(!root.flowSvg.includes('NaN'));
 assert.equal(context.datasetColor('dataset-a'), context.datasetColor('dataset-a'));
 
