@@ -122,6 +122,26 @@ global storage admission, production Temporal database failover, and the new
 cross-sample/Zoom-in workflows remain separate work. The development integration
 does not resume production datasets.
 
+## GPU workflow acceptance, 2026-09-15
+
+`prostate-gpu-20260915-0119` reused an accepted Organize input and wrote a fresh
+per-sample output root. All three samples completed: 625 input cells, 507 retained
+and 118 actual exclusions with reasons and source IDs. One compute task used
+RAPIDS on `sh03-15n05`; two used CPU on `sh04-14n18`, with peak compute concurrency
+of three. The trial explicitly set `gpu_min_cells=1` to exercise GPU placement;
+this is not a recommended size threshold.
+
+All 31 model turns were saved. Worker tools handled annotation evidence checks
+and agent-requested subclustering before final publication. Model waits held no
+Pool resources. Final H5AD identities, annotation columns, sample coverage and
+cell-exclusion conservation were verified. The three-node pool uses the same
+CPU/GPU scientific image; this small batch does not measure large-dataset
+throughput or GPU speedup. Cross-sample remains unimplemented in v2.
+
+The report is `workflow-acceptance.json` and the final publication is
+`persample-prostate/publication.json`, under
+`/scratch/users/chensj16/eca-runs/warmpool-v2-development/gpu-integration-20260915-004458`.
+
 ## Real-data acceptance, 2026-09-14
 
 | Dataset | Samples | Input cells | After QC | Recorded QC removals |
