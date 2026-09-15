@@ -67,6 +67,16 @@ def main(argv=None):
     slurm.add_argument("--time-limit-seconds", type=int)
     slurm.add_argument("--gpu", action="store_true", help="use the one GPU granted to this Slurm step")
     slurm.add_argument("runtime_command", nargs=argparse.REMAINDER, help="runtime Python command after --")
+    addition = commands.add_parser("add-worker", help="join an existing Slurm node with automatic resource and runtime discovery")
+    addition.add_argument("host", nargs="?", help="SSH host; omit when already inside the allocation")
+    addition.add_argument("--host-python", help="host Python 3.11+ available on the remote node; defaults to this interpreter")
+    addition.add_argument("--job-id", help="optional expected allocation ID")
+    addition.add_argument("--cpus", help="optional CPU ID subset; defaults to the full Slurm affinity")
+    addition.add_argument("--memory-mb", type=int, help="optional smaller budget; defaults to 90%% of the grant")
+    addition.add_argument("--work-dir", type=Path)
+    addition.add_argument("--gpu", action=argparse.BooleanOptionalAction, default=None, help="defaults to the actual Slurm GPU grant")
+    addition.add_argument("--bind", action="append", help="container bind mount; repeat to override default shared roots")
+    addition.add_argument("--wait-seconds", type=int, default=120)
     submission = commands.add_parser("submit")
     submission.add_argument("spec", type=Path)
     inspection = commands.add_parser("status")
@@ -91,6 +101,14 @@ def main(argv=None):
         from .allocation import launch
         return launch(a.root, [int(v) for v in a.cpus.split(",")], a.memory_mb, a.work_dir,
                       a.runtime_command, a.job_id, a.time_limit_seconds, a.gpu)
+    elif a.command == "add-worker":
+        from .provision import add_worker
+        result = add_worker(a.root, a.host, host_python=a.host_python, job_id=a.job_id,
+                            cpu_ids=[int(v) for v in a.cpus.split(",")] if a.cpus else None,
+                            memory_mb=a.memory_mb, work_dir=a.work_dir, gpu=a.gpu,
+                            binds=a.bind, wait_seconds=a.wait_seconds)
+        if result is None:
+            return 0  # The remote command already printed its result.
     elif a.command == "submit":
         result = submit(a.root, read(a.spec))
     elif a.command == "cancel":

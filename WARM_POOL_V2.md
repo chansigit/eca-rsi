@@ -83,6 +83,36 @@ No command requests or releases a Slurm allocation.
 
 ### Join an existing Slurm allocation
 
+From a host Python 3.11+ with this checkout on `PYTHONPATH`, use:
+
+```bash
+python -m ecarsi.warm_pool --root "$pool_state" add-worker sh04-01n13
+```
+
+`add-worker` connects over SSH, probes the actual Slurm cgroup and CPU affinity,
+uses 90% of the smaller Slurm/cgroup memory limit, and reads the scientific image,
+Python and import paths from the pool configuration. It starts the worker detached
+from the terminal, records `startup.json` and `startup.log` under the pool's
+`worker-state/<host>-<job>/`, and waits for actual HyperQueue registration inside
+the configured runtime. Repeating the command returns the existing registration;
+an in-progress startup is not launched twice. A timeout leaves startup running
+and reports the log path. The existing worker supervisor handles reconnection.
+
+GPU detection uses **allocated** `AllocTRES`, never physical node inventory alone.
+For a single-GPU allocation without GPU step visibility, the command starts an
+`srun` step **inside the existing job**, then reuses the GPU UUID/cgroup and
+CuPy/RAPIDS checks before registration. An invalid GPU setup fails visibly rather
+than silently registering a CPU worker. Automatic multi-GPU splitting is not
+implemented; use one explicit GPU step per worker for those allocations.
+
+Optional `--job-id`, `--cpus`, `--memory-mb`, `--work-dir`, `--gpu`/`--no-gpu`
+preserve explicit control. `--host-python` selects a host Python installed at a
+different path; `--bind` can be repeated to replace the default existing
+`/scratch`, `/oak`, `/home`, `/lscratch` mounts. Omit the hostname when already on
+the allocated host. No command requests or releases an allocation.
+
+For an explicit foreground launch with a manually supplied runtime:
+
 Run `slurm-worker` **on the allocated host**, using a host Python 3.11+ with
 this checkout on `PYTHONPATH`. It reads `scontrol` and the actual process cgroup,
 then replaces itself with the runtime command supplied after `--`. No Slurm
