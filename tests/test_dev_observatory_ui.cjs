@@ -34,6 +34,7 @@ const chart = element('timeline').innerHTML;
 assert(chart.includes('worker-a · lane 2'));
 assert(chart.indexOf('worker-a · lane 2') < chart.indexOf('worker-a · CPU'));
 assert(chart.includes('data-tip-title="a" data-tip-step="compute"'));
+assert(!chart.includes('>compute</span>'));
 assert(!chart.includes('Unit: compute'));
 assert(!chart.includes('timeline-queue'));
 assert(element('timeline-note').textContent.includes('started-task queue time is in task details'));

@@ -310,7 +310,7 @@ function renderTimeline(data) {
       if (parentsByChild.has(t.id)) body.push(`Upstream: ${parentsByChild.get(t.id).join(', ')}`);
       if (t.trace_source!=='explicit') body.push(`Identity: ${t.trace_source}`);
       const width=pos(end)-pos(start);
-      return end>start?`<span class="timeline-bar ${/fail/i.test(t.state)?'failed':t.service}" tabindex="0" style="left:${pos(start)}%;width:${Math.max(width,.3)}%;background:${datasetColor(t.trace.dataset_id)}" data-task-id="${esc(t.id)}" data-workflow="${esc(t.trace.workflow_id)}" data-tip-title="${esc(t.trace.dataset_id)}" data-tip-step="${esc(t.trace.unit_id||t.operation)}" data-tip-body="${esc(body.join('\n'))}">${width>6?esc(t.trace.unit_id.split('.').pop()):''}</span>`:'';
+      return end>start?`<span class="timeline-bar ${/fail/i.test(t.state)?'failed':t.service}" tabindex="0" style="left:${pos(start)}%;width:${Math.max(width,.3)}%;background:${datasetColor(t.trace.dataset_id)}" data-task-id="${esc(t.id)}" data-workflow="${esc(t.trace.workflow_id)}" data-tip-title="${esc(t.trace.dataset_id)}" data-tip-step="${esc(t.trace.unit_id||t.operation)}" data-tip-body="${esc(body.join('\n'))}"></span>`:'';
     }).join('');
     taskRows.set(lane.base,(taskRows.get(lane.base)||'')+`<div class="timeline-row"><div class="timeline-label" tabindex="0" data-tip-title="${lane.base==='Agent Bridge'?'Display lane':'Worker lane'}" data-tip-body="${esc(lane.label)}${lane.base==='Agent Bridge'?' · overlap only; executor identity unavailable':''}">${esc(lane.label)}</div><div class="timeline-track">${items}</div></div>`);
   }
