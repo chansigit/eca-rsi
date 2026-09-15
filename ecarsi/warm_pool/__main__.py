@@ -6,8 +6,18 @@ from pathlib import Path
 import subprocess
 import sys
 
-from .backend import check_hq, join, serve
-from .state import cancel, file_digest, lock, read, save, status, submit, sync_directory
+from .backend import check_hq, check_runtime, join, serve
+from .state import cancel, digest, file_digest, lock, pool_root, read, save, status, submit, sync_directory
+
+
+def configure_runtime(root, runtime):
+    """Validate from inside the target runtime; existing requests keep their pin."""
+    root = pool_root(root)
+    check_runtime(runtime, imports=True)
+    with lock(root / "init.lock"):
+        config = read(root / "config.json")
+        save(root / "config.json", {**config, "runtime": runtime})
+    return {"runtime_digest": digest(runtime)}
 
 
 def initialize(root, hq, runtime):
@@ -38,12 +48,23 @@ def main(argv=None):
     init = commands.add_parser("init")
     init.add_argument("--hq", required=True)
     init.add_argument("--runtime", default=sys.executable)
+    runtime = commands.add_parser("configure-runtime", help="preflight and select the runtime for new requests")
+    runtime.add_argument("spec", type=Path)
     server = commands.add_parser("scheduler")
     server.add_argument("--host")
     worker = commands.add_parser("worker")
     worker.add_argument("--cpus", required=True, help="explicit CPU IDs, e.g. 0,1")
     worker.add_argument("--memory-mb", type=int, required=True)
     worker.add_argument("--work-dir", type=Path, required=True, help="worker-local temporary directory")
+    worker.add_argument("--allocation-profile", type=Path, help="fresh host probe; normally set by slurm-worker")
+    worker.add_argument("--time-limit-seconds", type=int, help="optional shorter worker lifetime")
+    slurm = commands.add_parser("slurm-worker", help="probe an existing Slurm grant on the host, then enter the runtime")
+    slurm.add_argument("--cpus", required=True)
+    slurm.add_argument("--memory-mb", type=int, required=True)
+    slurm.add_argument("--work-dir", type=Path, required=True)
+    slurm.add_argument("--job-id", help="optional expected allocation ID")
+    slurm.add_argument("--time-limit-seconds", type=int)
+    slurm.add_argument("runtime_command", nargs=argparse.REMAINDER, help="runtime Python command after --")
     submission = commands.add_parser("submit")
     submission.add_argument("spec", type=Path)
     inspection = commands.add_parser("status")
@@ -53,10 +74,17 @@ def main(argv=None):
     a = p.parse_args(argv)
     if a.command == "init":
         result = initialize(a.root, a.hq, a.runtime)
+    elif a.command == "configure-runtime":
+        result = configure_runtime(a.root, read(a.spec))
     elif a.command == "scheduler":
         return serve(a.root, a.host)
     elif a.command == "worker":
-        return join(a.root, [int(v) for v in a.cpus.split(",")], a.memory_mb, a.work_dir)
+        return join(a.root, [int(v) for v in a.cpus.split(",")], a.memory_mb, a.work_dir,
+                    a.allocation_profile, a.time_limit_seconds)
+    elif a.command == "slurm-worker":
+        from .allocation import launch
+        return launch(a.root, [int(v) for v in a.cpus.split(",")], a.memory_mb, a.work_dir,
+                      a.runtime_command, a.job_id, a.time_limit_seconds)
     elif a.command == "submit":
         result = submit(a.root, read(a.spec))
     elif a.command == "cancel":

@@ -130,6 +130,76 @@ def task_timeline(pool_rows: list[dict], bridge_rows: list[dict], since: float, 
             "source": "durable Pool and Bridge request/acceptance/result records"}
 
 
+def worker_inventory(pool: Path, tasks: list[dict], now: float, cache: dict) -> list[dict]:
+    """Worker budgets are distinct from host measurements; retain departed identities."""
+    recent = {}
+    for row in resource_history(pool, now - 300, now, cache.setdefault("resource_files", {})):
+        recent.setdefault(row.get("worker_id"), []).append(row)
+    workers = []
+    for path in sorted((pool / "workers").glob("*/identity.json")):
+        identity = read(path, {})
+        worker_id = identity.get("worker_id", path.parent.name)
+        rows = recent.get(worker_id, [])
+        latest = rows[-1] if rows else None
+        if latest is None:
+            # Read only a bounded tail, including for workers last seen on an older day.
+            logs = sorted(path.parent.glob("????-??-??.jsonl"))
+            for log in reversed(logs):
+                stat = log.stat()
+                key = (str(log), stat.st_size, stat.st_mtime_ns)
+                tails = cache.setdefault("worker_tails", {})
+                if key not in tails:
+                    with log.open("rb") as stream:
+                        stream.seek(max(0, stat.st_size - 65536))
+                        lines = stream.read().split(b"\n")[:-1]
+                    value = None
+                    for line in reversed(lines):
+                        try:
+                            candidate = json.loads(line)
+                            if isinstance(candidate, dict) and isinstance(candidate.get("observed_at"), (int, float)):
+                                value = candidate
+                                break
+                        except ValueError:
+                            pass
+                    tails[key] = value
+                latest = tails[key]
+                if latest:
+                    break
+        last_seen = (latest or {}).get("observed_at")
+        reporting = last_seen is not None and 0 <= now - last_seen <= 90
+        measurements = summarize_resources([latest], last_seen, last_seen + 1)[0] if latest else {}
+        averaged = [summarize_resources([r], r["observed_at"], r["observed_at"] + 1)[0]
+                    for r in rows]
+        means = {}
+        for metric in ("cpu_percent", "memory_percent", "gpu_percent", "gpu_memory_percent"):
+            values = [r[metric] for r in averaged if r[metric] is not None]
+            means[metric] = sum(values) / len(values) if values else None
+        # Cancellation is still occupying its reservation until an execution receipt arrives.
+        active = [t for t in tasks if t.get("worker_id") == worker_id
+                  and t.get("started_at") and not t.get("finished_at")]
+        workers.append({"worker_id": worker_id, "host": identity.get("host", "Unknown host"),
+                        "slurm_job_id": identity.get("slurm_job_id"),
+                        "cpus": len(identity.get("cpu_ids", [])),
+                        "memory_mb": identity.get("memory_mb"), "reporting": reporting,
+                        "last_seen": last_seen, "current": measurements, "mean_5m": means,
+                        "sample_count_5m": len(rows), "tasks": active,
+                        "reserved_cpus": sum(t.get("cpus") or 0 for t in active),
+                        "reserved_memory_mb": sum(t.get("memory_mb") or 0 for t in active)})
+    known = {w["worker_id"] for w in workers}
+    historical = {}
+    for task in tasks:
+        if task.get("host") and task.get("worker_id") not in known:
+            key = task.get("worker_id") or ("legacy-host", task["host"])
+            row = historical.setdefault(key, {"worker_id": task.get("worker_id"),
+                "host": task["host"], "slurm_job_id": None, "reporting": False,
+                "last_seen": None, "last_activity": 0, "tasks": [], "history_only": True})
+            row["last_activity"] = max(row["last_activity"], task.get("finished_at") or
+                                       task.get("started_at") or task["submitted_at"])
+            if task.get("started_at") and not task.get("finished_at"):
+                row["tasks"].append(task)
+    return workers + list(historical.values())
+
+
 def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.0.1",
              cache: dict | None = None, pool_root: Path | None = None,
              bridge_root: Path | None = None) -> dict:
@@ -218,17 +288,14 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
             temporal_ui = True
     except OSError:
         temporal_ui = False
-    live_workers = set()
-    if (pool / "workers").is_dir():
-        now = time.time()
-        live_workers = {row.get("worker_id") for row in resource_history(pool, now - 90, now,
-            cache.setdefault("resource_files", {})) if row.get("worker_id")}
+    workers = worker_inventory(pool, pool_rows, time.time(), cache)
     return {
         "generated_at": time.time(), "host": socket.gethostname(),
         "mode": "development / read-only", "temporal_ui": temporal_ui,
         "temporal_port": temporal_port, "temporal_source": "unvalidated development SQLite",
         "scheduler": scheduler, "worker": worker, "bridge_summary": bridge_summary,
-        "worker_live_count": len(live_workers),
+        "worker_live_count": sum(w["reporting"] for w in workers), "workers": workers,
+        "pool_waiting": sum(t["state"] == "queued" for t in pool_rows),
         "acceptance": acceptance,
         "pool_requests": sorted(pool_rows, key=lambda x: x["submitted_at"], reverse=True),
         "bridge_requests": sorted(bridge_rows, key=lambda x: x["submitted_at"], reverse=True),

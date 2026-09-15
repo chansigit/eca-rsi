@@ -31,10 +31,40 @@ pool_state=/absolute/durable/path/development-pool
 python -m ecarsi.warm_pool --root "$pool_state" init --hq /absolute/path/hq
 ```
 
-Initialization requires a user-owned directory with mode `0700`. Configuration
-is immutable for this pool. The runtime defaults to the current Python; its
+Initialization requires a user-owned directory with mode `0700`. Backend
+configuration is immutable for this pool. The runtime defaults to the current Python; its
 binary hash and `--version` are checked before a worker joins and before each
-execution. This is **not yet a complete container/dependency fingerprint**.
+execution. This default identifies only the interpreter. Scientific workers
+should additionally pin their image and declared package paths as below.
+
+### Scientific runtime
+
+`configure-runtime runtime.json` validates the target environment before selecting
+it for new requests. Run it inside that environment. The JSON includes `command`,
+`version`, `files` (absolute file path to SHA256), and can additionally specify:
+
+- `image`: absolute `path` and `sha256` of the running Apptainer image.
+- `pythonpath`: explicit absolute package directories, replacing inherited paths.
+- `imports`: modules that must import successfully before worker registration.
+
+```bash
+python -m ecarsi.warm_pool --root "$pool_state" configure-runtime runtime.json
+```
+
+The image hash is checked at worker registration; its active image path and
+declared files are checked per task. Each request retains its original runtime
+fingerprint. Updating the default does not rewrite old requests or change an
+already running worker. Start workers in the new image before expecting new
+requests to run, and finish old work before replacing old workers. HQ places each
+request only on matching runtime capacity. Numba caches are separated by runtime
+fingerprint. This does not package mutable application source automatically;
+operations must also declare source/input hashes.
+
+The 2026-09-14 per-sample trial uses `rsi-cpu-20260914.sif`: scientific packages
+and OSP live under `/opt/rsi-python`, with package versions and source hashes in
+`/opt/rsi-runtime.json`. Compute no longer reads the external `dl2025` package
+directory. Bridge and Coordinator control environments are still separate and
+have not yet been packaged into this science image.
 
 Start these foreground processes in separate terminals. Select CPU IDs from
 `os.sched_getaffinity(0)` and memory from your actual available allocation:
@@ -50,6 +80,44 @@ pool, using the same requests and receipts. Worker CPU locks also use the
 existing per-host RSI lock directory, preventing overlap with cooperating
 legacy supervisors. Each worker's memory budget must be provisioned explicitly.
 No command requests or releases a Slurm allocation.
+
+### Join an existing Slurm allocation
+
+Run `slurm-worker` **on the allocated host**, using a host Python 3.11+ with
+this checkout on `PYTHONPATH`. It reads `scontrol` and the actual process cgroup,
+then replaces itself with the runtime command supplied after `--`. No Slurm
+libraries need to be mounted into the scientific image:
+
+```bash
+PYTHONPATH="$PWD" /absolute/host/python3 -m ecarsi.warm_pool --root "$pool_state" slurm-worker \
+  --cpus 0,1 --memory-mb 16384 --work-dir /absolute/shared/worker-directory \
+  --job-id 12345 -- \
+  apptainer exec --cleanenv --bind /scratch,/oak,/home,/lscratch \
+  --env "PYTHONPATH=$PWD:/opt/rsi-python" /absolute/rsi-cpu.sif /usr/local/bin/python3
+```
+
+Replace CPU IDs, memory, job ID, paths and bind mounts with your allocation and
+configured runtime. `--job-id` is an optional guard, not a substitute for a real
+Slurm cgroup. Direct `worker` is for local execution outside Slurm; inside Slurm
+it requires the fresh host profile produced by `slurm-worker`.
+
+CPU locks are shared with legacy RSI. Memory reservations use the existing
+per-host, per-job ledger; two Slurm jobs on the same machine keep distinct
+memory grants. Stale reservations are removed only after their ownership locks
+and recorded process/exit evidence show that the old worker stopped. Uncertain
+executors keep their reservation. A worker directory stays bound to its pool
+and CPU slice; use a new directory when either changes.
+
+Workers stop 60 seconds before the allocation's recorded end. The remaining
+lifetime is passed to native HyperQueue `--time-limit`; each request already
+has `--time-request` (at least its execution timeout). HyperQueue can backfill
+short tasks while longer tasks wait for a worker with enough time. Reconnecting
+does not reset the allocation deadline. See the official
+[worker lifetime documentation](https://it4innovations.github.io/hyperqueue/stable/deployment/worker/).
+`--time-limit-seconds` can shorten a worker's lifetime for explicit use or tests.
+Allocation extensions require relaunching the worker with a fresh probe; they
+are not silently assumed. An unexpected early Slurm cancellation remains a
+worker-loss case.
 
 Save a request as `/absolute/path/request.json`:
 
@@ -156,6 +224,7 @@ Example plan (replace all host, allocation and CPU identifiers with your grants)
 {
   "hq": "/absolute/path/hq",
   "image": "/absolute/path/python312.sif",
+  "host_python": "/absolute/host/python3",
   "nodes": [
     {"host": "node-a", "job_id": "12345", "worker_cpu": 0, "control_cpu": 1},
     {"host": "node-b", "job_id": "12346", "worker_cpu": 0, "control_cpu": 1}
@@ -170,12 +239,39 @@ the first host to the second, and subsequent work completed on both hosts.
 These are recorded test allocations, not reusable current resource assignments.
 The test does not automatically provision nodes or modify another pool's budgets.
 
+### Slurm budget and expiry acceptance, 2026-09-15
+
+The three development workers were relaunched through `slurm-worker`, retaining
+their explicit 2-CPU/16-GiB test slices. Their observed Slurm allocations were
+64 CPU/256 GiB (`43316333`), 32 CPU/64 GiB plus one GPU (`43316407`), and
+8 CPU/32 GiB (`43316331`). This milestone advertises CPU resources only; the GPU
+allocation does not imply GPU execution. Each worker completed a new test task.
+Old legacy ledger entries were reconciled using the existing lock/process
+checks; each new slice is now recorded against its actual Slurm job.
+
+An isolated pool used another explicitly budgeted CPU and 256 MiB on the first
+node. Its 100-second worker accepted a short task while leaving a task with a
+140-second time request queued, then exited without relaunching. A replacement
+worker completed the original queued request without resubmission. This tests
+the configured lifetime and handoff, not forced Slurm cancellation or physical
+node loss. Artifacts are under
+`/scratch/users/chensj16/eca-runs/warmpool-v2-development/slurm-integration-20260914-234920/`.
+The test runner's final cleanup had a formatting error; the exact isolated
+test processes were stopped separately and verified in `cleanup.json`.
+
+The repository's two-node recovery test also passed with the Slurm launcher:
+both computations finished while the Scheduler was down; the Scheduler then
+moved to the other host and all five tasks completed exactly once. Test workers
+released their reservations after cleanup. Its report is
+`multinode-recovery/acceptance.json` under the same artifact directory.
+
 Before connecting scientific production workflows, the next gates are:
 
-1. Automatic Slurm allocation discovery, remaining walltime, worker drain/replacement,
-   CPU/GPU identities and memory budgets across workers on the same host.
-2. A pinned scientific image and kernel/code identity; CPU Scanpy and GPU
-   RAPIDS operation variants, selected by declared capability.
+1. GPU identity/resource scheduling and CPU Scanpy/GPU RAPIDS operation variants.
+   CPU grant discovery, shared memory reservations and remaining worker walltime
+   are implemented; node acquisition remains a user responsibility.
+2. Complete application-code identity and control-component images. The current
+   CPU scientific image includes OSP and dependencies; runtime matching is enforced.
 3. Host-loss and network-partition recovery. Current evidence covers local
    process failures and Scheduler relocation between two Slurm hosts with a
    shared Lustre state directory; neither host was powered off. Resource limits currently use CPU affinity
@@ -184,8 +280,9 @@ Before connecting scientific production workflows, the next gates are:
    processes block reuse rather than being assumed dead.
 4. Storage-domain quotas and staging/publication across node-local scratch,
    shared scratch and durable storage, plus bounded attempt retry policy.
-5. A real confirmed OSP sample compute, then the asynchronous Work Coordinator
-   and Agent Bridge handshake. Scientific decisions and convergence remain
+5. Cross-sample and Zoom-in integration. Organize and per-sample now connect
+   Work Coordinator, Agent Bridge and worker tools; see [per-sample acceptance](PERSAMPLE_V2.md).
+   Scientific decisions and convergence remain
    outside the Warm Pool Scheduler.
 
 These are implementation gates, not claims that the new system is already

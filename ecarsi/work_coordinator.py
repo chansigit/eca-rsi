@@ -49,11 +49,14 @@ def submit_plan(spec: dict, prepared_path: str) -> str:
 
 
 @activity.defn
-def submit_execute(spec: dict, prepared_path: str, reply_path: str) -> str:
+def submit_execute(spec: dict, prepared_path: str, reply_path: str, plan_parent: str | None = None) -> str:
     from .warm_pool.state import file_digest, submit
     request_id = spec["run_id"] + ".execute"
+    trace = task_trace(spec, "organize.execute")
+    if plan_parent:
+        trace["depends_on"] = [plan_parent]
     submit(spec["pool_root"], dict(request_id=request_id, operation_id="organize.execute",
-        trace=task_trace(spec, "organize.execute"),
+        trace=trace,
         args=["-m", "ecarsi.organize_v2", "execute", prepared_path, reply_path, "."],
         cpus=spec["execute_cpus"], memory_mb=spec["execute_memory_mb"],
         timeout_seconds=spec["execute_timeout_seconds"],
@@ -98,6 +101,12 @@ def accept_organize(output: str, destination: str) -> str:
     return publish(Path(output).parent, Path(destination))
 
 
+@activity.defn
+def organize_agent_step(action: str, args: list):
+    from .organize_v2 import planning_spec, accepted_plan
+    return {"spec": planning_spec, "accept": accepted_plan}[action](*args)
+
+
 @workflow.defn
 class OrganizeWorkflow:
     @workflow.query
@@ -127,24 +136,108 @@ class OrganizeWorkflow:
         prepare_id = await call(submit_prepare, spec)
         prepared_path = await await_pool(prepare_id, "prepared.json")
         self._stage = "planning"
-        plan_id = await call(submit_plan, spec, prepared_path)
-        while True:
-            result = await call(check_bridge, spec["bridge_root"], plan_id)
-            if result["state"] == "ready":
-                reply_path = result["path"]
-                break
-            if result["state"] != "waiting":
-                raise ApplicationError(f"{plan_id}: {result['state']}: {result.get('detail')}",
-                                       non_retryable=True)
-            await workflow.sleep(5)
+        if workflow.patched("organize-worker-plan-v1"):
+            agent_spec = await call(organize_agent_step, "spec", [spec, prepared_path])
+            result = await workflow.execute_child_workflow(AgentWorkflow.run, agent_spec,
+                id=workflow.info().workflow_id + "/plan")
+            accepted = await call(organize_agent_step, "accept", [spec, result, prepared_path])
+            execute_args = [spec, prepared_path, accepted["path"], accepted["request_id"]]
+        else:
+            # Existing histories retain the original planning activities on replay.
+            plan_id = await call(submit_plan, spec, prepared_path)
+            while True:
+                result = await call(check_bridge, spec["bridge_root"], plan_id)
+                if result["state"] == "ready":
+                    reply_path = result["path"]
+                    break
+                if result["state"] != "waiting":
+                    raise ApplicationError(f"{plan_id}: {result['state']}: {result.get('detail')}",
+                                           non_retryable=True)
+                await workflow.sleep(5)
+            execute_args = [spec, prepared_path, reply_path]
         self._stage = "executing"
-        execute_id = await call(submit_execute, spec, prepared_path, reply_path)
+        execute_id = await call(submit_execute, *execute_args)
         completion = await await_pool(execute_id, "completion.json")
         self._stage = "publishing"
         return await call(accept_organize, completion, spec["output_root"])
 
 
-ACTIVITIES = [submit_prepare, submit_plan, submit_execute, check_pool, check_bridge, accept_organize]
+ACTIVITIES = [submit_prepare, submit_plan, submit_execute, check_pool, check_bridge, accept_organize, organize_agent_step]
+
+
+@activity.defn
+def agent_step(action: str, args: list):
+    from . import agent_session as session
+    from .warm_pool.state import read
+    if action == "decision":
+        reply = read(args[0])["response"]
+        return {"kind": reply["kind"], "calls": len(reply["calls"])}
+    if action == "finish":
+        spec = session.verified(args[0])["spec"]
+        if session.turn_reply(args[0], args[1])["kind"] != "final":
+            raise ValueError("Cannot finish an agent with pending tools")
+        return session.immutable(Path(spec["output_root"]) / "result.json",
+                                 {"session": args[0], "reply": session.reference(args[1])})["path"]
+    operations = {"create": session.create_session, "model": session.submit_turn,
+                  "tool": session.tool_request, "resume": session.continuation,
+                  "complete_tool": session.complete_tool}
+    return operations[action](*args)
+
+
+@workflow.defn
+class AgentWorkflow:
+    """Model turns and worker programs alternate without holding each other's capacity."""
+    @workflow.query
+    def stage(self) -> str:
+        return getattr(self, "_stage", "created")
+
+    @workflow.run
+    async def run(self, spec: dict) -> str:
+        async def call(fn, *args):
+            return await workflow.execute_activity(fn, args=args,
+                start_to_close_timeout=SHORT, retry_policy=RETRY)
+
+        session = await call(agent_step, "create", [spec])
+        context = None
+        parents = []
+        for turn in range(spec["max_turns"]):
+            self._stage = "model"
+            request = await call(agent_step, "model", [session, turn, context, parents])
+            while True:
+                result = await call(check_bridge, spec["bridge_root"], request)
+                if result["state"] == "ready":
+                    break
+                if result["state"] != "waiting":
+                    raise ApplicationError(f"{request}: {result['state']}", non_retryable=True)
+                await workflow.sleep(2)
+            reply = result["path"]
+            decision = await call(agent_step, "decision", [reply])
+            if decision["kind"] == "final":
+                self._stage = "complete"
+                return await call(agent_step, "finish", [session, reply])
+            if decision["kind"] != "tools" or not 1 <= decision["calls"] <= 16:
+                raise ApplicationError("Invalid agent tool boundary", non_retryable=True)
+            self._stage = "tools"
+            accepted, parents = [], []
+            # Ordered tools are the conservative default; never infer independence from a model batch.
+            for index in range(decision["calls"]):
+                item = await call(agent_step, "tool", [session, reply, index, parents[-1] if parents else None])
+                while True:
+                    result = await call(check_pool, spec["pool_root"], item["request_id"], item["result_file"])
+                    if result["state"] == "ready":
+                        break
+                    if result["state"] != "waiting":
+                        raise ApplicationError(f"{item['request_id']}: {result['state']}", non_retryable=True)
+                    await workflow.sleep(2)
+                accepted.append({**item, "path": result["path"]})
+                parents.append(item["request_id"])
+            context = await call(agent_step, "resume", [session, reply, accepted])
+            if spec.get("completion_tool"):
+                completed = await call(agent_step, "complete_tool", [session, context])
+                if completed:
+                    self._stage = "complete"
+                    return completed
+        raise ApplicationError("Agent model-turn budget exhausted", non_retryable=True)
 
 
 def validate_spec(spec):
@@ -183,27 +276,70 @@ async def main():
     commands.add_parser("worker")
     p = commands.add_parser("start")
     p.add_argument("spec", type=Path)
-    p = commands.add_parser("status")
-    p.add_argument("run_id")
+    p = commands.add_parser("start-agent")
+    p.add_argument("spec", type=Path)
+    p = commands.add_parser("start-persample")
+    p.add_argument("spec", type=Path)
+    for name in ("status", "status-agent", "status-persample", "resume-persample"):
+        p = commands.add_parser(name)
+        p.add_argument("run_id")
     args = parser.parse_args()
     client = await Client.connect(args.temporal)
     if args.command == "worker":
+        from .persample_workflow import PersampleWorkflow, SampleWorkflow, sample_step
         with ThreadPoolExecutor(max_workers=16) as executor:
-            async with Worker(client, task_queue=args.task_queue, workflows=[OrganizeWorkflow],
-                              activities=ACTIVITIES, activity_executor=executor,
+            async with Worker(client, task_queue=args.task_queue, workflows=[OrganizeWorkflow, AgentWorkflow, PersampleWorkflow, SampleWorkflow],
+                              activities=ACTIVITIES + [agent_step, sample_step], activity_executor=executor,
                               max_concurrent_activities=16):
                 await asyncio.Future()
-    elif args.command == "start":
-        spec = validate_spec(json.loads(args.spec.read_text()))
-        handle = await client.start_workflow(OrganizeWorkflow.run, spec,
-                      id="organize/" + spec["run_id"], task_queue=args.task_queue,
+    elif args.command in {"start", "start-agent", "start-persample"}:
+        if args.command == "start-agent":
+            from .agent_session import validate_spec as validate_agent
+            spec = validate_agent(json.loads(args.spec.read_text()))
+            run, identity = AgentWorkflow.run, "agent/" + spec["session_id"]
+        elif args.command == "start-persample":
+            from .persample_workflow import PersampleWorkflow, validate_spec as validate_samples
+            spec = validate_samples(json.loads(args.spec.read_text()))
+            run, identity = PersampleWorkflow.run, "persample/" + spec["run_id"]
+        else:
+            spec = validate_spec(json.loads(args.spec.read_text()))
+            run, identity = OrganizeWorkflow.run, "organize/" + spec["run_id"]
+        handle = await client.start_workflow(run, spec,
+                      id=identity, task_queue=args.task_queue,
                       id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE)
+        print(handle.id)
+    elif args.command == "resume-persample":
+        from .persample_workflow import PersampleWorkflow
+        from .agent_session import verified
+        from .warm_pool.state import identifier, read, status
+        from .agent_bridge import status as bridge_status
+        identity = "persample/" + identifier(args.run_id)
+        previous = client.get_workflow_handle(identity)
+        if (await previous.describe()).status.name != "FAILED":
+            raise ValueError("Resume requires a failed per-sample workflow")
+        history = await previous.fetch_history()
+        spec, = await client.data_converter.decode(history.events[0].workflow_execution_started_event_attributes.input.payloads)
+        if read(Path(spec["output_root"]) / "spec.json") != spec:
+            raise ValueError("Saved per-sample specification changed")
+        verified(spec["input_manifest"])
+        for root, inspect, allowed in ((spec["pool_root"], status, {"queued", "running", "succeeded"}),
+                (spec["bridge_root"], bridge_status, {"queued", "running", "reply_saved"})):
+            for path in (Path(root) / "requests").glob("*/request.json"):
+                if read(path)["spec"].get("trace", {}).get("workflow_id") == identity:
+                    state = inspect(root, path.parent.name)["state"]
+                    if state not in allowed:
+                        raise ValueError(f"Reconcile {path.parent.name} ({state}) before resume")
+        handle = await client.start_workflow(PersampleWorkflow.run, spec, id=identity,
+            task_queue=args.task_queue, id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY)
         print(handle.id)
     else:
         from .warm_pool.state import identifier
-        handle = client.get_workflow_handle("organize/" + identifier(args.run_id))
+        from .persample_workflow import PersampleWorkflow
+        kind = {"status": ("organize/", OrganizeWorkflow), "status-agent": ("agent/", AgentWorkflow),
+                "status-persample": ("persample/", PersampleWorkflow)}[args.command]
+        handle = client.get_workflow_handle(kind[0] + identifier(args.run_id))
         info = await handle.describe()
-        stage = await handle.query(OrganizeWorkflow.stage) if info.status.name == "RUNNING" else None
+        stage = await handle.query(kind[1].stage) if info.status.name == "RUNNING" else None
         print(json.dumps({"workflow_id": handle.id, "status": info.status.name,
                           "stage": stage}, sort_keys=True))
 

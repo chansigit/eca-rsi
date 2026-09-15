@@ -1,5 +1,6 @@
 """Bounded Organize computation commands for Warm Pool v2."""
 import argparse
+import json
 from pathlib import Path
 
 from . import layout as L
@@ -24,6 +25,116 @@ def prepare(input_root: Path, destination: Path):
                 "profiles": profiles, "source_identity": digest(records)}
     save(destination, prepared)
     return prepared
+
+
+def planning_spec(spec, prepared_path):
+    """The immutable agent policy names worker programs, never a Bridge-side harness."""
+    from .agent_session import reference
+    from .plan import PLAN_SCHEMA
+    prepared = read(prepared_path)
+    if prepared is None or Path(prepared["input_root"]).resolve() != Path(spec["input_root"]).resolve():
+        raise ValueError("prepared input identity does not match this dataset")
+    package = Path(__file__).parent
+    sources = [p["name"] for p in prepared["profiles"]]
+    tools = []
+    for name, parameters, description in (
+        ("inspect_source", {"source": {"type": "string", "enum": sources},
+            "column": {"type": ["string", "null"]}, "offset": {"type": "integer", "minimum": 0}},
+         "Read a source metadata profile on a worker. Use column=null, offset=0 for its profile. "
+         "For an existing obs column, return up to 100 value counts starting at offset; no expression reads."),
+        ("submit_plan", {"plan_json": {"type": "string"}},
+         "Validate and submit the complete plan on a worker. Correct any returned error and resubmit. "
+         "plan_json is JSON matching this schema: " + json.dumps(PLAN_SCHEMA))):
+        tools.append(dict(name=name, description=description,
+            parameters={"type": "object", "properties": parameters,
+                        "required": list(parameters), "additionalProperties": False},
+            args=["-m", "ecarsi.organize_v2", "plan-tool", name, str(prepared_path), "{arguments}", "result.json"],
+            cpus=spec["prepare_cpus"], memory_mb=spec["prepare_memory_mb"],
+            timeout_seconds=spec["prepare_timeout_seconds"],
+            inputs=[reference(prepared_path), *[reference(package / p) for p in (
+                "organize_v2.py", "plan.py", "execute.py", "upstream.py")]],
+            outputs=["result.json"], result_file="result.json"))
+    prompt = (package / "prompts/plan.md").read_text() + "\n\n" + (package / "prompts/organize_v2.md").read_text()
+    prompt += ("\n\n## Worker tools\nYou have no local filesystem or code execution. "
+               "Call inspect_source for each source before deciding. Request additional column value counts "
+               "only if needed; pagination is explicit. Use submit_plan for the structured plan instead of "
+               "returning it as prose. A rejected plan includes a concrete error: correct it and resubmit. "
+               "An accepted plan ends this planning session automatically. Never bypass the sample mapping "
+               "or cell-conservation checks.\nSources: " + json.dumps(sources))
+    return dict(session_id="org-" + digest(spec["run_id"])[:24],
+        dataset_id=spec.get("dataset_id", spec["run_id"]), prompt=prompt, tools=tools,
+        pool_root=spec["pool_root"], bridge_root=spec["bridge_root"],
+        output_root=spec["output_root"] + ".planning", max_turns=30, completion_tool="submit_plan",
+        trace={"workflow_id": "organize/" + spec["run_id"], "dataset_id": spec.get("dataset_id", spec["run_id"]),
+               "unit_id": "organize.plan", "depends_on": [spec["run_id"] + ".prepare"]})
+
+
+def plan_tool(name, prepared_path, arguments_path, destination):
+    """Metadata reads and scientific plan validation run only inside a Pool grant."""
+    from .upstream import inspect_unit, normalize
+    from .plan import PLAN_SCHEMA, _validate, validate_sample_mapping
+    from .execute import _conservation_audit, _experiment_audit
+    from jsonschema import validate, ValidationError
+    prepared, arguments = read(prepared_path), read(arguments_path)
+    current = [inspect_unit(record) for record in prepared["records"]]
+    if digest(current) != prepared["source_identity"]:
+        raise ValueError("ECA-PP inputs changed after Organize preparation")
+    try:
+        if name == "inspect_source":
+            profile = next(p for p in prepared["profiles"] if p["name"] == arguments["source"])
+            column = arguments["column"]
+            if column is None:
+                result = {k: profile[k] for k in ("name", "species", "n_obs", "n_vars", "obs_columns")}
+            else:
+                if column not in profile["obs_columns"]:
+                    raise ValueError("Column is not present in this source")
+                import anndata as ad
+                a = ad.read_h5ad(profile["h5ad"], backed="r")
+                try:
+                    counts = normalize(a.obs[column]).value_counts()
+                    offset = arguments["offset"]
+                    result = {"source": profile["name"], "column": column, "offset": offset,
+                              "total_values": len(counts), "n_na": int(normalize(a.obs[column]).isna().sum()),
+                              "value_counts": {str(k): int(v) for k, v in counts.iloc[offset:offset + 100].items()}}
+                finally:
+                    a.file.close()
+        elif name == "submit_plan":
+            plan = json.loads(arguments["plan_json"])
+            validate(plan, PLAN_SCHEMA)
+            _validate(plan, prepared["profiles"])
+            validate_sample_mapping(plan, prepared["profiles"])
+            units = {r["name"]: r for r in current}
+            conservation = _conservation_audit(units, plan)
+            experiments = _experiment_audit(units, plan)
+            result = {"accepted": True, "response": {"plan": plan},
+                      "source_identity": prepared["source_identity"],
+                      "conservation": conservation, "experiments": experiments}
+        else:
+            raise ValueError("Unknown Organize worker tool")
+    except (ValueError, ValidationError) as exc:
+        result = {"accepted": False, "error": str(exc)[:4000], "instruction": "Correct the arguments and retry."}
+    if len(json.dumps(result).encode()) > 262144:
+        raise ValueError("Metadata result exceeds the agent handoff limit")
+    save(destination, result)
+    return result
+
+
+def accepted_plan(spec, session_result, prepared_path):
+    from .agent_session import verified
+    from .warm_pool.state import status
+    result = read(session_result)
+    if not result or "output" not in result:
+        raise ValueError("Agent ended without an accepted submit_plan")
+    session = verified(result["session"])["spec"]
+    if session != planning_spec(spec, prepared_path):
+        raise ValueError("Plan session does not belong to this preparation")
+    receipt = status(spec["pool_root"], result["pool_request_id"])
+    output = verified(result["output"])
+    if (receipt["state"] != "succeeded" or output.get("accepted") is not True
+            or output.get("source_identity") != read(prepared_path)["source_identity"]
+            or result["output"] not in [{k: o[k] for k in ("path", "sha256")} for o in receipt["receipt"]["outputs"]]):
+        raise ValueError("Plan has no matching accepted worker receipt")
+    return {"path": result["output"]["path"], "request_id": result["pool_request_id"]}
 
 
 def execute(prepared_path: Path, reply_path: Path, output: Path):
@@ -107,9 +218,16 @@ def main():
     p.add_argument("prepared", type=Path)
     p.add_argument("reply", type=Path)
     p.add_argument("output", type=Path)
+    p = commands.add_parser("plan-tool")
+    p.add_argument("name", choices=["inspect_source", "submit_plan"])
+    p.add_argument("prepared", type=Path)
+    p.add_argument("arguments", type=Path)
+    p.add_argument("output", type=Path)
     args = parser.parse_args()
     if args.operation == "prepare":
         prepare(args.input_root, args.output)
+    elif args.operation == "plan-tool":
+        plan_tool(args.name, args.prepared, args.arguments, args.output)
     else:
         execute(args.prepared, args.reply, args.output)
 

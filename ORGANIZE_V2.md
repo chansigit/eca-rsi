@@ -1,16 +1,21 @@
 # Organize v2 integration
 
 The development branch connects one Temporal Workflow per dataset to three
-bounded operations: `organize.prepare` in Warm Pool, `organize.plan` in Agent
-Bridge, and `organize.execute` in Warm Pool. Temporal stores only references
+business steps: `organize.prepare` in Warm Pool, `organize.plan` alternating
+between Agent Bridge model turns and Warm Pool tools, and `organize.execute`
+in Warm Pool. Temporal stores only references
 and state transitions. Pool and Bridge store their own accepted requests and
 results. Model waiting never occupies a Pool grant. No Slurm allocation is
 requested or released by these services.
 
 `organize.prepare` discovers accepted ECA-PP products, validates source files,
-and saves compact metadata profiles. `organize.plan` uses the existing model
-catalog and harness, now requiring a source-scoped experiment mapping in the
-plan. `organize.execute` rechecks source identities, verifies cell conservation,
+and saves compact metadata profiles. `organize.plan` uses the configured model
+through the durable Agents SDK session. The worker tools `inspect_source` and
+`submit_plan` provide metadata and validate a source-scoped experiment mapping.
+Both tools use the explicit prepare CPU, memory and timeout budget. The model
+has no local filesystem/code tools. Rejected proposals return concrete errors
+for correction within the 30-turn session budget. A successful submit tool ends
+planning without an extra model acknowledgement. `organize.execute` rechecks source identities, verifies cell conservation,
 refuses to split one complete experiment across analysis units, writes organized
 H5AD files and per-cell sample maps, then records output identities. The
 Coordinator verifies the receipt, H5ADs, manifests, upstream snapshots and
@@ -86,17 +91,52 @@ compute has run in this milestone.
 - Temporal Service and supported database stopped and restored on another
   allocated host, with durable persistence and stale-writer exclusion. The
   development server used above is not this test.
-- Pinned CPU/GPU scientific images and whole-runtime identity. The current
-  test container binds a mutable Python environment. Slurm walltime-aware
-  admission, worker expiry and GPU tasks still need integration.
+- GPU scientific image and whole-application identity. Per-sample now uses a
+  pinned CPU scientific image containing OSP and its dependencies. Slurm CPU
+  budgets and worker lifetime are connected; GPU tasks remain to be integrated.
 - Full Agent Bridge design B: provider-turn quotas, tool pause/recovery,
   explicit resolution for unknown external calls and shared multi-model policy.
-  The Organize bridge currently limits whole planning sessions. Unknown
+  New Organize workflows release Bridge capacity at each worker-tool boundary;
+  replay of old workflows preserves their whole-session planning adapter. Unknown
   provider outcomes conservatively reserve capacity and may require review.
-- Bounded automatic replanning on an execution-time mapping audit rejection;
-  current rejection is explicit and does not silently bypass the decision.
-- Larger real datasets, concurrent-node throughput, and full per-sample OSP
-  execution have not been accepted yet.
+- Plan-time mapping and conservation audit errors now return to the model for
+  bounded correction. Execution-time input changes or other failures remain
+  explicit failures; they do not silently change the accepted decision.
+- Larger real datasets and sustained throughput have not been accepted yet.
+  Seven real per-sample OSP/annotation workflows completed across three workers;
+  see [per-sample acceptance](PERSAMPLE_V2.md). These bounded tests establish
+  concurrent placement and recovery, not production throughput.
+
+## Concurrent Organize test, 2026-09-14
+
+Eight Tabula Sapiens SS2 datasets (Prostate, Uterus, Thymus, Fat, Salivary
+Gland, Small Intestine, Tongue and Blood) completed Organize and published
+fresh outputs. Independent backed H5AD reads confirmed 11,060 input cells
+and 11,060 output cells across the eight datasets, with 72 mapped experiments.
+Three workers on `sh03-13n22`, `sh03-15n05` and `sh04-14n18` each had a
+2-CPU, 16-GiB test budget. Recorded start/end times show six simultaneous
+compute tasks, two per node. Completed compute intervals also overlap model
+waiting in other datasets. Bridge retained its two-session concurrency limit.
+
+The initial worker launch omitted the editable `harness_bridge` source path:
+prepare could import its dependencies, but execute could not. Thymus, Fat and
+Blood failed before scientific execution. After correcting all worker launch
+environments and checking executor/publication imports, those three datasets
+were submitted as explicit new `runtime-fixed` Workflows with fresh outputs
+and new model calls. All eight datasets then completed. The three initial
+failed Workflows and receipts remain visible; this is not evidence of automatic
+failure recovery. The compute validators still indirectly import the harness.
+
+Specifications, launch commands, service logs, `runtime-incident.md`,
+`verification.json`, exported Temporal histories and an online SQLite backup
+are under
+`/scratch/users/chensj16/eca-runs/warmpool-v2-development/concurrent-organize-20260914-185643/`.
+Temporal ran from a node-local SQLite database; cross-host persistence recovery
+and a pinned scientific image remain open. No production workflows or OSP
+computations were resumed. The observatory shows this batch automatically;
+browser checks rendered all 22 dependencies in the latest interval and all
+30 including earlier history in the 24-hour view, with no missing or misplaced
+connectors.
 
 Focused checks:
 
@@ -106,3 +146,51 @@ LC_ALL=C LANG=C OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
   tests/test_durable_agent_bridge.py tests/test_front_integration.py \
   tests/test_organize_v2_contract.py
 ```
+
+## Agent/worker migration acceptance, 2026-09-14
+
+New `OrganizeWorkflow` runs start an `AgentWorkflow` child for planning.
+The durable patch marker `organize-worker-plan-v1` preserves the original
+activity sequence when replaying pre-migration histories. The child uses the
+parent dataset/workflow trace and `organize.plan` business step; each model
+turn and worker tool still has its own timing and explicit dependencies.
+`organize.execute` depends on the accepted `submit_plan` worker request. The
+viewer keeps the three business step names and exposes the concrete operation
+in task details; it does not relabel standalone agent test workflows.
+
+Three real Tabula Sapiens SS2 datasets completed with fresh output roots:
+
+| Dataset | Input/output cells | Complete experiments | Worker tasks | Model turns |
+| --- | ---: | ---: | ---: | ---: |
+| Prostate | 625 / 625 | 3 | 4 | 2 |
+| Uterus | 666 / 666 | 4 | 4 | 2 |
+| Thymus | 1,381 / 1,381 | 9 | 4 | 2 |
+
+Each worker sequence was prepare, inspect_source, submit_plan, execute.
+The model performed no local file reads or registered program execution.
+Tasks ran on `sh03-15n05` and `sh04-14n18`; no accepted task ran twice.
+Recorded intervals show no overlap between a dataset's model turn and its
+worker grants. Independently backed-read outputs retained all 2,672 cells;
+worker audits and published manifests agreed on all 16 experiments.
+Twenty focused tests passed, including rejection of a plan that divides one
+complete experiment. Fourteen pre-migration Temporal histories and all six
+new parent/child histories replayed successfully. This validates this bounded
+Organize migration, not sustained production throughput or host-loss recovery.
+
+Specs, service launch records, request timing checks, exported histories,
+`acceptance.json`, `verify.py`, and an online SQLite backup are saved under
+`/scratch/users/chensj16/eca-runs/warmpool-v2-development/organize-agent-migration-20260914-201658/`.
+The original inputs and earlier outputs were retained.
+
+## Migration status after Organize
+
+| Area | Implemented in v2 | Still to implement |
+| --- | --- | --- |
+| Organize | Three business steps; durable model/tool handoffs; plan correction; audited publication | Larger-scale validation; execution-failure recovery policy |
+| Per-sample | [Temporal sample fan-out](PERSAMPLE_V2.md), whole-sample CPU OSP, durable annotation tools, publication and checkpoint resume; 7 real samples accepted | GPU variant; automatic failed-compute attempts; larger data |
+| Cross-sample | Design and legacy implementation | New workflow; integration/UMAP compute; parallel precomputed DEG; annotation handoffs |
+| Zoom-in | Design and legacy implementation | New lineage workflows; compute/annotation handoffs; GPU integration |
+| Work Coordinator | Organize, per-sample and generic agent workflows; process recovery and history replay | Cross-sample/Zoom-in; production database; host-expiry and failover acceptance |
+| Warm Pool Scheduler / Worker | HyperQueue adapter; concurrent CPU tasks; pinned CPU science image; Slurm grant and shared-memory accounting; worker lifetime; telemetry and receipts | GPU capabilities; storage staging across tiers; unexpected allocation loss at scale |
+| Agent Bridge | Shared turn admission; saved SDK state; worker tools and result verification | Provider/account quotas and balancing; uncertain-call reconciliation; other harness adapters |
+| Cell-exclusion accounting | Per-sample QC ledger with source cell IDs, reasons and input versions | Unified cross-stage ledger in the new workflows |

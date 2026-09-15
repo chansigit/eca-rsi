@@ -57,13 +57,17 @@ def run(plan, root):
                 ["worker", "--cpus", str(node["worker_cpu"]), "--memory-mb", "192", "--work-dir", str(directory)])
         cpu = node["control_cpu"] if role == "scheduler" else node["worker_cpu"]
         command = ["taskset", "-c", str(cpu)] + cli + args
+        if role == "worker":
+            command = ["env", "PYTHONPATH=" + code, plan["host_python"], "-m", "ecarsi.warm_pool",
+                       "--root", str(root), "slurm-worker", *args[1:], "--job-id", str(node["job_id"]),
+                       "--", *prefix, "/usr/local/bin/python3"]
         actor = dict(node=node, role=role, directory=directory)
         actors.append(actor)
         script = f"""import subprocess,json,os
 from pathlib import Path
 log=Path({str(directory / 'launcher.log')!r}).open('a')
 p=subprocess.Popen({command!r},stdin=subprocess.DEVNULL,stdout=log,stderr=log,start_new_session=True)
-Path({str(directory / 'launcher.json')!r}).write_text(json.dumps(dict(pid=p.pid)))
+Path({str(directory / 'container-launch.json')!r}).write_text(json.dumps(dict(pid=p.pid)))
 """
         ssh(node["host"], script)
         def ready():
@@ -178,7 +182,7 @@ host=socket.gethostname(),affinity=sorted(os.sched_getaffinity(0)),cgroup=Path('
             stop(actor)
         # Native supervisors finish cleanup before their container launchers exit.
         for actor in actors:
-            launcher = read(actor["directory"] / "launcher.json")
+            launcher = read(actor["directory"] / "container-launch.json")
             if launcher:
                 ssh(actor["node"]["host"], f"""import time
 from pathlib import Path

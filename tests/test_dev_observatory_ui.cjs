@@ -7,7 +7,7 @@ const script = html.match(/<script>([\s\S]*?)<\/script>/)[1].replace(/refresh\(\
 const elements = new Map();
 const element = id => {
   if (!elements.has(id)) elements.set(id, {value: '', hidden: false, listeners: {},
-    classList: {remove() {}}, addEventListener(name, fn) { this.listeners[name] = fn; }});
+    querySelector: () => null, classList: {remove() {}}, addEventListener(name, fn) { this.listeners[name] = fn; }});
   return elements.get(id);
 };
 const context = vm.createContext({
@@ -31,8 +31,11 @@ context.renderTimeline({since: 0, until: 600, tasks: [task('a', 100), task('b', 
     cpu_cores_allocated: 4, cpu_cores_used: 2, memory_total_gb: 16, memory_used_gb: 3,
     gpu_percent: null, gpu_memory_percent: null, samples: 1}], source: 'test'});
 const chart = element('timeline').innerHTML;
-assert(chart.includes('worker-a · lane 2'));
-assert(chart.indexOf('worker-a · lane 2') < chart.indexOf('worker-a · CPU'));
+assert.equal((chart.match(/data-group="worker-a"/g)||[]).length, 1);
+assert(chart.includes('Peak: 2 concurrent tasks'));
+assert(chart.includes('data-slot="1"'));
+assert(!chart.includes('timeline-spark'));
+assert(!chart.includes(' · lane '));
 assert(chart.includes('data-tip-title="a" data-tip-step="compute"'));
 assert(!chart.includes('>compute</span>'));
 assert(!chart.includes('Unit: compute'));
@@ -47,7 +50,6 @@ assert.equal(element('timeline-from').hidden, false);
 context.resetTimelineView();
 assert.equal(element('timeline-range').value, 'auto');
 assert.equal(element('timeline-from').hidden, true);
-assert(html.includes('.timeline-bar { position:absolute; top:8px; height:25px; min-width:10px; border-radius:2px'));
 const fitted = context.latestActivityWindow([
   {started_at: 100, finished_at: 150}, {started_at: 200, finished_at: 250},
   {started_at: 1000, finished_at: 1040}, {started_at: 1080, finished_at: 1120},
@@ -55,6 +57,29 @@ const fitted = context.latestActivityWindow([
 assert(fitted.since < 1000 && fitted.since > 900);
 assert(fitted.until > 1120 && fitted.until < 1200);
 assert.equal(Math.round(fitted.until-fitted.since), 139);
+
+context.renderTimeline({since: 0, until: 600, total: 4, resources: [], source: 'test', tasks: [
+  {...task('legacy-a', 100), worker_id: null, host: 'node-a', cpu_ids: [7]},
+  {...task('legacy-b', 150), worker_id: null, host: 'node-a', cpu_ids: [8]},
+  {...task('call-a', 100), service: 'bridge'}, {...task('call-b', 150), service: 'bridge'},
+]});
+const labels = element('timeline').innerHTML;
+assert.equal((labels.match(/data-group="node-a"/g)||[]).length,1);
+assert(labels.includes('Peak: 2 concurrent tasks'));
+assert(!labels.includes('node-a · CPU'));
+assert(labels.includes('CPU affinity: logical IDs 7'));
+assert.equal((labels.match(/data-group="Agent Bridge"/g)||[]).length,1);
+assert(labels.includes('Peak: 2 concurrent requests'));
+assert(!labels.includes(' · calls '));
+
+// A custom window extending into the future must not extend a running task there.
+context.Date = class extends Date { static now() { return 200000; } };
+context.renderTimeline({since: 100, until: 400, total: 1, tasks: [
+  {...task('live', 150), finished_at: null, state: 'running'},
+]});
+const liveWidth=Number(element('timeline').innerHTML.match(/width:([\d.]+)%/)[1]);
+assert(Math.abs(liveWidth-100*50/300)<.001);
+context.Date=Date;
 
 const stage = (id, workflow, dataset, operation, start, end, depends_on) => ({
   id, service: operation === 'organize.plan' ? 'bridge' : 'pool', operation,
@@ -76,9 +101,9 @@ root.clientWidth = 870;
 root.scrollHeight = 300;
 root.style = {setProperty() {}};
 root.getBoundingClientRect = () => ({left: 0, top: 0});
-root.querySelector = () => ({getBoundingClientRect: () => ({left: 245, right: 870, width: 625})});
+root.querySelector = selector => selector === '.timeline-scale' ? {getBoundingClientRect: () => ({left: 245, right: 870, width: 625})} : null;
 root.querySelectorAll = () => [prepare, plan, execute].map((task, index) => ({
-  dataset: {taskId: task.id}, offsetHeight: 25,
+  dataset: {taskId: task.id, workflow: task.trace.workflow_id}, offsetHeight: 25,
   getBoundingClientRect: () => ({top: 50 + index * 45, bottom: 75 + index * 45,
     left: 350 + index * 100, right: 390 + index * 100}),
 }));
@@ -94,11 +119,52 @@ assert.equal(context.datasetColor('dataset-a'), context.datasetColor('dataset-a'
 assert.equal(context.connectorRibbonPath(10,1,5,20,2,6),
   'M 10 1 C 14.5 1, 15.5 2, 20 2 L 20 6 C 15.5 6, 14.5 5, 10 5 Z');
 
-context.renderTimeline({since: 0, until: 1000, tasks: [], total: 0, source: 'test', resources:
+// Dependencies must survive narrow gaps, overlapping minimum-size glyphs, and both lane directions.
+for (const gap of [-5, 0, 1, 60]) for (const direction of [-1, 1]) {
+  root.querySelectorAll = () => [prepare, plan, execute].map((task, index) => ({
+    dataset: {taskId: task.id, workflow: task.trace.workflow_id},
+    getBoundingClientRect: () => ({top: 140 + direction * index * 45, bottom: 165 + direction * index * 45,
+      left: 350 + index * (40 + gap), right: 390 + index * (40 + gap)}),
+  }));
+  assert.equal(context.drawFlow(links), 2, `gap=${gap}, direction=${direction}`);
+  assert(root.flowSvg.includes('data-parent="run-a.prepare" data-child="run-a.plan"'));
+  assert(root.flowSvg.includes('data-parent="run-a.plan" data-child="run-a.execute"'));
+  if (Math.abs(gap) <= 5) assert(root.flowSvg.includes('--edge-min-opacity:.5'));
+}
+// Arbitrary unit names, fan-out, fan-in and another iteration use explicit request dependencies.
+const generic = (id, parents) => stage(id, 'analysis/run-1', 'dataset-a', id, 200, 300, parents);
+const graph = [generic('input', []), generic('sample-a', ['input']), generic('sample-b', ['input']),
+  generic('merge', ['sample-a', 'sample-b']), generic('sample-a-iteration-2', ['merge'])];
+// Clock skew/status do not erase a declared dependency.
+graph[0].state = 'failed';
+const graphLinks = context.buildFlowEdges(graph);
+assert.equal(graphLinks.length, 5);
+const collision = stage('input', 'analysis/another-run', 'dataset-b', 'input', 1, 2, []);
+assert.equal(context.buildFlowEdges([...graph, collision]).length, 5);
+
+context.renderResourceHistory({since: 0, until: 1000, tasks: [], total: 0, source: 'test', resources:
   Array.from({length: 240}, (_, i) => ({worker_id: 'worker-a', observed_at: i * 4,
     cpu_percent: i % 100, memory_percent: 20, gpu_percent: null, gpu_memory_percent: null,
     cpu_cores_allocated: 4, cpu_cores_used: 2, memory_total_gb: 16, memory_used_gb: 3, samples: 1}))});
-const denseChart = element('timeline').innerHTML;
+const denseChart = element('resource-history').innerHTML;
 assert(denseChart.includes('<polyline'));
 assert((denseChart.match(/pointer-events="all"/g)||[]).length <= 80);
 assert(!denseChart.includes('<line '));
+
+const poolWorker=(id,reporting=true)=>({worker_id:id,host:'same-host',slurm_job_id:id,cpus:2,
+  memory_mb:1024,reporting,last_seen:100,current:{cpu_percent:0,memory_percent:25,
+  memory_used_gb:1,memory_total_gb:4,gpu_percent:null},mean_5m:{cpu_percent:10},
+  sample_count_5m:10,tasks:[],reserved_cpus:0,reserved_memory_mb:0});
+context.renderComputePool({workers:[poolWorker('11'),poolWorker('12'),poolWorker('old',false)],pool_waiting:3});
+const poolHtml=element('pool-hosts').innerHTML;
+assert.equal((poolHtml.match(/data-pool-host=/g)||[]).length,1);
+assert.equal((poolHtml.match(/data-pool-worker=/g)||[]).length,2);
+assert.equal((poolHtml.match(/Host RAM/g)||[]).length,2); // label + accessible meter label, once per host
+assert(poolHtml.includes('0.0% · 5m 10.0%'));
+assert(poolHtml.includes('GPU —'));
+assert(!poolHtml.includes('Idle · no unfinished tasks'));
+assert(!poolHtml.includes('samples in the last 5 minutes'));
+assert(element('pool-history').innerHTML.includes('old'));
+assert(element('compute-pool-summary').textContent.includes('4 CPU / 2.0 GiB'));
+context.renderComputePool({workers:[]});
+assert(element('pool-hosts').innerHTML.includes('No workers'));

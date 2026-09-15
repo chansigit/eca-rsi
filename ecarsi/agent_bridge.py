@@ -1,12 +1,13 @@
-"""Durable Organize planning inbox on a trusted shared filesystem.
+"""Durable model-turn inbox with legacy Organize session support.
 
-Session-level admission only: this is not yet the per-model-turn Bridge.
 Requires coherent flock, atomic rename and fsync, like warm_pool.state.
 No model secrets are stored. Unknown executions are never retried implicitly.
 """
 import argparse
 import asyncio
 from collections import Counter
+from contextlib import contextmanager
+import copy
 import os
 from pathlib import Path
 import stat
@@ -15,6 +16,55 @@ import sys
 import time
 
 from .warm_pool.state import digest, file_digest, identifier, lock, read, save, sync_directory, validate_trace
+
+
+class LocalRestoreError(RuntimeError):
+    """SDK checkpoint restoration failed before Runner could contact a provider."""
+
+
+@contextmanager
+def sdk_restore_compat(folder):
+    """SDK 0.22 can serialize Chat text without annotations, then reject its own state.
+
+    Keep this boundary shim while pinned 0.22 sessions exist. It preserves saved
+    records and avoids changing their pinned agent adapter during a live run.
+    Each Bridge executor owns one model turn in its own process.
+    """
+    from agents import RunState
+    import agents
+    original = RunState.from_json
+
+    async def restore(agent, state, **kwargs):
+        state = copy.deepcopy(state)
+        repaired = 0
+        def visit(value):
+            nonlocal repaired
+            if isinstance(value, dict):
+                if value.get("type") == "message" and isinstance(value.get("content"), list):
+                    for item in value["content"]:
+                        if isinstance(item, dict) and item.get("type") == "output_text" and "annotations" not in item:
+                            item["annotations"] = []
+                            repaired += 1
+                for child in value.values():
+                    visit(child)
+            elif isinstance(value, list):
+                for child in value:
+                    visit(child)
+        if agents.__version__ == "0.22.0":
+            visit(state)
+        try:
+            result = await original(agent, state, **kwargs)
+        except Exception as exc:
+            raise LocalRestoreError("Local SDK checkpoint restore failed before model invocation") from exc
+        if repaired:
+            save(folder / "sdk-restore.json", {"sdk_version": agents.__version__, "empty_annotations_restored": repaired})
+        return result
+
+    RunState.from_json = staticmethod(restore)
+    try:
+        yield
+    finally:
+        RunState.from_json = staticmethod(original)
 
 
 def root_path(root):
@@ -48,23 +98,29 @@ def init(root, catalog, concurrency=2):
 
 def submit(root, spec):
     root = root_path(root)
-    required = {"request_id", "operation_id", "profiles", "cwd"}
+    is_turn = isinstance(spec, dict) and spec.get("operation_id") == "agent.turn"
+    required = ({"request_id", "operation_id", "session", "context", "trace"} if is_turn else
+                {"request_id", "operation_id", "profiles", "cwd"})
     if not isinstance(spec, dict) or not required <= spec.keys() or spec.keys() - required - {"trace"}:
         raise ValueError("Expected request_id, operation_id, profiles and cwd")
     identifier(spec["request_id"])
     identifier(spec["operation_id"])
     if "trace" in spec:
         validate_trace(spec["trace"])
-    profiles = spec["profiles"]
-    if not isinstance(profiles, list) or not profiles or not all(
-        isinstance(p, dict) and isinstance(p.get("name"), str) and
-        isinstance(p.get("h5ad"), str) for p in profiles
-    ):
-        raise ValueError("Expected nonempty Organize profiles with name and h5ad")
-    cwd = Path(spec["cwd"])
-    if not cwd.is_absolute() or not cwd.is_dir():
-        raise ValueError("cwd must be an existing absolute directory")
-    spec = dict(spec, cwd=str(cwd.resolve()))
+    if is_turn:
+        from .agent_session import validate_turn
+        validate_turn(spec)
+    else:
+        profiles = spec["profiles"]
+        if not isinstance(profiles, list) or not profiles or not all(
+            isinstance(p, dict) and isinstance(p.get("name"), str) and
+            isinstance(p.get("h5ad"), str) for p in profiles
+        ):
+            raise ValueError("Expected nonempty Organize profiles with name and h5ad")
+        cwd = Path(spec["cwd"])
+        if not cwd.is_absolute() or not cwd.is_dir():
+            raise ValueError("cwd must be an existing absolute directory")
+        spec = dict(spec, cwd=str(cwd.resolve()))
     fingerprint = digest(spec)
     folder = root / "requests" / spec["request_id"]
     folder.mkdir(mode=0o700, exist_ok=True)
@@ -77,9 +133,9 @@ def submit(root, spec):
         else:
             save(folder / "request.json", {
                 "spec": spec, "digest": fingerprint, "submitted_at": time.time(),
-                "brief": (Path(__file__).parent / "prompts/plan.md").read_text() + "\n\n" +
+                "brief": "" if is_turn else (Path(__file__).parent / "prompts/plan.md").read_text() + "\n\n" +
                          (Path(__file__).parent / "prompts/organize_v2.md").read_text(),
-                "adapter_sha256": file_digest(Path(__file__).with_name("plan.py")),
+                "adapter_sha256": file_digest(Path(__file__).with_name("agent_session.py" if is_turn else "plan.py")),
             })
     return status(root, spec["request_id"])
 
@@ -110,6 +166,11 @@ def run_organize(request, *, folder=None):
 
 
 def recover_result(folder, reason):
+    turn = read(folder / "turn-response.json")
+    if turn is not None:
+        save(folder / "result.json", {"state": "reply_saved", "finished_at": time.time(),
+                                      "recovered_after": reason, "response": turn})
+        return
     proposal = read(folder / "proposal.json")
     if proposal is not None:
         save(folder / "result.json", {
@@ -131,11 +192,18 @@ def execute(root, request_id):
             return
         request = read(folder / "request.json")
         try:
-            if file_digest(Path(__file__).with_name("plan.py")) != request["adapter_sha256"]:
+            is_turn = request["spec"]["operation_id"] == "agent.turn"
+            adapter = "agent_session.py" if is_turn else "plan.py"
+            if file_digest(Path(__file__).with_name(adapter)) != request["adapter_sha256"]:
                 save(folder / "result.json", {"state": "failed", "reason": "adapter_changed",
                                               "finished_at": time.time()})
                 return
-            result = run_organize(request, folder=folder)
+            if is_turn:
+                from .agent_session import run_turn
+                with sdk_restore_compat(folder):
+                    result = asyncio.run(run_turn(request, folder))
+            else:
+                result = run_organize(request, folder=folder)
             save(folder / "result.json", {"state": "reply_saved", "finished_at": time.time(),
                                           "response": result})
         except Exception as exc:
@@ -143,7 +211,11 @@ def execute(root, request_id):
             # Keep details in the private execution log, not the status response.
             import traceback
             traceback.print_exc()
-            recover_result(folder, type(exc).__name__)
+            if isinstance(exc, LocalRestoreError):
+                save(folder / "result.json", {"state": "failed", "reason": "local_state_restore",
+                     "provider_called": False, "finished_at": time.time()})
+            else:
+                recover_result(folder, type(exc).__name__)
 
 
 def reconcile(folder):

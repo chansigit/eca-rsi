@@ -22,14 +22,36 @@ def parent_death_signal(parent):
     return prepare
 
 
-def check_runtime(runtime):
+def runtime_environment(runtime, environment=None):
+    env = dict(os.environ if environment is None else environment)
+    env["PYTHONUNBUFFERED"] = "1"
+    if "pythonpath" in runtime:
+        paths = runtime["pythonpath"]
+        if not isinstance(paths, list) or not all(isinstance(p, str) and Path(p).is_absolute() and Path(p).is_dir() for p in paths):
+            raise ValueError("Runtime Python paths must be explicit existing absolute directories")
+        env["PYTHONPATH"] = os.pathsep.join(paths)
+        env["PYTHONNOUSERSITE"] = "1"
+    return env
+
+
+def check_runtime(runtime, *, imports=False):
+    if runtime.get("image"):
+        image = runtime["image"]
+        active = os.environ.get("APPTAINER_CONTAINER") or os.environ.get("SINGULARITY_CONTAINER")
+        if not active or Path(active).resolve() != Path(image["path"]).resolve():
+            raise ValueError("Worker is not running the configured scientific image")
+        if imports and file_digest(image["path"]) != image["sha256"]:
+            raise ValueError("Scientific image identity mismatch")
     for path, expected in runtime.get("files", {}).items():
         if file_digest(path) != expected:
             raise ValueError("runtime file identity mismatch: " + path)
     probe = subprocess.run(runtime["command"] + ["--version"], capture_output=True,
-                           text=True, check=True, timeout=15)
+                           text=True, check=True, timeout=15, env=runtime_environment(runtime))
     if probe.stdout.strip() != runtime["version"]:
         raise ValueError("runtime version mismatch")
+    if imports and runtime.get("imports"):
+        subprocess.run(runtime["command"] + ["-c", "import importlib,sys; [importlib.import_module(n) for n in sys.argv[1:]]",
+            *runtime["imports"]], check=True, timeout=60, env=runtime_environment(runtime))
 
 
 def check_hq(binary):
@@ -185,26 +207,35 @@ def serve(root, host=None):
                  observed_at=time.time(), state="stopped"))
 
 
-def join(root, cpu_ids, memory_mb, work_dir):
+def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit_seconds=None):
     """An independently supervised native HQ worker; local explicit budgets first."""
     from contextlib import ExitStack
     from .worker import reconcile_local
+    from .allocation import validate_profile
     backend = HyperQueue(root)
     check_hq(backend.config["hq"])
     if not cpu_ids or len(set(cpu_ids)) != len(cpu_ids) or not set(cpu_ids) <= os.sched_getaffinity(0):
         raise ValueError("worker CPU IDs must be unique and within current affinity")
     if type(memory_mb) is not int or memory_mb <= 0:
         raise ValueError("memory_mb must be a positive integer")
+    if time_limit_seconds is not None and (type(time_limit_seconds) is not int or time_limit_seconds <= 0):
+        raise ValueError("time_limit_seconds must be a positive integer")
+    profile = validate_profile(allocation_profile, cpu_ids, memory_mb)
+    expires_at = profile["end_time"] - 60 if profile else None
+    if time_limit_seconds is not None:
+        expires_at = min(expires_at or float("inf"), time.time() + time_limit_seconds)
     runtime = backend.config["runtime"]
-    check_runtime(runtime)
+    check_runtime(runtime, imports=True)
     work_dir = Path(work_dir).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
     host = socket.gethostname().split(".")[0]
     worker_id = host + "-" + digest(str(work_dir))[:12]
     telemetry_dir = backend.root / "workers" / worker_id
     telemetry_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    save(telemetry_dir / "identity.json", dict(worker_id=worker_id, host=host,
-         cpu_ids=cpu_ids, memory_mb=memory_mb, work_dir=str(work_dir)))
+    worker_identity = dict(worker_id=worker_id, host=host,
+         cpu_ids=cpu_ids, memory_mb=memory_mb, work_dir=str(work_dir),
+         slurm_job_id=profile["job_id"] if profile else None,
+         allocation=profile, expires_at=expires_at)
     locks = Path.home() / ".cache" / "ecarsi-pool" / host
     locks.mkdir(parents=True, exist_ok=True)
     stopping = False
@@ -214,14 +245,42 @@ def join(root, cpu_ids, memory_mb, work_dir):
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
     with ExitStack() as stack:
+        owner_lock = work_dir / "owner.lock"
+        stack.enter_context(lock(owner_lock, blocking=False))
+        registration = dict(pool_root=str(backend.root), cpu_ids=sorted(cpu_ids))
+        previous_registration = read(work_dir / "registration.json")
+        if previous_registration is not None and previous_registration != registration:
+            raise ValueError("worker directory belongs to another pool or CPU slice; use a new directory")
+        save(work_dir / "registration.json", registration)
+        # Reconcile before replacing a previous memory claim; a dead HQ process
+        # can still have a detached, bounded scientific executor.
+        while reconcile_local(backend.root, cpu_ids):
+            if stopping or expires_at is not None and time.time() >= expires_at:
+                return 0
+            time.sleep(1)
+        if profile:
+            from ecarsi.pool.budget import reserve
+            # Reserve before taking CPU locks so stale legacy entries can prove
+            # their old locks are free. The ledger serializes competing claims.
+            reserve(profile, "worker:" + str(work_dir), owner_lock, role="worker", worker_directory=work_dir)
+        def release_record():
+            pending = reconcile_local(backend.root, cpu_ids)
+            state = "waiting_for_previous_execution" if pending else "stopped"
+            save(work_dir / "launcher.json", dict(state=state, updated_at=time.time(), requests=pending))
+            save(work_dir / "worker.json", dict(state=state, observed_at=time.time(), requests=pending))
+        # Runs while our ownership lock still holds, after CPU locks are closed.
+        # Uncertain descendants keep the shared memory claim reserved.
+        stack.callback(release_record)
+        save(work_dir / "launcher.json", dict(state="running", updated_at=time.time()))
         for cpu in sorted(cpu_ids):
             stack.enter_context(lock(locks / f"cpu-{cpu}.lock", blocking=False))
+        save(telemetry_dir / "identity.json", worker_identity)
         os.sched_setaffinity(0, set(cpu_ids))
         log = stack.enter_context((work_dir / "worker.log").open("a"))
         proc = None
         previous_counters, last_sample = None, 0
         try:
-            while not stopping:
+            while not stopping and (expires_at is None or time.time() < expires_at):
                 if time.monotonic() - last_sample >= 30:
                     try:
                         sample, previous_counters = resource_sample(cpu_ids, previous_counters)
@@ -248,17 +307,23 @@ def join(root, cpu_ids, memory_mb, work_dir):
                 except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
                     time.sleep(1)
                     continue
+                lifetime = []
+                if expires_at is not None:
+                    remaining = int(expires_at - time.time())
+                    if remaining <= 0:
+                        break
+                    lifetime = ["--time-limit", str(remaining) + "s"]
                 proc = subprocess.Popen(backend.command + ["worker", "start", "--manager", "none",
                         "--cpus", "[" + ",".join(map(str, cpu_ids)) + "]", "--detect-resources", "none",
                         "--resource", f"mem=sum({memory_mb})",
                         "--resource", f"runtime/{digest(runtime)}=sum({len(cpu_ids)})",
                         "--on-server-lost", "finish-running", "--heartbeat", "1s", "--overview-interval", "5s",
-                        "--work-dir", str(work_dir)],
+                        "--work-dir", str(work_dir)] + lifetime,
                         env=dict(os.environ, ECA_POOL_WORKER_ID=worker_id),
                         stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
                         preexec_fn=parent_death_signal(os.getpid()))
                 save(work_dir / "worker.json", dict(state="connecting", pid=os.getpid(),
-                     hq_pid=proc.pid, cpu_ids=cpu_ids, observed_at=time.time()))
+                     hq_pid=proc.pid, cpu_ids=cpu_ids, expires_at=expires_at, observed_at=time.time()))
                 time.sleep(1)
         finally:
             if proc is not None and proc.poll() is None:

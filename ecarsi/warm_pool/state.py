@@ -64,9 +64,9 @@ def identifier(value):
 
 def validate_trace(trace):
     required = {"workflow_id", "dataset_id", "unit_id"}
-    if not isinstance(trace, dict) or not required <= trace.keys() or trace.keys() - required - {"depends_on"}:
+    if not isinstance(trace, dict) or not required <= trace.keys() or trace.keys() - required - {"depends_on", "sample_id"}:
         raise ValueError("trace requires workflow_id, dataset_id and unit_id")
-    for key in required:
+    for key in required | ({"sample_id"} if "sample_id" in trace else set()):
         value = trace[key]
         if not isinstance(value, str) or not 0 < len(value) <= 256 or any(ord(c) < 32 for c in value):
             raise ValueError("trace " + key + " must be a nonempty printable string")

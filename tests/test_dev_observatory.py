@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from ecarsi.dev_observatory import resource_history, snapshot, summarize_resources, task_timeline
+from ecarsi.dev_observatory import resource_history, snapshot, summarize_resources, task_timeline, worker_inventory
 
 
 def put(path, value):
@@ -12,6 +12,42 @@ def put(path, value):
 
 
 class ObservatoryTest(unittest.TestCase):
+    def test_inventory_retains_departed_workers_and_distinguishes_same_host_budgets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pool = Path(directory)
+            for worker, job, times in (("a", "11", [950, 980]), ("b", "12", [975]),
+                                       ("old", "10", [50])):
+                folder = pool / "workers" / worker
+                put(folder / "identity.json", dict(worker_id=worker, host="shared-host",
+                    slurm_job_id=job, cpu_ids=[0, 1], memory_mb=1024))
+                samples = [dict(worker_id=worker, host="shared-host", observed_at=t,
+                    cpu_ids=[0, 1], cpu_percent=20 + i * 40, memory_used_bytes=2**30,
+                    memory_total_bytes=4 * 2**30, gpus=[]) for i, t in enumerate(times)]
+                (folder / "1970-01-01.jsonl").write_text(
+                    "".join(json.dumps(s) + "\n" for s in samples) + '{"observed_at":')
+            tasks = [dict(id="active", worker_id="a", state="cancel_requested", cpus=1,
+                          memory_mb=512, started_at=940, finished_at=None),
+                     dict(id="done", worker_id="a", cpus=2, memory_mb=1024,
+                          started_at=920, finished_at=930)]
+            cache = {}
+            workers = worker_inventory(pool, tasks, 1000, cache)
+            a, b, old = workers
+            self.assertTrue(a["reporting"] and b["reporting"])
+            self.assertFalse(old["reporting"])
+            self.assertEqual(old["last_seen"], 50)
+            self.assertEqual(a["mean_5m"]["cpu_percent"], 40)
+            self.assertEqual(a["current"]["cpu_percent"], 60)
+            self.assertIsNone(a["current"]["gpu_percent"])
+            self.assertEqual(a["reserved_cpus"], 1)
+            self.assertEqual(a["reserved_memory_mb"], 512)
+            self.assertEqual([w["slurm_job_id"] for w in workers], ["11", "12", "10"])
+            self.assertEqual(worker_inventory(pool, tasks, 1000, cache), workers)
+            legacy = worker_inventory(pool, tasks + [dict(id="legacy", host="old-host",
+                worker_id=None, submitted_at=1, started_at=2, finished_at=3)], 1000, cache)[-1]
+            self.assertTrue(legacy["history_only"])
+            self.assertEqual(legacy["last_activity"], 3)
+            self.assertIsNone(legacy["last_seen"])
+
     def test_generic_timeline_window_filter_limit_and_resources(self):
         pool = [{"id": f"task-{i}", "operation": "per-sample.compute", "state": "succeeded",
                  "trace": {"workflow_id": f"osp/{i}", "dataset_id": f"dataset-{i}",

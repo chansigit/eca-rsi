@@ -8,6 +8,19 @@ from ecarsi.warm_pool.worker import registered_worker_id
 from ecarsi.warm_pool.state import cancel, file_digest, read, save, status, submit, validate_trace
 
 
+def test_runtime_paths_override_launcher_and_imports_are_checked(tmp_path, monkeypatch):
+    import sys
+    from ecarsi.warm_pool.backend import runtime_environment
+    (tmp_path / "pool_probe.py").write_text("VALUE = 'configured runtime'\n")
+    monkeypatch.setenv("PYTHONPATH", "/missing/launcher/path")
+    runtime = {"command": [sys.executable], "version": "Python " + sys.version.split()[0],
+               "pythonpath": [str(tmp_path)], "imports": ["pool_probe"]}
+    assert runtime_environment(runtime)["PYTHONPATH"] == str(tmp_path)
+    check_runtime(runtime, imports=True)
+    with pytest.raises(ValueError, match="absolute directories"):
+        runtime_environment({**runtime, "pythonpath": ["relative"]})
+
+
 def test_trace_dependencies_are_explicit_and_bounded():
     trace = {"workflow_id": "organize/run-a", "dataset_id": "dataset-a",
              "unit_id": "organize.plan", "depends_on": ["run-a.prepare"]}
@@ -93,3 +106,24 @@ def test_cancellation_wins_over_a_late_compute_receipt(tmp_path):
     result = status(tmp_path, "a")
     assert result["state"] == "cancelled"
     assert result["receipt"]["state"] == "succeeded"  # retained for audit, not accepted downstream
+
+
+def test_runtime_update_preserves_accepted_request_identity(tmp_path):
+    import subprocess
+    import sys
+    from ecarsi.warm_pool.__main__ import configure_runtime
+    tmp_path.chmod(0o700)
+    (tmp_path / "requests").mkdir()
+    old = {"command": [sys.executable], "version": subprocess.check_output([sys.executable, "--version"], text=True).strip(), "files": {}}
+    save(tmp_path / "config.json", {"runtime": old})
+    spec = dict(request_id="old", operation_id="a", args=["-c", "pass"], cpus=1,
+                memory_mb=64, timeout_seconds=10, outputs=["x"])
+    submit(tmp_path, spec)
+    new = {**old, "pythonpath": [str(tmp_path)], "imports": ["json"]}
+    configure_runtime(tmp_path, new)
+    submit(tmp_path, {**spec, "request_id": "new"})
+    assert read(tmp_path / "requests/old/request.json")["runtime"] == old
+    assert read(tmp_path / "requests/new/request.json")["runtime"] == new
+    with pytest.raises(ValueError):
+        configure_runtime(tmp_path, {**new, "pythonpath": ["relative"]})
+    assert read(tmp_path / "config.json")["runtime"] == new

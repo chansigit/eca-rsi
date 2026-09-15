@@ -44,3 +44,37 @@ def test_unknown_source_mapping_is_rejected():
             "sample_column": None, "confirmed_single": True,
             "rationale": "one donor"}}},
             [{**profile, "obs_columns": {"sample_id": {"n_unique": 3, "n_na": 0}}}])
+
+
+def test_worker_plan_returns_correctable_error_then_accepts_complete_experiments(tmp_path, monkeypatch):
+    import json
+    from ecarsi.organize_v2 import plan_tool
+    from ecarsi.run_state import digest
+    from ecarsi.warm_pool.state import save
+    from ecarsi import upstream
+    obs = pd.DataFrame({"sample_id": ["s1", "s1", "s2", "s2"],
+                        "tissue": ["left", "right", "left", "right"]}, index=["01", "02", "03", "04"])
+    path = tmp_path / "source.h5ad"
+    ad.AnnData(sparse.csr_matrix(np.eye(4)), obs=obs).write_h5ad(path)
+    record = {"name": "source", "h5ad": str(path)}
+    monkeypatch.setattr(upstream, "inspect_unit", lambda r: r)
+    prepared = tmp_path / "prepared.json"
+    save(prepared, {"records": [record], "source_identity": digest([record]),
+        "profiles": [{**record, "species": "human", "n_obs": 4, "n_vars": 4,
+                      "obs_columns": {"sample_id": {"n_unique": 2, "n_na": 0}, "tissue": {"n_unique": 2}}}]})
+    args, result = tmp_path / "args.json", tmp_path / "result.json"
+    save(args, {"source": "source", "column": "sample_id", "offset": 0})
+    assert plan_tool("inspect_source", prepared, args, result)["value_counts"] == {"s1": 2, "s2": 2}
+    plan = {"notes": "", "sample_mapping": {"source": {"sample_column": "sample_id", "rationale": "library IDs"}},
+            "analysis_units": [{"name": side, "rationale": "test", "batch_key_hint": "sample_id", "members": [
+                {"source": "source", "obs_filter": {"column": "tissue", "values": [side]}}]}
+                for side in ("left", "right")]}
+    save(args, {"plan_json": json.dumps(plan)})
+    rejected = plan_tool("submit_plan", prepared, args, result)
+    assert rejected["accepted"] is False and "split a complete experiment" in rejected["error"]
+    plan["analysis_units"] = [{"name": "whole", "rationale": "keep experiments complete", "batch_key_hint": "sample_id",
+                                "members": [{"source": "source", "obs_filter": None}]}]
+    save(args, {"plan_json": json.dumps(plan)})
+    accepted = plan_tool("submit_plan", prepared, args, result)
+    assert accepted["accepted"] is True and accepted["experiments"]["source"]["experiments"] == 2
+    assert accepted["conservation"]["sources"]["source"]["unique_assigned"] == 4

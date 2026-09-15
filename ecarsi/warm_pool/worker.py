@@ -186,6 +186,12 @@ def run(folder, request, ownership):
         env.update(MSP_COMPUTE_ENDPOINT="local", OSP_COMPUTE_ENDPOINT="local", CUDA_VISIBLE_DEVICES="", PYTHONUNBUFFERED="1")
         for key in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS"):
             env[key] = str(spec["cpus"])
+        from .backend import runtime_environment
+        env = runtime_environment(runtime, env)
+        if runtime.get("image"):
+            cache = folder.parent.parent / "cache" / request["runtime_digest"]
+            cache.mkdir(mode=0o700, parents=True, exist_ok=True)
+            env["NUMBA_CACHE_DIR"] = str(cache)
         with (attempt / "stdout.log").open("ab", buffering=0) as out, (attempt / "stderr.log").open("ab", buffering=0) as err:
             # Publish the process group before permitting numerical code to
             # spawn descendants. Parent death before this gate opens runs none.
