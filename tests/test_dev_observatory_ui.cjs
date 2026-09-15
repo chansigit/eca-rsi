@@ -78,10 +78,10 @@ root.getBoundingClientRect = () => ({left: 0, top: 0});
 root.querySelector = () => ({getBoundingClientRect: () => ({left: 245, right: 870, width: 625})});
 root.querySelectorAll = () => [prepare, plan, execute].map((task, index) => ({
   dataset: {taskId: task.id}, offsetHeight: 25,
-  getBoundingClientRect: () => ({top: 50 + index * 45}),
+  getBoundingClientRect: () => ({top: 50 + index * 45, left: 350 + index * 100, right: 390 + index * 100}),
 }));
 root.insertAdjacentHTML = (_, svg) => { root.flowSvg = svg; };
-assert.equal(context.drawFlow(links, 0, 400), 2);
+assert.equal(context.drawFlow(links), 2);
 assert(root.flowSvg.includes('data-workflow="organize/run-a"'));
 assert(root.flowSvg.includes('class="flow-edge"'));
 assert(root.flowSvg.includes('stroke-width="6"'));
@@ -89,6 +89,7 @@ assert(!root.flowSvg.includes('<circle'));
 assert(!root.flowSvg.includes(' Z"'));
 assert(!root.flowSvg.includes('NaN'));
 assert.equal(context.datasetColor('dataset-a'), context.datasetColor('dataset-a'));
+assert.equal(context.connectorPath(10,12,1,2), 'M 10 1 C 10.9 1, 11.1 2, 12 2');
 
 context.renderTimeline({since: 0, until: 1000, tasks: [], total: 0, source: 'test', resources:
   Array.from({length: 240}, (_, i) => ({worker_id: 'worker-a', observed_at: i * 4,

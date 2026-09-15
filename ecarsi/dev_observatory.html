@@ -216,23 +216,28 @@ function buildFlowEdges(tasks) {
   }
   return edges;
 }
-function drawFlow(edges,from,to) {
+function connectorPath(start,end,y1,y2) {
+  const bend=Math.max(0,end-start)*.45;
+  return `M ${start} ${y1} C ${start+bend} ${y1}, ${end-bend} ${y2}, ${end} ${y2}`;
+}
+function drawFlow(edges) {
   if (!edges.length) return 0;
   const root=$('timeline'), bounds=root.getBoundingClientRect();
   const scale=root.querySelector('.timeline-scale').getBoundingClientRect();
   const bars=new Map([...root.querySelectorAll('.timeline-bar[data-task-id]')].map(bar=>[bar.dataset.taskId,bar]));
-  const x=time=>scale.left-bounds.left+(time-from)/(to-from)*scale.width;
+  const scaleLeft=scale.left-bounds.left, scaleRight=scale.right-bounds.left;
   const paths=[];
   for (const edge of edges) {
     const a=bars.get(edge.parent.id), b=bars.get(edge.child.id);
     if (!a||!b) continue;
-    const x1=x(edge.parent.finished_at), x2=x(edge.child.started_at);
-    if (x1<scale.left-bounds.left || x2>scale.right-bounds.left) continue;
-    const y1=a.getBoundingClientRect().top-bounds.top+a.offsetHeight/2;
-    const y2=b.getBoundingClientRect().top-bounds.top+b.offsetHeight/2;
+    const first=a.getBoundingClientRect(), second=b.getBoundingClientRect();
+    const x1=first.right-bounds.left, x2=second.left-bounds.left;
+    if (x1<scaleLeft || x2>scaleRight || x2<=x1+2) continue;
+    const y1=first.top-bounds.top+a.offsetHeight/2;
+    const y2=second.top-bounds.top+b.offsetHeight/2;
     const inset=Math.min(4,Math.max(0,(x2-x1)/3)), start=x1+inset, end=x2-inset;
-    const bend=Math.max(10,(end-start)*.5), color=datasetColor(edge.child.trace.dataset_id);
-    paths.push(`<path class="flow-edge" data-workflow="${esc(edge.child.trace.workflow_id)}" d="M ${start} ${y1} C ${start+bend} ${y1}, ${end-bend} ${y2}, ${end} ${y2}" fill="none" stroke="${color}" stroke-width="6" vector-effect="non-scaling-stroke"/>`);
+    const color=datasetColor(edge.child.trace.dataset_id);
+    paths.push(`<path class="flow-edge" data-workflow="${esc(edge.child.trace.workflow_id)}" d="${connectorPath(start,end,y1,y2)}" fill="none" stroke="${color}" stroke-width="6" vector-effect="non-scaling-stroke"/>`);
   }
   if (paths.length) {
     root.style.setProperty('--flow-idle-opacity',paths.length>80?'.07':'.22');
@@ -338,7 +343,7 @@ function renderTimeline(data) {
   for (const [worker,rows] of taskRows) { chart+=rows+(resourceRows.get(worker)||''); resourceRows.delete(worker); }
   for (const rows of resourceRows.values()) chart+=rows;
   $('timeline').innerHTML=lanes.size||resourceGroups.size?chart:'<div class="empty">No started tasks or resource samples in this window</div>';
-  const linked=drawFlow(flowEdges,from,to);
+  const linked=drawFlow(flowEdges);
   $('timeline-state').textContent=`${data.total} tasks`;
   const queued=(data.tasks||[]).filter(t=>!t.started_at).length;
   $('timeline-note').textContent=`${linked} visible workflow handoffs. Connections use recorded dependencies, or the known Organize order for older runs; hover a task to isolate its workflow. ${queued} waiting without a worker; started-task queue time is in task details. Pool rows are actual workers; extra rows only separate overlapping tasks. Bridge rows only separate overlap, because executor IDs are not recorded. ${data.resources?.length||0} resource points. ${data.truncated?'Results capped at 2,000 tasks; narrow the time range or filter a dataset. ':''}CPU is measured on worker-allocated cores; RAM and accessible GPUs are host-wide. Missing historical usage is not inferred from reservations. ${data.source}.`;
