@@ -272,22 +272,24 @@ def launch(root, folder, catalog):
 
 def serve(root, *, once=False):
     root = root_path(root)
-    children = {}
+    children, finished = {}, {}
     with lock(root / "service.lock", blocking=False):
         while True:
+            scanning = time.monotonic()
             config = read(root / "config.json")
             limit = config["concurrency"]
             if type(limit) is not int or limit < 1:
                 raise ValueError("concurrency must be a positive integer")
-            # ponytail: directory scan per second; index only if queue size makes it costly.
+            # Terminal requests are immutable; rebuild this cache after restart.
+            # ponytail: still list names per tick; index them if directory listing dominates.
             folders = sorted((root / "requests").iterdir())
+            for name, child in list(children.items()):
+                if child.poll() is not None:
+                    del children[name]
             queued, active = [], 0
             for folder in folders:
-                if not (folder / "request.json").is_file():
+                if folder.name in finished or not (folder / "request.json").is_file():
                     continue
-                child = children.get(folder.name)
-                if child is not None and child.poll() is not None:
-                    del children[folder.name]
                 record = status(root, folder.name)
                 if record["state"] == "running":
                     if folder.name not in children:
@@ -319,9 +321,16 @@ def serve(root, *, once=False):
                     if status(root, folder.name)["state"] == "running":
                         reconcile(folder)
                     break
-            counts = Counter(status(root, f.name)["state"] for f in folders
-                             if (f / "request.json").is_file())
+            counts = Counter(finished.values())
+            for folder in folders:
+                if folder.name in finished or not (folder / "request.json").is_file():
+                    continue
+                state = status(root, folder.name)['state']
+                counts[state] += 1
+                if state in {'reply_saved', 'failed'}:
+                    finished[folder.name] = state
             save(root / "summary.json", {"updated_at": time.time(), "counts": dict(counts),
+                                         "dispatch_scan_seconds": time.monotonic() - scanning,
                                          "concurrency": limit, "dispatch_error": error,
                                          "running": counts['running'],
                                          "unresolved": counts['unknown_external_result'],

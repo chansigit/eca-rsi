@@ -166,6 +166,20 @@ attempt execution lock and durable receipt make that transport redelivery a
 no-op; an accepted attempt without a receipt is never blindly rerun. New local
 commands also check for surviving process groups left by dead executors before
 using their CPUs. A confirmed lost executor produces a failed, retryable receipt.
+
+Completed-attempt scans are cached between scheduler ticks. Replacing
+`request.json` for a retry, creating a cancellation, or changing the HQ server
+generation invalidates the cache. Thus completed history does not repeatedly
+take request locks and reload receipts, while new attempts and journal replay
+still receive the normal reconciliation. `scheduler.json` records
+`dispatch_scan_seconds`; startup performs a full scan again.
+
+In the 2026-09-15 acceptance, the hot dispatch scan fell from roughly four
+seconds to 0.19–0.28 seconds. A request already being submitted during scheduler
+replacement completed under its original attempt ID, and the worker rejoined
+automatically. The first 11 newly accepted operations had a median queue delay
+of 1.01 seconds. These observations concern this small acceptance workload,
+not a large-dataset throughput benchmark.
 Automatic creation of a new numerical attempt is not implemented in this slice.
 
 All control records are JSON, published with file fsync, atomic rename, and

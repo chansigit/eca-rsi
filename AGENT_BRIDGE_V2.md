@@ -57,6 +57,16 @@ It also separates `running`, `unresolved`, and `available` slots. An uncertain
 provider operation reserves capacity until its outcome can be reconciled;
 an idle local process count is not proof that provider capacity is free.
 
+The dispatcher caches terminal `reply_saved`/`failed` records in memory and
+rebuilds that cache from disk after restart. It continues checking queued,
+running and uncertain requests; late replies still release their reserved slot.
+`dispatch_scan_seconds` records loop processing time. In the 2026-09-15 live
+acceptance with over 1,100 retained requests, update intervals fell from about
+7.5 seconds to 1.03 seconds; hot scans took 15–30 ms. Both calls running during
+the dispatcher replacement finished normally. This measures dispatch overhead,
+not model inference speed or end-to-end scientific throughput.
+The first 24 subsequent model requests had a median admission delay of 0.50 seconds.
+
 The dispatcher automatically recovers a subsequently available saved response
 for an uncertain request, without another model call. If no response is
 recoverable, an operator or provider-side reconciler must first confirm that

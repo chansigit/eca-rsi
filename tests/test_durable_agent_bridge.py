@@ -49,6 +49,44 @@ def wait_for(predicate):
 
 
 class DurableBridgeTest(unittest.TestCase):
+    def test_terminal_history_is_cached_but_uncertain_calls_are_revisited(self):
+        from collections import Counter
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            catalog = base / 'models.json'
+            bridge.save(catalog, {'models': []})
+            root = bridge.init(base / 'bridge', catalog, concurrency=1)
+            spec = dict(operation_id='organize.plan', cwd=str(base),
+                        profiles=[{'name': 'test', 'h5ad': '/test-only/input.h5ad'}])
+            for n in range(20):
+                name = 'old-' + str(n)
+                bridge.submit(root, dict(spec, request_id=name))
+                bridge.save(root / 'requests' / name / 'result.json', {'state': 'reply_saved'})
+            for name in ('lost', 'waiting'):
+                bridge.submit(root, dict(spec, request_id=name))
+            bridge.save(root / 'requests/lost/state.json', {'state': 'unknown_external_result'})
+            real_status, reads, ticks, launched = bridge.status, Counter(), [], []
+            def inspect(root, name):
+                reads[name] += 1
+                return real_status(root, name)
+            def launch(root, folder, catalog):
+                launched.append(folder.name)
+                bridge.save(folder / 'result.json', {'state': 'reply_saved'})
+                return SimpleNamespace(poll=lambda: None)
+            def tick(seconds):
+                ticks.append(seconds)
+                if len(ticks) == 1:
+                    self.assertFalse(launched)  # Uncertain execution still owns its slot.
+                    bridge.save(root / 'requests/lost/proposal.json', {'synthetic': 'late reply'})
+                else:
+                    raise RuntimeError('end test')
+            with patch.object(bridge, 'status', side_effect=inspect), patch.object(bridge, 'launch', side_effect=launch), \
+                    patch.object(bridge.time, 'sleep', side_effect=tick), self.assertRaisesRegex(RuntimeError, 'end test'):
+                bridge.serve(root)
+            self.assertEqual(launched, ['waiting'])
+            self.assertTrue(all(reads['old-' + str(n)] == 2 for n in range(20)))
+            self.assertEqual(bridge.read(root / 'summary.json')['counts'], {'reply_saved': 22})
+
     def test_existing_planner_adapter_preserves_prompt_and_usage(self):
         from ecarsi import plan
         proposal = {'analysis_units': [{'name': 'unit', 'members': [

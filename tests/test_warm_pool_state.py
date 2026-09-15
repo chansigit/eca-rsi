@@ -8,6 +8,51 @@ from ecarsi.warm_pool.worker import registered_worker_id
 from ecarsi.warm_pool.state import cancel, file_digest, read, save, status, submit, validate_trace
 
 
+def test_dispatch_cache_revisits_retries_cancellation_and_replayed_jobs(tmp_path, monkeypatch):
+    from ecarsi.warm_pool.backend import HyperQueue
+    from ecarsi.warm_pool.state import retry
+    import ecarsi.warm_pool.backend as module
+    tmp_path.chmod(0o700)
+    (tmp_path / 'requests').mkdir()
+    save(tmp_path / 'config.json', {'hq': '/test/hq', 'executor': '/test/python', 'runtime': {'version': 'test'}})
+    submit(tmp_path, dict(request_id='r', operation_id='compute', args=['-c', 'pass'],
+                         cpus=1, memory_mb=64, timeout_seconds=10, outputs=['result.json']))
+    folder = tmp_path / 'requests/r'
+    request = read(folder / 'request.json')
+    def finish(request):
+        save(folder / request['attempt_id'] / 'receipt.json', dict(state='failed', finished_at=1,
+            attempt_id=request['attempt_id'], request_digest=request['digest'], runtime_digest=request['runtime_digest']))
+    finish(request)
+    backend, calls = HyperQueue(tmp_path), []
+    def call(*args):
+        calls.append(args)
+        if args[:2] == ('job', 'list'):
+            return [dict(name='rsi.r.' + request['attempt_id'], id=1, task_stats=dict(waiting=1, running=0))]
+        return {'id': 2}
+    monkeypatch.setattr(backend, 'call', call)
+    info = dict(server_uid='one', pid=1, start_date='one')
+    backend.dispatch(info)
+    assert ('job', 'cancel', '1') in calls
+    calls.clear()
+    # Hot ticks need no reads or locks for immutable terminal attempts.
+    with monkeypatch.context() as check:
+        check.setattr(module, 'read', lambda *args: pytest.fail('terminal history reread'))
+        backend.dispatch(info)
+    assert calls == [('job', 'list', '--all')]
+    calls.clear()
+    backend.dispatch({**info, 'server_uid': 'two'})
+    assert ('job', 'cancel', '1') in calls
+    retry(tmp_path, 'r', reason='confirmed local failure')
+    calls.clear()
+    backend.dispatch(info)
+    assert any(args[0] == 'submit' for args in calls)
+    finish(read(folder / 'request.json'))
+    backend.dispatch(info)
+    cancel(tmp_path, 'r')
+    backend.dispatch(info)
+    assert read(folder / 'backend.json')['state'] == 'cancelled'
+
+
 def test_retry_preserves_receipts_and_pins_runtime_until_explicit_upgrade(tmp_path):
     from ecarsi.warm_pool.state import retry
     tmp_path.chmod(0o700);(tmp_path/'requests').mkdir()

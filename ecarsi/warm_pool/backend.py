@@ -116,6 +116,7 @@ class HyperQueue:
         self.root = pool_root(root)
         self.config = read(self.root / "config.json")
         self.command = [self.config["hq"], "--server-dir", str(self.root / "hq"), "--output-mode", "json"]
+        self.finished = {}
 
     def call(self, *args):
         result = subprocess.run(self.command + list(args), stdin=subprocess.DEVNULL,
@@ -129,6 +130,18 @@ class HyperQueue:
         by_name = {j["name"]: j for j in jobs}
         generation = digest({k: info[k] for k in ("server_uid", "pid", "start_date")})
         for folder in sorted((self.root / "requests").iterdir()):
+            try:
+                stat = (folder / 'request.json').stat()
+            except FileNotFoundError:
+                continue
+            # A retry atomically replaces request.json. A new HQ generation must
+            # revisit receipts to cancel any replayed journal jobs. Neither may
+            # be hidden by the completed-attempt cache.
+            stamp = (generation, stat.st_ino, stat.st_mtime_ns, stat.st_size,
+                     (folder / 'cancel.json').exists())
+            if self.finished.get(folder.name) == stamp:
+                continue
+            self.finished.pop(folder.name, None)
             with lock(folder / "request.lock"):
                 request = read(folder / "request.json")
                 if not request:
@@ -146,11 +159,14 @@ class HyperQueue:
                         self.call("job", "cancel", str(job["id"]))
                     if receipt or not accepted:
                         save(folder / "backend.json", dict(previous, state="cancelled", observed_at=time.time()))
+                    if receipt:
+                        self.finished[folder.name] = stamp
                     continue
                 if receipt:
                     # A persisted result wins over a replayed HQ journal entry.
                     if job and job["task_stats"]["waiting"]:
                         self.call("job", "cancel", str(job["id"]))
+                    self.finished[folder.name] = stamp
                     continue
                 if job:
                     counts = job["task_stats"]
@@ -216,9 +232,11 @@ def serve(root, host=None):
                         raise RuntimeError("HQ server exited; see scheduler.log")
                     try:
                         info = backend.call("server", "info")
+                        scanning = time.monotonic()
                         backend.dispatch(info)
                         save(backend.root / "scheduler.json", dict(pid=os.getpid(), host=socket.gethostname(),
-                             backend_pid=info["pid"], observed_at=time.time(), state="running"))
+                             backend_pid=info["pid"], observed_at=time.time(), state="running",
+                             dispatch_scan_seconds=time.monotonic() - scanning))
                     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as exc:
                         save(backend.root / "scheduler.json", dict(pid=os.getpid(), host=socket.gethostname(),
                              observed_at=time.time(), state="reconciling", error=str(exc)))
