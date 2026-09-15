@@ -123,6 +123,8 @@ def test_resume_rejects_unreconciled_requests_and_audits_new_run(tmp_path, monke
     spec = dict(output_root=str(tmp_path), pool_root=str(tmp_path / 'pool'),
                 bridge_root=str(tmp_path / 'bridge'), run_id='test')
     save(tmp_path / 'spec.json', spec)
+    failed_publication = {'state': 'incomplete', 'failed_units': ['test']}
+    save(tmp_path / 'publication.json', failed_publication)
     request = tmp_path / 'pool/requests/compute/request.json'
     request.parent.mkdir(parents=True)
     save(request, {'spec': {'trace': {'workflow_id': 'dataset/test'}}})
@@ -156,6 +158,11 @@ def test_resume_rejects_unreconciled_requests_and_audits_new_run(tmp_path, monke
     assert client.started == [dict(args=[spec, True], id='dataset/test', task_queue='queue',
         id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY)]
     assert len(list((tmp_path / 'recoveries').glob('*.started.json'))) == 1
+    from ecarsi.agent_session import verified
+    audit = pool.read(next((tmp_path / 'recoveries').glob('*.started.json')))
+    intent = verified(audit['intent'])
+    save(tmp_path / 'publication.json', {'state': 'complete'})
+    assert verified(intent['previous_publication']) == failed_publication
 
 
 def test_failed_unit_does_not_cancel_its_running_sibling(monkeypatch):

@@ -53,7 +53,7 @@ async def resume_dataset(client, identity, task_queue, reason):
     """New Temporal run, same immutable dataset and accepted external request IDs."""
     from temporalio.common import WorkflowIDReusePolicy
     from .agent_session import immutable, reference
-    from .warm_pool.state import read, status
+    from .warm_pool.state import read, status, digest
     from .agent_bridge import status as bridge_status
     if not reason.strip():
         raise ValueError('A recovery reason is required')
@@ -108,9 +108,11 @@ async def resume_dataset(client, identity, task_queue, reason):
     from uuid import uuid4
     audit = root / 'recoveries' / (uuid4().hex + '.json')
     audit.parent.mkdir(mode=0o700, exist_ok=True)
+    previous_publication = read(root / 'publication.json')
+    previous_publication = immutable(root / ('publication-' + digest(previous_publication) + '.json'),
+                                     previous_publication) if previous_publication is not None else None
     intent = immutable(audit, dict(workflow_id=identity, failed_run_id=info.run_id, reason=reason,
-        spec=reference(root / 'spec.json'), previous_publication=reference(root / 'publication.json')
-        if (root / 'publication.json').exists() else None,
+        spec=reference(root / 'spec.json'), previous_publication=previous_publication,
         workflows=sorted(visited), requests=requests))
     handle = await client.start_workflow(DatasetWorkflow.run, args=[spec, True], id=identity,
         task_queue=task_queue, id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY)
