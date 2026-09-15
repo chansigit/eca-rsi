@@ -384,7 +384,13 @@ async def main():
     if args.service_root:
         from .temporal_service import endpoint
         args.temporal = endpoint(args.service_root)['endpoint']
-    client = await Client.connect(args.temporal)
+    runtime = None
+    if args.command != 'worker':
+        from temporalio.runtime import Runtime, TelemetryConfig
+        # Client-only commands have no worker to report. Starting the optional
+        # SDK heartbeat thread can race native teardown in short-lived clients.
+        runtime = Runtime(telemetry=TelemetryConfig(), worker_heartbeat_interval=None)
+    client = await Client.connect(args.temporal, runtime=runtime)
     if args.command == "worker":
         await run_worker(client, args.task_queue)
     elif args.command in {"start", "start-agent", "start-persample", "start-crosssample", "start-zoomin", "start-dataset"}:

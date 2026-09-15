@@ -7,6 +7,33 @@ from ecarsi.temporal_service import endpoint
 from ecarsi.warm_pool.state import save
 
 
+@pytest.mark.parametrize('command', ['status-dataset', 'worker'])
+def test_only_client_commands_disable_sdk_worker_heartbeats(monkeypatch, command):
+    import sys
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+    import temporalio.runtime
+    from ecarsi import work_coordinator as coordinator
+    handle = SimpleNamespace(id='dataset/test',
+        describe=AsyncMock(return_value=SimpleNamespace(status=SimpleNamespace(name='RUNNING'))),
+        query=AsyncMock(return_value='testing'))
+    client = SimpleNamespace(get_workflow_handle=lambda identity: handle)
+    connect = AsyncMock(return_value=client)
+    runtime = Mock()
+    monkeypatch.setattr(temporalio.runtime, 'Runtime', runtime)
+    monkeypatch.setattr(coordinator.Client, 'connect', connect)
+    monkeypatch.setattr(coordinator, 'run_worker', AsyncMock())
+    monkeypatch.setattr(sys, 'argv', ['coordinator', '--temporal', 'localhost:7333', command]
+                        + (['test'] if command == 'status-dataset' else []))
+    asyncio.run(coordinator.main())
+    if command == 'worker':
+        runtime.assert_not_called()
+        assert connect.call_args.kwargs['runtime'] is None
+    else:
+        assert runtime.call_args.kwargs['worker_heartbeat_interval'] is None
+        assert connect.call_args.kwargs['runtime'] is runtime.return_value
+
+
 def test_discovery_rejects_stale_or_stopped_owner(tmp_path):
     record = dict(state='ready', observed_at=time.time(), generation='first', endpoint='127.0.0.1:7333')
     save(tmp_path / 'service.json', record)
