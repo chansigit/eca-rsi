@@ -61,8 +61,8 @@ def gpu_device(gpu_id):
 def launch(root, cpu_ids, memory_mb, work_dir, prefix, job_id=None, time_limit_seconds=None, gpu=False):
     from ecarsi.pool.slurm import inventory
     profile = inventory(memory_mb * 2**20, gpu=gpu)
-    if gpu and len(profile["gpu_ids"]) != 1:
-        raise ValueError("use one GPU per worker; launch separate CPU slices for additional GPUs")
+    if gpu and not profile["gpu_ids"]:
+        raise ValueError("GPU worker requires a nonempty Slurm GPU grant")
     if job_id is not None and profile["job_id"] != job_id:
         raise ValueError("current Slurm job differs from --job-id")
     if not cpu_ids or len(set(cpu_ids)) != len(cpu_ids) or not set(cpu_ids) <= set(profile["cpu_ids"]):
@@ -83,7 +83,8 @@ def launch(root, cpu_ids, memory_mb, work_dir, prefix, job_id=None, time_limit_s
     if time_limit_seconds is not None:
         command += ["--time-limit-seconds", str(time_limit_seconds)]
     if gpu:
-        command += ["--gpu", profile["gpu_ids"][0]]
+        for gpu_id in profile["gpu_ids"]:
+            command += ["--gpu", gpu_id]
         os.environ["APPTAINER_NV"] = "1"
-        os.environ["APPTAINERENV_CUDA_VISIBLE_DEVICES"] = profile["gpu_ids"][0]
+        os.environ["APPTAINERENV_CUDA_VISIBLE_DEVICES"] = ",".join(profile["gpu_ids"])
     os.execvp(command[0], command)

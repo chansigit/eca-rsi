@@ -47,3 +47,17 @@ def test_shared_memory_ledger_keeps_uncertain_workers_reserved(tmp_path, monkeyp
             role="worker", worker_directory=second)
     entries = read(tmp_path / ".cache/ecarsi-pool/test/budget-123.json")
     assert set(entries) == {"second"}
+
+
+def test_slurm_launch_passes_every_granted_gpu_to_one_worker(tmp_path, monkeypatch):
+    profile = dict(job_id="123", gpu_ids=["GPU-a1", "GPU-b2"], cpu_ids=[4, 7])
+    monkeypatch.setattr("ecarsi.pool.slurm.inventory", lambda *a, **k: profile)
+    monkeypatch.setenv("APPTAINER_NV", "0")
+    monkeypatch.setenv("APPTAINERENV_CUDA_VISIBLE_DEVICES", "")
+    commands = []
+    monkeypatch.setattr(allocation.os, "execvp", lambda executable, args: commands.append(args))
+    allocation.launch(tmp_path, [4, 7], 1024, tmp_path / "worker", ["python"], job_id="123", gpu=True)
+    assert len(commands) == 1 and commands[0].count("--gpu") == 2
+    assert commands[0][-4:] == ["--gpu", "GPU-a1", "--gpu", "GPU-b2"]
+    assert os.environ["APPTAINERENV_CUDA_VISIBLE_DEVICES"] == "GPU-a1,GPU-b2"
+    assert read(next((tmp_path / "worker").glob("allocation-*.json")))["gpu_ids"] == profile["gpu_ids"]

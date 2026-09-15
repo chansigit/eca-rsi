@@ -31,8 +31,16 @@ def test_gpu_grant_selects_step_and_ignores_unallocated_visible_hardware(monkeyp
     assert "--gpu" in command and "--nodelist=node1" in command
     assert provision.allocated_gpus(granted) == 1
     assert provision.allocated_gpus(profile(allocated_tres="gres/gpu:rtx=2")) == 2
-    with pytest.raises(ValueError, match="multiple GPUs"):
-        provision.worker_command(tmp_path, profile(allocated_tres="gres/gpu=2"), ["python"], tmp_path, [4, 7], 100, None)
+    multi = profile(allocated_tres="gres/gpu=2")
+    command = provision.worker_command(tmp_path, multi, ["python"], tmp_path, [4, 7], 100, None)
+    assert command.count("slurm-worker") == 1 and "--gpus-per-task=2" in command
+    # A partial inherited step must not silently hide the allocation's second GPU.
+    monkeypatch.setenv("SLURM_STEP_GPUS", "0")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
+    assert provision.worker_command(tmp_path, multi, ["python"], tmp_path, [4, 7], 100, None)[0] == "srun"
+    monkeypatch.setenv("SLURM_STEP_GPUS", "0,1")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
+    assert provision.worker_command(tmp_path, multi, ["python"], tmp_path, [4, 7], 100, None)[0] != "srun"
 
 
 def test_runtime_uses_configured_image_and_pythonpath():

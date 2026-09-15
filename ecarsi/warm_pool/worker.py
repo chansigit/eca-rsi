@@ -110,13 +110,23 @@ def assigned_gpu(spec, environment):
     if not spec.get("gpu"):
         return None
     variant = environment.get("HQ_RESOURCE_VARIANT")
-    required = spec["gpu"]["mode"] == "required" or variant == "0"
-    if not values:
-        if required or variant != "1":
-            raise ValueError("HQ did not provide the requested GPU or a valid CPU alternative")
-        return None
-    if (variant not in ({None, "0"} if spec["gpu"]["mode"] == "required" else {"0"}) or "," in values):
-        raise ValueError("GPU grant disagrees with the selected HQ resource alternative")
+    if environment.get("ECA_POOL_GPU_LAYOUT") == "slots-v1":
+        from .backend import GPU_SLOT_LIMIT
+        slots = {key: value for key, value in environment.items() if key.startswith("HQ_RESOURCE_VALUES_gpuSlot_")}
+        if not slots and spec["gpu"]["mode"] == "preferred" and variant == str(GPU_SLOT_LIMIT):
+            return None
+        if (variant not in {str(i) for i in range(GPU_SLOT_LIMIT)} or
+                len(slots) != 1 or not (values := slots.get("HQ_RESOURCE_VALUES_gpuSlot_" + variant)) or "," in values):
+            raise ValueError("GPU grant disagrees with the selected HQ resource alternative")
+    else:
+        # Already-submitted jobfiles from the original single-GPU protocol.
+        required = spec["gpu"]["mode"] == "required" or variant == "0"
+        if not values:
+            if required or variant != "1":
+                raise ValueError("HQ did not provide the requested GPU or a valid CPU alternative")
+            return None
+        if (variant not in ({None, "0"} if spec["gpu"]["mode"] == "required" else {"0"}) or "," in values):
+            raise ValueError("GPU grant disagrees with the selected HQ resource alternative")
     from .allocation import gpu_device
     gpu = gpu_device(values)
     if spec["gpu"]["memory_mb"] > int(gpu["memory_mb"] * .9):

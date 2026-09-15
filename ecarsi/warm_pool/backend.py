@@ -12,6 +12,22 @@ import time
 from .state import digest, file_digest, lock, pool_root, read, save
 
 
+# ponytail: bounded native alternatives cover up to 64 cards per worker, including
+# workers that join after submission. Raise this protocol limit if hardware needs it.
+GPU_SLOT_LIMIT = 64
+
+
+def gpu_resources(devices):
+    """Independent device and VRAM pairs, with shared worker CPU/RAM resources."""
+    if len(devices) > GPU_SLOT_LIMIT:
+        raise ValueError(f"this resource protocol supports at most {GPU_SLOT_LIMIT} GPUs per worker")
+    resources = []
+    for slot, gpu in enumerate(devices):
+        resources += ["--resource", f"gpuSlot/{slot}=[{gpu['uuid']}]",
+                      "--resource", f"gpuMemoryMB/{slot}=sum({int(gpu['memory_mb'] * .9)})"]
+    return resources
+
+
 def parent_death_signal(parent):
     """Native Linux children cannot outlive a crashed component supervisor."""
     def prepare():
@@ -69,18 +85,19 @@ def gpu_jobfile(request, attempt, name, executor, pythonpath):
                   stdout=str(attempt / "hq-%{INSTANCE_ID}.stdout"), stderr=str(attempt / "hq-%{INSTANCE_ID}.stderr"))
     text = "name = " + json.dumps(name) + "\n[[task]]\n"
     text += "\n".join(k + " = " + json.dumps(v) for k, v in fields.items())
-    text += "\nenv = { PYTHONPATH = " + json.dumps(pythonpath) + " }\n"
+    text += "\nenv = { PYTHONPATH = " + json.dumps(pythonpath) + ', ECA_POOL_GPU_LAYOUT = "slots-v1" }\n'
     resources = {"cpus": spec["cpus"], "mem": spec["memory_mb"], "runtime/" + request["runtime_digest"]: 1}
-    variants = [{**resources, "gpus/nvidia": 1, "gpuMemoryMB": spec["gpu"]["memory_mb"]}]
+    variants = [{**resources, f"gpuSlot/{slot}": 1, f"gpuMemoryMB/{slot}": spec["gpu"]["memory_mb"]}
+                for slot in range(GPU_SLOT_LIMIT)]
     if spec["gpu"]["mode"] == "preferred":
         variants.append(resources)
     for variant in variants:
         text += "\n[[task.request]]\ntime_request = " + json.dumps(str(spec["time_request_seconds"]) + "s")
-        text += "\nresources = { " + ", ".join(json.dumps(k) + " = " + str(v) for k, v in variant.items()) + " }\n"
+        text += "\nresources = { " + ", ".join(json.dumps(k) + " = " + json.dumps(v) for k, v in variant.items()) + " }\n"
     return text
 
 
-def resource_sample(cpu_ids, previous=None):
+def resource_sample(cpu_ids, previous=None, gpu_ids=()):
     """Cheap host measurements on a worker's allocated CPUs, every 30 seconds."""
     counters = {}
     for line in Path("/proc/stat").read_text().splitlines():
@@ -102,6 +119,8 @@ def resource_sample(cpu_ids, previous=None):
                                  "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=3, check=True)
         for line in result.stdout.splitlines():
             uuid, name, *values = [v.strip() for v in line.split(",")]
+            if uuid not in gpu_ids:
+                continue
             utilization, used, total = (int(v) if v.isdigit() else None for v in values)
             gpus.append(dict(uuid=uuid, name=name, utilization_percent=utilization, memory_used_mb=used, memory_total_mb=total))
     except (FileNotFoundError, subprocess.SubprocessError, ValueError):
@@ -251,7 +270,7 @@ def serve(root, host=None):
                  observed_at=time.time(), state="stopped"))
 
 
-def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit_seconds=None, gpu_id=None):
+def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit_seconds=None, gpu_ids=()):
     """An independently supervised native HQ worker; local explicit budgets first."""
     from contextlib import ExitStack
     from .worker import reconcile_local
@@ -265,20 +284,18 @@ def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit
     if time_limit_seconds is not None and (type(time_limit_seconds) is not int or time_limit_seconds <= 0):
         raise ValueError("time_limit_seconds must be a positive integer")
     profile = validate_profile(allocation_profile, cpu_ids, memory_mb)
-    if profile and profile.get("gpu_ids", []) != ([gpu_id] if gpu_id else []):
+    gpu_ids = list(gpu_ids)
+    if len(set(gpu_ids)) != len(gpu_ids):
+        raise ValueError("GPU UUIDs must be unique")
+    if profile and set(profile.get("gpu_ids", [])) != set(gpu_ids):
         raise ValueError("GPU must match the actual Slurm step grant")
-    gpu = gpu_device(gpu_id) if gpu_id else None
-    if gpu:
-        os.environ["CUDA_VISIBLE_DEVICES"] = gpu_id
+    gpus = [gpu_device(gpu_id) for gpu_id in gpu_ids]
+    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(gpu_ids)
     expires_at = profile["end_time"] - 60 if profile else None
     if time_limit_seconds is not None:
         expires_at = min(expires_at or float("inf"), time.time() + time_limit_seconds)
     runtime = backend.config["runtime"]
     check_runtime(runtime, imports=True)
-    if gpu:
-        subprocess.run(runtime["command"] + ["-c", "import cupy as cp,rapids_singlecell; "
-            "assert cp.cuda.runtime.getDeviceCount()==1; assert int(cp.arange(8).sum())==28"],
-            check=True, timeout=60, env=runtime_environment(runtime))
     work_dir = Path(work_dir).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
     host = socket.gethostname().split(".")[0]
@@ -288,7 +305,8 @@ def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit
     worker_identity = dict(worker_id=worker_id, host=host,
          cpu_ids=cpu_ids, memory_mb=memory_mb, work_dir=str(work_dir),
          slurm_job_id=profile["job_id"] if profile else None,
-         allocation=profile, expires_at=expires_at, gpu_ids=[gpu_id] if gpu else [], gpu=gpu)
+         allocation=profile, expires_at=expires_at, gpu_ids=gpu_ids, gpus=gpus,
+         gpu=gpus[0] if len(gpus) == 1 else None)
     locks = Path.home() / ".cache" / "ecarsi-pool" / host
     locks.mkdir(parents=True, exist_ok=True)
     stopping = False
@@ -298,6 +316,8 @@ def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
     with ExitStack() as stack:
+        if profile:
+            stack.enter_context(lock(locks / f"allocation-{profile['job_id']}.lock", blocking=False))
         owner_lock = work_dir / "owner.lock"
         stack.enter_context(lock(owner_lock, blocking=False))
         registration = dict(pool_root=str(backend.root), cpu_ids=sorted(cpu_ids))
@@ -307,7 +327,7 @@ def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit
         save(work_dir / "registration.json", registration)
         # Reconcile before replacing a previous memory claim; a dead HQ process
         # can still have a detached, bounded scientific executor.
-        while reconcile_local(backend.root, cpu_ids, [gpu_id] if gpu else []):
+        while reconcile_local(backend.root, cpu_ids, gpu_ids):
             if stopping or expires_at is not None and time.time() >= expires_at:
                 return 0
             time.sleep(1)
@@ -317,7 +337,7 @@ def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit
             # their old locks are free. The ledger serializes competing claims.
             reserve(profile, "worker:" + str(work_dir), owner_lock, role="worker", worker_directory=work_dir)
         def release_record():
-            pending = reconcile_local(backend.root, cpu_ids, [gpu_id] if gpu else [])
+            pending = reconcile_local(backend.root, cpu_ids, gpu_ids)
             state = "waiting_for_previous_execution" if pending else "stopped"
             save(work_dir / "launcher.json", dict(state=state, updated_at=time.time(), requests=pending))
             save(work_dir / "worker.json", dict(state=state, observed_at=time.time(), requests=pending))
@@ -327,15 +347,17 @@ def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit
         save(work_dir / "launcher.json", dict(state="running", updated_at=time.time()))
         for cpu in sorted(cpu_ids):
             stack.enter_context(lock(locks / f"cpu-{cpu}.lock", blocking=False))
-        gpu_resources = []
-        if gpu:
+        for gpu_id in sorted(gpu_ids):
             stack.enter_context(lock(locks / (gpu_id + ".lock"), blocking=False))
             previous = read(locks / (gpu_id + ".json"))
             if previous and reconcile_local(pool_root(previous["pool_root"]), [], [gpu_id]):
                 raise ValueError("previous GPU executor is still uncertain; keep its reservation")
             save(locks / (gpu_id + ".json"), registration)
-            gpu_resources = ["--resource", f"gpus/nvidia=[{gpu_id}]", "--resource",
-                             f"gpuMemoryMB=sum({int(gpu['memory_mb'] * .9)})"]
+        for gpu_id in gpu_ids:
+            subprocess.run(runtime["command"] + ["-c", "import cupy as cp,rapids_singlecell; "
+                "assert cp.cuda.runtime.getDeviceCount()==1; assert int(cp.arange(8).sum())==28"],
+                check=True, timeout=60, env=dict(runtime_environment(runtime), CUDA_VISIBLE_DEVICES=gpu_id))
+        device_resources = gpu_resources(gpus)
         save(telemetry_dir / "identity.json", worker_identity)
         os.sched_setaffinity(0, set(cpu_ids))
         log = stack.enter_context((work_dir / "worker.log").open("a"))
@@ -345,7 +367,7 @@ def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit
             while not stopping and (expires_at is None or time.time() < expires_at):
                 if time.monotonic() - last_sample >= 30:
                     try:
-                        sample, previous_counters = resource_sample(cpu_ids, previous_counters)
+                        sample, previous_counters = resource_sample(cpu_ids, previous_counters, gpu_ids)
                         sample["worker_id"] = worker_id
                         day = datetime.fromtimestamp(sample["observed_at"], timezone.utc).strftime("%Y-%m-%d")
                         with (telemetry_dir / (day + ".jsonl")).open("a", encoding="utf-8") as stream:
@@ -358,7 +380,7 @@ def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit
                 if proc is not None and proc.poll() is None:
                     time.sleep(.5)
                     continue  # finish old work before re-registering its CPUs
-                pending = reconcile_local(backend.root, cpu_ids, [gpu_id] if gpu else [])
+                pending = reconcile_local(backend.root, cpu_ids, gpu_ids)
                 if pending:
                     save(work_dir / "worker.json", dict(state="waiting_for_previous_execution",
                          requests=pending, observed_at=time.time()))
@@ -380,7 +402,7 @@ def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit
                         "--resource", f"mem=sum({memory_mb})",
                         "--resource", f"runtime/{digest(runtime)}=sum({len(cpu_ids)})",
                         "--on-server-lost", "finish-running", "--heartbeat", "1s", "--overview-interval", "5s",
-                        "--work-dir", str(work_dir)] + lifetime + gpu_resources,
+                        "--work-dir", str(work_dir)] + lifetime + device_resources,
                         env=dict(os.environ, ECA_POOL_WORKER_ID=worker_id),
                         stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
                         preexec_fn=parent_death_signal(os.getpid()))

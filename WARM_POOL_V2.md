@@ -99,11 +99,13 @@ an in-progress startup is not launched twice. A timeout leaves startup running
 and reports the log path. The existing worker supervisor handles reconnection.
 
 GPU detection uses **allocated** `AllocTRES`, never physical node inventory alone.
-For a single-GPU allocation without GPU step visibility, the command starts an
-`srun` step **inside the existing job**, then reuses the GPU UUID/cgroup and
-CuPy/RAPIDS checks before registration. An invalid GPU setup fails visibly rather
-than silently registering a CPU worker. Automatic multi-GPU splitting is not
-implemented; use one explicit GPU step per worker for those allocations.
+One worker manages the allocation's CPU, RAM and all granted GPUs. If GPU step
+visibility is absent or incomplete, the command starts one `srun` step with the
+full GPU grant **inside the existing job**, then verifies each GPU's UUID and
+CuPy/RAPIDS execution before registration. An invalid GPU setup fails visibly
+rather than silently registering a CPU worker or dropping part of the GPU grant.
+An allocation ownership lock prevents a second worker on the same host/job;
+different Slurm jobs on the same host remain separate workers.
 
 Optional `--job-id`, `--cpus`, `--memory-mb`, `--work-dir`, `--gpu`/`--no-gpu`
 preserve explicit control. `--host-python` selects a host Python installed at a
@@ -311,22 +313,22 @@ released their reservations after cleanup. Its report is
 
 ### GPU scheduling and telemetry, 2026-09-15
 
-A GPU worker owns one explicitly granted GPU UUID and a CPU/RAM slice. For a
-local worker use `worker --gpu GPU-...`. Inside an existing Slurm allocation,
-launch `slurm-worker --gpu` in a step granted one GPU, for example:
+A worker manages all explicitly granted GPUs in its allocation. Use `add-worker`
+for automatic discovery. A local worker accepts repeated `--gpu GPU-...` flags;
+the explicit `slurm-worker --gpu` launcher uses all GPUs in its step, for example:
 
 ```bash
 srun --jobid="$job_id" --overlap --exact --nodes=1 --ntasks=1 \
-  --cpus-per-task=2 --mem=20G --gpus-per-task=1 \
+  --cpus-per-task="$allocated_cpus" --mem="$allocated_memory_mb" --gpus-per-task="$allocated_gpus" \
   python -m ecarsi.warm_pool --root "$pool_state" slurm-worker \
-  --cpus "$cpu_ids" --memory-mb 16384 --work-dir "$worker_state" \
+  --cpus "$cpu_ids" --memory-mb "$worker_memory_mb" --work-dir "$worker_state" \
   --job-id "$job_id" --gpu -- \
   apptainer exec --cleanenv --bind /scratch,/oak,/home,/lscratch \
   --env PYTHONPATH=/path/to/rsi:/opt/rsi-python science.sif /usr/local/bin/python3
 ```
 
 Select CPU IDs from that step's affinity. The launcher probes its actual Slurm
-GPU grant, enables Apptainer NVIDIA support and verifies CuPy/RAPIDS before
+GPU grant, enables Apptainer NVIDIA support and verifies CuPy/RAPIDS on each card before
 registration. No command acquires or releases an allocation. A host-wide UUID
 lock prevents two workers from registering the same GPU; uncertain surviving
 GPU executions block resource reuse, even across pool roots.
@@ -338,6 +340,21 @@ GPU task holds the whole device, with a usable VRAM budget of 90% of its capacit
 Concurrent tasks can use the worker's remaining CPUs. Multiple tasks sharing
 one GPU are not implemented. The VRAM watchdog samples every 5 seconds and is
 not a hard memory partition; brief peaks can be missed.
+
+Each GPU has a native HQ device resource and its own VRAM resource. Jobfile
+alternatives pair these resources by slot, so a large-memory task cannot add up
+several cards' memory or occupy a smaller card while a suitable card is free.
+CPU and host-memory budgets are shared across all tasks on the worker. The
+current protocol supports up to 64 GPU slots per worker; alternatives include
+these slots before any worker joins, so queued tasks can use newly arriving
+multi-GPU workers without resubmission. Each scientific task still uses one GPU.
+Resource telemetry includes only the worker's granted GPU UUIDs.
+
+`HQ_TEST_BINARY=/path/to/hq python -m pytest tests/test_warm_pool_gpu.py` includes
+an opt-in acceptance using real HQ processes and synthetic GPU descriptors. It
+checks late worker arrival, two GPU tasks plus CPU work on one worker, per-card
+memory matching, queue backfill and CPU fallback. This verifies scheduling;
+it does not substitute for a CUDA/RAPIDS run on actual multi-GPU hardware.
 
 The live development pool was upgraded to `rsi-science-20260915-1.sif` on three
 nodes, including the RTX 3090 (24 GiB) on `sh03-15n05`. A required GPU task,

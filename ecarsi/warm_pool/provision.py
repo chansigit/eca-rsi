@@ -45,14 +45,13 @@ def worker_command(root, profile, prefix, work_dir, cpu_ids, memory_mb, gpu):
         command += ["--gpu"]
         visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
         step_grant = os.environ.get("SLURM_STEP_GPUS") or os.environ.get("SLURM_JOB_GPUS")
-        if not step_grant or visible in {"", "-1", "NoDevFiles"}:
-            # The existing worker owns one GPU; never silently discard extra grants.
-            if allocated_gpus(profile) != 1:
-                raise ValueError("multiple GPUs: launch one worker per explicitly granted GPU step")
+        if (not step_grant or visible in {"", "-1", "NoDevFiles"}
+                or len(step_grant.split(",")) != allocated_gpus(profile)
+                or len(visible.split(",")) != allocated_gpus(profile)):
             command = ["srun", "--jobid=" + profile["job_id"], "--nodelist=" + profile["host"],
                        "--overlap", "--exact", "--nodes=1", "--ntasks=1", "--immediate=15",
                        "--cpus-per-task=" + str(len(cpu_ids)), "--mem=" + str(math.ceil(memory_mb / .9)),
-                       "--gpus-per-task=1", *command]
+                       "--gpus-per-task=" + str(allocated_gpus(profile)), *command]
     return command + ["--", *prefix]
 
 
@@ -115,7 +114,7 @@ def add_worker(root, host=None, *, host_python=None, job_id=None, cpu_ids=None, 
             if (identity and identity["host"] == profile["host"] and identity.get("slurm_job_id") == profile["job_id"]
                     and (not explicit_work_dir or identity["work_dir"] == str(work_dir))
                     and identity["cpu_ids"] == cpu_ids and identity["memory_mb"] == memory_mb
-                    and bool(identity.get("gpu_ids")) == (allocated_gpus(profile) > 0 if gpu is None else gpu)):
+                    and len(identity.get("gpu_ids", [])) == (allocated_gpus(profile) if gpu is not False else 0)):
                 existing_dir = Path(identity["work_dir"])
                 existing_log = existing_dir / "startup.log"
                 return dict(state="online", already_running=True, hq_worker_id=row["id"],
