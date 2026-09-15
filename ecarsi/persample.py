@@ -33,7 +33,7 @@ from .run_state import (
     write_json,
     writer_lock,
 )
-from .sample_mapping import SAMPLE_KEY, build_mapping, mapping_identity, obs_profile
+from .sample_mapping import SAMPLE_KEY, build_mapping, mapping_identity, obs_profile, _validate_sample_column
 
 SAMPLE_COL_SCHEMA = {
     "type": "object",
@@ -64,33 +64,6 @@ def profile_obs(h5ad: Path, max_levels: int = 50) -> dict:
 
 
 # ------------------------------------------------------- identify (agent)
-
-
-def _validate_sample_column(decision: dict, profile: dict, *, allow_unknown: bool = False,
-                            allow_na: bool = False) -> str | None:
-    """None if valid, else a problem description (fix-and-resubmit style)."""
-    if not isinstance(decision, dict) or "sample_column" not in decision:
-        return "decision must contain sample_column"
-    col = decision.get("sample_column")
-    if not isinstance(decision.get("rationale"), str) or not decision["rationale"].strip():
-        return "experiment decision requires a rationale"
-    if col is None:
-        if allow_unknown and decision.get("confirmed_single") is False:
-            return None  # valid uncertainty; execution still requires an explicit partition
-        return None if decision.get("confirmed_single") is True else "unknown grouping is not a confirmed single experiment"
-    if not isinstance(col, str) or col in ("source_unit", "eca_source_cell_id", "eca_pp_cell_type", SAMPLE_KEY):
-        return "sample_column must be an experiment column, not a bookkeeping/cell-type column"
-    info = profile["obs_columns"].get(col)
-    if info is None:
-        return f"picked obs column {col!r}, which does not exist"
-    if info["n_unique"] < 1:
-        return f"sample column {col!r} has {info['n_unique']} levels — implausible for 10x runs"
-    if info.get("n_na", 0) > 0 and not allow_na:
-        # a column that leaves cells unassigned is not a partition: those
-        # cells would become a bogus "nan" sample (the silent-garbage trap);
-        # an explicit sample-map may opt in with missing_as
-        return f"sample column {col!r} leaves {info['n_na']} cells NA — not a valid partition"
-    return None
 
 
 def identify_sample_column(profile: dict, obs=None) -> dict:

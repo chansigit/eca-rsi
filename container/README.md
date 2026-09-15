@@ -1,5 +1,52 @@
 # Container environment for the ecarsi chain
 
+## V2 control runtime
+
+The [control manifest](control-runtime-20260915.json) records the base SIF,
+installed Bridge wheel, and resulting SIF hashes. Its
+[requirements lock](control-requirements.lock) pins CPython 3.12 Linux x86_64
+wheels, including transitive dependencies. This image runs the Work Coordinator,
+Agent Bridge, and Warm Pool Scheduler. Scientific operations retain their own
+science image; adding scientific packages to the control environment is unnecessary.
+Organize validates sample decisions from prepared metadata without importing pandas.
+
+To rebuild, obtain the base image and Bridge wheel matching the manifest hashes.
+The wheel can be built from the recorded Bridge commit; use a separate checkout.
+Run from this repository, with absolute paths for the build inputs:
+
+```bash
+# Set BASE_SIF, BRIDGE_WHEEL, BUILD_ROOT, and CONTROL_SIF to your local paths.
+apptainer build --sandbox "$BUILD_ROOT" "$BASE_SIF"
+apptainer exec --cleanenv --bind "$PWD,$BUILD_ROOT,$(dirname "$BRIDGE_WHEEL")" \
+  "$BASE_SIF" python3 -m pip install --only-binary=:all: --require-hashes \
+  --target "$BUILD_ROOT/opt/rsi-control" -r "$PWD/container/control-requirements.lock"
+apptainer exec --cleanenv --bind "$BUILD_ROOT,$(dirname "$BRIDGE_WHEEL")" \
+  "$BASE_SIF" python3 -m pip install --no-deps \
+  --target "$BUILD_ROOT/opt/rsi-control" "$BRIDGE_WHEEL"
+apptainer build --mksquashfs-args '-processors 2' "$CONTROL_SIF" "$BUILD_ROOT"
+```
+
+Build timestamps can change the resulting SIF hash; record the new artifact's hash
+after validation. Launch against an explicit RSI checkout and shared run directories:
+
+```bash
+apptainer exec --cleanenv --bind /path/to/rsi,/shared/rsi \
+  --env PYTHONPATH=/path/to/rsi:/opt/rsi-control \
+  --env PYTHONNOUSERSITE=1 --env PYTHONSAFEPATH=1 \
+  "$CONTROL_SIF" python3 -m ecarsi.work_coordinator \
+  --service-root /shared/rsi/control --task-queue ecarsi-durable-v2 worker
+```
+
+Use the same interpreter prefix for `ecarsi.agent_bridge` and `ecarsi.warm_pool`.
+Bind the recorded native binaries when launching `ecarsi.temporal_service`.
+With `--cleanenv`, forward each configured provider credential through an
+`APPTAINERENV_` environment variable (for example `APPTAINERENV_OPENROUTER_API_KEY`);
+do not put credentials in command arguments or manifests. Preserve the chosen
+`OPENAI_AGENTS_API` mode when restarting services. Replay existing histories before
+replacing the Coordinator, and retain the previous image until verification passes.
+
+## Legacy full-chain runtime
+
 `build.sh` + `install-wrapper.sh` reproduce the interpreter that ECA-RSI batches run on.
 Nothing in them is site-specific; everything is set by environment variable.
 

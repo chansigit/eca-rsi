@@ -60,7 +60,12 @@ The legacy SQLite database also has an online-consistent cold archive on shared 
 
 These checks cover process interruption and relocation between two live allocated hosts. Physical host power loss, network partitions, filesystem eviction/failure, replicated database failover, backup restoration, and sustained high-volume operation are not certified by these checks. A replacement service still needs to be started on an available resource; there is no always-on host or automatic Slurm provisioning. PostgreSQL may conservatively reject a stale PID file whose numeric PID matches an unrelated process on the replacement host; this wrapper preserves that safety check and requires diagnosis instead of deleting the file automatically.
 
-The scientific operations use the previously accepted Apptainer science image. The current control launch still imports some Python packages from the existing `dl2025` environment alongside the pinned Temporal SDK; a fully pinned, separate control image remains deployment work. Native PostgreSQL/Temporal binaries and schemas are already pinned by this service.
+Scientific operations use the separate Apptainer science image. Control components
+can use the [pinned control image](container/control-runtime-20260915.json), whose
+Python dependencies are installed inside `/opt/rsi-control`; neither `dl2025` nor
+the old external `temporal-env` belongs on its `PYTHONPATH`. Native
+PostgreSQL/Temporal binaries and schemas remain separately pinned by this service.
+See [the build and launch instructions](container/README.md#v2-control-runtime).
 
 Client-only Coordinator commands disable the SDK's optional worker heartbeat
 thread: these commands do not host a Temporal worker. This avoids an observed

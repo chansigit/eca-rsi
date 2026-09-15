@@ -119,7 +119,7 @@ async def _propose(profiles: list[dict], *, brief=None, cwd=None, full_result=Fa
 
 def validate_sample_mapping(plan: dict, profiles: list[dict]) -> None:
     """New Organize contract; legacy plans remain readable in the old runner."""
-    from .persample import _validate_sample_column
+    from .sample_mapping import _validate_sample_column
 
     mapping = plan.get("sample_mapping")
     known = {p["name"]: p for p in profiles}

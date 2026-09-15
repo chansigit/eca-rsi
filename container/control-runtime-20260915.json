@@ -1,0 +1,23 @@
+{
+  "python": "3.12",
+  "platform": "linux-x86_64",
+  "base_image": {
+    "path": "/scratch/users/chensj16/containers/python312-slim.sif",
+    "sha256": "09cb54dc982d477ce6f01960150be1c7251cd458eafd2cc52078226f07a46d43"
+  },
+  "image": {
+    "path": "/scratch/users/chensj16/containers/rsi-control-20260915-1.sif",
+    "sha256": "a1917b629890caccd5ab982f64143ea4cbb68e3fd487f9f1a3266c6455dd6183"
+  },
+  "requirements": "control-requirements.lock",
+  "bridge": {
+    "version": "0.2.14",
+    "source_commit": "60bbb2142d250243a60fe3182886af785071a070",
+    "wheel": "agent_harness_bridge-0.2.14-py3-none-any.whl",
+    "sha256": "fe63cf9365a5bad0e5b48ccce0438ab7c3ede3277870cec1ccb895d9195bfd20"
+  },
+  "pythonpath": [
+    "/path/to/eca-rsi",
+    "/opt/rsi-control"
+  ]
+}

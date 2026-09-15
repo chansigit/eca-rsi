@@ -49,6 +49,29 @@ def wait_for(predicate):
 
 
 class DurableBridgeTest(unittest.TestCase):
+    def test_sample_validation_needs_no_science_packages(self):
+        import subprocess
+        import sys
+        subprocess.run([sys.executable, "-c", '''
+import sys
+class NoScience:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in {'numpy', 'pandas', 'anndata', 'scanpy'}:
+            raise AssertionError('Control validation imported ' + fullname)
+sys.meta_path.insert(0, NoScience())
+from ecarsi.plan import validate_sample_mapping
+profile = {'name': 'source', 'obs_columns': {'sample': {'n_unique': 2, 'n_na': 0}}}
+plan = {'sample_mapping': {'source': {'sample_column': 'sample', 'rationale': 'library IDs'}}}
+validate_sample_mapping(plan, [profile])
+profile['obs_columns']['sample']['n_na'] = 1
+try:
+    validate_sample_mapping(plan, [profile])
+except ValueError as exc:
+    assert 'leaves 1 cells NA' in str(exc)
+else:
+    raise AssertionError('Incomplete partition was accepted')
+'''], check=True)
+
     def test_terminal_history_is_cached_but_uncertain_calls_are_revisited(self):
         from collections import Counter
         with tempfile.TemporaryDirectory() as tmp:
