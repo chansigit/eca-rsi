@@ -53,6 +53,27 @@ boundaries before scientific acceptance.
 `summary.json` contains counts, concurrency and update time. It is a snapshot,
 not a liveness guarantee when the service is stopped. A request remains queued
 if the catalog is invalid; dispatch errors are recorded in its private log.
+It also separates `running`, `unresolved`, and `available` slots. An uncertain
+provider operation reserves capacity until its outcome can be reconciled;
+an idle local process count is not proof that provider capacity is free.
+
+The dispatcher automatically recovers a subsequently available saved response
+for an uncertain request, without another model call. If no response is
+recoverable, an operator or provider-side reconciler must first confirm that
+the remote execution has stopped, then record that evidence:
+
+```bash
+python -m ecarsi.agent_bridge confirm-stopped /absolute/development/bridge REQUEST_ID \
+  --reason 'Provider-side confirmation and evidence reference'
+```
+
+This refuses a request whose local executor still owns its lock. A saved reply
+is recovered in preference to failure. Otherwise `resolution.json` preserves
+the uncertain state, request identity and confirmation reason, and the request
+becomes failed so unrelated queued work can use the slot. It does not retry
+the affected model call, fabricate a successful reply, or resume its failed
+workflow. Elapsed time alone is insufficient confirmation. Provider-specific
+automatic lookup/cancellation and safe model-request retry remain open work.
 
 ## Recovery and limits
 

@@ -157,6 +157,52 @@ class DurableBridgeTest(unittest.TestCase):
                 provider.assert_called_once()
             self.assertIsNone(bridge.status(root, 'saved')['response']['usage'])
 
+    def test_confirmed_remote_stop_releases_capacity_without_retrying_lost_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            catalog = base / 'models.json'
+            bridge.save(catalog, {'models': [{'harness': 'claude', 'model': 'test-model'}]})
+            root = bridge.init(base / 'bridge', catalog, concurrency=1)
+            spec = dict(request_id='lost', operation_id='organize.plan', cwd=str(base),
+                        profiles=[{'name': 'test', 'h5ad': '/test-only/input.h5ad'}])
+            bridge.submit(root, spec)
+            bridge.submit(root, dict(spec, request_id='waiting'))
+            folder = root / 'requests/lost'
+            bridge.save(folder / 'state.json', {'state': 'unknown_external_result'})
+            fake_service(root, once=True)
+            summary = bridge.read(root / 'summary.json')
+            self.assertEqual((summary['running'], summary['unresolved'], summary['available']), (0, 1, 0))
+            with bridge.lock(folder / 'execution.lock'):
+                with self.assertRaises(BlockingIOError):
+                    bridge.confirm_stopped(root, 'lost', reason='Synthetic confirmed stop')
+            resolved = bridge.confirm_stopped(root, 'lost', reason='Synthetic provider confirms no execution remains')
+            self.assertEqual(resolved['state'], 'failed')
+            self.assertTrue(bridge.read(folder / 'resolution.json')['remote_stopped'])
+            with patch.object(bridge, 'run_organize', side_effect=AssertionError('must not retry lost call')):
+                bridge.execute(root, 'lost')
+            children = fake_service(root, once=True)
+            for child in children.values():
+                self.assertEqual(child.wait(timeout=10), 0)
+            self.assertFalse((base / 'lost.calls').exists())
+            self.assertEqual((base / 'waiting.calls').read_text(), 'called\n')
+            self.assertEqual(bridge.status(root, 'waiting')['state'], 'reply_saved')
+
+    def test_late_saved_reply_automatically_resolves_uncertain_outcome(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            catalog = base / 'models.json'
+            bridge.save(catalog, {'models': []})
+            root = bridge.init(base / 'bridge', catalog, concurrency=1)
+            bridge.submit(root, dict(request_id='lost', operation_id='organize.plan', cwd=str(base),
+                                     profiles=[{'name': 'test', 'h5ad': '/test-only/input.h5ad'}]))
+            folder = root / 'requests/lost'
+            bridge.save(folder / 'state.json', {'state': 'unknown_external_result'})
+            bridge.save(folder / 'proposal.json', {'synthetic': 'saved reply'})
+            with patch.object(bridge, 'launch', side_effect=AssertionError('must reuse saved reply')):
+                bridge.serve(root, once=True)
+            self.assertEqual(bridge.status(root, 'lost')['state'], 'reply_saved')
+            self.assertEqual(bridge.read(root / 'summary.json')['available'], 1)
+
     def test_proposal_survives_sdk_teardown_failure(self):
         from ecarsi import plan
         import json

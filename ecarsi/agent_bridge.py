@@ -229,6 +229,28 @@ def reconcile(folder):
         pass  # The accepted executor survived the service; let it publish its reply.
 
 
+def confirm_stopped(root, request_id, *, reason):
+    """Operator/provider confirmation, never a timeout-based assumption or retry."""
+    root = root_path(root)
+    folder = root / 'requests' / identifier(request_id)
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError('Record how the remote execution was confirmed stopped')
+    with lock(folder / 'execution.lock', blocking=False):
+        previous = status(root, request_id)
+        if previous['state'] != 'unknown_external_result':
+            raise ValueError('Only an unresolved external outcome can be reconciled')
+        # A surviving/restored response always wins over declaring its result unavailable.
+        if read(folder / 'turn-response.json') is not None or read(folder / 'proposal.json') is not None:
+            recover_result(folder, 'confirmed_stopped_with_saved_reply')
+        else:
+            from .agent_session import immutable
+            audit = immutable(folder / 'resolution.json', dict(request_digest=read(folder / 'request.json')['digest'],
+                previous=previous, remote_stopped=True, reason=reason))
+            save(folder / 'result.json', dict(state='failed', reason='remote_stopped_without_reply',
+                resolution=audit, finished_at=time.time()))
+    return status(root, request_id)
+
+
 def launch(root, folder, catalog):
     from .model_web import normalized_models, PROVIDERS
     models = normalized_models(catalog)
@@ -276,7 +298,10 @@ def serve(root, *, once=False):
                     queued.append((record["submitted_at"], folder))
                 elif record["state"] == "unknown_external_result":
                     # Provider work may still exist even when its local caller vanished.
-                    active += 1
+                    if (folder / 'turn-response.json').is_file() or (folder / 'proposal.json').is_file():
+                        reconcile(folder)
+                    if status(root, folder.name)['state'] == 'unknown_external_result':
+                        active += 1
             error = None
             for _, folder in sorted(queued):
                 if active >= limit:
@@ -297,7 +322,10 @@ def serve(root, *, once=False):
             counts = Counter(status(root, f.name)["state"] for f in folders
                              if (f / "request.json").is_file())
             save(root / "summary.json", {"updated_at": time.time(), "counts": dict(counts),
-                                         "concurrency": limit, "dispatch_error": error})
+                                         "concurrency": limit, "dispatch_error": error,
+                                         "running": counts['running'],
+                                         "unresolved": counts['unknown_external_result'],
+                                         "available": max(0, limit-counts['running']-counts['unknown_external_result'])})
             if once:
                 return children  # Test/embedding caller owns reaping any launched children.
             time.sleep(1)
@@ -310,6 +338,10 @@ def main():
     p.add_argument("root")
     p.add_argument("--catalog", required=True)
     p.add_argument("--concurrency", type=int, default=2)
+    p = commands.add_parser('confirm-stopped', help='reconcile an uncertain call after confirming remote execution has stopped')
+    p.add_argument('root')
+    p.add_argument('request_id')
+    p.add_argument('--reason', required=True)
     for name in ("serve", "submit", "status", "_execute"):
         p = commands.add_parser(name)
         p.add_argument("root")
@@ -324,6 +356,9 @@ def main():
         serve(args.root)
     elif args.command == "_execute":
         execute(args.root, args.request_id)
+    elif args.command == 'confirm-stopped':
+        import json
+        print(json.dumps(confirm_stopped(args.root, args.request_id, reason=args.reason), ensure_ascii=True))
     else:
         import json
         result = submit(args.root, read(args.request_file)) if args.command == "submit" else status(args.root, args.request_id)
