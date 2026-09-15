@@ -349,8 +349,10 @@ def tool(name, state_path, args_path, destination):
                 next_offset=offset+10 if offset+10<length else None,version=bundle['version'])
         elif name == 'submit_types':
             data = data_from(bundle);own, _ = lineage_labels(bundle)
-            if not state['lookups'] or not any(p.endswith('.png') for p in state['read']):
-                raise ValueError('Read lineage DEG and a figure before assigning types')
+            missing = [name for name, done in [('deg_lookup or deg_sql', bool(state['lookups'])),
+                ('read_evidence on a lineage PNG figure', any(p.endswith('.png') for p in state['read']))] if not done]
+            if missing:
+                raise ValueError('Complete required checks: ' + ', '.join(missing))
             proposal = json.loads(args['proposal_json'])
             if not isinstance(proposal,dict):raise ValueError('Type proposal must be an object')
             submitted=proposal.get('clusters',[])
@@ -365,8 +367,11 @@ def tool(name, state_path, args_path, destination):
             state['quality'] = None;state.pop('budget_warning',None)
             response['content'] = 'Type coverage accepted; continue quality review at resolution 2.0.'
         elif name == 'submit_quality':
-            if not state.get('types_complete') or not state['qc'] or not state['lookups'] or not any(p.endswith('.png') for p in state['read']):
-                raise ValueError('Save types and read current QC, DEG and a figure before quality review')
+            missing = [name for name, done in [('submit_types', state.get('types_complete')),
+                ('check_qc_scores', state['qc']), ('deg_lookup or deg_sql', bool(state['lookups'])),
+                ('read_evidence on a lineage PNG figure', any(p.endswith('.png') for p in state['read']))] if not done]
+            if missing:
+                raise ValueError('Complete required checks: ' + ', '.join(missing))
             data = data_from(bundle);own, other = lineage_labels(bundle)
             proposal = json.loads(args['proposal_json'])
             proposal['clusters'] = validate_quality(proposal,data.obs,other)

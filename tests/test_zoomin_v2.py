@@ -73,6 +73,11 @@ def test_zoom_handoffs_and_exact_global_conservation(tmp_path):
     review_state=immutable(tmp_path/'review-state.json',dict(evidence=evidence,kind='lineage',types=types,
         types_complete=True,quality=None,read=['figures/test.png'],lookups=[{'key':QUALITY_KEY}],qc=True))
     save(args,{'proposal_json':json.dumps(removal)})
+    missing_qc=immutable(tmp_path/'missing-qc-state.json',{**verified(review_state),'qc':False})
+    missing=folder('missing-qc');tool('submit_quality',missing_qc['path'],str(args),missing)
+    rejected=json.loads((missing/'result.json').read_text())
+    assert rejected['is_error'] and rejected['content']=='Complete required checks: check_qc_scores'
+    assert verified(rejected['state'])['types_complete']
     first=folder('first-review');tool('submit_quality',review_state['path'],str(args),first)
     warning=json.loads((first/'result.json').read_text())
     assert warning['is_error'] and 'confirmed dissociation/dying' in warning['content']
