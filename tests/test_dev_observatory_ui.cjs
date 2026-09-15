@@ -85,13 +85,13 @@ root.insertAdjacentHTML = (_, svg) => { root.flowSvg = svg; };
 assert.equal(context.drawFlow(links), 2);
 assert(root.flowSvg.includes('data-workflow="organize/run-a"'));
 assert(root.flowSvg.includes('class="flow-edge"'));
-assert(root.flowSvg.includes('stroke-width="6"'));
-assert(root.flowSvg.includes('M 390 71 C 417 71, 423 99, 450 99'));
+assert(root.flowSvg.includes('M 390 50 C 417 50, 423 95, 450 95 L 450 120 C 423 120, 417 75, 390 75 Z'));
+assert(!root.flowSvg.includes('stroke-width'));
 assert(!root.flowSvg.includes('<circle'));
-assert(!root.flowSvg.includes(' Z"'));
 assert(!root.flowSvg.includes('NaN'));
 assert.equal(context.datasetColor('dataset-a'), context.datasetColor('dataset-a'));
-assert.equal(context.connectorPath(10,1,20,2), 'M 10 1 C 14.5 1, 15.5 2, 20 2');
+assert.equal(context.connectorRibbonPath(10,1,5,20,2,6),
+  'M 10 1 C 14.5 1, 15.5 2, 20 2 L 20 6 C 15.5 6, 14.5 5, 10 5 Z');
 
 context.renderTimeline({since: 0, until: 1000, tasks: [], total: 0, source: 'test', resources:
   Array.from({length: 240}, (_, i) => ({worker_id: 'worker-a', observed_at: i * 4,

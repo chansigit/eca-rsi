@@ -76,10 +76,10 @@
   .timeline-bar:hover,.timeline-bar:focus-visible { outline:2px solid #2d5046; outline-offset:2px; z-index:2; }
   .timeline-bar.failed { outline:2px solid #a4514e; outline-offset:-2px; }
   .timeline-flow { position:absolute; inset:0; width:100%; height:100%; z-index:0; pointer-events:none; overflow:visible; }
-  .timeline-flow .flow-edge { opacity:var(--flow-idle-opacity,.22); transition:opacity .15s; stroke-linecap:butt; }
-  .timeline.flow-focused .flow-edge:not(.flow-active) { opacity:.03; }
+  .timeline-flow .flow-edge { opacity:var(--flow-idle-opacity,.14); transition:opacity .15s; }
+  .timeline.flow-focused .flow-edge:not(.flow-active) { opacity:.025; }
   .timeline.flow-focused .timeline-bar:not(.flow-active) { opacity:.28; }
-  .timeline.flow-focused .flow-edge.flow-active { opacity:.6; }
+  .timeline.flow-focused .flow-edge.flow-active { opacity:.32; }
   .timeline.flow-focused .timeline-bar.flow-active { filter:brightness(1.13); }
   .timeline-spark { width:100%; height:38px; display:block; overflow:visible; }
   .timeline-resource { color:#657b70; font-weight:500; }
@@ -216,9 +216,9 @@ function buildFlowEdges(tasks) {
   }
   return edges;
 }
-function connectorPath(x1,y1,x2,y2) {
+function connectorRibbonPath(x1,top1,bottom1,x2,top2,bottom2) {
   const bend=(x2-x1)*.45;
-  return `M ${x1} ${y1} C ${x1+bend} ${y1}, ${x2-bend} ${y2}, ${x2} ${y2}`;
+  return `M ${x1} ${top1} C ${x1+bend} ${top1}, ${x2-bend} ${top2}, ${x2} ${top2} L ${x2} ${bottom2} C ${x2-bend} ${bottom2}, ${x1+bend} ${bottom1}, ${x1} ${bottom1} Z`;
 }
 function drawFlow(edges) {
   if (!edges.length) return 0;
@@ -234,19 +234,13 @@ function drawFlow(edges) {
     if (first.right<scaleLeft+bounds.left || second.left>scaleRight+bounds.left) continue;
     const x1=first.right-bounds.left, x2=second.left-bounds.left;
     if (x2<=x1+2) continue;
-    const downward=second.top>first.top+2, upward=first.top>second.top+2;
-    let y1, y2;
-    if (downward||upward) {
-      y1=(downward?first.bottom-4:first.top+4)-bounds.top;
-      y2=(downward?second.top+4:second.bottom-4)-bounds.top;
-    } else {
-      y1=first.top-bounds.top+a.offsetHeight/2; y2=second.top-bounds.top+b.offsetHeight/2;
-    }
     const color=datasetColor(edge.child.trace.dataset_id);
-    paths.push(`<path class="flow-edge" data-workflow="${esc(edge.child.trace.workflow_id)}" d="${connectorPath(x1,y1,x2,y2)}" fill="none" stroke="${color}" stroke-width="6" vector-effect="non-scaling-stroke"/>`);
+    const ribbon=connectorRibbonPath(x1,first.top-bounds.top,first.bottom-bounds.top,
+                                     x2,second.top-bounds.top,second.bottom-bounds.top);
+    paths.push(`<path class="flow-edge" data-workflow="${esc(edge.child.trace.workflow_id)}" d="${ribbon}" fill="${color}"/>`);
   }
   if (paths.length) {
-    root.style.setProperty('--flow-idle-opacity',paths.length>80?'.07':'.22');
+    root.style.setProperty('--flow-idle-opacity',paths.length>80?'.045':'.14');
     root.insertAdjacentHTML('afterbegin',`<svg class="timeline-flow" viewBox="0 0 ${root.clientWidth} ${root.scrollHeight}" aria-hidden="true">${paths.join('')}</svg>`);
   }
   return paths.length;
