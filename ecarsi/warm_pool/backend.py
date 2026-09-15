@@ -129,42 +129,42 @@ class HyperQueue:
         by_name = {j["name"]: j for j in jobs}
         generation = digest({k: info[k] for k in ("server_uid", "pid", "start_date")})
         for folder in sorted((self.root / "requests").iterdir()):
-            request = read(folder / "request.json")
-            if not request:
-                continue
-            attempt = folder / request["attempt_id"]
-            receipt = read(attempt / "receipt.json")
-            previous = read(folder / "backend.json", {})
-            name = "rsi." + request["spec"]["request_id"] + "." + request["attempt_id"]
-            job = by_name.get(name)
-            if read(folder / "cancel.json"):
-                accepted = read(attempt / "accepted.json")
-                # HQ escalates cancellation to SIGKILL after one second. An
-                # accepted executor must finish its own descendant cleanup.
-                if job and (receipt or not accepted) and (job["task_stats"]["running"] or job["task_stats"]["waiting"]):
-                    self.call("job", "cancel", str(job["id"]))
-                if receipt or not accepted:
-                    save(folder / "backend.json", dict(previous, state="cancelled", observed_at=time.time()))
-                continue
-            if receipt:
-                # A persisted result wins over a replayed HQ journal entry.
-                if job and job["task_stats"]["waiting"]:
-                    self.call("job", "cancel", str(job["id"]))
-                continue
-            if job:
-                counts = job["task_stats"]
-                state = ("running" if counts["running"] else "queued" if counts["waiting"]
-                         else "unknown_external_result")
-                save(folder / "backend.json", dict(state=state, job_id=job["id"],
-                     generation=generation, observed_at=time.time(), task_stats=counts))
-                continue
-            if read(attempt / "accepted.json"):
-                # A lost backend record is not evidence that computation stopped.
-                save(folder / "backend.json", dict(previous, state="unknown_external_result", observed_at=time.time()))
-                continue
-            if previous.get("state") in {"submitting", "unknown_external_result"} and previous.get("generation") == generation:
-                continue  # reply may have been lost; reconcile by stable job name
             with lock(folder / "request.lock"):
+                request = read(folder / "request.json")
+                if not request:
+                    continue
+                attempt = folder / request["attempt_id"]
+                receipt = read(attempt / "receipt.json")
+                previous = read(folder / "backend.json", {})
+                name = "rsi." + request["spec"]["request_id"] + "." + request["attempt_id"]
+                job = by_name.get(name)
+                if read(folder / "cancel.json"):
+                    accepted = read(attempt / "accepted.json")
+                    # HQ escalates cancellation to SIGKILL after one second. An
+                    # accepted executor must finish its own descendant cleanup.
+                    if job and (receipt or not accepted) and (job["task_stats"]["running"] or job["task_stats"]["waiting"]):
+                        self.call("job", "cancel", str(job["id"]))
+                    if receipt or not accepted:
+                        save(folder / "backend.json", dict(previous, state="cancelled", observed_at=time.time()))
+                    continue
+                if receipt:
+                    # A persisted result wins over a replayed HQ journal entry.
+                    if job and job["task_stats"]["waiting"]:
+                        self.call("job", "cancel", str(job["id"]))
+                    continue
+                if job:
+                    counts = job["task_stats"]
+                    state = ("running" if counts["running"] else "queued" if counts["waiting"]
+                             else "unknown_external_result")
+                    save(folder / "backend.json", dict(state=state, job_id=job["id"],
+                         generation=generation, observed_at=time.time(), task_stats=counts))
+                    continue
+                if read(attempt / "accepted.json"):
+                    # A lost backend record is not evidence that computation stopped.
+                    save(folder / "backend.json", dict(previous, state="unknown_external_result", observed_at=time.time()))
+                    continue
+                if previous.get("state") in {"submitting", "unknown_external_result"} and previous.get("generation") == generation:
+                    continue  # reply may have been lost; reconcile by stable job name
                 if read(folder / "cancel.json"):
                     continue
                 save(folder / "backend.json", dict(state="submitting", generation=generation, observed_at=time.time()))

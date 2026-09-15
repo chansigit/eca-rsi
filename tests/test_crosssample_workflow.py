@@ -63,3 +63,17 @@ def test_workflow_fanout_and_annotation_order(monkeypatch):
         assert requests['finalize'][0]['paths']==['assemble','decision-type','decision-quality']
         assert workflow.stage()=='complete'
     asyncio.run(scenario())
+
+
+def test_confirmed_worker_interruption_recovers_with_a_finite_attempt_budget(tmp_path):
+    from ecarsi.work_coordinator import check_pool
+    from ecarsi.warm_pool.state import submit
+    tmp_path.chmod(0o700);(tmp_path/'requests').mkdir();save(tmp_path/'config.json',{'runtime':{}})
+    submit(tmp_path,dict(request_id='r',operation_id='compute',args=['-c','pass'],cpus=1,memory_mb=64,timeout_seconds=30,outputs=['result.json']))
+    folder=tmp_path/'requests/r'
+    for retry_number in range(3):
+        request=read(folder/'request.json')
+        assert request.get('retry_count',0)==retry_number
+        save(folder/request['attempt_id']/'receipt.json',dict(state='failed',retryable=True,finished_at=1,
+            attempt_id=request['attempt_id'],request_digest=request['digest'],runtime_digest=request['runtime_digest']))
+        assert check_pool(str(tmp_path),'r','result.json')['state']==('waiting' if retry_number<2 else 'failed')

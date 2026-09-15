@@ -268,12 +268,22 @@ def tool_request(session_ref, reply_path, index, previous=None):
     tool = next((t for t in s["tools"] if t["name"] == call["name"]), None)
     if tool is None:
         raise ValueError("Unregistered agent tool")
-    Draft202012Validator(tool["parameters"]).validate(call["arguments"])
+    values = call["arguments"]
+    if isinstance(values, dict):
+        # Some model adapters decode an explicitly JSON-valued string field.
+        # Canonicalize only that lossless representation; all policy validation remains.
+        fields = tool["parameters"].get("properties", {})
+        values = {name: json.dumps(value, allow_nan=False)
+                  if name.endswith("_json") and fields.get(name, {}).get("type") == "string"
+                  and isinstance(value, (dict, list)) else value for name, value in values.items()}
+    Draft202012Validator(tool["parameters"]).validate(values)
+    if len(json.dumps(values)) > 262144:
+        raise ValueError("Tool arguments exceed the 256 KiB handoff limit")
     turn_id = reply_path.parent.name
     request_id = s["session_id"] + ".tool-" + digest([turn_id, call["call_id"]])[:16]
     directory = Path(s["output_root"]) / request_id
     directory.mkdir(mode=0o700, exist_ok=True)
-    arguments = immutable(directory / "arguments.json", call["arguments"])
+    arguments = immutable(directory / "arguments.json", values)
     args = [arguments["path"] if a == "{arguments}" else a for a in tool["args"]]
     state_inputs = []
     if "{state}" in args:

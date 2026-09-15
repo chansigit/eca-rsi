@@ -180,6 +180,46 @@ def cancel(root, request_id):
     return status(root, request_id)
 
 
+def retry(root, request_id, *, reason, use_current_runtime=False):
+    """New attempt after a confirmed failure; retain the original inputs and audit."""
+    root = pool_root(root)
+    folder = root / "requests" / identifier(request_id)
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("Retry needs a recorded reason")
+    with lock(folder / "request.lock"):
+        request = read(folder / "request.json")
+        if not request:
+            raise KeyError(request_id)
+        previous = folder / request["attempt_id"]
+        receipt = read(previous / "receipt.json")
+        if (read(folder / "cancel.json") or not receipt or receipt.get("state") != "failed"
+                or not receipt.get("finished_at") or receipt.get("attempt_id") != request["attempt_id"]
+                or receipt.get("request_digest") != request["digest"]
+                or receipt.get("runtime_digest") != request["runtime_digest"]):
+            raise ValueError("Only a confirmed failed attempt can be retried; reconcile unknown outcomes first")
+        for item in request["spec"]["inputs"]:
+            if file_digest(item["path"]) != item["sha256"]:
+                raise ValueError("Retry input changed: " + item["path"])
+        runtime = read(root / "config.json")["runtime"] if use_current_runtime else request["runtime"]
+        attempt_id = uuid.uuid4().hex
+        attempt = folder / attempt_id
+        attempt.mkdir(mode=0o700)
+        (attempt / "outputs").mkdir(mode=0o700)
+        sync_directory(attempt)
+        save(previous / "request.json", request)
+        if not (previous / "backend.json").exists():
+            save(previous / "backend.json", read(folder / "backend.json", {}))
+        replacement = dict(request, attempt_id=attempt_id, submitted_at=time.time(),
+            runtime=runtime, runtime_digest=digest(runtime),
+            retry_count=request.get("retry_count", 0) + 1,
+            retry=dict(previous_attempt_id=request["attempt_id"], reason=reason,
+                       use_current_runtime=use_current_runtime))
+        # The old receipt remains authoritative until request.json switches atomically.
+        save(folder / "backend.json", dict(state="queued", attempt_id=attempt_id))
+        save(folder / "request.json", replacement)
+    return status(root, request_id)
+
+
 def status(root, request_id=None):
     root = pool_root(root)
     if request_id is None:

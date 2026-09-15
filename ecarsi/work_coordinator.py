@@ -67,7 +67,7 @@ def submit_execute(spec: dict, prepared_path: str, reply_path: str, plan_parent:
 
 @activity.defn
 def check_pool(root: str, request_id: str, output: str) -> dict:
-    from .warm_pool.state import file_digest, status
+    from .warm_pool.state import file_digest, read, retry, status
     state = status(root, request_id)
     if state["state"] == "succeeded":
         receipt = state["receipt"]
@@ -76,6 +76,11 @@ def check_pool(root: str, request_id: str, output: str) -> dict:
             raise ValueError("Pool receipt output changed or missing")
         return {"state": "ready", "path": selected["path"],
                 "attempt_id": state["attempt_id"]}
+    if state["state"] == "failed" and state["receipt"].get("retryable") is True:
+        request = read(Path(root) / "requests" / request_id / "request.json")
+        if request.get("retry_count", 0) < 2:
+            retry(root, request_id, reason="Automatic recovery after a confirmed local interruption")
+            return {"state": "waiting"}
     if state["state"] in {"failed", "cancelled", "unknown_external_result"}:
         return {"state": state["state"], "detail": (state["receipt"] or {}).get("error")}
     return {"state": "waiting"}
@@ -169,6 +174,23 @@ ACTIVITIES = [submit_prepare, submit_plan, submit_execute, check_pool, check_bri
 def agent_step(action: str, args: list):
     from . import agent_session as session
     from .warm_pool.state import read
+    if action == "cached_completion":
+        reference = args[0]
+        spec = session.verified(reference)["spec"]
+        path = Path(spec["output_root"]) / "result.json"
+        result = read(path)
+        if not result or "output" not in result:
+            return None
+        if result["session"] != reference:
+            raise ValueError("Completed agent result belongs to another session")
+        from .warm_pool.state import status
+        state = status(spec["pool_root"], result["pool_request_id"])
+        if state["state"] != "succeeded" or result["output"] not in [
+                {k: item[k] for k in ("path", "sha256")} for item in state["receipt"]["outputs"]]:
+            raise ValueError("Completed agent result is no longer accepted")
+        if session.verified(result["output"]).get("accepted") is not True:
+            raise ValueError("Completed agent submission is not accepted")
+        return str(path)
     if action == "decision":
         reply = read(args[0])["response"]
         return {"kind": reply["kind"], "calls": len(reply["calls"])}
@@ -198,6 +220,11 @@ class AgentWorkflow:
                 start_to_close_timeout=SHORT, retry_policy=RETRY)
 
         session = await call(agent_step, "create", [spec])
+        if workflow.patched("agent-reuse-completed-submission-v1"):
+            completed = await call(agent_step, "cached_completion", [session])
+            if completed:
+                self._stage = "complete"
+                return completed
         context = None
         parents = []
         for turn in range(spec["max_turns"]):

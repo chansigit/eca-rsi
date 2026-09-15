@@ -8,6 +8,35 @@ from ecarsi.warm_pool.worker import registered_worker_id
 from ecarsi.warm_pool.state import cancel, file_digest, read, save, status, submit, validate_trace
 
 
+def test_retry_preserves_receipts_and_pins_runtime_until_explicit_upgrade(tmp_path):
+    from ecarsi.warm_pool.state import retry
+    tmp_path.chmod(0o700);(tmp_path/'requests').mkdir()
+    save(tmp_path/'config.json',{'runtime':{'version':'old'}})
+    source=tmp_path/'source';source.write_text('unchanged')
+    spec=dict(request_id='r',operation_id='compute',args=['-c','pass'],cpus=1,memory_mb=64,
+              timeout_seconds=10,outputs=['result.json'],inputs=[dict(path=str(source),sha256=file_digest(source))])
+    submit(tmp_path,spec);folder=tmp_path/'requests/r'
+    with pytest.raises(ValueError,match='confirmed failed'):retry(tmp_path,'r',reason='no terminal receipt')
+    original=read(folder/'request.json')
+    def failed(request):
+        receipt=dict(state='failed',finished_at=1,attempt_id=request['attempt_id'],
+                     request_digest=request['digest'],runtime_digest=request['runtime_digest'])
+        save(folder/request['attempt_id']/'receipt.json',receipt)
+        return receipt
+    receipt=failed(original);save(tmp_path/'config.json',{'runtime':{'version':'new'}})
+    retry(tmp_path,'r',reason='known local failure')
+    repeated=read(folder/'request.json')
+    assert repeated['runtime']==original['runtime'] and repeated['attempt_id']!=original['attempt_id']
+    assert read(folder/original['attempt_id']/'receipt.json')==receipt
+    assert read(folder/original['attempt_id']/'request.json')==original
+    assert status(tmp_path,'r')['state']=='queued'
+    with pytest.raises(ValueError,match='confirmed failed'):retry(tmp_path,'r',reason='double retry')
+    failed(repeated);retry(tmp_path,'r',reason='validated runtime fix',use_current_runtime=True)
+    upgraded=read(folder/'request.json');assert upgraded['runtime']['version']=='new'
+    failed(upgraded);source.write_text('different')
+    with pytest.raises(ValueError,match='input changed'):retry(tmp_path,'r',reason='cannot reuse changed input')
+
+
 def test_runtime_paths_override_launcher_and_imports_are_checked(tmp_path, monkeypatch):
     import sys
     from ecarsi.warm_pool.backend import runtime_environment

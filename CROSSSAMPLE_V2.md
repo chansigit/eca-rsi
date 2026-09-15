@@ -37,7 +37,17 @@ python -m ecarsi.work_coordinator --temporal HOST:7233 start-crosssample spec.js
 python -m ecarsi.work_coordinator --temporal HOST:7233 status-crosssample example-crosssample
 ```
 
-The coordinator worker registers this alongside Organize and per-sample. Restarting it resumes open Temporal histories. After workflow failure, reconcile failed/unknown Pool or Bridge receipts before `resume-crosssample`; unresolved external API outcomes are not blindly submitted again. Changing input, code or scientific settings requires a fresh run/output. Do not modify worker programs while sessions reference their recorded hashes.
+The coordinator worker registers this alongside Organize and per-sample. Restarting it resumes open Temporal histories. Confirmed local interruptions retry automatically, up to three attempts. Other failures require a recorded repair before `resume-crosssample`; unresolved external API outcomes are not blindly submitted again. Completed agent submissions are verified and reused on resume. An unfinished session with an incompatible adapter revision requires a new session/run.
+
+For a known failed computation, preserve its history and retry through the Pool API:
+
+```bash
+python -m ecarsi.warm_pool --root /shared/pool retry REQUEST_ID --reason "Verified repair"
+# Add --use-current-runtime only after validating an intentional runtime upgrade.
+python -m ecarsi.work_coordinator --temporal HOST:7233 resume-crosssample example-crosssample
+```
+
+Retry refuses changed inputs, completed/cancelled tasks and unknown outcomes. Runtime upgrades are explicit and retained in the attempt history. Changing a pinned worker program or scientific input requires a fresh run/output. Do not modify programs while active sessions reference their hashes. Sparse global DEG needs a private normalized-expression workspace because Scanpy edits sparse storage in place; include that workspace in its memory budget. Shared evidence files remain unchanged.
 
 ## Outputs and validation
 

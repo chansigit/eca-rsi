@@ -165,6 +165,23 @@ def test_invalid_tool_and_modified_or_cancelled_results_cannot_resume(tmp_path):
         session.continuation(ref, reply, [accepted])
 
 
+def test_decoded_json_field_is_losslessly_encoded_before_validation(tmp_path):
+    from harness_bridge import _harness_openai as adapter
+    spec, _ = setup(tmp_path)
+    spec = {**spec, 'session_id':'json-test', 'output_root':str(tmp_path/'json-session')}
+    spec['tools'] = [{**spec['tools'][0], 'parameters':{'type':'object', 'properties':{'value_json':{'type':'string'}},
+                    'required':['value_json'], 'additionalProperties':False}}]
+    ref=session.create_session(spec);root=Path(spec['bridge_root'])
+    with patch.object(adapter,'_client',return_value=Client()),patch.object(adapter,'_model',return_value=ScriptedModel()):
+        reply=execute_turn(root,session.submit_turn(ref,0))
+    value={'samples':[{'include':True,'label':'a'}]};payload=read(reply)
+    payload['response']['calls'][0]['arguments']={'value_json':value};save(reply,payload)
+    task=session.tool_request(ref,reply,0)
+    request=read(Path(spec['pool_root'])/'requests'/task['request_id']/'request.json')
+    arguments=read(request['spec']['args'][-1])
+    assert json.loads(arguments['value_json'])==value
+
+
 def test_completion_tool_and_business_trace(tmp_path):
     from harness_bridge import _harness_openai as adapter
     spec, _ = setup(tmp_path)
@@ -185,9 +202,13 @@ def test_completion_tool_and_business_trace(tmp_path):
     final = session.complete_tool(ref, context)
     assert session.verified(read(final)["output"])["accepted"] is True
     assert session.complete_tool(ref, context) == final
+    from ecarsi.work_coordinator import agent_step
+    assert agent_step("cached_completion", [ref]) == final
     save(Path(spec["pool_root"]) / "requests" / item["request_id"] / "cancel.json", {"requested_at": 1})
     with pytest.raises(ValueError, match="uncancelled"):
         session.complete_tool(ref, context)
+    with pytest.raises(ValueError, match="no longer accepted"):
+        agent_step("cached_completion", [ref])
 
 
 def test_worker_images_and_state_survive_sdk_continuation(tmp_path):

@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 from .backend import check_hq, check_runtime, join, serve
-from .state import cancel, digest, file_digest, lock, pool_root, read, save, status, submit, sync_directory
+from .state import cancel, digest, file_digest, lock, pool_root, read, retry, save, status, submit, sync_directory
 
 
 def configure_runtime(root, runtime):
@@ -73,6 +73,10 @@ def main(argv=None):
     inspection.add_argument("request_id", nargs="?")
     cancellation = commands.add_parser("cancel")
     cancellation.add_argument("request_id")
+    repetition = commands.add_parser("retry", help="retry a confirmed failure without replacing its history")
+    repetition.add_argument("request_id")
+    repetition.add_argument("--reason", required=True)
+    repetition.add_argument("--use-current-runtime", action="store_true", help="explicitly adopt the currently configured runtime")
     a = p.parse_args(argv)
     if a.command == "init":
         result = initialize(a.root, a.hq, a.runtime)
@@ -91,6 +95,8 @@ def main(argv=None):
         result = submit(a.root, read(a.spec))
     elif a.command == "cancel":
         result = cancel(a.root, a.request_id)
+    elif a.command == "retry":
+        result = retry(a.root, a.request_id, reason=a.reason, use_current_runtime=a.use_current_runtime)
     else:
         result = status(a.root, a.request_id)
     print(json.dumps(result, indent=2))
