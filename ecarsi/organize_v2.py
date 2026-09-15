@@ -181,6 +181,18 @@ def publish(output: Path, destination: Path):
         run = output / "run"
         target = destination if destination.exists() else run
         manifest = read_json(L.organize_manifest(target))
+        snapshot = L.organize_manifest(target).with_name("worker-manifest.json")
+        if not snapshot.exists():
+            if file_identity(L.organize_manifest(target)) != completion["manifest"]:
+                raise ValueError("Organize worker manifest changed before publication")
+            write_json(snapshot, manifest)
+        if file_identity(snapshot) != completion["manifest"]:
+            raise ValueError("Organize worker manifest snapshot changed")
+        original = read_json(snapshot)
+        relocated = {**original, "units_written": [
+            {**u, "dir": str(L.unit_dir(destination, u["name"]))} for u in original["units_written"]]}
+        if manifest not in (original, relocated):
+            raise ValueError("Organize published manifest changed")
         if (manifest["state"] != "complete" or manifest["input_identity"] != completion["input_identity"]
                 or digest(manifest["plan"]) != completion["plan_digest"]
                 or len(manifest["units_written"]) != len(completion["units"])):
@@ -201,10 +213,20 @@ def publish(output: Path, destination: Path):
             if destination.exists():
                 raise ValueError("Organize output destination already exists")
             run.rename(destination)
-            manifest["units_written"] = [{**u, "dir": str(L.unit_dir(destination, u["name"]))}
-                                         for u in manifest["units_written"]]
-            write_json(L.organize_manifest(destination), manifest)
-        save(destination / "publication.json", completion)
+        if manifest != relocated:
+            write_json(L.organize_manifest(destination), relocated)
+        # The Pool receipt still names this small worker output after the unit
+        # directory moves. Preserve it for later receipt verification and replay.
+        if not L.organize_manifest(run).exists():
+            write_json(L.organize_manifest(run), original)
+        if file_identity(L.organize_manifest(run)) != completion["manifest"]:
+            raise ValueError("Organize Pool manifest output changed")
+        publication = {**completion, "worker_manifest": completion["manifest"],
+                       "manifest": file_identity(L.organize_manifest(destination))}
+        previous = read(destination / "publication.json")
+        if previous is not None and previous != publication:
+            raise ValueError("Organize publication changed")
+        save(destination / "publication.json", publication)
     return str(destination)
 
 

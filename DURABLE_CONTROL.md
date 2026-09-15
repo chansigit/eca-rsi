@@ -67,6 +67,23 @@ the old external `temporal-env` belongs on its `PYTHONPATH`. Native
 PostgreSQL/Temporal binaries and schemas remain separately pinned by this service.
 See [the build and launch instructions](container/README.md#v2-control-runtime).
 
+The development Coordinator, Bridge, Scheduler, and Temporal supervisor were
+switched to this image on 2026-09-15. All 86 existing histories replayed;
+28 control and 47 scientific compatibility checks passed. A fresh real Prostate
+Organize workflow then completed, including a rejected plan corrected by the
+model and tools executed on a Pool worker. Its two histories also replayed.
+Evidence is under `durable-control-20260915/control-runtime/`.
+
+An independent output check exposed a pre-existing Organize publication bug:
+relocating the global manifest changed its bytes without updating its published
+hash. Publication now retains a verified worker-manifest snapshot, records the
+relocated manifest's hash, and preserves the original small Pool output for
+receipt verification. Interrupted publication can retry; modified manifests are
+rejected. A repeat Pool execution using the already accepted real plan passed
+these checks. Older published receipts were left unchanged for audit; their
+global manifest hash must not be treated as verified. The separately pinned unit
+inputs and downstream cell-ledger checks are unaffected.
+
 Client-only Coordinator commands disable the SDK's optional worker heartbeat
 thread: these commands do not host a Temporal worker. This avoids an observed
 native exit crash after otherwise successful RPCs; the crash also reproduced in
