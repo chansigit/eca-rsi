@@ -1,6 +1,6 @@
 # Zoom-in on Temporal and Warm Pool
 
-The v2 workflow reuses ZMIP's lineage planning, marker scoring and merge checks, and MSP's numerical kernels. Model requests go through Agent Bridge; registered tools and numerical work execute on Pool workers. It is implemented on the feature branch and undergoing real-data acceptance.
+The v2 workflow reuses ZMIP's lineage planning, marker scoring and merge checks, and MSP's numerical kernels. Model requests go through Agent Bridge; registered tools and numerical work execute on Pool workers. The feature branch has completed a real GPU workflow through final publication; complementary CPU annotation acceptance is still running.
 
 The sequence is planning evidence → lineage plan → shared lineage markers and bounded subset preparation → independent lineage computation/DEG/annotation → validated global merge. Numerical admission is released before each lineage's model session, so another lineage can compute while the first waits. Every operation uses explicit resources and immutable input references; successful receipts survive Coordinator restarts.
 
@@ -32,6 +32,10 @@ Resume accepts only a failed workflow whose saved spec and input are unchanged a
 
 Real Prostate lineages ran through the Pool on `sh03-15n05`, using the allocated RTX 3090 and the unified `rsi-science-20260915-5.sif` image. Epithelial (348 cells) completed its RAPIDS numerical unit in 24.70 seconds; Immune (141 cells) completed in 21.39 seconds. Both receipts record `compute_backend=rapids`, the allocated GPU UUID and 345 MiB peak GPU memory. Their 39 independent DEG comparisons also completed. These small inputs verify execution, not large-data speedup.
 
-Uterus exercises the CPU route while Prostate agents wait: three lineage numerical units completed, with the first two running concurrently. Both workflows are continuing through model annotation and final merge; GPU numerical success alone does not establish full zoom-in acceptance. The small acceptance runs explicitly use `min_cells=50` instead of changing the production default.
+Prostate then completed both real model sessions and global merge: 502 input cells → 433 survivors + 69 exclusions. Epithelial retained 291/348; Immune retained 129/141. All 13 cells in skipped lineages retained their previous labels. The Epithelial proposal triggered a second removal review, which supplied the affected QC groups and rationale before acceptance. Backed reads verified exact cell conservation, original source identities, nonempty final labels, 1.0 type/2.0 quality proposals and every publication file's hash. This establishes execution and accounting consistency, not independent biological confirmation of each model judgment.
+
+Uterus exercises the CPU route while Prostate agents wait: three lineage numerical units completed, with the first two running concurrently. Its model annotation and final merge remain under acceptance. The small acceptance runs explicitly use `min_cells=50` instead of changing the production default.
+
+`zoomin-numerical-acceptance.json` holds the five computation receipts. `zoomin-final-acceptance.json` records completed publication checks; Prostate's publication SHA-256 is `4ceeb87049bb1038cbfefd122a3070195f924d7f8b027cfaf8fe320821c10ac5`. Subsequent prompt guidance makes batch marker queries and required checks explicit; the accepted run retained its original serialized prompt. Guard messages should also name missing checks directly, to avoid redundant evidence reads. Source files pinned by unfinished sessions must remain unchanged until those sessions finish or a deliberate version migration is performed.
 
 Records are under `crosssample-migration-20260915-015647` in the development run directory. Workflow IDs: `zoom-in/zoom-prostate-20260915-0340` and `zoom-in/zoom-uterus-20260915-0340`. The preceding stage's completed checks are recorded in [cross-sample acceptance](CROSSSAMPLE_V2_ACCEPTANCE.md).
