@@ -97,7 +97,7 @@ def summarize_resources(rows: list[dict], since: float, until: float) -> list[di
 
 
 def task_timeline(pool_rows: list[dict], bridge_rows: list[dict], since: float, until: float,
-                  dataset: str = "", limit: int = 2000) -> dict:
+                  dataset: str = "", limit: int = 2000, dataset_page: int | None = None) -> dict:
     """Generic, bounded timeline from explicit trace metadata and durable receipts."""
     tasks = []
     for service, rows in (("pool", pool_rows), ("bridge", bridge_rows)):
@@ -123,11 +123,36 @@ def task_timeline(pool_rows: list[dict], bridge_rows: list[dict], since: float, 
                 "id", "operation", "state", "submitted_at", "started_at", "finished_at",
                 "host", "worker_id", "cpu_ids", "cpus", "memory_mb", "model", "gpu_ids", "compute_backend")}
                 | {"service": service, "trace": trace, "trace_source": source})
+    pagination = {}
+    if dataset_page is not None:
+        if dataset_page < 0:
+            raise ValueError("dataset page must be nonnegative")
+        latest = {}
+        for task in tasks:
+            name = task["trace"]["dataset_id"]
+            latest[name] = max(latest.get(name, 0), task.get("finished_at") or
+                               task.get("started_at") or task["submitted_at"])
+        names = sorted(latest, key=lambda name: (-latest[name], name))
+        dataset_page = min(dataset_page, max(0, (len(names) - 1) // 10))
+        selected = set(names[dataset_page * 10:(dataset_page + 1) * 10])
+        tasks = [task for task in tasks if task["trace"]["dataset_id"] in selected]
+        pagination = dict(dataset_page=dataset_page, dataset_page_size=10, dataset_total=len(names))
     tasks.sort(key=lambda item: item["submitted_at"])
     total = len(tasks)
+    if dataset_page is not None and total > limit:
+        # Keep every dataset on the page visible; a busy dataset must not evict
+        # its neighbors. Filtering one dataset gives it the full task budget.
+        per_dataset = max(1, limit // max(1, len(selected)))
+        counts, retained = {}, []
+        for task in reversed(tasks):
+            name = task["trace"]["dataset_id"]
+            if counts.get(name, 0) < per_dataset:
+                retained.append(task)
+                counts[name] = counts.get(name, 0) + 1
+        tasks = list(reversed(retained))
     return {"tasks": tasks[-limit:], "total": total, "truncated": total > limit,
             "since": since, "until": until,
-            "source": "durable Pool and Bridge request/acceptance/result records"}
+            "source": "durable Pool and Bridge request/acceptance/result records", **pagination}
 
 
 def worker_inventory(pool: Path, tasks: list[dict], now: float, cache: dict) -> list[dict]:
@@ -346,11 +371,12 @@ def serve(root: Path, port: int, temporal_port: int, bind: str,
                             until = float(query.get("until", [time.time()])[0])
                             since = float(query.get("since", [until - 4 * 3600])[0])
                             limit = int(query.get("limit", [2000])[0])
+                            dataset_page = int(query["dataset_page"][0]) if "dataset_page" in query else None
                             dataset = query.get("dataset", [""])[0]
                             if not 0 < until - since <= 86400 or not 1 <= limit <= 2000 or len(dataset) > 256:
                                 raise ValueError("choose a time window of at most 24 hours and limit up to 2000")
                             result = task_timeline(data["pool_requests"], data["bridge_requests"],
-                                                   since, until, dataset, limit)
+                                                   since, until, dataset, limit, dataset_page)
                             result["resources"] = summarize_resources(resource_history(
                                 Path(pool_root) if pool_root else Path(root) / "organize-v2-pool", since, until,
                                 cache.setdefault("resource_files", {})), since, until)

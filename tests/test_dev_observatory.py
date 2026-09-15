@@ -12,6 +12,27 @@ def put(path, value):
 
 
 class ObservatoryTest(unittest.TestCase):
+    def test_dataset_pages_cover_history_before_task_limit(self):
+        rows = [dict(id=f"d{d}-t{t}", operation="organize.prepare", state="succeeded",
+                     submitted_at=d * 30 + t + 1, started_at=d * 30 + t + 1,
+                     finished_at=d * 30 + t + 2,
+                     trace=dict(dataset_id=f"dataset-{d}", workflow_id=f"run-{d}", unit_id="organize.prepare"))
+                for d in range(100) for t in range(30)]
+        seen = set()
+        for page in range(10):
+            result = task_timeline(rows, [], 0, 4000, dataset_page=page)
+            self.assertEqual(result["dataset_total"], 100)
+            self.assertFalse(result["truncated"])
+            names = {t["trace"]["dataset_id"] for t in result["tasks"]}
+            self.assertEqual(len(names), 10)
+            self.assertFalse(seen & names)
+            seen.update(names)
+        self.assertEqual(len(seen), 100)
+        limited = task_timeline(rows, [], 0, 4000, limit=20, dataset_page=0)
+        self.assertTrue(limited["truncated"])
+        self.assertEqual(len({t["trace"]["dataset_id"] for t in limited["tasks"]}), 10)
+        self.assertEqual(task_timeline(rows, [], 0, 4000, dataset="dataset-99", dataset_page=9)["dataset_page"], 0)
+
     def test_inventory_retains_departed_workers_and_distinguishes_same_host_budgets(self):
         with tempfile.TemporaryDirectory() as directory:
             pool = Path(directory)

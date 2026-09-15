@@ -13,7 +13,22 @@ const {chromium} = require('playwright');
     // Freeze polling while checking a sequence of layouts; scientific services stay untouched.
     await page.addInitScript(() => { window.setInterval = () => 0; });
     await page.goto(process.argv[2] || 'http://127.0.0.1:8765/');
-    await page.waitForSelector('.timeline-bar');
+    await page.waitForSelector('.flow-dataset');
+    assert.equal(await page.inputValue('#timeline-view'),'datasets');
+    const datasetLabels=await page.locator('.flow-dataset strong').allTextContents();
+    assert(datasetLabels.length>0);
+    const step=page.locator('.flow-step [data-step-select]').first();
+    await step.click();
+    assert(await page.locator('#flow-detail').isVisible());
+    assert((await page.locator('#flow-detail h3').innerText()).length>0);
+    if(process.env.OBSERVATORY_ARTIFACTS) {
+      fs.mkdirSync(process.env.OBSERVATORY_ARTIFACTS,{recursive:true});
+      await page.locator('#flow-layout').screenshot({path:path.join(process.env.OBSERVATORY_ARTIFACTS,'dataset-detail.png')});
+    }
+    await page.getByRole('button',{name:'Close step details'}).click();
+    console.log('dataset hierarchy / selection',datasetLabels);
+    await page.selectOption('#timeline-view','workers');
+    await page.waitForSelector('[data-group] .timeline-bar');
     const inventory = await page.evaluate(async () => {
       const data = await (await fetch('/api/status')).json();
       return {expected: data.workers.filter(w => w.reporting).map(w => w.worker_id).sort(),
@@ -78,7 +93,7 @@ const {chromium} = require('playwright');
         const actual = new Set(rendered.map(edge => pair(edge.dataset.workflow, edge.dataset.parent, edge.dataset.child)));
         const root = document.getElementById('timeline').getBoundingClientRect();
         const misplaced = rendered.filter(edge => {
-          const source = bars.get(JSON.stringify([edge.dataset.workflow, edge.dataset.parent]));
+          const source = bars.get(JSON.stringify([edge.dataset.parentWorkflow||edge.dataset.workflow, edge.dataset.parent]));
           const start = edge.getAttribute('d').match(/^M (\S+) (\S+)/);
           return !source || Math.abs(Number(start[1]) - (source.right - root.left)) > .1 ||
             Math.abs(Number(start[2]) - (source.top - root.top)) > .1;
@@ -126,6 +141,28 @@ const {chromium} = require('playwright');
     const large = await checkEdges('100 datasets / fan-out + fan-in + iteration / subpixel task durations');
     assert.equal(large.expected, 500);
     console.log('render', JSON.stringify(benchmark));
+    const flowBenchmark=await page.evaluate(()=>{
+      $('timeline-view').value='datasets';
+      const now=Date.now()/1000,tasks=[];
+      for(let n=0;n<100;n++)for(let run=0;run<2;run++)for(let k=0;k<3;k++){
+        const step=['organize.prepare','organize.plan','organize.execute'][k];
+        tasks.push({id:`${n}-${run}-${k}`,operation:step,service:k===1?'bridge':'pool',state:'succeeded',
+          submitted_at:now-600+n+run*10+k*2,started_at:now-600+n+run*10+k*2,finished_at:now-599+n+run*10+k*2,
+          trace:{dataset_id:`Dataset ${n}`,workflow_id:`organize/${n}-${run}`,unit_id:step,depends_on:[]}});
+      }
+      const start=performance.now();renderTimeline({since:now-1000,until:now,tasks,total:tasks.length});
+      return {ms:performance.now()-start,datasets:document.querySelectorAll('.flow-dataset').length,
+        runs:document.querySelectorAll('.flow-run').length,paging:$('flow-pages').textContent};
+    });
+    assert.equal(flowBenchmark.datasets,10);
+    assert.equal(flowBenchmark.runs,20,'Two runs of each dataset stay separate');
+    assert(flowBenchmark.paging.includes('100 datasets'));
+    assert(flowBenchmark.ms<1500,'A 100-dataset view should not block interaction');
+    await page.getByRole('button',{name:'Next',exact:true}).click();
+    assert((await page.locator('#flow-pages').innerText()).includes('11–20'));
+    await page.setViewportSize({width:700,height:1000});
+    assert(await page.locator('.flow-dataset').count()===10);
+    console.log('dataset hierarchy / 100 datasets',flowBenchmark);
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();

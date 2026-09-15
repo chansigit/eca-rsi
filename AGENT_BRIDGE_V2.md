@@ -165,6 +165,16 @@ Specs, pinned test program, logs, histories, receipts and `acceptance.json` are 
 The observatory draws explicit model → tool → model dependencies; worker-tool
 waiting is not included in the new Bridge turn bars.
 
+The default timeline groups dataset → stage workflow → named step. Separate
+workflow IDs stay separate even when they share a dataset or stage name. Clicking
+a step opens its model calls and worker tasks; `Workers` retains the exact
+execution-placement view. Dataset pages are selected before the task limit, so
+a busy dataset cannot remove its neighbors from the viewer. Truncated task
+history is labeled and can be narrowed by dataset/time. Stage spans summarize
+loaded records and include gaps; they are not authoritative workflow status.
+Dataset colors persist in the browser, with additional hue separation for small
+comparisons. Labels remain the identity cue for large collections.
+
 ### Legacy Organize sessions and shared limitations
 
 - A shared `flock` permits only one dispatcher. The directory must be user-owned

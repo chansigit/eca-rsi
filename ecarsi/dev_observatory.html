@@ -74,7 +74,8 @@
   .link.disabled { opacity:.45; pointer-events:none; }
   .note { font-size:12px; color:#7a786e; padding-top:12px; border-top:1px solid #e9e4d8; margin-top:15px; }
   .code { background:#f2efe6; border:1px solid #e4ddce; border-radius:9px; padding:10px; font:11px/1.55 ui-monospace,monospace; overflow-wrap:anywhere; user-select:all; }
-  .timeline-wrap { overflow-x:auto; }
+  .timeline-wrap { overflow:auto; }
+  #flow-scroll { max-height:700px; scrollbar-gutter:stable; }
   .timeline { min-width:870px; position:relative; }
   .timeline-axis,.timeline-row { display:grid; grid-template-columns:245px minmax(0,1fr); }
   .timeline-axis,.timeline-row { position:relative; z-index:1; }
@@ -116,19 +117,64 @@
   footer { margin-top:30px; color:#818479; font-size:12px; display:flex; justify-content:space-between; gap:20px; }
   @media(max-width:960px) { .hero,.layout { grid-template-columns:1fr; }.path { grid-template-columns:repeat(2,1fr); }.node:nth-child(2):after { display:none; } }
   @media(max-width:620px) { main { padding:19px 15px 40px; }.meta { display:none; }.hero { padding-top:34px; }.path { gap:8px; }.node { min-height:140px; padding:14px; }.node:after { display:none; }.metrics { grid-template-columns:repeat(3,1fr); }.metric { padding:9px; }.metric b { font-size:22px; } section.panel { padding:19px; } }
+
+  .flow-layout { display:grid; grid-template-columns:minmax(0,1fr); gap:20px; align-items:start; }
+  .flow-layout.inspecting { grid-template-columns:minmax(0,1fr) 310px; }
+  .flow-layout .timeline { min-width:740px; }
+  #timeline .timeline-axis { position:sticky; top:0; z-index:5; background:var(--sheet); padding:8px 0 0; margin:0; }
+  #timeline .timeline-label { background:var(--sheet); white-space:normal; font-size:13px; }
+  .flow-dataset { padding:15px 0 6px; position:relative; z-index:2; background:var(--sheet); border-bottom:1px solid var(--line); }
+  .flow-dataset button { width:100%; text-align:left; display:flex; align-items:center; gap:9px; }
+  .flow-dataset strong { font-size:15px; overflow-wrap:anywhere; }
+  .flow-swatch { display:inline-block; width:10px; height:10px; border-radius:50%; flex-shrink:0; background:var(--dataset); }
+  .flow-dataset .flow-count { margin-left:auto; color:var(--muted); font-size:12px; white-space:nowrap; font-weight:400; }
+  .flow-button { border:0; border-radius:3px; background:none; color:inherit; font:inherit; cursor:pointer; padding:6px 8px; }
+  .flow-button:hover { background:#eee9dd; }
+  .flow-button:focus-visible { outline:2px solid var(--green); outline-offset:-2px; }
+  .flow-run .timeline-label { padding:7px 8px; }
+  .flow-run .timeline-label button { width:100%; text-align:left; font-weight:650; }
+  .flow-run .timeline-label small { padding-left:22px; margin:1px 0 0; font-size:11px; }
+  .flow-step .timeline-label { padding:7px 8px 7px 28px; }
+  .flow-step .timeline-label button { width:100%; text-align:left; }
+  .flow-step .timeline-label small { font-size:11px; margin:1px 0 0; }
+  .flow-step.selected { background:#ede9dd; }
+  .flow-step.selected .timeline-label { background:#ede9dd; }
+  .flow-span { position:absolute; top:11px; height:22px; min-width:2px; border:1px solid var(--dataset); border-radius:2px; background:color-mix(in srgb,var(--dataset) 7%,var(--sheet)); cursor:pointer; padding:0; }
+  .flow-span.failed { outline:1px solid var(--red); }
+  .flow-segment { position:absolute; top:0; bottom:0; min-width:1px; background:var(--dataset); opacity:.8; }
+  .flow-segment.bridge { background:repeating-linear-gradient(135deg,var(--dataset) 0,var(--dataset) 3px,transparent 3px,transparent 6px); }
+  .flow-step .timeline-bar { height:18px; box-shadow:none; border:0; padding:0; }
+  .flow-step .timeline-bar.bridge { background-image:repeating-linear-gradient(135deg,#ffffff66 0,#ffffff66 2px,transparent 2px,transparent 5px)!important; }
+  .flow-step .timeline-bar.failed { outline:2px solid var(--red); }
+  .flow-step .timeline-bar.waiting { background:transparent!important; border:1px dashed var(--dataset); min-width:7px; }
+  .model-key { background:repeating-linear-gradient(135deg,#7d8178 0,#7d8178 2px,transparent 2px,transparent 4px); }
+  .compute-key { background:#7d8178; }
+  .flow-detail { padding:16px; border:1px solid var(--line); border-radius:7px; background:#fffdf8ed; max-height:700px; overflow:auto; }
+  .flow-detail[hidden] { display:none; }
+  .flow-detail header { align-items:start; padding:0 0 12px; }
+  .flow-detail h3 { font-size:16px; overflow-wrap:anywhere; }
+  .flow-detail .sub { font-size:12px; margin:8px 0; }
+  .flow-detail summary { cursor:pointer; font-size:12px; }
+  .flow-detail ol { list-style:none; margin:0; padding:0; }
+  .flow-detail li { border-top:1px solid var(--line); padding:12px 0; font-size:12px; }
+  .flow-detail li strong { display:block; margin-bottom:3px; }
+  .flow-detail .task-meta { display:flex; justify-content:space-between; gap:8px; color:var(--muted); margin:4px 0; }
+  .flow-detail code { font-size:10px; overflow-wrap:anywhere; }
+  .flow-pages { display:flex; align-items:center; justify-content:flex-end; gap:10px; margin-top:12px; font-size:12px; }
+  @media(max-width:1050px) { .flow-layout.inspecting { grid-template-columns:minmax(0,1fr); }.flow-detail { max-height:440px; } }
 </style>
 </head>
 <body>
 <main>
   <header><div class="brand">RSI <small>v2 / development observatory</small></div><div class="meta"><span><i class="live-dot"></i> Read-only</span><span id="updated">Connecting…</span></div></header>
-  <div class="hero"><div><div class="eyebrow">Isolated development branch</div><h1>Where the workflow stands.</h1><p>Live execution and saved history for compute tasks, model decisions and published results.</p></div><aside><div class="eyebrow">Current boundary</div><strong>Organize → Per-sample</strong><span>Per-sample is connected: independent sample computation, worker annotation tools and verified publication. Real-data acceptance has passed.</span></aside></div>
+  <div class="hero"><div><div class="eyebrow">Isolated development branch</div><h1>Where the workflow stands.</h1><p>Live execution and saved history for compute tasks, model decisions and published results.</p></div><aside><div class="eyebrow">Current boundary</div><strong>Organize → Zoom-in</strong><span>Two real datasets completed two rounds and final release. Large-scale throughput and GPU acceptance remain separate checks.</span></aside></div>
   <div class="path">
     <div class="node"><span class="n">01 / COMPUTE</span><span class="title">Warm Pool</span><span class="detail" id="pool-node">Checking scheduler record…</span></div>
     <div class="node"><span class="n">02 / DECISIONS</span><span class="title">Agent Bridge</span><span class="detail" id="bridge-node">Checking model receipts…</span></div>
     <div class="node"><span class="n">03 / DEPENDENCIES</span><span class="title">Temporal</span><span class="detail" id="temporal-node">Checking history viewer…</span></div>
     <div class="node"><span class="n">04 / OUTPUT</span><span class="title">Organize</span><span class="detail" id="organize-node">Checking publications…</span></div>
   </div>
-  <section class="panel" style="margin-bottom:20px"><div class="panel-head"><div><div class="eyebrow">Pool and Bridge history</div><h2>Task timeline</h2><div class="sub">Each group is one worker or Agent Bridge. Bars stacked vertically in the same group overlap in time. Wheel to zoom; double-click to reset; hover a task to trace its workflow.</div></div><span class="status off" id="timeline-state">Loading</span></div><div class="timeline-controls"><select id="timeline-range" aria-label="Time range"><option value="auto" selected>Latest activity</option><option value="3600">Last hour</option><option value="14400">Last 4 hours</option><option value="86400">Last 24 hours</option><option value="custom">Custom</option></select><input id="timeline-from" type="datetime-local" aria-label="From" hidden><input id="timeline-to" type="datetime-local" aria-label="To" hidden><input id="timeline-dataset" type="search" placeholder="Filter dataset…" aria-label="Filter dataset"><button id="timeline-apply" type="button">Apply</button></div><div class="timeline-legend"><span><i style="background:linear-gradient(90deg,#607f93 0 33%,#a77a55 33% 66%,#88739a 66%)"></i>Dataset color</span><span><i style="background:transparent;border:2px solid #a4514e"></i>Failed</span><span><i style="background:#a77a55;height:6px;vertical-align:1px;opacity:.28;border-radius:1px"></i>Workflow handoff</span></div><div class="timeline-wrap"><div class="timeline" id="timeline"></div></div><div class="note" id="timeline-note"></div></section>
+  <section class="panel" style="margin-bottom:20px"><div class="panel-head"><div><h2>Workflow timeline</h2><div class="sub">Browse datasets and stage runs. Expand a run to see its steps; select a step for individual calls and worker tasks.</div></div><span class="status off" id="timeline-state">Loading</span></div><div class="timeline-controls"><select id="timeline-view" aria-label="Timeline view"><option value="datasets">Datasets</option><option value="workers">Workers</option></select><select id="timeline-range" aria-label="Time range"><option value="auto" selected>Latest activity</option><option value="3600">Last hour</option><option value="14400">Last 4 hours</option><option value="86400">Last 24 hours</option><option value="custom">Custom</option></select><input id="timeline-from" type="datetime-local" aria-label="From" hidden><input id="timeline-to" type="datetime-local" aria-label="To" hidden><input id="timeline-dataset" type="search" placeholder="Filter dataset…" aria-label="Filter dataset"><button id="timeline-apply" type="button">Apply</button></div><div class="timeline-legend"><span>One color per dataset</span><span><i class="model-key"></i>Model call</span><span><i class="compute-key"></i>Worker task</span><span><i style="background:transparent;border:2px solid #a4514e"></i>Failed task</span><span>Wheel to zoom · Double-click to reset</span></div><div class="flow-layout" id="flow-layout"><div class="timeline-wrap" id="flow-scroll"><div class="timeline" id="timeline"></div></div><aside id="flow-detail" class="flow-detail" aria-label="Selected step details" hidden></aside></div><div id="flow-pages" class="flow-pages"></div><div class="note" id="timeline-note"></div></section>
   <section class="panel" id="compute-pool" style="margin-bottom:20px">
     <div class="panel-head"><div><h2>Compute Warm Pool</h2></div><span id="compute-pool-state" class="status off">Checking</span></div>
     <p id="compute-pool-summary" class="sub"></p>
@@ -146,7 +192,7 @@
       <section class="panel"><div class="eyebrow">Native workflow viewer</div><h2>Temporal</h2><p class="sub">Workflow execution history and activity transitions in the connected development service.</p><a class="link disabled" id="temporal-link" href="http://127.0.0.1:8233/" target="_blank" rel="noopener">Open Temporal UI ↗</a><div class="note" id="temporal-note">Checking history service…</div></section>
       <section class="panel"><div class="eyebrow">Accepted artifacts</div><h2>Organize output</h2><p class="sub">Published after source identity, experiment mapping and cell conservation checks.</p><div id="outputs"></div></section>
       <section class="panel"><div class="eyebrow">Recorded infrastructure trial</div><h2>Two-host recovery</h2><p class="sub">Actual Slurm allocations were used for the isolated HyperQueue trial.</p><div id="acceptance"></div></section>
-      <section class="panel"><div class="eyebrow">What is connected</div><h2>Migration progress</h2><p class="sub">Organize and per-sample are connected to Temporal, Agent Bridge and Warm Pool. Cross-sample and Zoom-in remain designs.</p><div class="code">Organize ✓ &nbsp;→&nbsp; Per-sample ✓ &nbsp;→&nbsp; Cross-sample ◌ &nbsp;→&nbsp; Zoom-in ◌</div><div class="note">This observatory reads the isolated v2 state. The existing Periscope installation is a separate service.</div></section>
+      <section class="panel"><div class="eyebrow">What is connected</div><h2>Migration progress</h2><p class="sub">Organize, per-sample, cross-sample and Zoom-in run through Temporal, Agent Bridge and Warm Pool.</p><div class="code">Organize ✓ &nbsp;→&nbsp; Per-sample ✓ &nbsp;→&nbsp; Cross-sample ✓ &nbsp;→&nbsp; Zoom-in ✓</div><div class="note">This observatory reads the isolated v2 state. The existing Periscope installation is a separate service.</div></section>
     </div>
   </div>
   <footer><span id="host">RSI v2 isolated state</span><span>Refreshes every 10 seconds · no scheduler or model actions</span></footer>
@@ -213,11 +259,33 @@ function latestActivityWindow(tasks,now=Date.now()/1000) {
   if (until>now) { since-=until-now; until=now; }
   return {since,until};
 }
-const datasetPalette=['#607f93','#a77a55','#88739a','#ad6f6b','#647f86','#987f58'];
-function datasetColor(dataset) { let hash=0; for (const ch of dataset||'') hash=(hash*31+ch.charCodeAt(0))|0; return datasetPalette[(hash>>>0)%datasetPalette.length]; }
+const datasetColors=new Map();
+try {
+  for(const [name,color] of JSON.parse(localStorage.getItem('rsi-dataset-colors')||'[]'))
+    if(typeof name==='string' && /^hsl\(\d+ 32% 44%\)$/.test(color))datasetColors.set(name,color);
+} catch (_) {}
+function datasetColor(dataset) {
+  const name=String(dataset||'Unattributed');
+  if(datasetColors.has(name))return datasetColors.get(name);
+  let hash=2166136261;
+  for(const ch of name)hash=Math.imul(hash^ch.charCodeAt(0),16777619);
+  const base=(hash>>>0)%360, used=[...datasetColors.values()].map(c=>Number(c.match(/\d+/)[0]));
+  let hue=base;
+  // Separate nearby colors for small comparisons; names remain the identity
+  // cue when a large collection exhausts the distinguishable hues.
+  for(let n=0;n<12;n++) {
+    const candidate=Math.round((base+n*137.508)%360);
+    if(used.every(h=>Math.min(Math.abs(candidate-h),360-Math.abs(candidate-h))>=48)){hue=candidate;break;}
+  }
+  const color=`hsl(${hue} 32% 44%)`;datasetColors.set(name,color);
+  try { localStorage.setItem('rsi-dataset-colors',JSON.stringify([...datasetColors])); } catch (_) {}
+  return color;
+}
 const taskKey=task=>JSON.stringify([task.trace?.workflow_id,task.id]);
 function buildFlowEdges(tasks) {
   const byId=new Map(tasks.map(task=>[taskKey(task),task]));
+  const globalIds=new Map();
+  for (const task of tasks) globalIds.set(task.id,[...(globalIds.get(task.id)||[]),task]);
   const byUnit=new Map(tasks.filter(task=>task.trace?.workflow_id).map(task=>[task.trace.workflow_id+'\u0000'+task.trace.unit_id,task]));
   const known={'organize.plan':'organize.prepare','organize.execute':'organize.plan'};
   const edges=[];
@@ -231,7 +299,8 @@ function buildFlowEdges(tasks) {
       source='known Organize order';
     }
     for (const id of parents) {
-      const parent=byId.get(JSON.stringify([child.trace.workflow_id,id]));
+      const candidates=(globalIds.get(id)||[]).filter(t=>t.trace?.dataset_id===child.trace.dataset_id);
+      const parent=byId.get(JSON.stringify([child.trace.workflow_id,id]))||(candidates.length===1?candidates[0]:null);
       if (!parent || parent===child) continue;
       // Recorded dependencies remain edges even when state/timestamps are incomplete.
       if (source==='known Organize order' && (!parent.finished_at || parent.finished_at>child.started_at ||
@@ -267,7 +336,7 @@ function drawFlow(edges) {
     // Even coincident side edges have a visible, subpixel seam. Never drop an edge for lack of space.
     const seam=Math.abs(x2-x1)<.5?` stroke="${color}" stroke-width=".5"`:'';
     const narrow=Math.abs(x2-x1)*(first.bottom-first.top)/(first.bottom-first.top+Math.abs(second.top-first.top))<12;
-    paths.push(`<path class="flow-edge${activeWorkflow===edge.child.trace.workflow_id?' flow-active':''}" data-workflow="${esc(edge.child.trace.workflow_id)}" data-parent="${esc(edge.parent.id)}" data-child="${esc(edge.child.id)}" style="--edge-min-opacity:${narrow?'.5':'0'}" d="${ribbon}" fill="${color}"${seam}/>`);
+    paths.push(`<path class="flow-edge${activeWorkflow===edge.child.trace.workflow_id?' flow-active':''}" data-workflow="${esc(edge.child.trace.workflow_id)}" data-parent-workflow="${esc(edge.parent.trace.workflow_id)}" data-parent="${esc(edge.parent.id)}" data-child="${esc(edge.child.id)}" style="--edge-min-opacity:${narrow?'.5':'0'}" d="${ribbon}" fill="${color}"${seam}/>`);
   }
   if (paths.length) {
     root.style.setProperty('--flow-idle-opacity',paths.length>80?'.045':'.14');
@@ -298,7 +367,138 @@ function resetTimelineView() {
   $('timeline-from').hidden=$('timeline-to').hidden=true;
 }
 $('timeline').addEventListener('dblclick',event=>{ event.preventDefault(); resetTimelineView(); refresh(); });
+let timelineData=null, selectedStep=null, datasetPage=0, detailLimit=80;
+const expandedRuns=new Set(), collapsedDatasets=new Set();
+let initializedFlow=false;
+const stageNames={'organize':'Organize','persample':'Per-sample','per-sample':'Per-sample','cross-sample':'Cross-sample','zoom-in':'Zoom-in','dataset':'Release'};
+const operationNames={'prepare':'Prepare inputs','plan':'Plan experiments','execute':'Build analysis units','partition':'Partition samples','compute':'Compute','compute-round':'Integrate & embed','inspect':'Inspect inputs','deg':'Differential expression','assemble':'Assemble evidence','type':'Type annotation','type.prepare':'Prepare type annotation','quality':'Quality review','quality.prepare':'Prepare quality review','finalize':'Publish results','subset':'Prepare lineages','markers':'Prepare markers','plan.prepare':'Prepare planning evidence','lineage.prepare':'Prepare annotation evidence','lineage':'Annotate & review lineage','apply':'Apply decisions','merge':'Merge lineages','release':'Final release'};
+function stageName(task) { return stageNames[(task.trace?.unit_id||task.operation||'').split('.')[0]]||'Other operations'; }
+function stepName(task) {
+  const raw=task.trace?.unit_id||task.operation||'Task', split=raw.indexOf('.'), part=split<0?raw:raw.slice(split+1);
+  if(part==='plan' && stageName(task)==='Zoom-in') return 'Plan lineages';
+  return operationNames[part]||part.replaceAll(/[._-]/g,' ').replace(/^./,c=>c.toUpperCase());
+}
+function taskName(task) {
+  const operation=String(task.operation||'Task');
+  return task.service==='bridge'?'Model call':({deg_sql:'Query precomputed DEG',check_genes:'Check gene expression',submit_decision:'Submit decision',submit_plan:'Validate plan',finalize_annotation:'Finalize annotation'}[operation]||operation.replaceAll(/[._-]/g,' ').replace(/^./,c=>c.toUpperCase()));
+}
+function duration(seconds) { return seconds<60?`${Math.max(0,seconds).toFixed(1)}s`:seconds<3600?`${Math.floor(seconds/60)}m ${Math.floor(seconds%60)}s`:`${Math.floor(seconds/3600)}h ${Math.floor(seconds%3600/60)}m`; }
+function recordedState(tasks) {
+  if(tasks.some(t=>t.state==='running'))return 'Running';
+  if(tasks.some(t=>!t.started_at&&t.state==='queued'))return 'Queued';
+  if(tasks.some(t=>/failed|cancelled|unknown_external/.test(t.state)))return 'Needs attention';
+  return 'Tasks complete';
+}
+function flowGroups(tasks) {
+  const datasets=new Map();
+  for(const t of tasks) {
+    const name=t.trace?.dataset_id||'Unattributed', workflow=t.trace?.workflow_id||'unattributed', runKey=JSON.stringify([name,workflow]);
+    if(!datasets.has(name))datasets.set(name,{name,runs:new Map(),last:0});
+    const dataset=datasets.get(name);
+    dataset.last=Math.max(dataset.last,t.finished_at||t.started_at||t.submitted_at||0);
+    if(!dataset.runs.has(runKey))dataset.runs.set(runKey,{key:runKey,workflow,name:stageName(t),tasks:[],steps:new Map()});
+    const run=dataset.runs.get(runKey), step=t.trace?.unit_id||t.operation, key=JSON.stringify([name,workflow,step]);
+    run.tasks.push(t);
+    if(!run.steps.has(key))run.steps.set(key,{key,name:stepName(t),dataset:name,workflow,tasks:[]});
+    run.steps.get(key).tasks.push(t);
+  }
+  return [...datasets.values()].sort((a,b)=>b.last-a.last||a.name.localeCompare(b.name));
+}
+function timeBounds(tasks) {
+  const now=Date.now()/1000;
+  return {start:Math.min(...tasks.map(t=>t.started_at||t.submitted_at)),end:Math.max(...tasks.map(t=>t.finished_at||now))};
+}
+function runSpan(run,data) {
+  const {start,end}=timeBounds(run.tasks), from=Math.max(data.since,start), to=Math.min(data.until,end), span=data.until-data.since;
+  if(to<from)return '';
+  const color=datasetColor(run.tasks[0].trace?.dataset_id), width=Math.max(.1,100*(to-from)/span);
+  const segments=run.tasks.filter(t=>t.started_at).map(t=>{
+    const a=Math.max(from,t.started_at),b=Math.min(to,t.finished_at||Date.now()/1000);
+    return b<a?'':`<i class="flow-segment ${t.service}" style="left:${100*(a-from)/Math.max(1,to-from)}%;width:${100*(b-a)/Math.max(1,to-from)}%"></i>`;
+  }).join('');
+  return `<button type="button" class="flow-span ${recordedState(run.tasks)==='Needs attention'?'failed':''}" style="--dataset:${color};left:${100*(from-data.since)/span}%;width:${width}%" data-run-toggle="${esc(run.key)}" aria-label="Expand ${esc(run.name)}" data-tip-title="${esc(run.tasks[0].trace?.dataset_id)}" data-tip-step="${esc(run.name)}" data-tip-body="${esc(`${run.tasks.length} recorded tasks\nElapsed span: ${duration(end-start)} (includes gaps)\nRun: ${run.workflow}`)}">${segments}</button>`;
+}
+function stepBars(step,data) {
+  const ends=[], items=[], now=Date.now()/1000, span=data.until-data.since;
+  for(const t of [...step.tasks].sort((a,b)=>(a.started_at||a.submitted_at)-(b.started_at||b.submitted_at))) {
+    const start=t.started_at||t.submitted_at, end=t.finished_at||now;
+    let slot=ends.findIndex(v=>v<=start);if(slot<0)slot=ends.length;ends[slot]=end;
+    const from=Math.max(data.since,start), to=Math.min(data.until,end);
+    if(to<from)continue;
+    const location=t.service==='bridge'?(t.model?.model||'Agent Bridge'):(t.host||t.worker_id||'Unassigned');
+    const body=`${taskName(t)}\n${location}\n${t.state}\nStarted: ${when(t.started_at)}\nFinished: ${when(t.finished_at)}\n${t.started_at?'Duration: '+duration(end-start):'Waiting to start'}\nRequest: ${t.id}`;
+    items.push(`<button type="button" class="timeline-bar ${t.service}${/fail|cancel|unknown/.test(t.state)?' failed':''}${!t.started_at?' waiting':''}" style="--dataset:${datasetColor(step.dataset)};background:${datasetColor(step.dataset)};top:${8+slot*25}px;left:${100*(from-data.since)/span}%;width:${100*(to-from)/span}%" data-slot="${slot}" data-step-select="${esc(step.key)}" data-task-id="${esc(t.id)}" data-workflow="${esc(t.trace.workflow_id)}" data-tip-title="${esc(step.dataset)}" data-tip-step="${esc(step.name)}" data-tip-body="${esc(body)}" aria-label="${esc(step.name+' — '+taskName(t)+' — '+t.state)}"></button>`);
+  }
+  return `<div class="timeline-track" style="height:${Math.max(1,ends.length)*25+14}px">${items.join('')}</div>`;
+}
+function renderDatasetTimeline(data) {
+  hideTimelineTip();activeWorkflow=null;$('timeline').classList.remove('flow-focused');
+  currentTimelineWindow={since:data.since,until:data.until};
+  const datasets=flowGroups(data.tasks||[]), pageSize=10, totalDatasets=data.dataset_total??datasets.length;
+  datasetPage=data.dataset_page??Math.min(datasetPage,Math.max(0,Math.ceil(datasets.length/pageSize)-1));
+  const visible=data.dataset_page!==undefined?datasets:datasets.slice(datasetPage*pageSize,(datasetPage+1)*pageSize);
+  if(!initializedFlow && visible.length) {
+    // Start with the latest stage open; subsequent polling preserves the user's choices.
+    for(const d of visible.slice(0,3)) { const runs=[...d.runs.values()].sort((a,b)=>timeBounds(b.tasks).end-timeBounds(a.tasks).end);if(runs[0])expandedRuns.add(runs[0].key); }
+    initializedFlow=true;
+  }
+  let html=timelineAxis(data.since,data.until,'Dataset / stage / step'), renderedTasks=[];
+  for(const dataset of visible) {
+    const color=datasetColor(dataset.name), collapsed=collapsedDatasets.has(dataset.name);
+    html+=`<div class="flow-dataset" style="--dataset:${color}"><button class="flow-button" type="button" data-dataset-toggle="${esc(dataset.name)}" aria-expanded="${!collapsed}"><span aria-hidden="true">${collapsed?'▸':'▾'}</span><i class="flow-swatch"></i><strong>${esc(dataset.name)}</strong><span class="flow-count">${dataset.runs.size} stage run${dataset.runs.size===1?'':'s'}</span></button></div>`;
+    if(collapsed)continue;
+    for(const run of [...dataset.runs.values()].sort((a,b)=>timeBounds(a.tasks).start-timeBounds(b.tasks).start)) {
+      const open=expandedRuns.has(run.key), {start,end}=timeBounds(run.tasks);
+      html+=`<div class="timeline-row flow-run" data-run="${esc(run.key)}"><div class="timeline-label"><button type="button" class="flow-button" data-run-toggle="${esc(run.key)}" aria-expanded="${open}">${open?'▾':'▸'} ${esc(run.name)}</button><small>${esc(new Date(start*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}))} · ${duration(end-start)} · ${run.tasks.length} task${run.tasks.length===1?'':'s'}</small></div><div class="timeline-track">${runSpan(run,data)}</div></div>`;
+      if(!open)continue;
+      for(const step of [...run.steps.values()].sort((a,b)=>timeBounds(a.tasks).start-timeBounds(b.tasks).start)) {
+        const model=step.tasks.filter(t=>t.service==='bridge').length, worker=step.tasks.length-model;
+        html+=`<div class="timeline-row flow-step${selectedStep===step.key?' selected':''}" data-step="${esc(step.key)}"><div class="timeline-label"><button type="button" class="flow-button" data-step-select="${esc(step.key)}">${esc(step.name)}<small>${model?model+' model call'+(model===1?'':'s'):''}${model&&worker?' · ':''}${worker?worker+' worker task'+(worker===1?'':'s'):''}</small></button></div>${stepBars(step,data)}</div>`;
+        renderedTasks.push(...step.tasks);
+      }
+    }
+  }
+  $('timeline').innerHTML=visible.length?html:'<div class="empty">No recorded activity in this window. Widen the range or clear the dataset filter.</div>';
+  renderStepDetail();
+  const shown=new Set(renderedTasks);
+  drawFlow(buildFlowEdges(data.tasks||[]).filter(e=>shown.has(e.parent)&&shown.has(e.child)));
+  $('timeline-state').textContent=`${totalDatasets} datasets · ${data.tasks.length} loaded tasks`;
+  $('timeline-note').textContent=`${data.truncated?'Showing '+data.tasks.length+' of '+data.total+' tasks on this page; filter a dataset or narrow the range for complete detail. ':''}Stage runs are separate recorded workflow IDs. Their spans include gaps; filled segments are actual model calls or worker tasks. Status refers to loaded task records.`;
+  $('flow-pages').innerHTML=totalDatasets>pageSize?`<button type="button" class="flow-button" data-page="${datasetPage-1}" ${datasetPage===0?'disabled':''}>Previous</button><span>${datasetPage*pageSize+1}–${Math.min((datasetPage+1)*pageSize,totalDatasets)} of ${totalDatasets} datasets</span><button type="button" class="flow-button" data-page="${datasetPage+1}" ${(datasetPage+1)*pageSize>=totalDatasets?'disabled':''}>Next</button>`:'';
+}
+function renderStepDetail() {
+  let step;
+  for(const d of flowGroups(timelineData?.tasks||[]))for(const r of d.runs.values())if(r.steps.has(selectedStep))step=r.steps.get(selectedStep);
+  const open=!!step;
+  $('flow-detail').hidden=!open;$('flow-layout').className='flow-layout'+(open?' inspecting':'');
+  if(!step)return;
+  const panel=$('flow-detail'), scroll=panel.scrollTop, opened=new Set([...(panel.querySelectorAll?.('details[open]')||[])].map(d=>d.dataset.detailKey));
+  const tasks=[...step.tasks].sort((a,b)=>(a.started_at||a.submitted_at)-(b.started_at||b.submitted_at));
+  $('flow-detail').innerHTML=`<header><div><h3>${esc(step.dataset)}</h3><strong>${esc(step.name)}</strong></div><button type="button" class="flow-button" data-close-detail aria-label="Close step details">×</button></header><p class="sub">${esc(recordedState(tasks))} · ${tasks.length} recorded tasks</p><details data-detail-key="workflow"><summary>Workflow ID</summary><code>${esc(step.workflow)}</code></details><ol>${tasks.slice(0,detailLimit).map(t=>`<li><strong>${esc(taskName(t))}</strong><div class="task-meta"><span>${esc(String(t.state||'unknown').replaceAll('_',' '))}</span><span>${t.started_at?duration((t.finished_at||Date.now()/1000)-t.started_at):'Not started'}</span></div><div>${esc(t.service==='bridge'?(t.model?.model||'Agent Bridge'):(t.host||t.worker_id||'Unassigned worker'))}</div><div class="sub">${esc(when(t.started_at||t.submitted_at))}${t.trace.sample_id?'<br>Sample: '+esc(t.trace.sample_id):''}</div><details data-detail-key="${esc(t.id)}"><summary>Request details</summary><code>${esc(t.id)}</code><div class="sub">Submitted: ${esc(when(t.submitted_at))}<br>Finished: ${esc(when(t.finished_at))}${t.started_at?'<br>Queue wait: '+duration(t.started_at-t.submitted_at):''}${t.worker_id?'<br>Worker: '+esc(t.worker_id):''}</div></details></li>`).join('')}</ol>${tasks.length>detailLimit?'<button type="button" class="flow-button" data-more-detail>Show more tasks</button>':''}`;
+  for(const detail of panel.querySelectorAll?.('details')||[])detail.open=opened.has(detail.dataset.detailKey);
+  panel.scrollTop=scroll;
+}
 function renderTimeline(data) {
+  timelineData=data;
+  if(($('timeline-view').value||'datasets')==='workers') {
+    $('flow-pages').innerHTML='';$('flow-detail').hidden=true;$('flow-layout').className='flow-layout';renderWorkerTimeline(data);
+  } else renderDatasetTimeline(data);
+}
+$('timeline-view').addEventListener('change',()=>{datasetPage=0;if(timelineData)renderTimeline(timelineData);refresh();});
+$('timeline').addEventListener('click',event=>{
+  const target=event.target.closest?.('[data-dataset-toggle],[data-run-toggle],[data-step-select]');if(!target)return;
+  if(target.dataset.datasetToggle!==undefined) { const key=target.dataset.datasetToggle;collapsedDatasets.has(key)?collapsedDatasets.delete(key):collapsedDatasets.add(key); }
+  else if(target.dataset.runToggle!==undefined) { const key=target.dataset.runToggle;expandedRuns.has(key)?expandedRuns.delete(key):expandedRuns.add(key); }
+  else { selectedStep=target.dataset.stepSelect;detailLimit=80; }
+  renderTimeline(timelineData);
+});
+$('flow-pages').addEventListener('click',event=>{const button=event.target.closest?.('[data-page]');if(button&&!button.disabled){datasetPage=Number(button.dataset.page);if(timelineData.dataset_page!==undefined)refresh();else renderTimeline(timelineData);$('flow-scroll').scrollTop=0;}});
+$('flow-detail').addEventListener('click',event=>{
+  if(event.target.closest?.('[data-close-detail]')){selectedStep=null;renderTimeline(timelineData);}
+  if(event.target.closest?.('[data-more-detail]')){detailLimit+=80;renderStepDetail();}
+});
+
+function renderWorkerTimeline(data) {
   hideTimelineTip();
   activeWorkflow=null;
   $('timeline').classList.remove('flow-focused');
@@ -352,9 +552,9 @@ function renderTimeline(data) {
   const queued=(data.tasks||[]).filter(t=>!t.started_at).length;
   $('timeline-note').textContent=`${linked} of ${flowEdges.length} loaded workflow handoffs visible. Connections use recorded dependencies, or the known Organize order for older runs. ${queued} waiting to start; started-task queue time is in task details. Stacked bars show actual overlap within a group, not fixed execution slots. Model-turn bars exclude worker tool waits; legacy Organize bars cover whole planning sessions. ${data.truncated?'Results capped at 2,000 tasks; narrow the time range or filter a dataset. ':''}Hover a task to isolate its workflow.`;
 }
-function timelineAxis(from,to) {
-  const ticks=[0,.25,.5,.75,1].map(f=>`<span class="timeline-tick" style="left:${f*100}%">${esc(new Date((from+f*(to-from))*1000).toLocaleString())}</span>`).join('');
-  return `<div class="timeline-axis"><span>Worker / service</span><div class="timeline-scale">${ticks}</div></div>`;
+function timelineAxis(from,to,label="Worker / service") {
+  const ticks=[0,.25,.5,.75,1].map(f=>`<span class="timeline-tick" style="left:${f*100}%">${esc(new Date((from+f*(to-from))*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:to-from<600?'2-digit':undefined}))}</span>`).join('');
+  return `<div class="timeline-axis"><span>${esc(label)}</span><div class="timeline-scale">${ticks}</div></div>`;
 }
 function renderResourceHistory(data) {
   const span=data.until-data.since, pos=t=>100*(t-data.since)/span;
@@ -460,6 +660,7 @@ async function refresh() {
     const until=viewWindow?viewWindow.until:latest?latest.until:range==='custom'?Date.parse($('timeline-to').value)/1000:now;
     if (Number.isFinite(since) && Number.isFinite(until)) {
       const params=new URLSearchParams({since:String(since),until:String(until),dataset});
+      if(($("timeline-view").value||"datasets")==="datasets")params.set("dataset_page",String(datasetPage));
       const timelineResponse=await fetch('/api/timeline?'+params,{cache:'no-store'});
       if (!timelineResponse.ok) throw new Error(`Timeline HTTP ${timelineResponse.status}`);
       const timeline=await timelineResponse.json();
@@ -479,7 +680,7 @@ async function refresh() {
   } catch(e) { if (seq===refreshSeq) $('updated').textContent=`Unavailable: ${e.message}`; }
 }
 $('timeline-range').addEventListener('change',()=>{ const custom=$('timeline-range').value==='custom'; $('timeline-from').hidden=!custom; $('timeline-to').hidden=!custom; viewWindow=null; if (custom) { const now=Date.now()/1000, window=currentTimelineWindow||{since:now-3600,until:now}; $('timeline-from').value=localTime(window.since); $('timeline-to').value=localTime(window.until); } refresh(); });
-$('timeline-apply').addEventListener('click',()=>{ if ($('timeline-range').value==='custom') { const since=Date.parse($('timeline-from').value)/1000, until=Date.parse($('timeline-to').value)/1000; if (!(until>since && until-since<=86400)) { $('timeline-state').textContent='Select up to 24 hours'; return; } viewWindow={since,until}; } else viewWindow=null; refresh(); });
+$('timeline-apply').addEventListener('click',()=>{ datasetPage=0; if ($('timeline-range').value==='custom') { const since=Date.parse($('timeline-from').value)/1000, until=Date.parse($('timeline-to').value)/1000; if (!(until>since && until-since<=86400)) { $('timeline-state').textContent='Select up to 24 hours'; return; } viewWindow={since,until}; } else viewWindow=null; refresh(); });
 refresh(); setInterval(refresh,10000);
 </script>
 </body>

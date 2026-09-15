@@ -15,6 +15,7 @@ const context = vm.createContext({
   window: {addEventListener() {}}, Date, Map, URLSearchParams, setTimeout: () => 1, clearTimeout() {},
 });
 vm.runInContext(script, context);
+element("timeline-view").value="workers";
 const now = Date.now() / 1000;
 const original = {since: now - 3600, until: now};
 const zoomed = context.zoomWindow(original, .25, -100);
@@ -92,7 +93,8 @@ const execute = stage('run-a.execute', 'organize/run-a', 'dataset-a', 'organize.
 const otherRun = stage('run-b.execute', 'organize/run-b', 'dataset-a', 'organize.execute', 260, 290, ['run-a.prepare']);
 const unrelated = stage('unrelated', 'other/run', 'dataset-a', 'compute', 300, 330);
 const links = context.buildFlowEdges([prepare, plan, execute, otherRun, unrelated]);
-assert.equal(links.length, 2);
+assert.equal(links.length, 3);
+assert.equal(links[2].parent.id, "run-a.prepare"); // Explicit dependencies can cross stage workflow IDs.
 assert.equal(links[0].source, 'recorded dependency');
 assert.equal(links[1].source, 'known Organize order');
 assert.equal(links[1].parent.id, 'run-a.plan');
@@ -168,3 +170,28 @@ assert(element('pool-history').innerHTML.includes('old'));
 assert(element('compute-pool-summary').textContent.includes('4 CPU / 2.0 GiB'));
 context.renderComputePool({workers:[]});
 assert(element('pool-hosts').innerHTML.includes('No workers'));
+
+// Business hierarchy preserves separate runs and exposes readable steps without hover.
+assert.notEqual(context.datasetColor('Tabula Sapiens SS2 / Prostate'),context.datasetColor('Tabula Sapiens SS2 / Uterus'));
+const flows=[stage('prepare-1','organize/first','Prostate','organize.prepare',100,120,[]),
+  stage('plan-1','organize/first','Prostate','organize.plan',121,140,['prepare-1']),
+  stage('prepare-2','organize/second','Prostate','organize.prepare',150,160,[]),
+  stage('plan-2','organize/second','Prostate','organize.plan',161,180,['prepare-2']),
+  stage('uterus','organize/uterus','Uterus','organize.prepare',100,120,[])];
+const grouped=context.flowGroups(flows);
+assert.equal(grouped.find(d=>d.name==='Prostate').runs.size,2);
+assert.equal(context.stepName(flows[1]),'Plan experiments');
+element('timeline-view').value='datasets';
+root.querySelectorAll=()=>[];
+context.renderTimeline({since:90,until:200,tasks:flows,total:flows.length});
+assert(element('timeline').innerHTML.includes('Prostate'));
+assert(element('timeline').innerHTML.includes('Uterus'));
+assert(element('timeline').innerHTML.includes('2 stage runs'));
+assert(element('timeline').innerHTML.includes('Prepare inputs'));
+assert(element('timeline').innerHTML.includes('Plan experiments'));
+const stepKey=JSON.stringify(['Prostate','organize/second','organize.plan']);
+element('timeline').listeners.click({target:{closest:()=>({dataset:{stepSelect:stepKey}})}});
+assert.equal(element('flow-detail').hidden,false);
+assert(element('flow-detail').innerHTML.includes('Plan experiments'));
+assert(element('flow-detail').innerHTML.includes('Model call'));
+assert(element('flow-detail').innerHTML.includes('plan-2'));
