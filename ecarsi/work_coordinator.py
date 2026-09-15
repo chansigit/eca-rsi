@@ -200,8 +200,16 @@ def agent_step(action: str, args: list):
             raise ValueError("Cannot finish an agent with pending tools")
         return session.immutable(Path(spec["output_root"]) / "result.json",
                                  {"session": args[0], "reply": session.reference(args[1])})["path"]
+    if action == "tool":
+        from jsonschema import ValidationError
+        from .agent_tool_errors import reject_arguments
+        try:
+            return session.tool_request(*args)
+        except ValidationError as exc:
+            # A model can correct its arguments; never run an invalid command or lose its session.
+            return reject_arguments(*args, message=exc.message)
     operations = {"create": session.create_session, "model": session.submit_turn,
-                  "tool": session.tool_request, "resume": session.continuation,
+                  "resume": session.continuation,
                   "complete_tool": session.complete_tool}
     return operations[action](*args)
 

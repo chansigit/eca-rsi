@@ -240,3 +240,45 @@ def test_worker_images_and_state_survive_sdk_continuation(tmp_path):
         request = read(Path(spec["pool_root"]) / "requests" / second["request_id"] / "request.json")
         assert request["spec"]["args"][-1] == later["path"]
         assert later in request["spec"]["inputs"]
+
+
+def test_invalid_arguments_return_to_model_without_executing_tool(tmp_path,monkeypatch):
+    from harness_bridge import _harness_openai as adapter
+    from ecarsi.work_coordinator import agent_step
+    from ecarsi.agent_tool_errors import write_rejection
+    class CorrectingModel(ScriptedModel):
+        async def get_response(self,**kwargs):
+            self.inputs.append(kwargs['input'])
+            turn=len(self.inputs)
+            if turn==1:
+                output=[ResponseFunctionToolCall(type='function_call',name='compute',call_id='bad',arguments='{}',id='bad',status='completed')]
+            elif turn==2:
+                assert 'Invalid arguments' in json.dumps(kwargs['input'])
+                output=[ResponseFunctionToolCall(type='function_call',name='compute',call_id='good',arguments='{"value":7}',id='good',status='completed')]
+            else:
+                assert 'worker-node' in json.dumps(kwargs['input'])
+                output=[ResponseOutputMessage(type='message',id='done',role='assistant',status='completed',
+                    content=[ResponseOutputText(type='output_text',text='done',annotations=[])])]
+            return ModelResponse(output=output,usage=Usage(requests=1,input_tokens=10,output_tokens=4),response_id='r'+str(turn))
+    spec,_=setup(tmp_path)
+    state=session.immutable(tmp_path/'state.json',{'preserved':17})
+    spec={**spec,'session_id':'correcting','output_root':str(tmp_path/'correcting'),'tool_state':state,
+          'tools':[{**spec['tools'][0],'args':spec['tools'][0]['args']+['{state}']}]}
+    ref=session.create_session(spec);root=Path(spec['bridge_root']);model=CorrectingModel()
+    with patch.object(adapter,'_client',return_value=Client()),patch.object(adapter,'_model',return_value=model):
+        reply=execute_turn(root,session.submit_turn(ref,0))
+        item=agent_step('tool',[ref,str(reply),0,None])
+        request=read(Path(spec['pool_root'])/'requests'/item['request_id']/'request.json')
+        assert request['spec']['args'][:2]==['-m','ecarsi.agent_tool_errors']
+        assert 'must never run' not in str(request['spec']['args'])
+        output=tmp_path/'error-output';output.mkdir();monkeypatch.chdir(output)
+        write_rejection(request['spec']['args'][2])
+        response=read(output/'result.json');assert response['is_error'] and response['state']==state
+        context=session.continuation(ref,reply,[completed_tool(spec,item,response)])
+        reply=execute_turn(root,session.submit_turn(ref,1,context,[item['request_id']]))
+        corrected=agent_step('tool',[ref,str(reply),0,None])
+        actual=read(Path(spec['pool_root'])/'requests'/corrected['request_id']/'request.json')['spec']
+        assert state in actual['inputs']  # rejection preserves the last accepted state
+        context=session.continuation(ref,reply,[completed_tool(spec,corrected,{'state':state,'worker':'worker-node','value':49})])
+        final=execute_turn(root,session.submit_turn(ref,2,context,[corrected['request_id']]))
+        assert read(final)['response']['kind']=='final' and len(model.inputs)==3

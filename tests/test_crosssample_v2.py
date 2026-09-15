@@ -99,6 +99,15 @@ def test_compute_comparisons_and_sql_handoff(tmp_path):
     bad=tmp_path/'bad';bad.mkdir()
     with pytest.raises(ValueError,match='Missing or duplicate'):assemble(prepared,results[:-1],bad)
     original=an.read_h5ad(computed/'integrated.h5ad');clusters=sorted(original.obs[BASE].astype(str).unique())
+    real_types=immutable(tmp_path/'report-types.json',dict(accepted=True,evidence=evidence,proposal={'clusters':[
+        dict(cluster_id=c,coarse_label='Fixture',fine_label='Fixture '+c,merge_target=None,action='keep',confidence='high',
+             evidence={k:'fixture evidence' for k in ('distinctness','markers','merge')},rationale='fixture evidence') for c in clusters]}))
+    proposal=dict(clusters=[dict(cluster=c,verdict='real',action='keep',confidence='high',
+        tests={k:'fixture evidence' for k in ('markers','qc','composition','geometry','stability')},rationale='fixture evidence') for c in clusters],cell_actions=[])
+    real_quality=immutable(tmp_path/'report-quality.json',dict(accepted=True,evidence=evidence,types=real_types,proposal=proposal))
+    published=tmp_path/'published';published.mkdir();finalize(evidence,real_types,real_quality,published)
+    assert (published/'report.html').is_file()
+    final=verified(reference(published/'final.json'));assert final['n_input']==150 and final['n_survived']+final['n_removed']==150
     typed=immutable(tmp_path/'types.json',dict(accepted=True,evidence=evidence,proposal={'clusters':[
         dict(cluster_id=c,merge_target=None,action='keep') for c in clusters]}))
     request=immutable(tmp_path/'refinement.json',dict(accepted=True,evidence=evidence,types=typed,
