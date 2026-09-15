@@ -43,6 +43,10 @@ element('timeline').listeners.wheel({target: {closest: () => ({getBoundingClient
 assert(prevented);
 assert.equal(element('timeline-range').value, 'custom');
 assert.equal(element('timeline-from').hidden, false);
+context.resetTimelineView();
+assert.equal(element('timeline-range').value, 'auto');
+assert.equal(element('timeline-from').hidden, true);
+assert(html.includes('.timeline-bar { position:absolute; top:8px; height:25px; min-width:10px; border-radius:2px'));
 const fitted = context.latestActivityWindow([
   {started_at: 100, finished_at: 150}, {started_at: 200, finished_at: 250},
   {started_at: 1000, finished_at: 1040}, {started_at: 1080, finished_at: 1120},
@@ -80,6 +84,7 @@ root.insertAdjacentHTML = (_, svg) => { root.flowSvg = svg; };
 assert.equal(context.drawFlow(links, 0, 400), 2);
 assert(root.flowSvg.includes('data-workflow="organize/run-a"'));
 assert(root.flowSvg.includes('class="flow-edge"'));
+assert(root.flowSvg.includes(' Z" fill='));
 assert(!root.flowSvg.includes('NaN'));
 assert.equal(context.datasetColor('dataset-a'), context.datasetColor('dataset-a'));
 
