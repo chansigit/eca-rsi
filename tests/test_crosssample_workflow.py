@@ -20,6 +20,9 @@ def test_gpu_selection_and_large_fanin(tmp_path):
     task=crosssample_step('compute',[spec,{'paths':[str(tmp_path/'inspected.json'),str(tmp_path/'inclusion.json')]},['included']])
     request=read(pool/'requests'/task['id']/'request.json')['spec']
     assert request['gpu']==dict(mode='preferred',memory_mb=4096)
+    later=crosssample_step('compute-round',[spec,{'paths':[str(tmp_path/'inspected.json')]},['prior-zoom']])
+    repeated=read(pool/'requests'/later['id']/'request.json')['spec']
+    assert repeated['gpu']==request['gpu'] and repeated['trace']['depends_on']==['prior-zoom']
     trace={**request['trace'],'depends_on':['deg-'+str(i) for i in range(100)]}
     assert validate_trace(trace)==trace
     with pytest.raises(ValueError):validate_trace({**trace,'depends_on':['d'+str(i) for i in range(4097)]})

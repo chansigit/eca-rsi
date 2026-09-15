@@ -303,9 +303,59 @@ def validate_spec(spec):
     return spec
 
 
+async def run_worker(client, task_queue):
+    from .persample_workflow import PersampleWorkflow, SampleWorkflow, sample_step
+    from .crosssample_workflow import CrosssampleWorkflow, crosssample_step
+    from .zoomin_workflow import ZoominWorkflow, zoomin_step
+    from .dataset_workflow import DatasetWorkflow, AnalysisUnitWorkflow, dataset_step
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        async with Worker(client, task_queue=task_queue,
+                workflows=[OrganizeWorkflow, AgentWorkflow, PersampleWorkflow, SampleWorkflow, CrosssampleWorkflow, ZoominWorkflow, DatasetWorkflow, AnalysisUnitWorkflow],
+                activities=ACTIVITIES + [agent_step, sample_step, crosssample_step, zoomin_step, dataset_step],
+                activity_executor=executor, max_concurrent_activities=16):
+            await asyncio.Future()
+
+
+async def follow_service(root, task_queue):
+    """Reconnect after a service handoff without cancelling Pool or Bridge work."""
+    from .temporal_service import endpoint
+    last_state = None
+    while True:
+        try:
+            current = endpoint(root)
+            client = await asyncio.wait_for(Client.connect(current['endpoint']), 10)
+        except (ConnectionError, RuntimeError, TimeoutError) as exc:
+            message = 'Waiting for Temporal service: ' + str(exc)
+            if message != last_state:
+                print(message, flush=True)
+                last_state = message
+            await asyncio.sleep(5)
+            continue
+        print('Connected to Temporal service generation ' + current['generation'], flush=True)
+        last_state = None
+        running = asyncio.create_task(run_worker(client, task_queue))
+        try:
+            while True:
+                done, _ = await asyncio.wait([running], timeout=5)
+                if done:
+                    await running  # Code/configuration errors must remain visible.
+                    return
+                try:
+                    if endpoint(root)['generation'] == current['generation']:
+                        continue
+                except ConnectionError:
+                    pass
+                break
+        finally:
+            running.cancel()
+            await asyncio.gather(running, return_exceptions=True)
+
+
 async def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--temporal", required=True, help="explicit Temporal Service host:port")
+    connection = parser.add_mutually_exclusive_group(required=True)
+    connection.add_argument("--temporal", help="explicit Temporal Service host:port")
+    connection.add_argument("--service-root", type=Path, help="shared Temporal service discovery directory")
     parser.add_argument("--task-queue", default=QUEUE)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("worker")
@@ -319,22 +369,27 @@ async def main():
     p.add_argument("spec", type=Path)
     p = commands.add_parser("start-zoomin")
     p.add_argument("spec", type=Path)
-    for name in ("status", "status-agent", "status-persample", "resume-persample", "status-crosssample", "resume-crosssample", "status-zoomin", "resume-zoomin"):
+    p = commands.add_parser("start-dataset")
+    p.add_argument("spec", type=Path)
+    for name in ("status", "status-agent", "status-persample", "resume-persample", "status-crosssample", "resume-crosssample", "status-zoomin", "resume-zoomin", "status-dataset"):
         p = commands.add_parser(name)
         p.add_argument("run_id")
     args = parser.parse_args()
+    if args.command == 'worker' and args.service_root:
+        await follow_service(args.service_root, args.task_queue)
+        return
+    if args.service_root:
+        from .temporal_service import endpoint
+        args.temporal = endpoint(args.service_root)['endpoint']
     client = await Client.connect(args.temporal)
     if args.command == "worker":
-        from .persample_workflow import PersampleWorkflow, SampleWorkflow, sample_step
-        from .crosssample_workflow import CrosssampleWorkflow, crosssample_step
-        from .zoomin_workflow import ZoominWorkflow, zoomin_step
-        with ThreadPoolExecutor(max_workers=16) as executor:
-            async with Worker(client, task_queue=args.task_queue, workflows=[OrganizeWorkflow, AgentWorkflow, PersampleWorkflow, SampleWorkflow, CrosssampleWorkflow, ZoominWorkflow],
-                              activities=ACTIVITIES + [agent_step, sample_step, crosssample_step, zoomin_step], activity_executor=executor,
-                              max_concurrent_activities=16):
-                await asyncio.Future()
-    elif args.command in {"start", "start-agent", "start-persample", "start-crosssample", "start-zoomin"}:
-        if args.command == "start-agent":
+        await run_worker(client, args.task_queue)
+    elif args.command in {"start", "start-agent", "start-persample", "start-crosssample", "start-zoomin", "start-dataset"}:
+        if args.command == "start-dataset":
+            from .dataset_workflow import DatasetWorkflow, validate_spec as validate_dataset
+            spec = validate_dataset(json.loads(args.spec.read_text()))
+            run, identity = DatasetWorkflow.run, 'dataset/' + spec['run_id']
+        elif args.command == "start-agent":
             from .agent_session import validate_spec as validate_agent
             spec = validate_agent(json.loads(args.spec.read_text()))
             run, identity = AgentWorkflow.run, "agent/" + spec["session_id"]
@@ -391,10 +446,12 @@ async def main():
         from .persample_workflow import PersampleWorkflow
         from .crosssample_workflow import CrosssampleWorkflow
         from .zoomin_workflow import ZoominWorkflow
+        from .dataset_workflow import DatasetWorkflow
         kind = {"status": ("organize/", OrganizeWorkflow), "status-agent": ("agent/", AgentWorkflow),
                 "status-persample": ("persample/", PersampleWorkflow),
                 "status-crosssample": ("cross-sample/", CrosssampleWorkflow),
-                "status-zoomin": ("zoom-in/", ZoominWorkflow)}[args.command]
+                "status-zoomin": ("zoom-in/", ZoominWorkflow),
+                "status-dataset": ('dataset/', DatasetWorkflow)}[args.command]
         handle = client.get_workflow_handle(kind[0] + identifier(args.run_id))
         info = await handle.describe()
         stage = await handle.query(kind[1].stage) if info.status.name == "RUNNING" else None

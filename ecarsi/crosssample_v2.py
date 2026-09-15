@@ -30,6 +30,12 @@ def publish_bundle(destination, name, parent=None, **metadata):
 def inspect_input(spec, destination):
     """Verify OSP publication and prepare bounded inclusion evidence, not matrices."""
     publication = verified(spec['input'])
+    if 'previous_round' in spec:
+        if publication.get('state') != 'complete' or 'annotated_zmip.h5ad' not in publication.get('files', {}):
+            raise ValueError('Later rounds require completed Zoom-in survivors')
+        immutable(destination/'inspected.json', dict(previous_round=spec['previous_round'],
+            input=spec['input'], n_input=publication['n_survived'], spec=spec))
+        return
     if publication['state'] != 'complete' or publication['failed_samples']:
         raise ValueError('Cross-sample requires a complete per-sample publication')
     samples, empty, files = [], [], {}
@@ -58,7 +64,7 @@ def inspect_input(spec, destination):
 
 def compute(inspected_ref, inclusion_ref, destination):
     import pandas as pd
-    from msp.integrate import load_and_merge, integrate_adata
+    from msp.integrate import load_and_merge
     from .crosssample import validate_inclusion
     inspected, inclusion = verified(inspected_ref), verified(inclusion_ref)
     if inclusion.get('accepted') is not True or inclusion['evidence'] != inspected_ref:
@@ -100,12 +106,50 @@ def compute(inspected_ref, inclusion_ref, destination):
     excluded = pd.concat(exclusions, ignore_index=True) if exclusions else pd.DataFrame(columns=[*origin.columns,'reason','reason_code'])
     excluded.to_csv(destination/'sample_exclusions.csv.gz', index=False)
     pd.DataFrame(decision['samples']).to_csv(destination/'sample_decisions.csv',index=False)
+    data=load_and_merge(inputs,inspected['spec']['config']['batch_col'])
+    if len(data)+len(excluded)!=len(origin):raise ValueError('Sample selection lost cells')
+    integrate(data, inspected_ref, inclusion_ref, destination, inputs)
+
+
+def compute_round(inspected_ref, destination):
+    """Reintegrate only accepted survivors; sample inclusion was decided in round one."""
+    import anndata as an
+    import pandas as pd
+    from .round_policy import PREV_COLS
+    inspected = verified(inspected_ref)
+    previous = verified(inspected['input'])
+    path = artifact(previous, 'annotated_zmip.h5ad')
+    data = an.read_h5ad(path)
+    if len(data) != inspected['n_input'] or not data.obs_names.is_unique:
+        raise ValueError('Previous round survivor identity changed')
+    batch = inspected['spec']['config']['batch_col']
+    required = {'source_unit', 'eca_source_cell_id', batch}
+    if not required <= set(data.obs) or data.obs[list(required)].isna().any().any():
+        raise ValueError('Survivors lost their original source or sample identities')
+    if '_qc_action' in data.obs and data.obs['_qc_action'].astype(str).eq('drop').any():
+        raise ValueError('A prior OSP exclusion reappeared among accepted survivors')
+    prefix = f"r{inspected['previous_round']:02d}_"
+    rename = {c: prefix + c.lstrip('_') for c in PREV_COLS if c in data.obs}
+    if set(rename.values()) & set(data.obs):
+        raise ValueError('Previous round labels were already archived')
+    data.obs = data.obs.rename(columns=rename)
+    origin = pd.DataFrame(dict(cell_id=data.obs_names.astype(str),
+        source_id=data.obs.source_unit.astype(str).to_numpy(),
+        source_cell_id=data.obs.eca_source_cell_id.astype(str).to_numpy(),
+        sample_id=data.obs[batch].astype(str).to_numpy()))
+    origin.to_csv(destination/'input_cells.csv.gz', index=False)
+    pd.DataFrame(columns=[*origin.columns, 'reason', 'reason_code']).to_csv(destination/'sample_exclusions.csv.gz', index=False)
+    pd.DataFrame(columns=['cell', 'reasons']).to_csv(destination/'osp_removal_proposals.csv.gz', index=False)
+    integrate(data, inspected_ref, None, destination, [str(path)])
+
+
+def integrate(data, inspected_ref, inclusion_ref, destination, inputs):
+    from msp.integrate import integrate_adata
+    inspected=verified(inspected_ref)
     spec = inspected['spec'];cfg=spec['config'];backend=os.environ.get('RSI_COMPUTE_BACKEND','cpu')
     if cfg['compute_backend'] not in {'auto',backend}:
         raise ValueError('Backend does not match the Pool grant')
     os.environ['MSP_COMPUTE_ENDPOINT']='local';os.environ['MSP_COMPUTE_GPU']='1' if backend=='rapids' else '0'
-    data=load_and_merge(inputs,cfg['batch_col'])
-    if len(data)+len(excluded)!=len(origin):raise ValueError('Sample selection lost cells')
     integrate_adata(data,cfg['batch_col'],str(destination),species=cfg['species'],
                     resolutions=(.3,1.,2.),n_top_genes=cfg['n_top_genes'],n_pcs=cfg['n_pcs'],
                     n_neighbors=cfg['n_neighbors'],defer_deg=True,inputs=inputs,
@@ -115,7 +159,7 @@ def compute(inspected_ref, inclusion_ref, destination):
         tasks.append({'plan_index':index,'cluster':None})
         tasks.extend({'plan_index':index,'cluster':c} for c in item['valid'] if item['top3'].get(c))
     sealed(destination,destination/'prepared.json',inspected=inspected_ref,inclusion=inclusion_ref,
-           version=0,tasks=tasks,n_input=len(origin),n_selected=len(data),backend=backend,
+           version=0,tasks=tasks,n_input=inspected['n_input'],n_selected=len(data),backend=backend,
            type_entries={},quality_entries={},type_scope=sorted(data.obs[BASE].astype(str).unique()))
 
 
@@ -443,6 +487,7 @@ def main():
         from .crosssample import SINGLE_SAMPLE_NOTE
         immutable(dest/'decision.json',dict(accepted=True,evidence=ref(0),proposal={'samples':[dict(sample=bundle['samples'][0]['sample'],include=True,reason=SINGLE_SAMPLE_NOTE)],'notes':SINGLE_SAMPLE_NOTE}))
     elif a.operation=='compute':compute(ref(0),ref(1),dest)
+    elif a.operation=='compute-round':compute_round(ref(0),dest)
     elif a.operation=='refine':refine(ref(0),ref(1),ref(2),dest)
     elif a.operation=='deg':deg(ref(0),int(a.args[1]),dest)
     elif a.operation=='assemble':assemble(ref(0),read(a.args[1]),dest)

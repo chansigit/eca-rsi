@@ -1,0 +1,139 @@
+{
+  "dataset_id": "Prostate",
+  "input_root": "/shared/data/prostate/standardize",
+  "pool_root": "/shared/rsi/pool",
+  "bridge_root": "/shared/rsi/bridge",
+  "run_id": "prostate-v2",
+  "output_root": "/shared/rsi/runs/prostate-v2",
+  "organize": {
+    "prepare_cpus": 1,
+    "prepare_memory_mb": 2048,
+    "prepare_timeout_seconds": 600,
+    "execute_cpus": 1,
+    "execute_memory_mb": 8192,
+    "execute_timeout_seconds": 600
+  },
+  "per_sample": {
+    "batch_size": 3,
+    "compute_budget": {
+      "cpus": 1,
+      "memory_mb": 8192,
+      "timeout_seconds": 1800
+    },
+    "config": {
+      "compute_backend": "auto",
+      "decontx": true,
+      "gpu_memory_mb": 4096,
+      "gpu_min_cells": 1000,
+      "resolution": 1.0,
+      "scrublet": true,
+      "tissue": "Prostate"
+    },
+    "finalize_budget": {
+      "cpus": 1,
+      "memory_mb": 8192,
+      "timeout_seconds": 600
+    },
+    "max_batch_bytes": 1073741824,
+    "max_in_flight_samples": 3,
+    "partition_budget": {
+      "cpus": 1,
+      "memory_mb": 4096,
+      "timeout_seconds": 600
+    },
+    "tool_budget": {
+      "cpus": 1,
+      "memory_mb": 8192,
+      "timeout_seconds": 600
+    }
+  },
+  "cross_sample": {
+    "inspect_budget": {
+      "cpus": 1,
+      "memory_mb": 2048,
+      "timeout_seconds": 180
+    },
+    "compute_budget": {
+      "cpus": 2,
+      "memory_mb": 8192,
+      "timeout_seconds": 1800
+    },
+    "deg_budget": {
+      "cpus": 1,
+      "memory_mb": 4096,
+      "timeout_seconds": 600
+    },
+    "tool_budget": {
+      "cpus": 1,
+      "memory_mb": 4096,
+      "timeout_seconds": 300
+    },
+    "finalize_budget": {
+      "cpus": 1,
+      "memory_mb": 8192,
+      "timeout_seconds": 600
+    },
+    "max_in_flight_deg": 6,
+    "max_refinements": 2,
+    "config": {
+      "tissue": "prostate",
+      "n_top_genes": 3000,
+      "n_pcs": 30,
+      "n_neighbors": 15,
+      "compute_backend": "auto",
+      "gpu_min_cells": 1000,
+      "gpu_memory_mb": 4096
+    }
+  },
+  "zoom_in": {
+    "config": {
+      "compute_backend": "auto",
+      "gpu_memory_mb": 4096,
+      "gpu_min_cells": 1000,
+      "n_neighbors": 15,
+      "n_pcs": 30,
+      "n_top_genes": 3000,
+      "tissue": "prostate",
+      "min_cells": 800,
+      "max_refinements": 2
+    },
+    "max_in_flight_lineages": 2,
+    "max_in_flight_deg": 6,
+    "prepare_budget": {
+      "cpus": 1,
+      "memory_mb": 4096,
+      "timeout_seconds": 300
+    },
+    "subset_budget": {
+      "cpus": 1,
+      "memory_mb": 8192,
+      "timeout_seconds": 600
+    },
+    "compute_budget": {
+      "cpus": 2,
+      "memory_mb": 8192,
+      "timeout_seconds": 1800
+    },
+    "deg_budget": {
+      "cpus": 1,
+      "memory_mb": 4096,
+      "timeout_seconds": 600
+    },
+    "tool_budget": {
+      "cpus": 1,
+      "memory_mb": 4096,
+      "timeout_seconds": 300
+    },
+    "merge_budget": {
+      "cpus": 1,
+      "memory_mb": 8192,
+      "timeout_seconds": 600
+    }
+  },
+  "round_policy": {
+    "rounds": null,
+    "cap": 10,
+    "extra_rounds_after_convergence": 0,
+    "max_removed": 1000
+  }
+}

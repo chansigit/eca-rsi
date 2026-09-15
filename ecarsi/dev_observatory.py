@@ -206,7 +206,7 @@ def worker_inventory(pool: Path, tasks: list[dict], now: float, cache: dict) -> 
 
 def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.0.1",
              cache: dict | None = None, pool_root: Path | None = None,
-             bridge_root: Path | None = None) -> dict:
+             bridge_root: Path | None = None, temporal_service_root: Path | None = None) -> dict:
     """Read published records; never connect to a scheduler or submit work."""
     root = Path(root)
     pool = Path(pool_root) if pool_root else root / "organize-v2-pool"
@@ -290,6 +290,17 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
     acceptance = {"passed": report.get("passed"), "tests": report.get("tests", []),
                   "nodes": [{"host": n.get("host"), "worker_cpu": n.get("worker_cpu")}
                             for n in report.get("nodes", [])]}
+    temporal_source = 'unvalidated development SQLite'
+    service = None
+    if temporal_service_root:
+        from .temporal_service import endpoint
+        temporal_source = 'PostgreSQL on shared storage'
+        try:
+            service = endpoint(temporal_service_root)
+            temporal_host = service['endpoint'].rsplit(':', 1)[0]
+            temporal_port = service['ui_port']
+        except ConnectionError:
+            temporal_port = 0
     try:
         with socket.create_connection((temporal_host, temporal_port), timeout=0.2):
             temporal_ui = True
@@ -299,7 +310,8 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
     return {
         "generated_at": time.time(), "host": socket.gethostname(),
         "mode": "development / read-only", "temporal_ui": temporal_ui,
-        "temporal_port": temporal_port, "temporal_source": "unvalidated development SQLite",
+        "temporal_port": temporal_port, "temporal_source": temporal_source,
+        "temporal_service": service,
         "scheduler": scheduler, "worker": worker, "bridge_summary": bridge_summary,
         "worker_live_count": sum(w["reporting"] for w in workers), "workers": workers,
         "pool_waiting": sum(t["state"] == "queued" for t in pool_rows),
@@ -311,7 +323,8 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
 
 
 def serve(root: Path, port: int, temporal_port: int, bind: str,
-          pool_root: Path | None = None, bridge_root: Path | None = None) -> None:
+          pool_root: Path | None = None, bridge_root: Path | None = None,
+          temporal_service_root: Path | None = None) -> None:
     cache = {}
     guard = threading.Lock()
 
@@ -325,7 +338,7 @@ def serve(root: Path, port: int, temporal_port: int, bind: str,
                     with guard:
                         if time.monotonic() - cache.get("snapshot_at", 0) >= 2:
                             cache["snapshot"] = snapshot(root, temporal_port, bind, cache,
-                                                         pool_root, bridge_root)
+                                                         pool_root, bridge_root, temporal_service_root)
                             cache["snapshot_at"] = time.monotonic()
                         data = cache["snapshot"]
                         if url.path == "/api/timeline":
@@ -403,6 +416,7 @@ def main() -> None:
     web.add_argument("--root", type=Path, required=True)
     web.add_argument("--port", type=int, default=8765)
     web.add_argument("--temporal-ui-port", type=int, default=8233)
+    web.add_argument("--temporal-service-root", type=Path, help="shared PostgreSQL-backed Temporal service discovery")
     web.add_argument("--bind", default="127.0.0.1")
     web.add_argument("--pool-root", type=Path, help="shared Pool receipt and worker telemetry root")
     web.add_argument("--bridge-root", type=Path, help="shared Agent Bridge receipt root")
@@ -414,7 +428,7 @@ def main() -> None:
     args = parser.parse_args()
     if args.command == "serve":
         serve(args.root, args.port, args.temporal_ui_port, args.bind,
-              args.pool_root, args.bridge_root)
+              args.pool_root, args.bridge_root, args.temporal_service_root)
     else:
         asyncio.run(temporal_ui(args.database, args.port, args.ui_port, args.bind))
 

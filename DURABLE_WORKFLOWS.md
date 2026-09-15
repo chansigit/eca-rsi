@@ -4,6 +4,9 @@ Status: approved architecture and isolated implementation; no production migrati
 Design branch: `feature/durable-workflows`. Implementation branch: `feature/warmpool-v2`.
 The [first Warm Pool implementation](WARM_POOL_V2.md) verifies local recovery
 and Scheduler relocation between two Slurm hosts before scientific or Temporal integration.
+Current implementation entries: [dataset orchestration and iteration](DATASET_V2.md),
+[shared Temporal persistence and recovery](DURABLE_CONTROL.md),
+[cross-sample acceptance](CROSSSAMPLE_V2_ACCEPTANCE.md), and [Zoom-in acceptance](ZOOMIN_V2.md).
 
 ## Component names and proposed responsibility boundary
 

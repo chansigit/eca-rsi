@@ -15,9 +15,13 @@ def validate_spec(spec):
     required = {"run_id", "dataset_id", "unit", "output_root", "pool_root", "bridge_root",
                 "partition_budget", "compute_budget", "tool_budget", "finalize_budget", "config",
                 "batch_size", "max_in_flight_samples", "max_batch_bytes"}
-    if not isinstance(spec, dict) or set(spec) != required:
+    if not isinstance(spec, dict) or set(spec) - {'depends_on'} != required:
         raise ValueError("Per-sample needs explicit input, services, compute and backlog budgets")
     identifier(spec["run_id"])
+    if 'depends_on' in spec:
+        from .warm_pool.state import validate_trace
+        validate_trace(dict(workflow_id='persample/' + spec['run_id'], dataset_id=spec['dataset_id'],
+                            unit_id='persample.partition', depends_on=spec['depends_on']))
     if len(spec["run_id"]) > 60 or not isinstance(spec["dataset_id"], str) or not spec["dataset_id"].strip():
         raise ValueError("Use a run ID up to 60 characters and a dataset label")
     unit, output = Path(spec["unit"]), Path(spec["output_root"])
@@ -133,7 +137,7 @@ def sample_step(action, args):
         request_id = spec["run_id"] + ".partition-" + str(offset)
         command = ["partition", reference_spec["path"], str(offset)]
         inputs, budget, output, unit = [reference_spec, spec["input_manifest"]], spec["partition_budget"], "partition.json", "persample.partition"
-        parents = [parent] if parent else []
+        parents = [parent] if parent else spec.get('depends_on', [])
     elif action == "compute":
         entry, parent = args[1:]
         trace["sample_id"] = entry["sample_id"]

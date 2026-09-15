@@ -15,20 +15,35 @@ def validate_spec(spec):
     required = {'run_id', 'dataset_id', 'input', 'output_root', 'pool_root', 'bridge_root',
                 'inspect_budget', 'compute_budget', 'deg_budget', 'tool_budget', 'finalize_budget',
                 'config', 'max_in_flight_deg', 'max_refinements'}
-    if not isinstance(spec, dict) or set(spec) != required:
+    if not isinstance(spec, dict) or set(spec) - {'previous_round', 'depends_on'} != required:
         raise ValueError('Cross-sample needs explicit published input, services and operation budgets')
     identifier(spec['run_id'])
+    if 'depends_on' in spec:
+        from .warm_pool.state import validate_trace
+        validate_trace(dict(workflow_id='cross-sample/' + spec['run_id'], dataset_id=spec['dataset_id'],
+                            unit_id='cross-sample.inspect', depends_on=spec['depends_on']))
     if len(spec['run_id']) > 60 or not isinstance(spec['dataset_id'], str) or not spec['dataset_id'].strip():
         raise ValueError('Use a run ID up to 60 characters and a dataset label')
     output = Path(spec['output_root'])
     if not output.is_absolute() or output.exists():
         raise ValueError('Use a fresh absolute output directory')
     publication = verified(spec['input'])
-    if publication.get('state') != 'complete' or publication.get('failed_samples') or not publication.get('samples'):
-        raise ValueError('Cross-sample requires a completed per-sample publication')
-    metadata = verified(publication['input'])
-    if not metadata.get('sample_mapping'):
-        raise ValueError('Organize must confirm sample mapping first')
+    if 'previous_round' in spec:
+        if type(spec['previous_round']) is not int or spec['previous_round'] < 1:
+            raise ValueError('previous_round must be a positive integer')
+        if publication.get('state') != 'complete' or 'annotated_zmip.h5ad' not in publication.get('files', {}):
+            raise ValueError('Later rounds require a completed Zoom-in publication')
+        prior = verified(publication['planning'])['spec']['config']
+        species, batch = prior['species'], prior['batch_col']
+    else:
+        if publication.get('state') != 'complete' or publication.get('failed_samples') or not publication.get('samples'):
+            raise ValueError('Cross-sample requires a completed per-sample publication')
+        metadata = verified(publication['input'])
+        if not metadata.get('sample_mapping'):
+            raise ValueError('Organize must confirm sample mapping first')
+        from .sample_mapping import SAMPLE_KEY
+        species = metadata['species']
+        batch = (metadata['sample_mapping']['decision'].get('batch_key') or {}).get('column', SAMPLE_KEY)
     pool_root(spec['pool_root'])
     root_path(spec['bridge_root'])
     for name in ('inspect_budget', 'compute_budget', 'deg_budget', 'tool_budget', 'finalize_budget'):
@@ -47,9 +62,7 @@ def validate_spec(spec):
         raise ValueError('Numerical and GPU settings must be positive integers')
     if cfg['compute_backend'] not in {'cpu', 'rapids', 'auto'}:
         raise ValueError('compute_backend must be cpu, rapids or auto')
-    from .sample_mapping import SAMPLE_KEY
-    batch = metadata['sample_mapping']['decision'].get('batch_key', {}).get('column', SAMPLE_KEY)
-    if cfg['species'] != metadata['species'] or cfg['batch_col'] != batch:
+    if cfg['species'] != species or cfg['batch_col'] != batch:
         raise ValueError('Species and sample key must match the accepted Organize manifest')
     if any(not isinstance(cfg[k], str) or not cfg[k].strip() for k in ('tissue', 'batch_col')):
         raise ValueError('Tissue and sample key must be nonempty')
@@ -82,15 +95,16 @@ def crosssample_step(action, args):
     accelerator = {}
     command = [action, *[r['path'] for r in refs]]
     if action == 'inspect':
+        parents = parents or spec.get('depends_on', [])
         command += [str(root / 'spec.json')]
         refs += [reference(root / 'spec.json'), spec['input']]
         budget, output = spec['inspect_budget'], 'inspected.json'
     elif action == 'include-single':
         budget, output = spec['inspect_budget'], 'decision.json'
-    elif action in {'compute', 'refine'}:
+    elif action in {'compute', 'compute-round', 'refine'}:
         budget, output = spec['compute_budget'], 'prepared.json'
         cfg = spec['config']
-        if action == 'compute':
+        if action in {'compute', 'compute-round'}:
             cells = verified(refs[0])['n_input']
             if cfg['compute_backend'] == 'rapids' or cfg['compute_backend'] == 'auto' and cells >= cfg['gpu_min_cells']:
                 accelerator = {'gpu': {'mode': 'required' if cfg['compute_backend'] == 'rapids' else 'preferred', 'memory_mb': cfg['gpu_memory_mb']}}
@@ -115,7 +129,7 @@ def crosssample_step(action, args):
     unit = 'cross-sample.' + (payload['phase'] + '.prepare' if action == 'agent' else action)
     submit(spec['pool_root'], dict(request_id=request_id, operation_id=unit,
            args=['-m', 'ecarsi.crosssample_v2', *command], **budget, **accelerator,
-           inputs=refs + [reference(Path(__file__).with_name('crosssample_v2.py'))], outputs=[output],
+           inputs=refs + [reference(Path(__file__).with_name(name)) for name in ('crosssample_v2.py', 'round_policy.py')], outputs=[output],
            trace=dict(workflow_id='cross-sample/' + spec['run_id'], dataset_id=spec['dataset_id'],
                       unit_id=unit, depends_on=parents)))
     return {'id': request_id, 'output': output}
@@ -148,12 +162,16 @@ class CrosssampleWorkflow:
         self._stage = 'inspecting input'
         inspected, parent = await run_operation('inspect', [], [])
         bundle = await call(crosssample_step, 'read', [inspected])
-        if len(bundle['samples']) == 1:
+        if bundle.get('previous_round'):
+            self._stage = 'reintegrating survivors'
+            prepared, parent = await run_operation('compute-round', [inspected], [parent])
+        elif len(bundle['samples']) == 1:
             inclusion, inclusion_parent = await run_operation('include-single', [inspected], [parent])
         else:
             inclusion, inclusion_parent = await judge('inclusion', inspected, parent)
-        self._stage = 'integrating'
-        prepared, parent = await run_operation('compute', [inspected, inclusion], [inclusion_parent])
+        if not bundle.get('previous_round'):
+            self._stage = 'integrating'
+            prepared, parent = await run_operation('compute', [inspected, inclusion], [inclusion_parent])
         for refinement in range(spec['max_refinements'] + 1):
             self._stage = 'DEG comparisons'
             plan = await call(crosssample_step, 'read', [prepared])

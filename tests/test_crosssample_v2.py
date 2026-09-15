@@ -12,6 +12,30 @@ from ecarsi.persample_v2 import sealed
 from ecarsi.warm_pool.state import save,read
 
 
+def test_later_round_keeps_source_ids_and_archives_labels(tmp_path, monkeypatch):
+    import ecarsi.crosssample_v2 as module
+    data = an.AnnData(np.ones((3, 4)), obs=pd.DataFrame({
+        'source_unit': ['input'] * 3, 'eca_source_cell_id': ['01', '02', '03'],
+        'sample_id': ['A'] * 3, 'msp_ann_coarse': ['old'] * 3,
+        'zmip_ann_fine': ['previous fine'] * 3}, index=['a', 'b', 'c']))
+    data.layers['counts'] = data.X.copy()
+    data.write_h5ad(tmp_path/'annotated_zmip.h5ad')
+    source = sealed(tmp_path, tmp_path/'survivors.json', state='complete', n_survived=3)
+    spec = dict(input=source, previous_round=1, config={'batch_col': 'sample_id'})
+    prepared = tmp_path/'prepared'; prepared.mkdir()
+    module.inspect_input(spec, prepared)
+    integrated = []
+    monkeypatch.setattr(module, 'integrate', lambda data, *args: integrated.append(data))
+    output = tmp_path/'output'; output.mkdir()
+    module.compute_round(reference(prepared/'inspected.json'), output)
+    assert list(integrated[0].obs_names) == ['a', 'b', 'c']
+    assert 'msp_ann_coarse' not in integrated[0].obs and 'r01_msp_ann_coarse' in integrated[0].obs
+    assert list(integrated[0].obs['r01_zmip_ann_fine']) == ['previous fine'] * 3
+    ledger = pd.read_csv(output/'input_cells.csv.gz', dtype=str)
+    assert list(ledger.source_cell_id) == ['01', '02', '03']
+    assert pd.read_csv(output/'sample_exclusions.csv.gz').empty
+
+
 def test_agent_tools_have_valid_worker_contracts(tmp_path):
     for name in ('pool','bridge'):
         root=tmp_path/name;root.mkdir(mode=0o700);save(root/'config.json',{})

@@ -14,9 +14,13 @@ def validate_spec(spec):
     budgets = {'prepare_budget','subset_budget','compute_budget','deg_budget','tool_budget','merge_budget'}
     required = {'run_id','dataset_id','input','output_root','pool_root','bridge_root','config',
                 'max_in_flight_lineages','max_in_flight_deg'} | budgets
-    if not isinstance(spec, dict) or set(spec) != required:
+    if not isinstance(spec, dict) or set(spec) - {'depends_on'} != required:
         raise ValueError('Zoom-in needs explicit input, services and operation budgets')
     identifier(spec['run_id'])
+    if 'depends_on' in spec:
+        from .warm_pool.state import validate_trace
+        validate_trace(dict(workflow_id='zoom-in/' + spec['run_id'], dataset_id=spec['dataset_id'],
+                            unit_id='zoom-in.prepare', depends_on=spec['depends_on']))
     if len(spec['run_id']) > 60 or not isinstance(spec['dataset_id'],str) or not spec['dataset_id'].strip():
         raise ValueError('Use a run ID up to 60 characters and a dataset label')
     if not Path(spec['output_root']).is_absolute() or Path(spec['output_root']).exists():
@@ -67,6 +71,8 @@ def zoomin_step(action,args):
         path=Path(spec['output_root'])/'publication.json'
         immutable(path,{**bundle,'result':reference(args[1])});return str(path)
     spec,payload,parents=args
+    if action == 'prepare':
+        parents = parents or spec.get('depends_on', [])
     root=Path(spec['output_root']);root.mkdir(mode=0o700,parents=True,exist_ok=True)
     immutable(root/'spec.json',spec)
     refs=[reference(path) for path in payload['paths']]
