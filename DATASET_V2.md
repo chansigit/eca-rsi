@@ -47,6 +47,8 @@ At a round boundary, `continue_as_new` bounds the analysis unit's Temporal histo
 
 Each completed round checks both upstream publication identity and cell-count conservation before proceeding. Failed units retain their artifacts and do not cancel successful siblings. Once siblings finish, a dataset with failed units publishes an incomplete record and fails visibly. Unknown external outcomes are not automatically duplicated or treated as successful exclusions.
 
+New Zoom-in histories also let independent lineages finish after another lineage fails. Their accepted computations and annotations remain reusable, but the stage cannot publish a merged success until all selected lineages succeed. A Temporal patch marker preserves replay behavior for histories that already entered the earlier scheduling path.
+
 ## Resume a terminal failure
 
 Ordinary Coordinator/service restarts recover running workflows automatically. A terminal scientific failure first needs its cause corrected and any failed external request reconciled. Then use the same dataset run ID:

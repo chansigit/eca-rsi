@@ -1,5 +1,7 @@
 import asyncio
 from types import SimpleNamespace
+import pytest
+from temporalio.exceptions import ApplicationError
 
 from ecarsi.zoomin_workflow import ZoominWorkflow, zoomin_step
 from ecarsi.warm_pool.state import save, read
@@ -21,7 +23,8 @@ def test_gpu_grant_is_selected_for_lineage_compute(tmp_path):
     assert stored['trace']['depends_on']==['part','markers']
 
 
-def test_model_wait_releases_lineage_compute_admission(monkeypatch):
+@pytest.mark.parametrize('fail_first', [False, True])
+def test_model_wait_releases_lineage_compute_admission(monkeypatch, fail_first):
     import ecarsi.zoomin_workflow as module
     async def scenario():
         second_compute=asyncio.Event();requests={};prepared_count=0;events=[]
@@ -43,6 +46,7 @@ def test_model_wait_releases_lineage_compute_admission(monkeypatch):
             if action=='compute':
                 nonlocal prepared_count
                 prepared_count+=1
+                if fail_first and prepared_count==1:raise RuntimeError('one lineage failed')
                 if prepared_count==2:second_compute.set()
             return request['id']
         async def child(fn,session,**kw):
@@ -53,6 +57,12 @@ def test_model_wait_releases_lineage_compute_admission(monkeypatch):
         monkeypatch.setattr(module,'call',call);monkeypatch.setattr(module,'await_pool',await_pool)
         monkeypatch.setattr(module.workflow,'execute_child_workflow',child)
         monkeypatch.setattr(module.workflow,'info',lambda:SimpleNamespace(workflow_id='zoom-test'))
-        result=await ZoominWorkflow().run(dict(max_in_flight_lineages=1,max_in_flight_deg=2))
-        assert result=='publication' and events.count('compute')==2 and events[-1]=='merge'
+        monkeypatch.setattr(module.workflow,'patched',lambda name:True)
+        if fail_first:
+            with pytest.raises(ApplicationError,match='completed lineages retained'):
+                await ZoominWorkflow().run(dict(max_in_flight_lineages=1,max_in_flight_deg=2))
+            assert second_compute.is_set() and events.count('apply')==1 and 'merge' not in events
+        else:
+            result=await ZoominWorkflow().run(dict(max_in_flight_lineages=1,max_in_flight_deg=2))
+            assert result=='publication' and events.count('compute')==2 and events[-1]=='merge'
     asyncio.run(scenario())

@@ -3,6 +3,7 @@ import asyncio
 from pathlib import Path
 
 from temporalio import activity, workflow
+from temporalio.exceptions import ApplicationError
 
 from .persample_workflow import await_pool, call
 
@@ -149,7 +150,14 @@ class ZoominWorkflow:
                 accepted,accepted_parent=await judge('lineage',evidence,evidence_parent)
                 decision=await call(zoomin_step,'read',[accepted])
                 return await run('apply',[decision['evidence']['path'],accepted],[accepted_parent])
-            results=await asyncio.gather(*[lineage(i) for i in chosen])
+            if workflow.patched('zoomin-preserve-independent-lineages-v1'):
+                results=await asyncio.gather(*[lineage(i) for i in chosen],return_exceptions=True)
+                failures=[r for r in results if isinstance(r,BaseException)]
+                if failures:
+                    raise ApplicationError(f'{len(failures)} lineages failed; completed lineages retained: {failures[0]}',
+                                           non_retryable=True)
+            else:
+                results=await asyncio.gather(*[lineage(i) for i in chosen])
         self._stage='merging lineage results'
         result,_=await run('merge',[prepared,plan]+[r[0] for r in results],[plan_parent]+[r[1] for r in results])
         publication=await call(zoomin_step,'publish',[spec,result])
