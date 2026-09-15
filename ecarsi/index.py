@@ -680,7 +680,8 @@ def dataset_state(root: Path, states: list[dict] | None = None) -> dict:
             "final_cells": sum(final) if final else None, "rounds": max((len(s["rounds"]) for s in states), default=0),
             "species": ", ".join(sorted({str(s["species"]) for s in states if s["species"]})),
             "finished": max(fin) if fin and released == len(states) else None,
-            "updated": state_mtime(root), "stage": stage, "cls": cls}
+            "updated": state_mtime(root), "stage": stage, "cls": cls,
+            "awaiting_start": cls == "queued" or queued.get("dispatch_paused", False)}
 
 
 def _hero(s_cls: str, s_stage: str, title: str, crumb: str = "", sub: str = "", facts=(), next_: str = "") -> str:

@@ -666,6 +666,7 @@ def fleet_history(states: dict) -> dict:
         out[name] = {"collection": s['collection'] if 'collection' in s else index.collection_of(p), "species": s["species"],
                      "organize": [list(e) for e in ev.get("organize", [])], "release": [list(e) for e in ev.get("release", [])],
                      "state": s["cls"], "input_cells": s.get("n_input") or 0,
+                     "awaiting_start": s.get("awaiting_start", s["cls"] == "queued"),
                      "final_cells": s.get("final_cells") or 0}
     return {"datasets": out}
 
@@ -685,9 +686,9 @@ def fleet_totals(hist: dict) -> dict:
     result = history_at(hist, time.time())
     rows = list(hist["datasets"].values())
     result["cells_queued"] = sum(max(0, d["input_cells"] - sum(n for _, n in d["organize"]))
-                                 for d in rows if d["state"] == "queued")
+                                 for d in rows if d["awaiting_start"])
     result["undated_input"] = sum(max(0, d["input_cells"] - sum(n for _, n in d["organize"]))
-                                  for d in rows if d["state"] not in {"queued", "neutral"})
+                                  for d in rows if not d["awaiting_start"] and d["state"] != "neutral")
     released = [d for d in rows if d["state"] == "released"]
     denominator = sum(d["input_cells"] for d in released)
     result["kept"] = 100 * sum(d["final_cells"] for d in released) / denominator if denominator else None
@@ -733,7 +734,7 @@ HISTORY_JS = r"""
     let pending = 0, undated = 0, releasedInput = 0, releasedOutput = 0; const counts = {};
     for(const d of rows){ counts[d.state] = (counts[d.state] || 0)+1;
       const missing = Math.max(0,d.input_cells-d.organize.reduce((s,e)=>s+e[1],0));
-      if(d.state === 'queued') pending += missing; else if(d.state !== 'neutral') undated += missing;
+      if(d.awaiting_start) pending += missing; else if(d.state !== 'neutral') undated += missing;
       if(d.state === 'released'){releasedInput += d.input_cells;releasedOutput += d.final_cells;}}
     const values = {datasets:rows.length,'cells-in':k.cin,'cells-released':k.rel,'cells-queued':pending,
       kept:releasedInput ? (100*releasedOutput/releasedInput).toFixed(0)+'%' : '—'};
