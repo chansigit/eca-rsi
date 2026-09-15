@@ -86,13 +86,12 @@ assert.equal(context.drawFlow(links), 2);
 assert(root.flowSvg.includes('data-workflow="organize/run-a"'));
 assert(root.flowSvg.includes('class="flow-edge"'));
 assert(root.flowSvg.includes('stroke-width="6"'));
-assert(root.flowSvg.includes('M 384 75 C 384 84, 456 86, 456 95'));
+assert(root.flowSvg.includes('M 390 71 C 417 71, 423 99, 450 99'));
 assert(!root.flowSvg.includes('<circle'));
 assert(!root.flowSvg.includes(' Z"'));
 assert(!root.flowSvg.includes('NaN'));
 assert.equal(context.datasetColor('dataset-a'), context.datasetColor('dataset-a'));
-assert.equal(context.connectorPath(10,0,12,20,true), 'M 10 0 C 10 9, 12 11, 12 20');
-assert.equal(context.connectorPath(10,1,20,2,false), 'M 10 1 C 14.5 1, 15.5 2, 20 2');
+assert.equal(context.connectorPath(10,1,20,2), 'M 10 1 C 14.5 1, 15.5 2, 20 2');
 
 context.renderTimeline({since: 0, until: 1000, tasks: [], total: 0, source: 'test', resources:
   Array.from({length: 240}, (_, i) => ({worker_id: 'worker-a', observed_at: i * 4,

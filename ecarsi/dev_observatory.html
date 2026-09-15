@@ -216,11 +216,7 @@ function buildFlowEdges(tasks) {
   }
   return edges;
 }
-function connectorPath(x1,y1,x2,y2,vertical) {
-  if (vertical) {
-    const bend=(y2-y1)*.45;
-    return `M ${x1} ${y1} C ${x1} ${y1+bend}, ${x2} ${y2-bend}, ${x2} ${y2}`;
-  }
+function connectorPath(x1,y1,x2,y2) {
   const bend=(x2-x1)*.45;
   return `M ${x1} ${y1} C ${x1+bend} ${y1}, ${x2-bend} ${y2}, ${x2} ${y2}`;
 }
@@ -236,19 +232,18 @@ function drawFlow(edges) {
     if (!a||!b) continue;
     const first=a.getBoundingClientRect(), second=b.getBoundingClientRect();
     if (first.right<scaleLeft+bounds.left || second.left>scaleRight+bounds.left) continue;
+    const x1=first.right-bounds.left, x2=second.left-bounds.left;
+    if (x2<=x1+2) continue;
     const downward=second.top>first.top+2, upward=first.top>second.top+2;
-    let x1, y1, x2, y2;
+    let y1, y2;
     if (downward||upward) {
-      x1=first.right-bounds.left-6; x2=second.left-bounds.left+6;
-      y1=(downward?first.bottom:first.top)-bounds.top;
-      y2=(downward?second.top:second.bottom)-bounds.top;
+      y1=(downward?first.bottom-4:first.top+4)-bounds.top;
+      y2=(downward?second.top+4:second.bottom-4)-bounds.top;
     } else {
-      x1=first.right-bounds.left; x2=second.left-bounds.left;
       y1=first.top-bounds.top+a.offsetHeight/2; y2=second.top-bounds.top+b.offsetHeight/2;
-      if (x2<=x1+2) continue;
     }
     const color=datasetColor(edge.child.trace.dataset_id);
-    paths.push(`<path class="flow-edge" data-workflow="${esc(edge.child.trace.workflow_id)}" d="${connectorPath(x1,y1,x2,y2,downward||upward)}" fill="none" stroke="${color}" stroke-width="6" vector-effect="non-scaling-stroke"/>`);
+    paths.push(`<path class="flow-edge" data-workflow="${esc(edge.child.trace.workflow_id)}" d="${connectorPath(x1,y1,x2,y2)}" fill="none" stroke="${color}" stroke-width="6" vector-effect="non-scaling-stroke"/>`);
   }
   if (paths.length) {
     root.style.setProperty('--flow-idle-opacity',paths.length>80?'.07':'.22');
