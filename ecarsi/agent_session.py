@@ -1,4 +1,4 @@
-"""Durable agent tool boundaries: Bridge calls models; Pool executes registered programs.
+"""Durable agent tool boundaries: Pool executes model turns and registered programs.
 
 Tools are trusted application registrations, never model-selected commands or budgets.
 The Agents SDK interruption is a machine handoff, not a human approval request.
@@ -6,6 +6,7 @@ The Agents SDK interruption is a machine handoff, not a human approval request.
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 from .warm_pool.state import digest, file_digest, identifier, lock, read, save, validate
 
@@ -118,6 +119,7 @@ def create_session(spec):
         if api not in {"responses", "chat_completions"}:
             raise ValueError("Unsupported Agents API mode")
         save(path, {"spec": spec, "model": models[0], "api_mode": api,
+                    "protocol": 2 if config.get("pool_root") else 1,
                     "sdk_version": agents.__version__, "adapter_sha256": file_digest(Path(__file__))})
     return reference(path)
 
@@ -148,7 +150,30 @@ def validate_turn(spec):
         raise ValueError("Agent session adapter changed")
 
 
-async def run_turn(request, folder):
+def portable_history(items):
+    """Public messages and tool receipts, with no provider-owned response IDs."""
+    result = []
+    for item in items:
+        kind = item.get("type", "message")
+        if kind == "reasoning":
+            continue  # Private provider reasoning is not a portable conversation artifact.
+        if kind == "message":
+            content = item["content"]
+            if isinstance(content, list):
+                content = [{"type": "input_text", "text": part["text"]}
+                           if part["type"] == "output_text" else
+                           {"type": "input_text", "text": part["refusal"]}
+                           if part["type"] == "refusal" else part for part in content]
+            result.append(dict(role=item["role"], content=content))
+        elif kind in {"function_call", "function_call_output"}:
+            keys = ("call_id", "name", "arguments") if kind == "function_call" else ("call_id", "output")
+            result.append(dict(type=kind, **{key: item[key] for key in keys}))
+        else:
+            raise ValueError("Nonportable agent history item: " + kind)
+    return result
+
+
+async def run_turn(request, folder, *, model=None):
     """One model/tool boundary; no registered program can execute in this process."""
     from agents import Agent, FunctionTool, ModelSettings, RunConfig, Runner, RunState
     import agents
@@ -182,7 +207,10 @@ async def run_turn(request, folder):
     tools = [FunctionTool(name=t["name"], description=t["description"],
               params_json_schema=t["parameters"], strict_json_schema=False,
               on_invoke_tool=consume_result, needs_approval=True) for t in policy.values()]
-    chosen = session["model"]
+    chosen = model or session["model"]
+    portable = session.get("protocol", 1) >= 2
+    if chosen != session["model"] and not portable:
+        raise ValueError("Legacy SDK sessions cannot switch model identity")
     provider = next(k for k, v in PROVIDERS.items() if v["harness"] == chosen["harness"])
     if chosen["url"]:
         os.environ[PROVIDERS[provider]["base_env"]] = chosen["url"]
@@ -193,7 +221,19 @@ async def run_turn(request, folder):
                       model_settings=ModelSettings(parallel_tool_calls=False, store=False))
         run_input = "Carry out the task using the registered tools, then report the result."
         before_in = before_out = 0
-        if context:
+        if context and portable:
+            from agents import ItemHelpers
+            from openai.types.responses import ResponseFunctionToolCall
+            reply = verified(context["reply"])["response"]
+            run_input = portable_history(reply["input_history"])
+            for call in reply["calls"]:
+                output = await consume_result(SimpleNamespace(tool_call_id=call["call_id"], tool_name=call["name"]),
+                                              json.dumps(call["arguments"]))
+                tool_call = ResponseFunctionToolCall(type="function_call", **{
+                    **call, "arguments": json.dumps(call["arguments"])})
+                run_input.append(ItemHelpers.tool_call_output_item(tool_call, output))
+            before_in, before_out = context["usage_total"]["tokens_in"], context["usage_total"]["tokens_out"]
+        elif context:
             run_input = await RunState.from_json(agent, context["sdk_state"])
             pending = run_input.get_interruptions()
             if {i.raw_item.call_id for i in pending} != set(results):
@@ -208,7 +248,8 @@ async def run_turn(request, folder):
         result = await Runner.run(agent, run_input, max_turns=session["spec"]["max_turns"],
                                   run_config=RunConfig(tracing_disabled=True))
         usage = result.context_wrapper.usage
-        total = {"tokens_in": usage.input_tokens, "tokens_out": usage.output_tokens}
+        total = {"tokens_in": usage.input_tokens + (before_in if portable else 0),
+                 "tokens_out": usage.output_tokens + (before_out if portable else 0)}
         calls = [{"call_id": i.raw_item.call_id, "name": i.raw_item.name,
                   "arguments": json.loads(i.raw_item.arguments)} for i in result.interruptions]
         response = {"kind": "tools" if calls else "final", "calls": calls,
@@ -217,6 +258,8 @@ async def run_turn(request, folder):
                     "model": chosen, "usage_total": total,
                     "usage": {"tokens_in": total["tokens_in"] - before_in,
                               "tokens_out": total["tokens_out"] - before_out, "cost_usd": None}}
+        if portable:
+            response["input_history"] = portable_history(result.to_input_list())
         # Save the resumable result before executor teardown and the Bridge acknowledgement.
         save(folder / "turn-response.json", response)
         return response

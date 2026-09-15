@@ -1,25 +1,73 @@
 # Agent Bridge: model turns and worker tool handoffs
 
-This development service accepts model work independently of its callers and
-persists replies. `AgentWorkflow` pauses at each tool boundary: Bridge saves the
-Agents SDK state and exits, Coordinator validates and submits the registered
-program to Warm Pool, then Bridge resumes the saved conversation with the
-verified tool result. Worker tool waits occupy no Bridge model slot. Model
-waiting occupies no Pool compute grant. Both paths use the same Bridge admission
-limit and model catalog. New Organize workflows use this path; the legacy
-planning adapter remains for old Temporal histories and explicit legacy requests.
-Production workflows have not been migrated automatically.
+Bridge owns the durable inbox, model health, routing and admission. **All new
+model calls and agent harness execution run as bounded Warm Pool tasks.**
+Coordinator validates tool requests and submits their registered programs as
+separate Pool tasks. Model waits use a small, explicit worker budget; heavy
+programs retain their own CPU/memory/GPU budgets. Waiting for a tool releases the
+Bridge model slot. The Bridge process never imports a provider client in Pool mode.
+
+New sessions use a portable conversation record: public messages, tool calls and
+verified tool results. Switching a model resends the pending model turn with this
+context; it never reruns completed tools. Old SDK sessions keep their pinned
+model and conservative recovery rules.
+
+## Model health and fallback
+
+The model catalog defines calling order. A free, healthy primary is preferred;
+a busy or cooling primary allows the next configured model. Each selected
+attempt has an immutable dispatch record and a separate Pool request. Defaults
+are configurable in the Bridge `config.json` under `routing`:
+
+```json
+{
+  "response_timeout_seconds": 900,
+  "cooldown_seconds": 300,
+  "failure_threshold": 2,
+  "model_concurrency": 2,
+  "max_attempts": 3,
+  "worker_cpus": 1,
+  "worker_memory_mb": 1024
+}
+```
+
+The timeout starts on the Worker, not while waiting for Pool resources. A failed
+portable model turn selects an untried eligible alternative first. Consecutive
+provider failures put that model in cooldown; after cooldown it is eligible for
+a new request. Attempts and retries are bounded. Settings are reread each tick;
+an already dispatched task retains its original resource budget and timeout.
+
+`summary.json.models` exposes state, in-flight admissions, consecutive failures,
+timeouts, last response time, last attempt latency and cooldown expiry. Immutable
+`model-events/*.json` retain every attempt outcome. The observatory displays
+these health records and places model execution on its actual Worker lane.
+
+Timeout does not prove remote inference stopped or was not billed. Safe automatic
+fallback applies to tool-free `agent.turn` calls: only one accepted attempt may
+provide the tool plan. Superseded/late replies cannot execute tools or advance the
+workflow. Legacy harness sessions that can execute arbitrary programs do not
+receive this retry policy. Provider RPM/TPM quotas are not inferred from the
+per-model concurrency limit.
+
+## Service interruption
+
+There is no automatic control-node acquisition or takeover. A person restarts
+Work Coordinator, Warm Pool Scheduler, Agent Bridge and Temporal on an available
+node using their durable shared state. Workers finish already accepted bounded
+work and save receipts while the control services are down. On restart, Bridge
+reconciles the existing Pool request before dispatching anything new.
 
 ## Usage
 
 Use the development worktree and a Python environment containing its existing
 `agent-harness-bridge` dependency. The service and executors must import the same
-worktree. Set credentials in the service launch environment as for the existing
-harness; credentials are not placed in request/config records.
+worktree. Export provider keys in the user's bashrc. Model executors read the selected key
+on the Worker; credentials are not placed in task arguments, config or receipts.
 
 ```bash
 python -m ecarsi.agent_bridge init /absolute/development/bridge \
-  --catalog /absolute/path/model-pool.json --concurrency 2
+  --catalog /absolute/path/model-pool.json --concurrency 4 \
+  --pool-root /absolute/development/pool
 python -m ecarsi.agent_bridge serve /absolute/development/bridge
 ```
 
@@ -53,9 +101,9 @@ boundaries before scientific acceptance.
 `summary.json` contains counts, concurrency and update time. It is a snapshot,
 not a liveness guarantee when the service is stopped. A request remains queued
 if the catalog is invalid; dispatch errors are recorded in its private log.
-It also separates `running`, `unresolved`, and `available` slots. An uncertain
-provider operation reserves capacity until its outcome can be reconciled;
-an idle local process count is not proof that provider capacity is free.
+It also separates `running`, `unresolved`, and `available` slots. Legacy uncertain
+executions retain capacity until reconciled. Portable model attempts follow the
+bounded fallback policy above.
 
 The dispatcher caches terminal `reply_saved`/`failed` records in memory and
 rebuilds that cache from disk after restart. It continues checking queued,
@@ -67,7 +115,7 @@ the dispatcher replacement finished normally. This measures dispatch overhead,
 not model inference speed or end-to-end scientific throughput.
 The first 24 subsequent model requests had a median admission delay of 0.50 seconds.
 
-The dispatcher automatically recovers a subsequently available saved response
+For legacy local executions, the dispatcher automatically recovers a subsequently available saved response
 for an uncertain request, without another model call. If no response is
 recoverable, an operator or provider-side reconciler must first confirm that
 the remote execution has stopped, then record that evidence:
@@ -83,7 +131,7 @@ the uncertain state, request identity and confirmation reason, and the request
 becomes failed so unrelated queued work can use the slot. It does not retry
 the affected model call, fabricate a successful reply, or resume its failed
 workflow. Elapsed time alone is insufficient confirmation. Provider-specific
-automatic lookup/cancellation and safe model-request retry remain open work.
+automatic lookup/cancellation remains separate from the portable-turn fallback policy.
 
 ## Recovery and limits
 
@@ -144,9 +192,9 @@ Repeated activity delivery returns the existing request. Failed, cancelled,
 unknown or modified outputs cannot resume a model session. Tool failure stops
 the workflow visibly; automatic tool retries/replanning remain separate work.
 
-The session pins its initial catalog model/endpoint, API mode, SDK version and
-adapter hash. Changing those identities requires an explicit new session;
-cross-provider continuation/fallback is not implemented for this new adapter.
+The session pins its API mode, SDK version and adapter hash. Protocol 2 sessions
+select models from the current catalog and carry portable accepted context across
+model changes; legacy sessions retain their initial model/endpoint.
 SDK state and tool outputs survive process replacement on shared storage. If a
 model caller disappears before its response is saved, the existing conservative
 `unknown_external_result` handling still applies. A saved interruption response
@@ -186,13 +234,13 @@ comparisons. Labels remain the identity cue for large collections.
   or transcript remains explicitly unknown. Without a saved reply/proposal it
   becomes `unknown_external_result`.
   It is not retried and conservatively retains a capacity slot because provider
-  work may still exist. Automated provider reconciliation / explicit resolution
-  is not implemented yet. This limitation prevents claiming unattended production
+  work may still exist. Automated provider reconciliation is not implemented; `confirm-stopped`
+  provides explicit resolution. This limitation prevents claiming unattended production
   readiness; do not erase state or invent a new ID to bypass it.
 - Legacy Organize requests still hold a slot for the complete planning session,
   including harness retries. New `agent.turn` requests hold it only until the
-  next worker-tool boundary or final response. Provider/account-specific quotas,
-  uncertain-call reconciliation and general cancellation remain unimplemented.
+  next worker-tool boundary or final response. Per-model concurrency and cooldown apply in Pool mode; provider/account RPM/TPM
+  accounting and general workflow cancellation remain separate work.
 - The existing harness controls its internal timeouts/fallbacks. Killing a local
   caller does not establish whether the provider completed or billed a request.
 - A changed planning adapter fails before calling a provider. Full dependency
@@ -206,7 +254,7 @@ comparisons. Labels remain the identity cue for large collections.
 LC_ALL=C LANG=C OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
   python -m unittest discover -s tests -p test_durable_agent_bridge.py -v
 LC_ALL=C LANG=C PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-  python -m pytest -q tests/test_agent_session.py
+  python -m pytest -q tests/test_agent_session.py tests/test_agent_dispatch.py
 ```
 
 Tests cover adapter handoff, unknown usage, duplicate submissions, conflicting
@@ -224,3 +272,18 @@ A rejection returns to the saved model conversation for correction. Merely
 returning prose does not supply Organize's required accepted plan.
 New Organize runs use `inspect_source` and `submit_plan` under `organize.plan`.
 The validated output is then passed by reference to `organize.execute`.
+
+### Worker routing acceptance (2026-09-15)
+
+Three concurrent Temporal Agent workflows completed six real model turns (four
+Turbo, two Pro) and exactly three registered worker programs. The calls executed
+on `sh03-01n54` and `sh04-14n18`; every program returned the verified sum 500500.
+A separate recovery check stopped Bridge after a Worker accepted a model call.
+The Worker saved its successful receipt while Bridge was down; restarting Bridge
+resumed the same workflow to completion. This does not claim provider-side
+cancellation or a sustained scientific throughput benchmark.
+
+Evidence is under `durable-control-20260915/agent-worker-acceptance` in the shared
+v2 run directory: `real-acceptance.json` and `bridge-inflight-recovery.json`.
+The container regression passed 29 tests, including local HTTP timeout/fallback,
+portable tool and image continuation, model health and the existing Bridge tests.

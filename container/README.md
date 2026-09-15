@@ -1,5 +1,23 @@
 # Container environment for the ecarsi chain
 
+## Worker model calls
+
+[Agent Worker manifest](agent-worker-runtime-20260915.json) extends the pinned
+science image with `/opt/rsi-control` from the pinned control image. Its Python
+path puts `/opt/rsi-control` before `/opt/rsi-python`, so Bridge and Worker use
+the same harness/SDK dependencies. NumPy, SciPy and scientific kernels come from
+`/opt/rsi-python`; the control directory contains no numerical stack.
+Model clients and registered scientific tools can therefore run on the same
+allocation without using a host Python environment.
+
+To rebuild, extract both recorded source images with `apptainer build --sandbox`,
+copy the control image's `/opt/rsi-control` into the science sandbox, and pack it
+with `LC_ALL=C LANG=C apptainer build --mksquashfs-args '-processors 2'`.
+Record the resulting SIF hash. Run `configure-runtime` inside that image before
+rejoining idle workers with `add-worker`; running tasks retain their original
+runtime identity. Workers load model credentials from user shell configuration
+only in model executor processes, never in request manifests.
+
 ## V2 control runtime
 
 The [control manifest](control-runtime-20260915.json) records the base SIF,

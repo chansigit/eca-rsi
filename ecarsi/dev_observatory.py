@@ -100,9 +100,15 @@ def task_timeline(pool_rows: list[dict], bridge_rows: list[dict], since: float, 
                   dataset: str = "", limit: int = 2000, dataset_page: int | None = None) -> dict:
     """Generic, bounded timeline from explicit trace metadata and durable receipts."""
     tasks = []
+    # Bridge is the logical inbox; its Pool attempts are the actual execution bars.
+    aliases = {row["id"]: row["pool_attempts"][-1] for row in bridge_rows if row.get("pool_attempts")}
     for service, rows in (("pool", pool_rows), ("bridge", bridge_rows)):
         for item in rows:
+            if service == "bridge" and item["id"] in aliases:
+                continue
             trace = item.get("trace")
+            if trace:
+                trace = {**trace, "depends_on": [aliases.get(p, p) for p in trace.get("depends_on", [])]}
             source = "explicit"
             if trace is None:
                 run_id, dot, _ = item["id"].rpartition(".")
@@ -291,10 +297,17 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
                 "started_at": item.get("started_at"),
                 "finished_at": item.get("finished_at"),
                 "model": response.get("model"), "usage": response.get("usage"),
+                "pool_attempts": [a["pool_request_id"] for a in item.get("attempts", [])],
+                "host": (item.get("worker") or {}).get("host"),
             }
             bridge_rows.append(row)
             if row["state"] in {"reply_saved", "failed"}:
                 bridge_done[folder.name] = row
+    pool_by_id = {row["id"]: row for row in pool_rows}
+    for row in bridge_rows:
+        for pool_id in row.get("pool_attempts", []):
+            if pool_id in pool_by_id:
+                pool_by_id[pool_id]["model"] = row["model"]
     outputs = []
     for publication in sorted(root.glob("organize-v2-*/*-output/publication.json")):
         output = publication.parent

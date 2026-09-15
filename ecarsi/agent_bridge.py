@@ -77,7 +77,7 @@ def root_path(root):
     return root
 
 
-def init(root, catalog, concurrency=2):
+def init(root, catalog, concurrency=2, *, pool_root=None):
     if type(concurrency) is not int or concurrency < 1:
         raise ValueError("concurrency must be a positive integer")
     catalog = str(Path(catalog).resolve(strict=True))
@@ -87,6 +87,9 @@ def init(root, catalog, concurrency=2):
         raise ValueError("Bridge root must be user-owned with mode 0700")
     with lock(root / "init.lock"):
         config = {"catalog": catalog, "concurrency": concurrency}
+        if pool_root is not None:
+            from .warm_pool.state import pool_root as verified_pool
+            config["pool_root"] = str(verified_pool(pool_root))
         previous = read(root / "config.json")
         if previous is not None and previous != config:
             raise ValueError("Bridge is already initialized with another configuration")
@@ -272,6 +275,9 @@ def launch(root, folder, catalog):
 
 def serve(root, *, once=False):
     root = root_path(root)
+    if read(root / "config.json").get("pool_root"):
+        from .agent_dispatch import serve as serve_pool
+        return serve_pool(root, once=once)
     children, finished = {}, {}
     with lock(root / "service.lock", blocking=False):
         while True:
@@ -347,6 +353,7 @@ def main():
     p.add_argument("root")
     p.add_argument("--catalog", required=True)
     p.add_argument("--concurrency", type=int, default=2)
+    p.add_argument("--pool-root", required=True, help="Pool for all model and harness execution")
     p = commands.add_parser('confirm-stopped', help='reconcile an uncertain call after confirming remote execution has stopped')
     p.add_argument('root')
     p.add_argument('request_id')
@@ -360,7 +367,7 @@ def main():
             p.add_argument("request_id")
     args = parser.parse_args()
     if args.command == "init":
-        init(args.root, args.catalog, args.concurrency)
+        init(args.root, args.catalog, args.concurrency, pool_root=args.pool_root)
     elif args.command == "serve":
         serve(args.root)
     elif args.command == "_execute":

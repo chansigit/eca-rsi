@@ -211,7 +211,8 @@ def test_completion_tool_and_business_trace(tmp_path):
         agent_step("cached_completion", [ref])
 
 
-def test_worker_images_and_state_survive_sdk_continuation(tmp_path):
+@pytest.mark.parametrize("portable", [False, True])
+def test_worker_images_and_state_survive_sdk_continuation(tmp_path, portable):
     from harness_bridge import _harness_openai as adapter
     class VisionModel(ScriptedModel):
         async def get_response(self, **kwargs):
@@ -223,6 +224,9 @@ def test_worker_images_and_state_survive_sdk_continuation(tmp_path):
                     usage=Usage(requests=1, input_tokens=10, output_tokens=4), response_id="response-2")
             return await super().get_response(**kwargs)
     spec, _ = setup(tmp_path)
+    if portable:
+        config_path = Path(spec["bridge_root"]) / "config.json"
+        save(config_path, {**read(config_path), "pool_root": spec["pool_root"]})
     initial = session.immutable(tmp_path / "initial.json", {"version": 0})
     later = session.immutable(tmp_path / "later.json", {"version": 1})
     spec = {**spec, "session_id": "vision", "output_root": str(tmp_path / "vision"), "tool_state": initial,
