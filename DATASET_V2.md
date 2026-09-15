@@ -109,3 +109,28 @@ A Pool export of the completed Uterus first-round artifacts succeeded on `sh04-1
 The in-progress timing audit (`acceptance-timing.json`, filtered by these workflow IDs) found median Pool queue delays of 3.6–3.9 seconds. Repeated model evidence requests dominate these small runs: cross-sample guidance now explicitly describes the existing all-cluster `check_genes` mode and bounded marker panels, in addition to batched DEG SQL. Saved sessions retain their original prompts. This is a targeted reduction in avoidable round trips, not a measured sustained-throughput improvement. Versioned support for multiple tool requests per model reply remains a next step; the current adapter explicitly asks for one at a time.
 
 Remaining production gates include large-dataset budget/history calibration, legacy release presentation, consolidation of upstream-standardization review advisories, and sustained multi-dataset throughput. The `forced_release` flag refers only to the convergence safety cap. Ordinary Coordinator or Temporal service interruption while a workflow is running is recovered through the [shared control service](DURABLE_CONTROL.md), and does not require dataset resubmission.
+
+### Full-size concurrent acceptance (started 2026-09-15)
+
+The active test submits all 28 existing Tabula Sapiens clean tissue datasets
+(1,084,377 cells, 3,055–126,016 per dataset), without subsampling. It uses automatic
+round convergence, the normal Zoom-in minimum of 800 cells, real Turbo/Pro calls,
+and the three existing CPU allocations. The requested GPU allocation is pending;
+this run cannot yet establish GPU performance.
+
+The first batch exposed eager AnnData layer loading in Organize metadata reads:
+Lung, Bladder, Fat and Lymph Node exceeded their 4 GiB preparation budgets. The
+shared HDF5 reader now slices counts and reads obs directly. Full count validation,
+input identities, cell conservation and complete-experiment checks remain enabled.
+All four failed preparations subsequently succeeded under the unchanged 4 GiB
+limit, with peak RSS 540–669 MiB. Front-pipeline, downstream, Organize publication
+and Agent dispatch/cancellation regression checks passed (65 distinct tests).
+
+The first batch is retained as `scale-acceptance-20260915` for diagnosis. Its running
+workflows and pending calls were explicitly terminated/cancelled before changing
+pinned tool source. The full batch restarted with fresh IDs and output directories
+under `scale-acceptance-20260915-v2`. This is an ongoing acceptance run, not a claim
+that all scientific workflows have completed. `manifest.json` records all inputs
+and budgets; `status.json` and `throughput.jsonl` record workflow, operation, model
+and worker status every minute. Preparation receipts and memory measurements are
+in `durable-control-20260915/metadata-pool-check-results.json`.

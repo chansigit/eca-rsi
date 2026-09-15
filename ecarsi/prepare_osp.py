@@ -12,10 +12,7 @@ from ecarsi.run_state import digest, file_identity, read_json, write_json, write
 def metadata_data(path):
     """Reuse the existing H5AD reader without AnnData's eager layers."""
     from ecarsi.downstream import _data
-    result = _data(path)
-    result.layers = {'counts': result.counts}
-    result.shape = (result.n_obs, result.n_vars)
-    return result
+    return _data(path)
 
 
 def source_profiles(source):

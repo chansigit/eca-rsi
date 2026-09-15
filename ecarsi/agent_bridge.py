@@ -153,6 +153,26 @@ def status(root, request_id):
     return {"request_id": request_id, "submitted_at": request["submitted_at"], **state}
 
 
+def cancel(root, request_id):
+    """Stop queued/Pool-backed calls; preserve every completed reply and attempt."""
+    root = root_path(root)
+    folder = root / "requests" / identifier(request_id)
+    with lock(folder / "request.lock"):
+        record = status(root, request_id)
+        if record["state"] in {"reply_saved", "failed"}:
+            return record
+        if record["state"] != "queued" and record.get("execution") != "pool":
+            raise ValueError("Legacy external execution requires explicit reconciliation")
+        from .warm_pool.state import cancel as cancel_pool
+        for attempt in record.get("attempts", []):
+            try:
+                cancel_pool(record["pool_root"], attempt["pool_request_id"])
+            except KeyError:
+                pass  # Dispatch intent was saved, but no Pool task was submitted.
+        save(folder / "result.json", dict(state="failed", reason="cancelled", finished_at=time.time()))
+    return status(root, request_id)
+
+
 def run_organize(request, *, folder=None):
     from .plan import _propose, _validate, validate_sample_mapping
     spec = request["spec"]
@@ -358,12 +378,12 @@ def main():
     p.add_argument('root')
     p.add_argument('request_id')
     p.add_argument('--reason', required=True)
-    for name in ("serve", "submit", "status", "_execute"):
+    for name in ("serve", "submit", "status", "cancel", "_execute"):
         p = commands.add_parser(name)
         p.add_argument("root")
         if name == "submit":
             p.add_argument("request_file")
-        if name in {"status", "_execute"}:
+        if name in {"status", "cancel", "_execute"}:
             p.add_argument("request_id")
     args = parser.parse_args()
     if args.command == "init":
@@ -377,7 +397,8 @@ def main():
         print(json.dumps(confirm_stopped(args.root, args.request_id, reason=args.reason), ensure_ascii=True))
     else:
         import json
-        result = submit(args.root, read(args.request_file)) if args.command == "submit" else status(args.root, args.request_id)
+        result = (submit(args.root, read(args.request_file)) if args.command == "submit" else
+                  cancel(args.root, args.request_id) if args.command == "cancel" else status(args.root, args.request_id))
         print(json.dumps(result, ensure_ascii=True))
 
 

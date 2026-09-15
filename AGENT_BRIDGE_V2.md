@@ -287,3 +287,13 @@ Evidence is under `durable-control-20260915/agent-worker-acceptance` in the shar
 v2 run directory: `real-acceptance.json` and `bridge-inflight-recovery.json`.
 The container regression passed 29 tests, including local HTTP timeout/fallback,
 portable tool and image continuation, model health and the existing Bridge tests.
+
+### Cancel a request
+
+`python -m ecarsi.agent_bridge cancel BRIDGE_ROOT REQUEST_ID` cancels a queued or
+Pool-dispatched call and records a terminal cancellation. It also requests Pool
+cancellation for its attempts. Dispatch and result acceptance share the request
+lock, so a cancelled call cannot publish a late reply or start another attempt.
+An already accepted reply is preserved. Provider-side inference or billing may
+continue after local cancellation. Legacy execution with an uncertain external
+outcome still requires explicit reconciliation.

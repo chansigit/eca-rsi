@@ -134,7 +134,7 @@ def load_evidence(unit: dict, obs):
 
 
 def inspect_unit(unit: dict) -> dict:
-    import anndata as ad
+    from .downstream import _data
 
     result = read_json(Path(unit["standardize_result"]))
     state = result_state(result, "standardize")
@@ -147,7 +147,7 @@ def inspect_unit(unit: dict) -> dict:
         return record
     if not isinstance(result.get("output"), str) or Path(result["output"]).name != h5.name:
         raise ValueError("result does not declare standardized.h5ad output")
-    a = ad.read_h5ad(h5, backed="r")
+    a = _data(h5, min_vars=1)
     try:
         validate_matrix(a, result)
         if set(RESERVED) & set(a.obs.columns) or "source_unit" in a.obs:
@@ -164,21 +164,17 @@ def inspect_unit(unit: dict) -> dict:
 
 def snapshot(record: dict, target: Path) -> None:
     """Self-contained result JSON, derived TSV and complete source obs metadata."""
-    import anndata as ad
+    from .design import _obs
     import shutil
 
     target.mkdir(parents=True, exist_ok=True)
     write_json(target / "standardize.json", record["standardize"])
     write_json(target / "identify_columns.json", record.get("identify_columns", {}))
-    a = ad.read_h5ad(record["h5ad"], backed="r")
-    try:
-        _, values, _ = load_evidence(record, a.obs)
-        obs = a.obs.copy()
-        for col, s in values.items():
-            obs[col] = s
-        obs.to_csv(target / "source_obs.csv.gz", index_label="cell_id")
-    finally:
-        a.file.close()
+    obs = _obs(record["h5ad"])
+    _, values, _ = load_evidence(record, obs)
+    for col, s in values.items():
+        obs[col] = s
+    obs.to_csv(target / "source_obs.csv.gz", index_label="cell_id")
     for role, f in record.get("derived_files", {}).items():
         shutil.copyfile(f["path"], target / f"{role}.tsv")
 

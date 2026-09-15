@@ -118,6 +118,25 @@ def test_worker_timeout_fallback_continuation_and_dispatcher_recovery(tmp_path):
         # Repeated service replacement neither repeats calls nor double-counts timeouts.
         bridge.serve(root, once=True)
         assert len(calls) == 3 and len(list((root/'model-events').glob('*.json'))) == 3
+        # Completed replies are immutable; cancellation fences pending and late attempts.
+        assert bridge.cancel(root, next_id)['state'] == 'reply_saved'
+        pending_ref = session.create_session(dict(spec, session_id='cancel-active', output_root=str(tmp_path/'cancel-active')))
+        pending = session.submit_turn(pending_ref, 0)
+        bridge.serve(root, once=True)
+        attempt = bridge.status(root, pending)['attempts'][-1]
+        assert bridge.cancel(root, pending)['reason'] == 'cancelled'
+        folder = root/'requests'/pending
+        before = read(folder/'result.json')
+        dispatch.reconcile_pool(root, folder, read(root/'config.json'), {})
+        assert dispatch.dispatch(root, folder, read(root/'config.json'), models[2]) is None
+        assert read(folder/'result.json') == before
+        assert (pool/'requests'/attempt['pool_request_id']/'cancel.json').is_file()
+        queued_ref = session.create_session(dict(spec, session_id='cancel-queued', output_root=str(tmp_path/'cancel-queued')))
+        queued = session.submit_turn(queued_ref, 0)
+        assert bridge.cancel(root, queued)['reason'] == 'cancelled'
+        bridge.serve(root, once=True)
+        assert not bridge.status(root, queued).get('attempts')
+
     finally:
         server.shutdown(); server.server_close(); thread.join()
 

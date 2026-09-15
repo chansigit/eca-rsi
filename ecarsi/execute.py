@@ -88,15 +88,11 @@ def _barcode_overlap_warnings(parts: list[tuple[str, "ad.AnnData"]]) -> list[str
 def _conservation_audit(units_by_name: dict, plan: dict) -> dict:
     """Every input cell must land in exactly one analysis unit — no cell
     silently dropped by a filter gap, none double-counted by overlapping
-    filters, no source file omitted from the plan. Backed reads (obs only),
+    filters, no source file omitted from the plan. Metadata-only reads,
     runs BEFORE anything is written; any violation aborts the whole run."""
-    import anndata as ad
+    from .design import _obs
 
-    src_obs = {}  # obs is in-memory even in backed mode; one read per source
-    for src, u in units_by_name.items():
-        a = ad.read_h5ad(u["h5ad"], backed="r")
-        src_obs[src] = a.obs
-        a.file.close()
+    src_obs = {src: _obs(u["h5ad"]) for src, u in units_by_name.items()}
 
     taken: dict[str, list[set]] = {src: [] for src in units_by_name}
     unit_expected: dict[str, int] = {}
@@ -132,35 +128,31 @@ def _conservation_audit(units_by_name: dict, plan: dict) -> dict:
 
 def _experiment_audit(units_by_name: dict, plan: dict) -> dict:
     """Before writing, prove each source experiment lands in one analysis unit."""
-    import anndata as ad
+    from .design import _obs
     from .upstream import normalize
 
     across = {}
     for source, record in units_by_name.items():
-        a = ad.read_h5ad(record["h5ad"], backed="r")
-        try:
-            obs = a.obs
-            decision = plan["sample_mapping"][source]
-            col = decision["sample_column"]
-            values = normalize(obs[col]) if col is not None else None
-            if values is not None and values.isna().any():
-                raise ValueError(f"{source}: experiment column leaves cells unassigned")
-            owners = {}
-            for au in plan["analysis_units"]:
-                for member in au["members"]:
-                    if member["source"] != source:
-                        continue
-                    mask = _keep_mask(obs, member.get("obs_filter"))
-                    selected = obs.index if mask is None else obs.index[mask]
-                    selected_values = {"all"} if col is None else set(values.loc[selected].astype(str))
-                    for value in selected_values:
-                        if value in owners and owners[value] != au["name"]:
-                            raise ValueError(f"{source}/{value}: organize split a complete experiment "
-                                             f"between {owners[value]} and {au['name']}")
-                        owners[value] = au["name"]
-            across[source] = {"experiments": len(owners), "complete": True}
-        finally:
-            a.file.close()
+        obs = _obs(record["h5ad"])
+        decision = plan["sample_mapping"][source]
+        col = decision["sample_column"]
+        values = normalize(obs[col]) if col is not None else None
+        if values is not None and values.isna().any():
+            raise ValueError(f"{source}: experiment column leaves cells unassigned")
+        owners = {}
+        for au in plan["analysis_units"]:
+            for member in au["members"]:
+                if member["source"] != source:
+                    continue
+                mask = _keep_mask(obs, member.get("obs_filter"))
+                selected = obs.index if mask is None else obs.index[mask]
+                selected_values = {"all"} if col is None else set(values.loc[selected].astype(str))
+                for value in selected_values:
+                    if value in owners and owners[value] != au["name"]:
+                        raise ValueError(f"{source}/{value}: organize split a complete experiment "
+                                         f"between {owners[value]} and {au['name']}")
+                    owners[value] = au["name"]
+        across[source] = {"experiments": len(owners), "complete": True}
     return across
 
 
@@ -244,7 +236,8 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
         udir.mkdir(parents=True, exist_ok=True)
         tmp = udir / "organized.tmp.h5ad"
         merged.write_h5ad(tmp)  # never in place: tmp + rename
-        check = ad.read_h5ad(tmp, backed="r")
+        from .downstream import _data
+        check = _data(tmp, min_vars=1)
         try:
             if check.shape != merged.shape or not check.obs_names.equals(merged.obs_names):
                 raise ValueError(f"organized H5AD failed readback: {name}")

@@ -52,7 +52,7 @@ def planning_spec(spec, prepared_path):
             cpus=spec["prepare_cpus"], memory_mb=spec["prepare_memory_mb"],
             timeout_seconds=spec["prepare_timeout_seconds"],
             inputs=[reference(prepared_path), *[reference(package / p) for p in (
-                "organize_v2.py", "plan.py", "execute.py", "upstream.py")]],
+                "organize_v2.py", "plan.py", "execute.py", "upstream.py", "downstream.py", "design.py")]],
             outputs=["result.json"], result_file="result.json"))
     prompt = (package / "prompts/plan.md").read_text() + "\n\n" + (package / "prompts/organize_v2.md").read_text()
     prompt += ("\n\n## Worker tools\nYou have no local filesystem or code execution. "
@@ -88,16 +88,13 @@ def plan_tool(name, prepared_path, arguments_path, destination):
             else:
                 if column not in profile["obs_columns"]:
                     raise ValueError("Column is not present in this source")
-                import anndata as ad
-                a = ad.read_h5ad(profile["h5ad"], backed="r")
-                try:
-                    counts = normalize(a.obs[column]).value_counts()
-                    offset = arguments["offset"]
-                    result = {"source": profile["name"], "column": column, "offset": offset,
-                              "total_values": len(counts), "n_na": int(normalize(a.obs[column]).isna().sum()),
-                              "value_counts": {str(k): int(v) for k, v in counts.iloc[offset:offset + 100].items()}}
-                finally:
-                    a.file.close()
+                from .design import _obs
+                values = normalize(_obs(profile["h5ad"])[column])
+                counts = values.value_counts()
+                offset = arguments["offset"]
+                result = {"source": profile["name"], "column": column, "offset": offset,
+                          "total_values": len(counts), "n_na": int(values.isna().sum()),
+                          "value_counts": {str(k): int(v) for k, v in counts.iloc[offset:offset + 100].items()}}
         elif name == "submit_plan":
             plan = json.loads(arguments["plan_json"])
             validate(plan, PLAN_SCHEMA)

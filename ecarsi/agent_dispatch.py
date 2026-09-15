@@ -88,6 +88,13 @@ def record_event(root, folder, attempt, outcome, *, elapsed=None, model_failure=
 
 
 def dispatch(root, folder, config, model):
+    with lock(folder / "request.lock"):
+        if read(folder / "result.json") is not None:
+            return None
+        return _dispatch(root, folder, config, model)
+
+
+def _dispatch(root, folder, config, model):
     """Persist intent before enqueueing so dispatcher replacement cannot duplicate a turn."""
     from .agent_session import immutable
     request = read(folder / "request.json")
@@ -121,6 +128,12 @@ def enqueue(folder, config, attempt):
 
 
 def reconcile_pool(root, folder, config, events):
+    with lock(folder / "request.lock"):
+        if read(folder / "result.json") is None:
+            _reconcile_pool(root, folder, config, events)
+
+
+def _reconcile_pool(root, folder, config, events):
     """Accept one attempt's fenced output; late alternatives never publish Bridge replies."""
     from .agent_session import verified
     state = read(folder / "state.json")
@@ -195,8 +208,10 @@ def serve(root, *, once=False):
                     try:
                         reconcile_pool(root, folder, config, events)
                     except (ValueError, KeyError, StopIteration) as exc:
-                        save(folder / "result.json", dict(state="failed", reason="invalid_attempt_receipt",
-                             error=type(exc).__name__, finished_at=time.time()))
+                        with lock(folder / "request.lock"):
+                            if read(folder / "result.json") is None:
+                                save(folder / "result.json", dict(state="failed", reason="invalid_attempt_receipt",
+                                     error=type(exc).__name__, finished_at=time.time()))
                     except OSError as exc:
                         error = type(exc).__name__
                     state = bridge_status(root, folder.name)
@@ -223,7 +238,8 @@ def serve(root, *, once=False):
                     if fresh or ready:
                         selected = (fresh or ready)[0]
                         attempt = dispatch(root, folder, config, selected["model"])
-                        active[model_key(attempt["model"])] += 1
+                        if attempt:
+                            active[model_key(attempt["model"])] += 1
                 except Exception as exc:
                     error = type(exc).__name__
                     save(folder / "dispatch-error.json", dict(error=error, observed_at=time.time()))

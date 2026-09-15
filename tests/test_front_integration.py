@@ -494,3 +494,21 @@ def test_separate_osp_dispatch_preserves_identity_and_finalizes(tmp_path, monkey
     after = read_json(L.persample_root(unit)/L.MANIFEST)
     assert calls == [2] and before['identity'] == after['identity']
     assert before['samples'] == after['samples']
+
+
+def test_organize_prepare_reads_counts_in_chunks_without_eager_layers(tmp_path, monkeypatch):
+    from ecarsi.organize_v2 import prepare
+    from ecarsi.design import _obs
+    step = source(tmp_path / "inputs", n=5000)
+    def no_eager_read(*args, **kwargs):
+        raise AssertionError("Organize preparation must not load AnnData layers")
+    monkeypatch.setattr(ad, "read_h5ad", no_eager_read)
+    prepared = prepare(tmp_path / "inputs", tmp_path / "prepared.json")
+    assert prepared["profiles"][0]["n_obs"] == 5000
+    assert len(_obs(step / "standardized.h5ad")) == 5000
+    # A bad value beyond the first validation chunk must still be rejected.
+    import h5py
+    with h5py.File(step / "standardized.h5ad", "r+") as handle:
+        handle["layers/counts/data"][-1] = float("nan")
+    with pytest.raises(ValueError, match="non-finite"):
+        prepare(tmp_path / "inputs", tmp_path / "bad.json")
