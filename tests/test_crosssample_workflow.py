@@ -1,0 +1,65 @@
+"""Bounded numerical work must finish before type -> quality -> publication."""
+import asyncio
+from types import SimpleNamespace
+
+import pytest
+
+from ecarsi.crosssample_workflow import CrosssampleWorkflow, crosssample_step, validate_spec
+from ecarsi.agent_session import reference
+from ecarsi.warm_pool.state import save, read, validate_trace
+
+
+def test_gpu_selection_and_large_fanin(tmp_path):
+    pool=tmp_path/'pool';pool.mkdir(mode=0o700);(pool/'requests').mkdir()
+    save(pool/'config.json',{'runtime':{}})
+    save(tmp_path/'inspected.json',{'n_input':10000})
+    save(tmp_path/'inclusion.json',{})
+    budget=dict(cpus=1,memory_mb=1024,timeout_seconds=100)
+    spec=dict(run_id='cross-test',dataset_id='D',output_root=str(tmp_path/'out'),pool_root=str(pool),
+              compute_budget=budget,config=dict(compute_backend='auto',gpu_min_cells=5000,gpu_memory_mb=4096))
+    task=crosssample_step('compute',[spec,{'paths':[str(tmp_path/'inspected.json'),str(tmp_path/'inclusion.json')]},['included']])
+    request=read(pool/'requests'/task['id']/'request.json')['spec']
+    assert request['gpu']==dict(mode='preferred',memory_mb=4096)
+    trace={**request['trace'],'depends_on':['deg-'+str(i) for i in range(100)]}
+    assert validate_trace(trace)==trace
+    with pytest.raises(ValueError):validate_trace({**trace,'depends_on':['d'+str(i) for i in range(4097)]})
+
+
+def test_workflow_fanout_and_annotation_order(monkeypatch):
+    import ecarsi.crosssample_workflow as module
+    async def scenario():
+        active=peak=0;events=[];requests={}
+        async def call(fn,action,args):
+            if action=='read':
+                path=args[0]
+                if path=='inspect':return {'samples':[{},{}]}
+                if path=='compute':return {'tasks':list(range(8))}
+                if path.startswith('agent'):return {'session_id':path}
+                if path=='decision-quality':return {}
+                raise AssertionError(path)
+            if action=='accepted':return {'path':args[0],'parent':args[0]}
+            if action=='publish':events.append('publish');return 'publication'
+            _,payload,parents=args
+            name=action+('-'+payload['phase'] if action=='agent' else '-'+str(payload['index']) if action=='deg' else '')
+            requests[name]=(payload,parents);events.append(name)
+            return {'id':name,'output':name}
+        async def await_pool(spec,request):
+            nonlocal active,peak
+            if request['id'].startswith('deg-'):
+                active+=1;peak=max(peak,active)
+                await asyncio.sleep(.001)
+                active-=1
+            return request['id']
+        async def child(fn,session,**kwargs):return 'decision-'+session['session_id'].split('-')[1]
+        monkeypatch.setattr(module,'call',call);monkeypatch.setattr(module,'await_pool',await_pool)
+        monkeypatch.setattr(module.workflow,'execute_child_workflow',child)
+        monkeypatch.setattr(module.workflow,'info',lambda:SimpleNamespace(workflow_id='cross-sample/test'))
+        monkeypatch.setattr(module.workflow,'wait',asyncio.wait)
+        workflow=CrosssampleWorkflow()
+        assert await workflow.run({'max_in_flight_deg':3,'max_refinements':0})=='publication'
+        assert peak==3 and events.index('assemble')>events.index('deg-7')
+        assert events.index('agent-type')<events.index('agent-quality')<events.index('finalize')
+        assert len(requests['assemble'][1])==9
+        assert requests['finalize'][0]['paths']==['assemble','decision-type','decision-quality']
+        assert workflow.stage()=='complete'
+    asyncio.run(scenario())

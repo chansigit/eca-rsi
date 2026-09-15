@@ -280,19 +280,22 @@ async def main():
     p.add_argument("spec", type=Path)
     p = commands.add_parser("start-persample")
     p.add_argument("spec", type=Path)
-    for name in ("status", "status-agent", "status-persample", "resume-persample"):
+    p = commands.add_parser("start-crosssample")
+    p.add_argument("spec", type=Path)
+    for name in ("status", "status-agent", "status-persample", "resume-persample", "status-crosssample", "resume-crosssample"):
         p = commands.add_parser(name)
         p.add_argument("run_id")
     args = parser.parse_args()
     client = await Client.connect(args.temporal)
     if args.command == "worker":
         from .persample_workflow import PersampleWorkflow, SampleWorkflow, sample_step
+        from .crosssample_workflow import CrosssampleWorkflow, crosssample_step
         with ThreadPoolExecutor(max_workers=16) as executor:
-            async with Worker(client, task_queue=args.task_queue, workflows=[OrganizeWorkflow, AgentWorkflow, PersampleWorkflow, SampleWorkflow],
-                              activities=ACTIVITIES + [agent_step, sample_step], activity_executor=executor,
+            async with Worker(client, task_queue=args.task_queue, workflows=[OrganizeWorkflow, AgentWorkflow, PersampleWorkflow, SampleWorkflow, CrosssampleWorkflow],
+                              activities=ACTIVITIES + [agent_step, sample_step, crosssample_step], activity_executor=executor,
                               max_concurrent_activities=16):
                 await asyncio.Future()
-    elif args.command in {"start", "start-agent", "start-persample"}:
+    elif args.command in {"start", "start-agent", "start-persample", "start-crosssample"}:
         if args.command == "start-agent":
             from .agent_session import validate_spec as validate_agent
             spec = validate_agent(json.loads(args.spec.read_text()))
@@ -301,6 +304,10 @@ async def main():
             from .persample_workflow import PersampleWorkflow, validate_spec as validate_samples
             spec = validate_samples(json.loads(args.spec.read_text()))
             run, identity = PersampleWorkflow.run, "persample/" + spec["run_id"]
+        elif args.command == "start-crosssample":
+            from .crosssample_workflow import CrosssampleWorkflow, validate_spec as validate_crosssample
+            spec = validate_crosssample(json.loads(args.spec.read_text()))
+            run, identity = CrosssampleWorkflow.run, "cross-sample/" + spec["run_id"]
         else:
             spec = validate_spec(json.loads(args.spec.read_text()))
             run, identity = OrganizeWorkflow.run, "organize/" + spec["run_id"]
@@ -308,20 +315,22 @@ async def main():
                       id=identity, task_queue=args.task_queue,
                       id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE)
         print(handle.id)
-    elif args.command == "resume-persample":
+    elif args.command in {"resume-persample", "resume-crosssample"}:
         from .persample_workflow import PersampleWorkflow
+        from .crosssample_workflow import CrosssampleWorkflow
         from .agent_session import verified
         from .warm_pool.state import identifier, read, status
         from .agent_bridge import status as bridge_status
-        identity = "persample/" + identifier(args.run_id)
+        cross = args.command == "resume-crosssample"
+        identity = ("cross-sample/" if cross else "persample/") + identifier(args.run_id)
         previous = client.get_workflow_handle(identity)
         if (await previous.describe()).status.name != "FAILED":
-            raise ValueError("Resume requires a failed per-sample workflow")
+            raise ValueError("Resume requires a failed workflow")
         history = await previous.fetch_history()
         spec, = await client.data_converter.decode(history.events[0].workflow_execution_started_event_attributes.input.payloads)
         if read(Path(spec["output_root"]) / "spec.json") != spec:
-            raise ValueError("Saved per-sample specification changed")
-        verified(spec["input_manifest"])
+            raise ValueError("Saved workflow specification changed")
+        verified(spec["input" if cross else "input_manifest"])
         for root, inspect, allowed in ((spec["pool_root"], status, {"queued", "running", "succeeded"}),
                 (spec["bridge_root"], bridge_status, {"queued", "running", "reply_saved"})):
             for path in (Path(root) / "requests").glob("*/request.json"):
@@ -329,14 +338,16 @@ async def main():
                     state = inspect(root, path.parent.name)["state"]
                     if state not in allowed:
                         raise ValueError(f"Reconcile {path.parent.name} ({state}) before resume")
-        handle = await client.start_workflow(PersampleWorkflow.run, spec, id=identity,
+        handle = await client.start_workflow(CrosssampleWorkflow.run if cross else PersampleWorkflow.run, spec, id=identity,
             task_queue=args.task_queue, id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY)
         print(handle.id)
     else:
         from .warm_pool.state import identifier
         from .persample_workflow import PersampleWorkflow
+        from .crosssample_workflow import CrosssampleWorkflow
         kind = {"status": ("organize/", OrganizeWorkflow), "status-agent": ("agent/", AgentWorkflow),
-                "status-persample": ("persample/", PersampleWorkflow)}[args.command]
+                "status-persample": ("persample/", PersampleWorkflow),
+                "status-crosssample": ("cross-sample/", CrosssampleWorkflow)}[args.command]
         handle = client.get_workflow_handle(kind[0] + identifier(args.run_id))
         info = await handle.describe()
         stage = await handle.query(kind[1].stage) if info.status.name == "RUNNING" else None

@@ -72,8 +72,8 @@ def validate_trace(trace):
             raise ValueError("trace " + key + " must be a nonempty printable string")
     if "depends_on" in trace:
         parents = trace["depends_on"]
-        if not isinstance(parents, list) or len(parents) > 32 or len(set(map(str, parents))) != len(parents):
-            raise ValueError("trace depends_on must be a unique list of at most 32 request IDs")
+        if not isinstance(parents, list) or len(parents) > 4096 or len(set(map(str, parents))) != len(parents):
+            raise ValueError("trace depends_on must be a unique list of at most 4096 request IDs")
         for parent in parents:
             identifier(parent)
     return trace
