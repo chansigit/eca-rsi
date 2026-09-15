@@ -58,12 +58,14 @@ def main(argv=None):
     worker.add_argument("--work-dir", type=Path, required=True, help="worker-local temporary directory")
     worker.add_argument("--allocation-profile", type=Path, help="fresh host probe; normally set by slurm-worker")
     worker.add_argument("--time-limit-seconds", type=int, help="optional shorter worker lifetime")
+    worker.add_argument("--gpu", help="one explicitly reserved NVIDIA GPU UUID")
     slurm = commands.add_parser("slurm-worker", help="probe an existing Slurm grant on the host, then enter the runtime")
     slurm.add_argument("--cpus", required=True)
     slurm.add_argument("--memory-mb", type=int, required=True)
     slurm.add_argument("--work-dir", type=Path, required=True)
     slurm.add_argument("--job-id", help="optional expected allocation ID")
     slurm.add_argument("--time-limit-seconds", type=int)
+    slurm.add_argument("--gpu", action="store_true", help="use the one GPU granted to this Slurm step")
     slurm.add_argument("runtime_command", nargs=argparse.REMAINDER, help="runtime Python command after --")
     submission = commands.add_parser("submit")
     submission.add_argument("spec", type=Path)
@@ -80,11 +82,11 @@ def main(argv=None):
         return serve(a.root, a.host)
     elif a.command == "worker":
         return join(a.root, [int(v) for v in a.cpus.split(",")], a.memory_mb, a.work_dir,
-                    a.allocation_profile, a.time_limit_seconds)
+                    a.allocation_profile, a.time_limit_seconds, a.gpu)
     elif a.command == "slurm-worker":
         from .allocation import launch
         return launch(a.root, [int(v) for v in a.cpus.split(",")], a.memory_mb, a.work_dir,
-                      a.runtime_command, a.job_id, a.time_limit_seconds)
+                      a.runtime_command, a.job_id, a.time_limit_seconds, a.gpu)
     elif a.command == "submit":
         result = submit(a.root, read(a.spec))
     elif a.command == "cancel":

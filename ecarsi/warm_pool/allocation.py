@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import re
 import socket
+import subprocess
 import time
 
 from .state import read, save
@@ -42,9 +43,26 @@ def validate_profile(path, cpu_ids, memory_mb):
     return profile
 
 
-def launch(root, cpu_ids, memory_mb, work_dir, prefix, job_id=None, time_limit_seconds=None):
+def gpu_device(gpu_id):
+    if not re.fullmatch(r"GPU-[a-fA-F0-9-]+", gpu_id):
+        raise ValueError("GPU identity must be a full NVIDIA UUID")
+    result = subprocess.run(["nvidia-smi", "--id=" + gpu_id,
+        "--query-gpu=uuid,name,memory.total,memory.used,utilization.gpu", "--format=csv,noheader,nounits"],
+        capture_output=True, text=True, check=True, timeout=10)
+    rows = result.stdout.strip().splitlines()
+    if len(rows) != 1:
+        raise ValueError("expected exactly one GPU")
+    uuid, name, total, used, utilization = [s.strip() for s in rows[0].split(",")]
+    if uuid != gpu_id:
+        raise ValueError("GPU UUID mismatch")
+    return dict(uuid=uuid, name=name, memory_mb=int(total), used_mb=int(used), utilization_percent=int(utilization))
+
+
+def launch(root, cpu_ids, memory_mb, work_dir, prefix, job_id=None, time_limit_seconds=None, gpu=False):
     from ecarsi.pool.slurm import inventory
-    profile = inventory(memory_mb * 2**20)
+    profile = inventory(memory_mb * 2**20, gpu=gpu)
+    if gpu and len(profile["gpu_ids"]) != 1:
+        raise ValueError("use one GPU per worker; launch separate CPU slices for additional GPUs")
     if job_id is not None and profile["job_id"] != job_id:
         raise ValueError("current Slurm job differs from --job-id")
     if not cpu_ids or len(set(cpu_ids)) != len(cpu_ids) or not set(cpu_ids) <= set(profile["cpu_ids"]):
@@ -64,4 +82,8 @@ def launch(root, cpu_ids, memory_mb, work_dir, prefix, job_id=None, time_limit_s
                        "--work-dir", str(work_dir), "--allocation-profile", str(path)]
     if time_limit_seconds is not None:
         command += ["--time-limit-seconds", str(time_limit_seconds)]
+    if gpu:
+        command += ["--gpu", profile["gpu_ids"][0]]
+        os.environ["APPTAINER_NV"] = "1"
+        os.environ["APPTAINERENV_CUDA_VISIBLE_DEVICES"] = profile["gpu_ids"][0]
     os.execvp(command[0], command)

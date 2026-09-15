@@ -103,12 +103,18 @@ def pool_root(root):
 
 def validate(spec):
     allowed = {"request_id", "operation_id", "args", "cpus", "memory_mb", "timeout_seconds",
-               "time_request_seconds", "inputs", "outputs", "trace"}
+               "time_request_seconds", "inputs", "outputs", "trace", "gpu"}
     if not isinstance(spec, dict) or not {"request_id", "operation_id"} <= spec.keys():
         raise ValueError("request must be an object with request_id and operation_id")
     if set(spec) - allowed:
         raise ValueError("unknown request fields: " + ", ".join(sorted(set(spec) - allowed)))
     spec = dict(spec)
+    if "gpu" in spec:
+        gpu = spec["gpu"]
+        if (not isinstance(gpu, dict) or set(gpu) != {"mode", "memory_mb"} or
+                gpu["mode"] not in {"required", "preferred"} or
+                type(gpu["memory_mb"]) is not int or gpu["memory_mb"] <= 0):
+            raise ValueError("gpu needs required/preferred mode and positive memory_mb")
     for key in ("request_id", "operation_id"):
         identifier(spec[key])
     if "trace" in spec:

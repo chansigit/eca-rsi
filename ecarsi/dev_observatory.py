@@ -121,7 +121,7 @@ def task_timeline(pool_rows: list[dict], bridge_rows: list[dict], since: float, 
                 continue
             tasks.append({key: item.get(key) for key in (
                 "id", "operation", "state", "submitted_at", "started_at", "finished_at",
-                "host", "worker_id", "cpu_ids", "cpus", "memory_mb", "model")}
+                "host", "worker_id", "cpu_ids", "cpus", "memory_mb", "model", "gpu_ids", "compute_backend")}
                 | {"service": service, "trace": trace, "trace_source": source})
     tasks.sort(key=lambda item: item["submitted_at"])
     total = len(tasks)
@@ -179,12 +179,16 @@ def worker_inventory(pool: Path, tasks: list[dict], now: float, cache: dict) -> 
                   and t.get("started_at") and not t.get("finished_at")]
         workers.append({"worker_id": worker_id, "host": identity.get("host", "Unknown host"),
                         "slurm_job_id": identity.get("slurm_job_id"),
+                        "gpu_ids": identity.get("gpu_ids", []),
+                        "gpu_devices": (latest or {}).get("gpus", []),
+                        "allocation": identity.get("allocation"),
                         "cpus": len(identity.get("cpu_ids", [])),
                         "memory_mb": identity.get("memory_mb"), "reporting": reporting,
                         "last_seen": last_seen, "current": measurements, "mean_5m": means,
                         "sample_count_5m": len(rows), "tasks": active,
                         "reserved_cpus": sum(t.get("cpus") or 0 for t in active),
-                        "reserved_memory_mb": sum(t.get("memory_mb") or 0 for t in active)})
+                        "reserved_memory_mb": sum(t.get("memory_mb") or 0 for t in active),
+                        "reserved_gpus": len({g for t in active for g in t.get("gpu_ids") or []})})
     known = {w["worker_id"] for w in workers}
     historical = {}
     for task in tasks:
@@ -235,6 +239,9 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
                 "host": (item.get("accepted") or {}).get("host"),
                 "worker_id": (item.get("accepted") or {}).get("worker_id"),
                 "cpu_ids": (item.get("accepted") or {}).get("cpu_ids"),
+                "gpu_ids": (item.get("accepted") or {}).get("gpu_ids", []),
+                "compute_backend": (item.get("accepted") or {}).get("compute_backend"),
+                "gpu_request": spec.get("gpu"),
                 "peak_rss_bytes": receipt.get("peak_rss_bytes"),
             }
             pool_rows.append(row)

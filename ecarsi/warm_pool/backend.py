@@ -60,6 +60,26 @@ def check_hq(binary):
         raise ValueError("this adapter is validated against HyperQueue 0.26.2")
 
 
+def gpu_jobfile(request, attempt, name, executor, pythonpath):
+    """Native HQ alternatives: GPU first; CPU fallback only when declared."""
+    spec = request["spec"]
+    command = [executor, "-m", "ecarsi.warm_pool.worker", "execute",
+               str(attempt.parent.parent.parent), spec["request_id"], request["attempt_id"]]
+    fields = dict(command=command, cwd=str(attempt), pin="taskset", crash_limit="never-restart",
+                  stdout=str(attempt / "hq-%{INSTANCE_ID}.stdout"), stderr=str(attempt / "hq-%{INSTANCE_ID}.stderr"))
+    text = "name = " + json.dumps(name) + "\n[[task]]\n"
+    text += "\n".join(k + " = " + json.dumps(v) for k, v in fields.items())
+    text += "\nenv = { PYTHONPATH = " + json.dumps(pythonpath) + " }\n"
+    resources = {"cpus": spec["cpus"], "mem": spec["memory_mb"], "runtime/" + request["runtime_digest"]: 1}
+    variants = [{**resources, "gpus/nvidia": 1, "gpuMemoryMB": spec["gpu"]["memory_mb"]}]
+    if spec["gpu"]["mode"] == "preferred":
+        variants.append(resources)
+    for variant in variants:
+        text += "\n[[task.request]]\ntime_request = " + json.dumps(str(spec["time_request_seconds"]) + "s")
+        text += "\nresources = { " + ", ".join(json.dumps(k) + " = " + str(v) for k, v in variant.items()) + " }\n"
+    return text
+
+
 def resource_sample(cpu_ids, previous=None):
     """Cheap host measurements on a worker's allocated CPUs, every 30 seconds."""
     counters = {}
@@ -78,12 +98,12 @@ def resource_sample(cpu_ids, previous=None):
               if (parts := line.split()) and parts[0] in {"MemTotal:", "MemAvailable:"}}
     gpus = []
     try:
-        result = subprocess.run(["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total",
+        result = subprocess.run(["nvidia-smi", "--query-gpu=uuid,name,utilization.gpu,memory.used,memory.total",
                                  "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=3, check=True)
         for line in result.stdout.splitlines():
-            utilization, used, total = (int(v.strip()) if v.strip().isdigit() else None
-                                        for v in line.split(","))
-            gpus.append(dict(utilization_percent=utilization, memory_used_mb=used, memory_total_mb=total))
+            uuid, name, *values = [v.strip() for v in line.split(",")]
+            utilization, used, total = (int(v) if v.isdigit() else None for v in values)
+            gpus.append(dict(uuid=uuid, name=name, utilization_percent=utilization, memory_used_mb=used, memory_total_mb=total))
     except (FileNotFoundError, subprocess.SubprocessError, ValueError):
         pass
     return dict(observed_at=time.time(), host=socket.gethostname().split(".")[0], cpu_ids=cpu_ids,
@@ -160,7 +180,13 @@ class HyperQueue:
                             str(Path(__file__).resolve().parents[2]), os.environ.get("PYTHONPATH", "")))),
                         self.config["executor"], "-m", "ecarsi.warm_pool.worker", "execute",
                         str(self.root), spec["request_id"], request["attempt_id"]]
-                submitted = self.call(*args)
+                if spec.get("gpu"):
+                    path = attempt / "job.toml"
+                    path.write_text(gpu_jobfile(request, attempt, name, self.config["executor"],
+                        os.pathsep.join(filter(None, (str(Path(__file__).resolve().parents[2]), os.environ.get("PYTHONPATH", ""))))))
+                    submitted = self.call("job", "submit-file", str(path))
+                else:
+                    submitted = self.call(*args)
                 # RSI already persisted acceptance. Flush makes backend lookup
                 # survive ordinary restart; wrapper receipts cover later loss.
                 self.call("journal", "flush")
@@ -207,11 +233,11 @@ def serve(root, host=None):
                  observed_at=time.time(), state="stopped"))
 
 
-def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit_seconds=None):
+def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit_seconds=None, gpu_id=None):
     """An independently supervised native HQ worker; local explicit budgets first."""
     from contextlib import ExitStack
     from .worker import reconcile_local
-    from .allocation import validate_profile
+    from .allocation import validate_profile, gpu_device
     backend = HyperQueue(root)
     check_hq(backend.config["hq"])
     if not cpu_ids or len(set(cpu_ids)) != len(cpu_ids) or not set(cpu_ids) <= os.sched_getaffinity(0):
@@ -221,11 +247,20 @@ def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit
     if time_limit_seconds is not None and (type(time_limit_seconds) is not int or time_limit_seconds <= 0):
         raise ValueError("time_limit_seconds must be a positive integer")
     profile = validate_profile(allocation_profile, cpu_ids, memory_mb)
+    if profile and profile.get("gpu_ids", []) != ([gpu_id] if gpu_id else []):
+        raise ValueError("GPU must match the actual Slurm step grant")
+    gpu = gpu_device(gpu_id) if gpu_id else None
+    if gpu:
+        os.environ["CUDA_VISIBLE_DEVICES"] = gpu_id
     expires_at = profile["end_time"] - 60 if profile else None
     if time_limit_seconds is not None:
         expires_at = min(expires_at or float("inf"), time.time() + time_limit_seconds)
     runtime = backend.config["runtime"]
     check_runtime(runtime, imports=True)
+    if gpu:
+        subprocess.run(runtime["command"] + ["-c", "import cupy as cp,rapids_singlecell; "
+            "assert cp.cuda.runtime.getDeviceCount()==1; assert int(cp.arange(8).sum())==28"],
+            check=True, timeout=60, env=runtime_environment(runtime))
     work_dir = Path(work_dir).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
     host = socket.gethostname().split(".")[0]
@@ -235,7 +270,7 @@ def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit
     worker_identity = dict(worker_id=worker_id, host=host,
          cpu_ids=cpu_ids, memory_mb=memory_mb, work_dir=str(work_dir),
          slurm_job_id=profile["job_id"] if profile else None,
-         allocation=profile, expires_at=expires_at)
+         allocation=profile, expires_at=expires_at, gpu_ids=[gpu_id] if gpu else [], gpu=gpu)
     locks = Path.home() / ".cache" / "ecarsi-pool" / host
     locks.mkdir(parents=True, exist_ok=True)
     stopping = False
@@ -254,7 +289,7 @@ def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit
         save(work_dir / "registration.json", registration)
         # Reconcile before replacing a previous memory claim; a dead HQ process
         # can still have a detached, bounded scientific executor.
-        while reconcile_local(backend.root, cpu_ids):
+        while reconcile_local(backend.root, cpu_ids, [gpu_id] if gpu else []):
             if stopping or expires_at is not None and time.time() >= expires_at:
                 return 0
             time.sleep(1)
@@ -264,7 +299,7 @@ def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit
             # their old locks are free. The ledger serializes competing claims.
             reserve(profile, "worker:" + str(work_dir), owner_lock, role="worker", worker_directory=work_dir)
         def release_record():
-            pending = reconcile_local(backend.root, cpu_ids)
+            pending = reconcile_local(backend.root, cpu_ids, [gpu_id] if gpu else [])
             state = "waiting_for_previous_execution" if pending else "stopped"
             save(work_dir / "launcher.json", dict(state=state, updated_at=time.time(), requests=pending))
             save(work_dir / "worker.json", dict(state=state, observed_at=time.time(), requests=pending))
@@ -274,6 +309,15 @@ def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit
         save(work_dir / "launcher.json", dict(state="running", updated_at=time.time()))
         for cpu in sorted(cpu_ids):
             stack.enter_context(lock(locks / f"cpu-{cpu}.lock", blocking=False))
+        gpu_resources = []
+        if gpu:
+            stack.enter_context(lock(locks / (gpu_id + ".lock"), blocking=False))
+            previous = read(locks / (gpu_id + ".json"))
+            if previous and reconcile_local(pool_root(previous["pool_root"]), [], [gpu_id]):
+                raise ValueError("previous GPU executor is still uncertain; keep its reservation")
+            save(locks / (gpu_id + ".json"), registration)
+            gpu_resources = ["--resource", f"gpus/nvidia=[{gpu_id}]", "--resource",
+                             f"gpuMemoryMB=sum({int(gpu['memory_mb'] * .9)})"]
         save(telemetry_dir / "identity.json", worker_identity)
         os.sched_setaffinity(0, set(cpu_ids))
         log = stack.enter_context((work_dir / "worker.log").open("a"))
@@ -296,7 +340,7 @@ def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit
                 if proc is not None and proc.poll() is None:
                     time.sleep(.5)
                     continue  # finish old work before re-registering its CPUs
-                pending = reconcile_local(backend.root, cpu_ids)
+                pending = reconcile_local(backend.root, cpu_ids, [gpu_id] if gpu else [])
                 if pending:
                     save(work_dir / "worker.json", dict(state="waiting_for_previous_execution",
                          requests=pending, observed_at=time.time()))
@@ -318,7 +362,7 @@ def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit
                         "--resource", f"mem=sum({memory_mb})",
                         "--resource", f"runtime/{digest(runtime)}=sum({len(cpu_ids)})",
                         "--on-server-lost", "finish-running", "--heartbeat", "1s", "--overview-interval", "5s",
-                        "--work-dir", str(work_dir)] + lifetime,
+                        "--work-dir", str(work_dir)] + lifetime + gpu_resources,
                         env=dict(os.environ, ECA_POOL_WORKER_ID=worker_id),
                         stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
                         preexec_fn=parent_death_signal(os.getpid()))

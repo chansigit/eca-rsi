@@ -48,6 +48,23 @@ class ObservatoryTest(unittest.TestCase):
             self.assertEqual(legacy["last_activity"], 3)
             self.assertIsNone(legacy["last_seen"])
 
+    def test_gpu_registration_is_distinct_from_detection_and_usage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pool = Path(directory)
+            folder = pool / "workers/a"
+            put(folder / "identity.json", dict(worker_id="a", host="gpu-host", cpu_ids=[0],
+                gpu_ids=["GPU-a"], allocation={"allocated_tres": "cpu=1,gres/gpu=1"}))
+            device = dict(uuid="GPU-a", name="Test GPU", memory_total_mb=24576,
+                          memory_used_mb=6144, utilization_percent=80)
+            (folder / "1970-01-01.jsonl").write_text(json.dumps(dict(worker_id="a", host="gpu-host",
+                observed_at=980, cpu_ids=[0], gpus=[device])) + "\n")
+            task = dict(worker_id="a", started_at=975, gpu_ids=["GPU-a"])
+            worker = worker_inventory(pool, [task], 1000, {})[0]
+            self.assertEqual(worker["gpu_ids"], ["GPU-a"])
+            self.assertEqual(worker["gpu_devices"], [device])
+            self.assertEqual(worker["reserved_gpus"], 1)
+            self.assertEqual(worker["current"]["gpu_memory_percent"], 25)
+
     def test_generic_timeline_window_filter_limit_and_resources(self):
         pool = [{"id": f"task-{i}", "operation": "per-sample.compute", "state": "succeeded",
                  "trace": {"workflow_id": f"osp/{i}", "dataset_id": f"dataset-{i}",

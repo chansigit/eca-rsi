@@ -48,7 +48,8 @@ def compute_sample(request, source: Path, outdir: Path):
     run_one_sample_pipeline(
         a, sample_label=request["value"], sample_col="eca_sample_id",
         qc_kwargs={"run_scrublet": cfg["scrublet"], "run_decontx": cfg["decontx"]},
-        cluster_kwargs={"resolutions": (cfg["resolution"],), "primary_resolution": cfg["resolution"]},
+        cluster_kwargs={"resolutions": (cfg["resolution"],), "primary_resolution": cfg["resolution"],
+                        **({"compute_backend": cfg["compute_backend"]} if "compute_backend" in cfg else {})},
         outdir=str(outdir),
     )
     generate_report(str(outdir))

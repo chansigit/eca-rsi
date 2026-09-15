@@ -58,6 +58,31 @@ limits each prepared batch on disk. These are per-workflow limits, not a global
 storage quota. Partition currently loads the organized matrix once per batch,
 so its memory budget must cover that matrix.
 
+### CPU and GPU execution
+
+The workflow is new; the numerical implementation is shared with OSP. One
+sample's computation remains one Pool task, while samples run independently.
+With the RAPIDS-enabled OSP package and a matching scientific image, add:
+
+```json
+"compute_backend": "auto",
+"gpu_min_cells": 10000,
+"gpu_memory_mb": 8192
+```
+
+These fields belong inside `config`. The threshold and VRAM budget above are
+examples to tune for the data. `auto` makes eligible samples prefer a GPU and
+allows CPU execution when GPU capacity is unavailable; smaller samples use CPU.
+`rapids` requires a GPU, regardless of the threshold. `cpu`, including older
+specs with no backend field, keeps CPU execution. RAM, CPUs and time still come
+from `compute_budget`; a GPU does not remove those requirements.
+
+RAPIDS runs PCA, neighbors and UMAP. QC, HVG selection, Leiden, DEG and reporting
+remain shared CPU code. Annotation and its tools have separate resource grants.
+GPU and CPU clusters need not be identical; a fresh run annotates its own result
+and never borrows labels from the other backend. Cross-sample will have its own
+operation boundaries rather than invoking the old MSP workflow as a single task.
+
 `publication.json` contains verified references to each final sample bundle,
 with input, retained and removed cell counts. Bundle paths refer to accepted
 Pool attempt outputs on durable shared storage; they are not a copy in the old
@@ -92,7 +117,7 @@ stable request IDs, within the same in-flight limit and at most once per sample.
 This can consume repaired results without repeating accepted science. Any remaining failed, cancelled or unknown request blocks that replay;
 it does not authorize a new compute attempt or an uncertain provider retry.
 
-CPU Scanpy is connected. GPU execution, automatic Organize-to-all-units chaining,
+CPU Scanpy and GPU RAPIDS are connected. Automatic Organize-to-all-units chaining,
 global storage admission, production Temporal database failover, and the new
 cross-sample/Zoom-in workflows remain separate work. The development integration
 does not resume production datasets.

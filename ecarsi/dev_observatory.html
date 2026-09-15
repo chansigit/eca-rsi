@@ -133,7 +133,7 @@
     <div class="panel-head"><div><h2>Compute Warm Pool</h2></div><span id="compute-pool-state" class="status off">Checking</span></div>
     <p id="compute-pool-summary" class="sub"></p>
     <div id="pool-hosts" class="pool-hosts"></div>
-    <details class="sub" style="margin:18px 0 0"><summary>30s samples · 10s refresh · Measurement details</summary><p>Brown ticks mark the 5-minute average. CPU covers assigned cores; RAM and visible GPUs cover the host. Worker budgets may be smaller than Slurm allocations. GPU scheduling is not enabled. Recent telemetry does not confirm scheduler membership.</p></details>
+    <details class="sub" style="margin:18px 0 0"><summary>30s samples · 10s refresh · Measurement details</summary><p>Brown ticks mark the 5-minute average. CPU covers assigned cores; RAM and visible GPUs cover the host. Worker budgets may be smaller than Slurm allocations. Registered GPUs can receive GPU tasks. In-use counts are task grants; utilization is sampled hardware activity. Recent telemetry does not confirm scheduler membership.</p></details>
     <div class="pool-history"><strong>History</strong><div id="pool-history"></div></div>
   </section>
   <details class="panel" style="margin-bottom:20px"><summary style="cursor:pointer;font-weight:650">Worker resource history</summary><p class="sub">CPU, RAM and GPU measurements, separate from task placement. Uses the selected timeline window. CPU covers allocated cores; RAM and accessible GPUs are host-wide.</p><div class="timeline-wrap"><div id="resource-history" class="timeline"></div></div></details>
@@ -334,6 +334,8 @@ function renderTimeline(data) {
       if (bridge) body.push(t.operation==='agent.turn'?'Span: model turn; worker tool execution is shown separately':'Span: legacy planning session, including harness waits; not individual HTTP calls');
       if (t.trace.sample_id) body.push(`Sample: ${t.trace.sample_id}`);
       if (t.cpus) body.push(`Reserved: ${t.cpus} CPUs · ${t.memory_mb} MiB RAM`);
+      if (t.compute_backend) body.push(`Compute backend: ${t.compute_backend}`);
+      if (t.gpu_ids?.length) body.push(`GPU: ${t.gpu_ids.join(', ')}`);
       if (t.cpu_ids?.length) body.push(`CPU affinity: logical IDs ${t.cpu_ids.join(', ')}`);
       if (t.model?.model) body.push(`Model: ${t.model.model}`);
       if (parentsByChild.has(taskKey(t))) body.push(`Upstream: ${parentsByChild.get(taskKey(t)).join(', ')}`);
@@ -402,14 +404,19 @@ function renderComputePool(data) {
   const gib=x=>Number.isFinite(x)?x.toFixed(1):'—';
   $('compute-pool-state').textContent=live.length?'Reporting':'No telemetry';
   $('compute-pool-state').className=`status ${live.length?'ok':'off'}`;
-  $('compute-pool-summary').textContent=`${hosts.size} nodes · ${live.length} workers · ${cpus} CPU / ${gib(mem)} GiB · ${tasks} tasks · ${data.pool_waiting||0} queued`;
+  const gpuCount=new Set(live.flatMap(w=>w.gpu_ids||[])).size, gpuUsed=live.reduce((n,w)=>n+(w.reserved_gpus||0),0);
+  $('compute-pool-summary').textContent=`${hosts.size} nodes · ${live.length} workers · ${cpus} CPU / ${gib(mem)} GiB · ${gpuCount} GPU (${gpuUsed} busy) · ${tasks} tasks · ${data.pool_waiting||0} queued`;
   $('pool-hosts').innerHTML=[...hosts].sort(([a],[b])=>a.localeCompare(b)).map(([host,group])=>{
     const newest=group.reduce((a,b)=>a.last_seen>b.last_seen?a:b), current=newest.current||{}, mean=newest.mean_5m||{};
+    const gpuWorker=group.find(w=>w.gpu_devices?.length)||newest, devices=gpuWorker.gpu_devices||[], gpuCurrent=gpuWorker.current||{}, gpuMean=gpuWorker.mean_5m||{};
+    const registered=new Set(group.flatMap(w=>w.gpu_ids||[])), allocated=Math.max(0,...group.map(w=>Number(w.allocation?.allocated_tres?.match(/(?:^|,)gres\/gpu=(\d+)/)?.[1]||0)));
+    const gpuDescription=devices.length?devices.map(g=>`${g.name||'NVIDIA GPU'} · ${gib(g.memory_total_mb/1024)} GiB`).join(' / '):allocated?`${allocated} Slurm GPU · telemetry unavailable`:'';
     return `<article class="pool-host" data-pool-host="${esc(host)}"><h3>${esc(host)}</h3><div class="sub" title="Last sample: ${esc(when(newest.last_seen))}">${group.length} worker${group.length===1?'':'s'}</div>`+
       poolMeter('Host RAM',current.memory_percent,mean.memory_percent,`${gib(current.memory_used_gb)} / ${gib(current.memory_total_gb)} GiB`)+
-      (Number.isFinite(current.gpu_percent)||Number.isFinite(current.gpu_memory_percent)?poolMeter('GPU',current.gpu_percent,mean.gpu_percent)+poolMeter('GPU memory',current.gpu_memory_percent,mean.gpu_memory_percent,`${gib(current.gpu_memory_used_gb)} / ${gib(current.gpu_memory_total_gb)} GiB`):'<div class="sub" title="GPU telemetry unavailable">GPU —</div>')+
+      (gpuDescription?`<div class="sub">${esc(gpuDescription)} · ${registered.size?registered.size+' registered':'Not registered'}</div>`:'')+
+      (Number.isFinite(gpuCurrent.gpu_percent)||Number.isFinite(gpuCurrent.gpu_memory_percent)?poolMeter('GPU',gpuCurrent.gpu_percent,gpuMean.gpu_percent)+poolMeter('GPU memory',gpuCurrent.gpu_memory_percent,gpuMean.gpu_memory_percent,`${gib(gpuCurrent.gpu_memory_used_gb)} / ${gib(gpuCurrent.gpu_memory_total_gb)} GiB`):'<div class="sub" title="GPU telemetry unavailable">GPU —</div>')+
       group.map(w=>`<div class="pool-worker" data-pool-worker="${esc(w.worker_id)}"><div class="sub" title="${esc(w.worker_id)} · Slurm job ${esc(w.slurm_job_id||'not recorded')}">${w.cpus} CPU / ${gib(w.memory_mb/1024)} GiB${w.slurm_job_id?' · Job '+esc(w.slurm_job_id):''}</div>`+
-        poolMeter('CPU',w.current?.cpu_percent,w.mean_5m?.cpu_percent)+
+        ((w.gpu_ids||[]).length?`<div class="sub">${w.gpu_ids.length} GPU · ${w.reserved_gpus||0} in use</div>`:'')+poolMeter('CPU',w.current?.cpu_percent,w.mean_5m?.cpu_percent)+
         (w.tasks.length?`<div class="sub">Reserved ${w.reserved_cpus} CPU / ${gib(w.reserved_memory_mb/1024)} GiB</div>`:'')+
         `<details ${expanded.has(w.worker_id)?'open':''}><summary>${w.tasks.length?w.tasks.length+' tasks':'Idle'}</summary><small>${esc(w.worker_id)}</small>${w.tasks.map(t=>`<p><strong>${esc(t.trace?.dataset_id||t.id)}</strong><br>${esc(t.operation)} · ${esc(t.state)}</p>`).join('')}</details></div>`).join('')+'</article>';
   }).join('')||'<p class="empty">No workers reporting.</p>';

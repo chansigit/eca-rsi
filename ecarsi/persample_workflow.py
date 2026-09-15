@@ -44,8 +44,15 @@ def validate_spec(spec):
     if spec["batch_size"] > spec["max_in_flight_samples"]:
         raise ValueError("Batch size exceeds the in-flight sample limit")
     cfg = spec["config"]
-    if set(cfg) != {"scrublet", "decontx", "resolution", "tissue"} or any(type(cfg[k]) is not bool for k in ("scrublet", "decontx")):
+    required_config = {"scrublet", "decontx", "resolution", "tissue"}
+    if (not required_config <= set(cfg) or set(cfg) - required_config - {"compute_backend", "gpu_min_cells", "gpu_memory_mb"}
+            or any(type(cfg[k]) is not bool for k in ("scrublet", "decontx"))):
         raise ValueError("Explicit Scrublet, DecontX, resolution and tissue settings are required")
+    if cfg.get("compute_backend", "cpu") not in {"cpu", "rapids", "auto"}:
+        raise ValueError("compute_backend must be cpu, rapids or auto")
+    if cfg.get("compute_backend", "cpu") != "cpu":
+        if any(type(cfg.get(k)) is not int or cfg[k] <= 0 for k in ("gpu_min_cells", "gpu_memory_mb")):
+            raise ValueError("GPU execution needs explicit positive gpu_min_cells and gpu_memory_mb")
     import math
     if isinstance(cfg["resolution"], bool) or not isinstance(cfg["resolution"], (int, float)) or not math.isfinite(cfg["resolution"]) or cfg["resolution"] <= 0:
         raise ValueError("Resolution must be finite and positive")
@@ -119,6 +126,7 @@ def sample_step(action, args):
     root = Path(spec["output_root"])
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     trace = {"workflow_id": "persample/" + spec["run_id"], "dataset_id": spec["dataset_id"]}
+    accelerator = {}
     if action == "partition":
         offset, parent = args[1:]
         reference_spec = immutable(root / "spec.json", spec)
@@ -132,6 +140,11 @@ def sample_step(action, args):
         request_id = spec["run_id"] + ".compute-" + digest(entry["sample_id"])[:20]
         command = ["compute", entry["bundle"]["path"]]
         inputs, budget, output, unit = [entry["bundle"]], spec["compute_budget"], "computed.json", "osp.compute"
+        cfg = spec["config"]
+        backend = cfg.get("compute_backend", "cpu")
+        if backend == "rapids" or backend == "auto" and entry["n_cells"] >= cfg["gpu_min_cells"]:
+            accelerator = {"gpu": {"mode": "required" if backend == "rapids" else "preferred",
+                                   "memory_mb": cfg["gpu_memory_mb"]}}
         parents = [parent]
     elif action == "finalize":
         computed, annotation, parent = args[1:]
@@ -146,7 +159,7 @@ def sample_step(action, args):
         raise ValueError("Unknown per-sample activity")
     submit(spec["pool_root"], {"request_id": request_id, "operation_id": unit,
         "trace": {**trace, "unit_id": unit, "depends_on": parents},
-        "args": ["-m", "ecarsi.persample_v2", *command], **budget,
+        "args": ["-m", "ecarsi.persample_v2", *command], **budget, **accelerator,
         "inputs": inputs + [reference(Path(__file__).with_name("persample_v2.py"))], "outputs": [output]})
     return {"id": request_id, "output": output}
 

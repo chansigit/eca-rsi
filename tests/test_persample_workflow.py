@@ -24,9 +24,32 @@ def test_only_published_organize_units_can_start(tmp_path):
         validate_spec(spec)
     save(unit.parent.parent / "publication.json", {"units": [{"name": "a", "manifest": file_identity(manifest)}]})
     assert validate_spec(spec)["config"]["species"] == "human"
+    gpu_config = {**spec["config"], "compute_backend": "auto", "gpu_min_cells": 5000, "gpu_memory_mb": 8192}
+    assert validate_spec({**spec, "config": gpu_config})["config"]["compute_backend"] == "auto"
+    with pytest.raises(ValueError, match="GPU execution"):
+        validate_spec({**spec, "config": {**gpu_config, "gpu_memory_mb": 0}})
     save(manifest, {"species": "mouse", "sample_mapping": {"path": "mapping.csv.gz"}})
     with pytest.raises(ValueError, match="accepted Organize"):
         validate_spec(spec)
+
+
+def test_sample_size_selects_gpu_alternative_before_submission(tmp_path):
+    from ecarsi.agent_session import reference
+    from ecarsi.persample_workflow import sample_step
+    from ecarsi.warm_pool.state import read
+    pool = tmp_path / "pool"
+    pool.mkdir(mode=0o700)
+    (pool / "requests").mkdir()
+    save(pool / "config.json", {"runtime": {}})
+    save(tmp_path / "bundle.json", {})
+    spec = dict(run_id="r", dataset_id="D", output_root=str(tmp_path / "run"), pool_root=str(pool),
+                compute_budget={"cpus": 1, "memory_mb": 8192, "timeout_seconds": 60},
+                config={"compute_backend": "auto", "gpu_min_cells": 5000, "gpu_memory_mb": 8192})
+    for sample, cells in (("small", 100), ("large", 10000)):
+        task = sample_step("compute", [spec, {"sample_id": sample, "n_cells": cells,
+                           "bundle": reference(tmp_path / "bundle.json")}, "prepared"])
+        request = read(pool / "requests" / task["id"] / "request.json")["spec"]
+        assert bool(request.get("gpu")) == (cells >= 5000)
 
 
 def test_recovery_requires_resolved_receipts(tmp_path):

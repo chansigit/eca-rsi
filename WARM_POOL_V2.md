@@ -265,13 +265,60 @@ moved to the other host and all five tasks completed exactly once. Test workers
 released their reservations after cleanup. Its report is
 `multinode-recovery/acceptance.json` under the same artifact directory.
 
+### GPU scheduling and telemetry, 2026-09-15
+
+A GPU worker owns one explicitly granted GPU UUID and a CPU/RAM slice. For a
+local worker use `worker --gpu GPU-...`. Inside an existing Slurm allocation,
+launch `slurm-worker --gpu` in a step granted one GPU, for example:
+
+```bash
+srun --jobid="$job_id" --overlap --exact --nodes=1 --ntasks=1 \
+  --cpus-per-task=2 --mem=20G --gpus-per-task=1 \
+  python -m ecarsi.warm_pool --root "$pool_state" slurm-worker \
+  --cpus "$cpu_ids" --memory-mb 16384 --work-dir "$worker_state" \
+  --job-id "$job_id" --gpu -- \
+  apptainer exec --cleanenv --bind /scratch,/oak,/home,/lscratch \
+  --env PYTHONPATH=/path/to/rsi:/opt/rsi-python science.sif /usr/local/bin/python3
+```
+
+Select CPU IDs from that step's affinity. The launcher probes its actual Slurm
+GPU grant, enables Apptainer NVIDIA support and verifies CuPy/RAPIDS before
+registration. No command acquires or releases an allocation. A host-wide UUID
+lock prevents two workers from registering the same GPU; uncertain surviving
+GPU executions block resource reuse, even across pool roots.
+
+Requests may declare `"gpu": {"mode": "preferred", "memory_mb": 8192}` or
+`"required"`. Native HQ resource alternatives prefer GPU and permit CPU fallback
+only for `preferred`; plain CPU requests never inherit GPU visibility. Each
+GPU task holds the whole device, with a usable VRAM budget of 90% of its capacity.
+Concurrent tasks can use the worker's remaining CPUs. Multiple tasks sharing
+one GPU are not implemented. The VRAM watchdog samples every 5 seconds and is
+not a hard memory partition; brief peaks can be missed.
+
+The live development pool was upgraded to `rsi-science-20260915-1.sif` on three
+nodes, including the RTX 3090 (24 GiB) on `sh03-15n05`. A required GPU task,
+concurrent CPU fallback, and subsequent preferred GPU task all completed with
+the recorded grants. The monitor shows model, VRAM, registered and in-use GPU
+counts, plus current and 5-minute GPU/VRAM measurements (30-second samples,
+10-second page refresh). Busy counts mean granted tasks, not utilization.
+
+The scientific image contains both CPU and RAPIDS dependencies; its package
+and OSP source manifest is [container/science-runtime-20260915.json](container/science-runtime-20260915.json).
+Validation records are under
+`/scratch/users/chensj16/eca-runs/warmpool-v2-development/gpu-integration-20260915-004458`:
+`scheduling-acceptance.json`, `science-acceptance.json`, and `monitor-during-gpu.json`.
+The real 318-cell comparison preserved the same 235 survivors and 83 exclusions;
+CPU/GPU cluster ARI was 0.730, so cluster identity is not treated as interchangeable.
+Both backends also passed the optional OSP check at 3 and 80 cells. These small
+samples do not establish production-scale GPU speedup.
+
 Before connecting scientific production workflows, the next gates are:
 
-1. GPU identity/resource scheduling and CPU Scanpy/GPU RAPIDS operation variants.
-   CPU grant discovery, shared memory reservations and remaining worker walltime
-   are implemented; node acquisition remains a user responsibility.
+1. Large-sample GPU sizing and throughput validation beyond the tested OSP
+   variants. CPU/GPU grant discovery, shared memory reservations and remaining
+   worker walltime are implemented; node acquisition remains a user responsibility.
 2. Complete application-code identity and control-component images. The current
-   CPU scientific image includes OSP and dependencies; runtime matching is enforced.
+   scientific image includes OSP and CPU/GPU dependencies; runtime matching is enforced.
 3. Host-loss and network-partition recovery. Current evidence covers local
    process failures and Scheduler relocation between two Slurm hosts with a
    shared Lustre state directory; neither host was powered off. Resource limits currently use CPU affinity

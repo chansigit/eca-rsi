@@ -66,7 +66,7 @@ def stop_group(pgid):
     raise RuntimeError("attempt process group has not stopped; resources remain uncertain")
 
 
-def reconcile_local(root, cpu_ids):
+def reconcile_local(root, cpu_ids, gpu_ids=()):
     """Do not re-advertise CPUs while a previous local execution can be alive."""
     host = socket.gethostname().split(".")[0]
     boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
@@ -79,7 +79,8 @@ def reconcile_local(root, cpu_ids):
             continue
         attempt = folder / request["attempt_id"]
         accepted = read(attempt / "accepted.json")
-        if (not accepted or accepted["host"] != host or not set(cpu_ids).intersection(accepted["cpu_ids"])
+        if (not accepted or accepted["host"] != host or not (set(cpu_ids).intersection(accepted["cpu_ids"])
+                or set(gpu_ids).intersection(accepted.get("gpu_ids", [])))
                 or read(attempt / "receipt.json")):
             continue
         try:
@@ -101,6 +102,26 @@ def reconcile_local(root, cpu_ids):
         except BlockingIOError:
             pending.append(request["spec"]["request_id"])
     return pending
+
+
+def assigned_gpu(spec, environment):
+    """Only an HQ grant can expose a GPU to a compute subprocess."""
+    values = environment.get("HQ_RESOURCE_VALUES_gpus_nvidia", "")
+    if not spec.get("gpu"):
+        return None
+    variant = environment.get("HQ_RESOURCE_VARIANT")
+    required = spec["gpu"]["mode"] == "required" or variant == "0"
+    if not values:
+        if required or variant != "1":
+            raise ValueError("HQ did not provide the requested GPU or a valid CPU alternative")
+        return None
+    if (variant not in ({None, "0"} if spec["gpu"]["mode"] == "required" else {"0"}) or "," in values):
+        raise ValueError("GPU grant disagrees with the selected HQ resource alternative")
+    from .allocation import gpu_device
+    gpu = gpu_device(values)
+    if spec["gpu"]["memory_mb"] > int(gpu["memory_mb"] * .9):
+        raise ValueError("GPU request exceeds this device's usable memory")
+    return values
 
 
 def output_receipts(attempt, names):
@@ -160,9 +181,10 @@ def run(folder, request, ownership):
         cpus = sorted(os.sched_getaffinity(0))
         if len(cpus) != spec["cpus"]:
             raise ValueError("HQ CPU binding does not match the requested CPU count")
+        gpu_id = assigned_gpu(spec, os.environ)
         # An HQ task wrapper can itself die while descendants still exist. HQ
         # may already have freed its grant; check locally before new compute.
-        while reconcile_local(folder.parent.parent, cpus):
+        while reconcile_local(folder.parent.parent, cpus, [gpu_id] if gpu_id else []):
             if read(folder / "cancel.json"):
                 receipt["state"] = "cancelled"
                 return 0
@@ -180,10 +202,12 @@ def run(folder, request, ownership):
             accepted = dict(host=socket.gethostname().split(".")[0],
                             worker_id=os.environ.get("ECA_POOL_WORKER_ID") or
                             registered_worker_id(folder.parent.parent, cpus), identity=identity(os.getpid()),
-                            cpu_ids=cpus, started_at=time.time())
+                            cpu_ids=cpus, gpu_ids=[gpu_id] if gpu_id else [],
+                            compute_backend="rapids" if gpu_id else "cpu", started_at=time.time())
             save(attempt / "accepted.json", accepted)
         env = {k: v for k, v in os.environ.items() if not k.startswith(("ECA_DRIVER_", "ECA_POOL_"))}
-        env.update(MSP_COMPUTE_ENDPOINT="local", OSP_COMPUTE_ENDPOINT="local", CUDA_VISIBLE_DEVICES="", PYTHONUNBUFFERED="1")
+        env.update(MSP_COMPUTE_ENDPOINT="local", OSP_COMPUTE_ENDPOINT="local", CUDA_VISIBLE_DEVICES=gpu_id or "",
+                   RSI_COMPUTE_BACKEND="rapids" if gpu_id else "cpu", PYTHONUNBUFFERED="1")
         for key in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS"):
             env[key] = str(spec["cpus"])
         from .backend import runtime_environment
@@ -212,14 +236,22 @@ def run(folder, request, ownership):
                 os.close(gate_write)
             previous, stamp = group_usage(proc.pid), time.monotonic()
             peak = 0
+            gpu_usage, gpu_stamp, peak_gpu_mb = None, 0, 0
             while os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is None:
                 now = time.monotonic()
                 usage = group_usage(proc.pid)
                 peak = max(peak, usage["rss_bytes"])
+                if gpu_id and now - gpu_stamp >= 5:
+                    from .allocation import gpu_device
+                    gpu_usage, gpu_stamp = gpu_device(gpu_id), now
+                    peak_gpu_mb = max(peak_gpu_mb, gpu_usage["used_mb"])
+                    if gpu_usage["used_mb"] > spec["gpu"]["memory_mb"]:
+                        raise MemoryError("attempt exceeded its GPU memory budget")
                 save(attempt / "usage.json", dict(usage, observed_at=time.time(),
                      cpu_percent=max(0, usage["ticks"] - previous["ticks"]) / os.sysconf("SC_CLK_TCK") / max(.001, now - stamp) * 100,
                      cpu_count=spec["cpus"], reserved_memory_bytes=spec["memory_mb"] * 2**20,
-                     memory_enforcement="process-group RSS watchdog", peak_rss_bytes=peak))
+                     memory_enforcement="process-group RSS watchdog", peak_rss_bytes=peak,
+                     gpu=gpu_usage, peak_gpu_memory_mb=peak_gpu_mb))
                 previous, stamp = usage, now
                 if read(folder / "cancel.json"):
                     receipt["state"] = "cancelled"
@@ -235,7 +267,8 @@ def run(folder, request, ownership):
             rc = proc.wait()
             os.fsync(out.fileno())
             os.fsync(err.fileno())
-            receipt.update(exit_code=rc, peak_rss_bytes=peak)
+            receipt.update(exit_code=rc, peak_rss_bytes=peak, gpu_ids=[gpu_id] if gpu_id else [],
+                           compute_backend="rapids" if gpu_id else "cpu", peak_gpu_memory_mb=peak_gpu_mb)
             if receipt["state"] == "cancelled":
                 return 0
             if rc:

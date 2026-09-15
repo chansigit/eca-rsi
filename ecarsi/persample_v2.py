@@ -114,6 +114,13 @@ def compute(bundle_ref, destination):
     bundle = check_bundle(bundle_ref)
     source = Path(bundle["files"]["request.json"]["path"]).parent
     request = read(source / "request.json")
+    if "compute_backend" in request["config"]:
+        import os
+        backend = os.environ.get("RSI_COMPUTE_BACKEND", "cpu")
+        desired = request["config"]["compute_backend"]
+        if desired == "rapids" and backend != "rapids" or desired == "cpu" and backend != "cpu":
+            raise ValueError("compute backend does not match the reserved resources")
+        request = {**request, "config": {**request["config"], "compute_backend": backend}}
     folder = destination / "sample"
     folder.mkdir()
     shutil.copyfile(source / "input_cells.csv.gz", folder / "input_cells.csv.gz")
