@@ -95,6 +95,8 @@
   #timeline-popover { position:fixed; z-index:1000; width:max-content; max-width:min(390px,calc(100vw - 24px)); max-height:70vh; overflow:auto; pointer-events:none; padding:15px 17px; border:1px solid #c9d6c8; border-radius:14px; background:#fffdf8f2; color:var(--ink); box-shadow:0 16px 42px #4b59412b; backdrop-filter:blur(12px); }
   #timeline-popover[hidden] { display:none; }
   #timeline-popover strong { display:block; font:600 18px/1.25 "Iowan Old Style",Georgia,serif; margin-bottom:7px; overflow-wrap:anywhere; }
+  #timeline-popover-step { display:block; margin:-3px 0 8px; color:#876f4e; font:700 12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }
+  #timeline-popover-step[hidden] { display:none; }
   #timeline-popover span { display:block; white-space:pre-line; overflow-wrap:anywhere; color:#505b50; font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; }
   footer { margin-top:30px; color:#818479; font-size:12px; display:flex; justify-content:space-between; gap:20px; }
   @media(max-width:960px) { .hero,.layout { grid-template-columns:1fr; }.path { grid-template-columns:repeat(2,1fr); }.node:nth-child(2):after { display:none; } }
@@ -126,7 +128,7 @@
   </div>
   <footer><span id="host">RSI v2 isolated state</span><span>Refreshes every 10 seconds · no scheduler or model actions</span></footer>
 </main>
-<div id="timeline-popover" role="tooltip" hidden><strong id="timeline-popover-title"></strong><span id="timeline-popover-body"></span></div>
+<div id="timeline-popover" role="tooltip" hidden><strong id="timeline-popover-title"></strong><b id="timeline-popover-step" hidden></b><span id="timeline-popover-body"></span></div>
 <script>
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '—').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -139,6 +141,9 @@ function showTimelineTip(target, event) {
   if (target===tipTarget) return;
   const popup=$('timeline-popover');
   $('timeline-popover-title').textContent=target.dataset.tipTitle;
+  const step=$('timeline-popover-step');
+  step.textContent=target.dataset.tipStep||'';
+  step.hidden=!target.dataset.tipStep;
   $('timeline-popover-body').textContent=target.dataset.tipBody;
   tipTarget=target;
   popup.hidden=false;
@@ -284,7 +289,7 @@ function renderTimeline(data) {
       const start=Math.max(from,t.started_at), end=Math.min(to,t.finished_at||to);
       const worker=t.worker_id||t.host||'Unassigned';
       const waitSeconds=(t.started_at-t.submitted_at).toFixed(1);
-      const body=[`Workflow: ${t.trace.workflow_id||'—'}`,`Unit: ${t.trace.unit_id||t.operation||'—'}`,
+      const body=[`Workflow: ${t.trace.workflow_id||'—'}`,
         `Task: ${t.id}`,`Service: ${t.service}`,`Worker: ${worker}`,`State: ${t.state}`,
         `Submitted: ${when(t.submitted_at)}`,`Started: ${when(t.started_at)}`,
         `Finished: ${t.finished_at?when(t.finished_at):'Running'}`,
@@ -294,7 +299,7 @@ function renderTimeline(data) {
       if (parentsByChild.has(t.id)) body.push(`Upstream: ${parentsByChild.get(t.id).join(', ')}`);
       if (t.trace_source!=='explicit') body.push(`Identity: ${t.trace_source}`);
       const width=pos(end)-pos(start);
-      return end>start?`<span class="timeline-bar ${/fail/i.test(t.state)?'failed':t.service}" tabindex="0" style="left:${pos(start)}%;width:${Math.max(width,.3)}%;background:${datasetColor(t.trace.dataset_id)}" data-task-id="${esc(t.id)}" data-workflow="${esc(t.trace.workflow_id)}" data-tip-title="${esc(t.trace.dataset_id)} · ${esc(t.operation)}" data-tip-body="${esc(body.join('\n'))}">${width>6?esc(t.trace.unit_id.split('.').pop()):''}</span>`:'';
+      return end>start?`<span class="timeline-bar ${/fail/i.test(t.state)?'failed':t.service}" tabindex="0" style="left:${pos(start)}%;width:${Math.max(width,.3)}%;background:${datasetColor(t.trace.dataset_id)}" data-task-id="${esc(t.id)}" data-workflow="${esc(t.trace.workflow_id)}" data-tip-title="${esc(t.trace.dataset_id)}" data-tip-step="${esc(t.trace.unit_id||t.operation)}" data-tip-body="${esc(body.join('\n'))}">${width>6?esc(t.trace.unit_id.split('.').pop()):''}</span>`:'';
     }).join('');
     taskRows.set(lane.base,(taskRows.get(lane.base)||'')+`<div class="timeline-row"><div class="timeline-label" tabindex="0" data-tip-title="${lane.base==='Agent Bridge'?'Display lane':'Worker lane'}" data-tip-body="${esc(lane.label)}${lane.base==='Agent Bridge'?' · overlap only; executor identity unavailable':''}">${esc(lane.label)}</div><div class="timeline-track">${items}</div></div>`);
   }
