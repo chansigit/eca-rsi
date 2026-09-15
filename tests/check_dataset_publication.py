@@ -109,6 +109,21 @@ def check(path):
         assert unit['n_input'] == len(original) == len(surviving) + len(excluded)
         assert unit['n_survived'] == len(surviving) and unit['n_removed'] == len(excluded)
         assert unit['final'] == verified(unit['rounds'][-1])['zoom_in']
+        release = Path(unit_ref['path']).parent / 'release'
+        if release.exists():
+            receipt = verified(reference(release / 'receipt.json'))
+            assert receipt['state'] == 'complete' and receipt['input'] == unit_ref
+            for name, checksum in receipt['files'].items():
+                assert reference(release / name)['sha256'] == checksum
+            assert reference(release / 'final.h5ad')['sha256'] == verified(unit['final'])['files']['annotated_zmip.h5ad']['sha256']
+            ledger = frame(release / 'cell_ledger.csv.gz')
+            gone = frame(release / 'cell_exclusions.csv.gz')
+            assert len(ledger) == len(original) and set(ledger.cell_uid) == set(original.index)
+            assert set(ledger.loc[ledger.final_status == 'kept', 'cell_uid']) == surviving
+            assert len(gone) == len(excluded) and set(gone.cell_uid) == excluded
+            assert gone.reason.str.strip().ne('').all()
+            for source, column in (('source_id', 'source_unit'), ('source_cell_id', 'eca_source_cell_id')):
+                assert ledger[source].tolist() == original.loc[ledger.cell_uid, column].astype(str).tolist()
         result['units'].append(dict(name=unit['unit']['name'], n_input=len(original),
             n_survived=len(surviving), n_removed=len(excluded), rounds=rounds))
     for key in ('n_input', 'n_survived', 'n_removed'):

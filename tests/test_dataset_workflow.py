@@ -52,6 +52,7 @@ def test_next_round_does_not_repeat_organize_or_per_sample(monkeypatch):
             return spec['run_id'] + '.json'
         monkeypatch.setattr(module, 'call', call)
         monkeypatch.setattr(module.workflow, 'execute_child_workflow', child)
+        monkeypatch.setattr(module.workflow, 'patched', lambda name: False)
         progress = dict(per_sample='samples.json', input='previous-zoom.json', stats=[{}], rounds=[{}])
         assert await AnalysisUnitWorkflow().run({}, {}, progress) == 'completed.json'
         assert stages == [('cross_sample', 2), ('zoom_in', 2)]
@@ -75,6 +76,7 @@ def test_resume_reuses_complete_stages_and_only_starts_unfinished_zoom(monkeypat
             return 'zoom.json'
         monkeypatch.setattr(module, 'call', call)
         monkeypatch.setattr(module.workflow, 'execute_child_workflow', child)
+        monkeypatch.setattr(module.workflow, 'patched', lambda name: False)
         assert await AnalysisUnitWorkflow().run({}, {}, resume=True) == 'complete.json'
         assert started == ['zoom-in/zoom_in']
     asyncio.run(scenario())
@@ -90,6 +92,33 @@ def test_dataset_publication_preserves_incomplete_revision_and_seals_success(tmp
     assert read(path)['state'] == 'complete'
     with pytest.raises(ValueError, match='completed publication'):
         dataset_step('publish', [spec, [], [{'unit': 'U', 'error': 'failed'}]])
+
+
+def test_unit_waits_for_accepted_pool_release_before_completing(monkeypatch):
+    import ecarsi.dataset_workflow as module
+    actions = []
+    async def call(fn, action, args):
+        actions.append(action)
+        if action == 'stage':
+            return {'run_id': args[2]}
+        if action == 'round':
+            return {'publication': 'unit.json'}
+        if action == 'release':
+            assert args[1] == 'unit.json'
+            return {'id': 'release', 'output': 'released.json'}
+        assert action == 'released' and args == ['unit.json', 'result.json']
+    async def child(*args, **kwargs):
+        return 'stage.json'
+    async def pool(spec, request):
+        actions.append('await release')
+        return 'result.json'
+    monkeypatch.setattr(module, 'call', call)
+    monkeypatch.setattr(module, 'await_pool', pool)
+    monkeypatch.setattr(module.workflow, 'execute_child_workflow', child)
+    monkeypatch.setattr(module.workflow, 'patched', lambda name: True)
+    progress = dict(per_sample='per.json', input='zoom.json', stats=[{}], rounds=[{}])
+    assert asyncio.run(AnalysisUnitWorkflow().run({}, {}, progress)) == 'unit.json'
+    assert actions[-3:] == ['release', 'await release', 'released']
 
 
 def test_completed_stage_requires_same_input_spec_and_accepted_result(tmp_path, monkeypatch):

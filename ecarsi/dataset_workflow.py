@@ -5,7 +5,7 @@ from pathlib import Path
 from temporalio import activity, workflow
 from temporalio.exceptions import ApplicationError
 
-from .persample_workflow import call
+from .persample_workflow import await_pool, call
 
 
 def validate_spec(spec):
@@ -124,6 +124,34 @@ async def resume_dataset(client, identity, task_queue, reason):
 def dataset_step(action, args):
     from .agent_session import immutable, reference, verified
     from .warm_pool.state import digest, read, save, lock
+    if action == 'release':
+        from .warm_pool.state import submit
+        spec, path = args
+        source = reference(path)
+        unit = verified(source)
+        root = Path(spec['output_root']) / 'units' / unit['unit']['name']
+        if Path(path).resolve() != (root / 'publication.json').resolve() or unit['state'] != 'complete':
+            raise ValueError('Release requires this dataset\'s completed unit')
+        program = Path(__file__).with_name('dataset_release.py')
+        packet = immutable(root / 'release-input.json', dict(input=source))
+        request_id = spec['run_id'] + '.release-' + digest(source)[:16]
+        parent = Path(verified(unit['final'])['result']['path']).relative_to(Path(spec['pool_root']) / 'requests').parts[0]
+        submit(spec['pool_root'], dict(request_id=request_id, operation_id='dataset.release',
+            args=['-m', 'ecarsi.dataset_release', packet['path']], **spec['zoom_in']['merge_budget'],
+            inputs=[packet, source, *[reference(program.with_name(name)) for name in (
+                'dataset_release.py', 'release_state.py', 'ledger.py', 'review.py', 'umapdata.py')]],
+            outputs=['released.json'], trace=dict(workflow_id='dataset/' + spec['run_id'],
+                dataset_id=spec['dataset_id'], unit_id='dataset.release', depends_on=[parent])))
+        return dict(id=request_id, output='released.json')
+    if action == 'released':
+        source, result = args
+        receipt = verified(reference(result))
+        if receipt['state'] != 'complete' or receipt['input'] != reference(source):
+            raise ValueError('Release does not match completed unit')
+        release = verified(receipt['release'])
+        if release['state'] != 'complete' or release['input'] != receipt['input']:
+            raise ValueError('Release receipt does not match completed unit')
+        return source
     if action == 'completed':
         stage, spec = args
         root = Path(spec['output_root'])
@@ -310,6 +338,11 @@ class AnalysisUnitWorkflow:
         zoom = await execute('zoom_in', cross, number, ZoominWorkflow.run, 'zoom-in/')
         progress = await call(dataset_step, 'round', [spec, unit, progress, cross, zoom])
         if 'publication' in progress:
+            if workflow.patched('analysis-unit-release-v1'):
+                self._stage = 'publishing final results'
+                request = await call(dataset_step, 'release', [spec, progress['publication']])
+                result = await await_pool(spec, request)
+                await call(dataset_step, 'released', [progress['publication'], result])
             self._stage = 'complete'
             return progress['publication']
         # Bound each unit's Temporal history; continued runs preserve the child result contract.

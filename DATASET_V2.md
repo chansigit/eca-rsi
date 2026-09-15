@@ -32,10 +32,25 @@ dataset/
       publication.json
     rounds/round02/...
     publication.json
+    release/
+      final.h5ad
+      cell_ledger.csv.gz
+      cell_exclusions.csv.gz
+      decisions.json
+      needs_review.json
+      needs_review.md
+      sankey.json
+      umap.json
+      summary.json
+      receipt.json
   publication.json
 ```
 
-Stage publications retain their artifact references and exact exclusion ledgers. Unit publications link every round and the final Zoom-in publication; the dataset publication links the units. The final H5AD is the `annotated_zmip.h5ad` artifact of that final stage. These manifests do not yet recreate the legacy `release/` directory and its presentation pages.
+Stage publications retain their artifact references and exact exclusion ledgers. Unit publications link every round and the final Zoom-in publication; the dataset publication links the units.
+
+At completion, `dataset.release` runs on a Pool worker using the configured Zoom-in merge budget. The unit workflow waits for its accepted result before returning success. It independently copies the final H5AD and joins the effective stage ledgers, checking exact cell partitions and source IDs at every boundary. The ledger begins with the accepted Organize input; it does not invent exclusions before that input. OSP proposal-only removals are counted when cross-sample actually applies them.
+
+The release includes one row per input cell in `cell_ledger.csv.gz`, one row per actually excluded cell in `cell_exclusions.csv.gz`, embedded model decisions with their original references, review advisories, and UMAP/Sankey data. Original reason strings and structured evidence are retained. Reassignments remain survivors. Publication uses the existing crash-recoverable directory transaction; retries verify and reuse the committed receipt. Copying the release H5AD does not alias the upstream artifact. A Temporal patch marker keeps earlier histories replayable; already-completed old workflows are not retroactively exported. Legacy presentation pages are not yet generated.
 
 ## Iteration and scheduling
 
@@ -87,4 +102,8 @@ python tests/check_dataset_publication.py /shared/rsi/dataset/publication.json
 
 It verifies artifact identities, exact kept/excluded cell sets across every stage and round, original source IDs, nonempty exclusion reasons, retained skipped lineages, and preservation of previous-round annotations.
 
-Remaining production gates include completion of both live two-round workflows and their final artifact checks, large-dataset budget/history calibration, legacy release presentation and aggregation of scientific review advisories, and sustained multi-dataset throughput. The `forced_release` flag refers only to the convergence safety cap; scientific advisory details remain in stage artifacts. Ordinary Coordinator or Temporal service interruption while a workflow is running is recovered through the [shared control service](DURABLE_CONTROL.md), and does not require dataset resubmission.
+Release checks additionally cover repeat publication, exact string IDs such as `001` and `NA`, corruption rejection, independent H5AD copying, and waiting for the accepted Pool release before completing. The exporter also passed exact-set ledger checks against both real completed first rounds: Prostate 625 → 459 and Uterus 666 → 259. These checks do not imply that their second rounds have completed.
+
+A Pool export of the completed Uterus first-round artifacts succeeded on `sh04-14n18` in 5.2 seconds, with peak RSS 257 MiB (`release-validation-uterus-20260915`). This separate export-validation directory is not the dataset's final two-round release. The Coordinator was updated after 81 historical workflow runs replayed successfully.
+
+Remaining production gates include completion of both live two-round workflows and their final artifact checks, large-dataset budget/history calibration, legacy release presentation, consolidation of upstream-standardization review advisories, and sustained multi-dataset throughput. The `forced_release` flag refers only to the convergence safety cap. Ordinary Coordinator or Temporal service interruption while a workflow is running is recovered through the [shared control service](DURABLE_CONTROL.md), and does not require dataset resubmission.
