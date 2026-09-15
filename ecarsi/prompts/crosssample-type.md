@@ -6,6 +6,8 @@ Identify the cell types of the assigned base clusters before model-based quality
 4. Submit the type labels, supporting evidence, uncertainty, and any supported merge proposals using the host's submission schema. Record any required removal recommendation as a proposal only. Do not delete cells, apply merges, or change the evidence snapshot.
 5. Ensure all assigned clusters are covered and the label hierarchy and merge proposals are consistent. Correct validation errors through the provided submission tools. The host passes accepted proposals to quality annotation.
 
+For `boundary_reviews`, read `paga_neighbors_<base key>.csv` from the assigned evidence. Review each distinct pair of proposed coarse labels connected by those cluster neighbors, considering only clusters whose proposed action is `keep`. Do not include removed clusters, pairs with the same coarse label, or every possible pair of labels. Each review must contain exactly two `coarse_labels`, nonempty marker-based `evidence`, and a boolean `uncertain`. Use each pair once; if there are no such pairs, submit an empty list. Recompute this list when changing labels or removal proposals. A boundary can remain uncertain; uncertainty does not authorize dropping its cells.
+
 For a targeted review requested after quality-driven refinement, use the supplied new clustering version and matching evidence. Review only the affected clusters. A parent's type is context, not a confirmed label for every child.
 
 ## Cell-exclusion accounting

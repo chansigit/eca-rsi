@@ -49,9 +49,13 @@ Each completed round checks both upstream publication identity and cell-count co
 
 ## Acceptance scope
 
-Unit checks cover unchanged convergence decisions, source/count continuity, preservation of string cell IDs and prior annotations, skipping Organize/per-sample in subsequent rounds, and service discovery reconnection. Existing CPU numerical, DEG, exclusion-accounting, and legacy loop-control checks also pass.
+Unit checks cover unchanged convergence decisions, source/count continuity, preservation of string cell IDs and prior annotations, skipping Organize/per-sample in subsequent rounds, preserving a running sibling after another unit fails, and service discovery reconnection. Existing CPU numerical, DEG, exclusion-accounting, and legacy loop-control checks also pass.
 
 Real Prostate and Uterus acceptance runs were submitted as dataset workflows on 2026-09-15, using two fixed rounds and the explicitly reduced Zoom-in `min_cells=50` for these small inputs. The template retains the normal `min_cells=800`. Their final outcomes are recorded below after verification.
+
+Both runs completed Organize and per-sample automatically: Prostate retained 507 of 625 cells; Uterus retained 441 of 666. Both first cross-sample integrations and their 48 independent DEG tasks completed. Full two-round acceptance remains in progress.
+
+A separate numerical acceptance used the previously accepted Prostate Zoom-in publication to exercise `compute-round` on 433 real surviving cells. Reintegration completed on a Pool CPU worker in 31.6 seconds. All 42,128 genes and their raw counts were unchanged, source/sample identities and archived annotations matched, and PCA/UMAP values were finite (`numerical-round2-acceptance.json`). This checks the new reintegration adapter; it is separate from the two running dataset workflows.
 
 The first integration passes already demonstrate cross-dataset overlap: Uterus completed a 35-second `cross-sample.compute` request while Prostate was awaiting a model response. Matching Pool and Bridge receipts are recorded in `durable-control-20260915/compute-model-overlap.json`. This verifies that model waiting does not reserve numerical worker capacity; it is not a sustained-throughput benchmark.
 

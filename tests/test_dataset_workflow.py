@@ -56,3 +56,48 @@ def test_next_round_does_not_repeat_organize_or_per_sample(monkeypatch):
         assert await AnalysisUnitWorkflow().run({}, {}, progress) == 'completed.json'
         assert stages == [('cross_sample', 2), ('zoom_in', 2)]
     asyncio.run(scenario())
+
+
+def test_failed_unit_does_not_cancel_its_running_sibling(monkeypatch):
+    import ecarsi.dataset_workflow as module
+    from types import SimpleNamespace
+    from temporalio.exceptions import ApplicationError
+
+    async def scenario():
+        children, published = [], []
+
+        async def call(fn, action, args):
+            if action == 'organize':
+                return {'run_id': 'organize'}
+            if action == 'units':
+                return [dict(name='failed'), dict(name='healthy')]
+            assert action == 'publish'
+            published.append(args)
+            return 'incomplete.json'
+
+        async def organize(*args, **kwargs):
+            return 'organized'
+
+        async def child(*args, **kwargs):
+            future = asyncio.get_running_loop().create_future()
+            if not children:
+                future.set_exception(RuntimeError('scientific failure'))
+            children.append(future)
+            return future
+
+        async def wait(pending, **kwargs):
+            if len(pending) == 1:
+                assert not children[1].cancelled()
+                children[1].set_result('healthy.json')
+            return await asyncio.wait(pending, **kwargs)
+
+        monkeypatch.setattr(module, 'call', call)
+        monkeypatch.setattr(module.workflow, 'execute_child_workflow', organize)
+        monkeypatch.setattr(module.workflow, 'start_child_workflow', child)
+        monkeypatch.setattr(module.workflow, 'wait', wait)
+        monkeypatch.setattr(module.workflow, 'info', lambda: SimpleNamespace(workflow_id='dataset/test'))
+        with pytest.raises(ApplicationError, match='Analysis units failed'):
+            await module.DatasetWorkflow().run({})
+        assert published == [[{}, ['healthy.json'], [{'unit': 'failed', 'error': 'scientific failure'}]]]
+
+    asyncio.run(scenario())
