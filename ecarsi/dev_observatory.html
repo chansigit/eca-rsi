@@ -216,9 +216,13 @@ function buildFlowEdges(tasks) {
   }
   return edges;
 }
-function connectorPath(start,end,y1,y2) {
-  const bend=Math.max(0,end-start)*.45;
-  return `M ${start} ${y1} C ${start+bend} ${y1}, ${end-bend} ${y2}, ${end} ${y2}`;
+function connectorPath(x1,y1,x2,y2,vertical) {
+  if (vertical) {
+    const bend=(y2-y1)*.45;
+    return `M ${x1} ${y1} C ${x1} ${y1+bend}, ${x2} ${y2-bend}, ${x2} ${y2}`;
+  }
+  const bend=(x2-x1)*.45;
+  return `M ${x1} ${y1} C ${x1+bend} ${y1}, ${x2-bend} ${y2}, ${x2} ${y2}`;
 }
 function drawFlow(edges) {
   if (!edges.length) return 0;
@@ -231,13 +235,20 @@ function drawFlow(edges) {
     const a=bars.get(edge.parent.id), b=bars.get(edge.child.id);
     if (!a||!b) continue;
     const first=a.getBoundingClientRect(), second=b.getBoundingClientRect();
-    const x1=first.right-bounds.left, x2=second.left-bounds.left;
-    if (x1<scaleLeft || x2>scaleRight || x2<=x1+2) continue;
-    const y1=first.top-bounds.top+a.offsetHeight/2;
-    const y2=second.top-bounds.top+b.offsetHeight/2;
-    const inset=Math.min(4,Math.max(0,(x2-x1)/3)), start=x1+inset, end=x2-inset;
+    if (first.right<scaleLeft+bounds.left || second.left>scaleRight+bounds.left) continue;
+    const downward=second.top>first.top+2, upward=first.top>second.top+2;
+    let x1, y1, x2, y2;
+    if (downward||upward) {
+      x1=first.right-bounds.left-6; x2=second.left-bounds.left+6;
+      y1=(downward?first.bottom:first.top)-bounds.top;
+      y2=(downward?second.top:second.bottom)-bounds.top;
+    } else {
+      x1=first.right-bounds.left; x2=second.left-bounds.left;
+      y1=first.top-bounds.top+a.offsetHeight/2; y2=second.top-bounds.top+b.offsetHeight/2;
+      if (x2<=x1+2) continue;
+    }
     const color=datasetColor(edge.child.trace.dataset_id);
-    paths.push(`<path class="flow-edge" data-workflow="${esc(edge.child.trace.workflow_id)}" d="${connectorPath(start,end,y1,y2)}" fill="none" stroke="${color}" stroke-width="6" vector-effect="non-scaling-stroke"/>`);
+    paths.push(`<path class="flow-edge" data-workflow="${esc(edge.child.trace.workflow_id)}" d="${connectorPath(x1,y1,x2,y2,downward||upward)}" fill="none" stroke="${color}" stroke-width="6" vector-effect="non-scaling-stroke"/>`);
   }
   if (paths.length) {
     root.style.setProperty('--flow-idle-opacity',paths.length>80?'.07':'.22');
