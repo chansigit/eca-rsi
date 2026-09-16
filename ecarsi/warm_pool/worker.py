@@ -300,12 +300,13 @@ def run(folder, request, ownership):
                 os.close(gate_read)
                 os.close(gate_write)
             previous, stamp = group_usage(proc.pid), time.monotonic()
-            peak = 0
+            peak, cpu_ticks = 0, 0  # cpu_ticks: positive deltas only; an exiting child drops out of the group sum
             gpu_usage, gpu_stamp, peak_gpu_mb = None, 0, 0
             while os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is None:
                 now = time.monotonic()
                 usage = group_usage(proc.pid)
                 peak = max(peak, usage["rss_bytes"])
+                cpu_ticks += max(0, usage["ticks"] - previous["ticks"])
                 if gpu_id and now - gpu_stamp >= 5:
                     from .allocation import gpu_device
                     gpu_usage, gpu_stamp = gpu_device(gpu_id), now
@@ -332,7 +333,8 @@ def run(folder, request, ownership):
             rc = proc.wait()
             os.fsync(out.fileno())
             os.fsync(err.fileno())
-            receipt.update(exit_code=rc, peak_rss_bytes=peak, gpu_ids=[gpu_id] if gpu_id else [],
+            receipt.update(exit_code=rc, peak_rss_bytes=peak, cpu_seconds=round(cpu_ticks / os.sysconf("SC_CLK_TCK"), 2),
+                           gpu_ids=[gpu_id] if gpu_id else [],
                            compute_backend="rapids" if gpu_id else "cpu", peak_gpu_memory_mb=peak_gpu_mb)
             if receipt["state"] == "cancelled":
                 return 0

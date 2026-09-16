@@ -67,6 +67,7 @@ def test_recovery_cache_keeps_live_orphan_resources_reserved(tmp_path):
     completed, folder = launch('completed', "from pathlib import Path;Path('result.json').write_text('{}')")
     assert completed.wait(timeout=10) == 0
     assert worker.reconcile_local(tmp_path, [cpu]) == []
+    assert read(folder / 'receipt.json')['cpu_seconds'] >= 0  # integrated group CPU time, for CPU right-sizing
     phases = read(folder / 'receipt.json')['preflight_seconds']
     assert set(phases) == {'local_recovery', 'runtime_validation', 'input_validation'}
     assert all(seconds >= 0 for seconds in phases.values())
