@@ -315,8 +315,9 @@ async def run_worker(client, task_queue, workflow_slots=None):
     from .zoomin_workflow import ZoominWorkflow, zoomin_step
     from .dataset_workflow import DatasetWorkflow, AnalysisUnitWorkflow, dataset_step
     if workflow_slots is None:
-        cpus = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
-        workflow_slots = max(1, min(8, cpus // 2))
+        # Python history replay shares the process GIL. Concurrent cold replays
+        # made 14k-event agent histories miss their 10-second task deadline.
+        workflow_slots = 1
     if workflow_slots < 1:
         raise ValueError("Workflow slots must be positive")
     # The SDK default permits 500 concurrent replays; cold recovery must fit this host.
@@ -371,7 +372,7 @@ async def main():
     parser.add_argument("--task-queue", default=QUEUE)
     commands = parser.add_subparsers(dest="command", required=True)
     p = commands.add_parser("worker")
-    p.add_argument("--workflow-slots", type=int, help="concurrent workflow activations; default uses up to half the available CPUs, capped at 8")
+    p.add_argument("--workflow-slots", type=int, help="concurrent workflow activations; default 1 to bound Python history replay; activities and Pool tasks remain concurrent")
     p = commands.add_parser("start")
     p.add_argument("spec", type=Path)
     p = commands.add_parser("start-agent")

@@ -361,3 +361,42 @@ must be called individually, after their evidence has returned. Existing session
 without declarations retain their original single-tool policy. New per-sample,
 cross-sample and Zoom-in sessions declare their evidence readers explicitly;
 subclustering and decision tools remain individual operations.
+
+### Pack mandatory evidence on the Worker
+
+Before a new evidence tool request is submitted, `agent_evidence.plan` records
+its exact execution in `execution.json`. Existing requests and saved plans retain
+their original command. This works with existing single-tool sessions: one model
+request can return several observations, without changing its model-call policy.
+If the model already requested multiple tools in the same turn, normal ordered
+execution is retained to avoid automatically reading its requested evidence twice.
+
+The Worker invokes the original registered tools sequentially, carrying forward
+their immutable state. It can return up to eight continuous evidence pages or
+mandatory observations in one response. OSP adds missing figures/tables and
+current QC; cross-sample inclusion packs sample inventories and required UMAPs;
+cross-sample quality can include QC and accepted type context. Zoom-in also uses
+bounded text pagination and lineage QC. Gene selection, DEG queries, refinement,
+and decisions remain model-directed. No scientific submission check is skipped.
+
+The response retains the requested tool's result, adds `additional_evidence`,
+and records `evidence_batch.calls` plus an explicit pending tool/arguments when
+more reading is required. Additional images use indices into the top-level image
+array. The batch is bounded by eight calls, 240 KB of serialized evidence text,
+16 images and approximately 9 MiB of PNG data. Evidence that does not fit is not
+added to the published read state. QC reserves its registered matrix-reading
+budget; OSP may reuse the existing accepted-compute memory calibration.
+
+The execution layer also corrects the old cross-sample text reader's page offset,
+which advanced past its one-character lookahead. Original artifact hash checks
+remain active, and tests check complete text delivery and rejection of changed
+evidence. Batch size measures combined observations, not a guaranteed reduction
+in provider calls: live model continuations and downstream results must still be
+observed to establish that benefit.
+
+Dataset and per-sample recovery recognize a superseded model attempt only when
+its Worker has a terminal receipt and the same portable model turn has a different,
+successful attempt whose verified output matches the accepted Bridge reply.
+Historical timeout cancellations therefore do not block that recovery. An
+uncertain Worker, a cancelled replacement, or an ordinary scientific tool failure
+still requires reconciliation; their safety checks remain unchanged.

@@ -13,6 +13,44 @@ from ecarsi import agent_bridge as bridge, agent_dispatch as dispatch, agent_ses
 from ecarsi.warm_pool.state import save, read, status
 
 
+def test_recovery_ignores_only_terminal_model_attempts_with_an_accepted_replacement(tmp_path):
+    from tests.test_agent_session import setup, completed_tool
+    from ecarsi.warm_pool.state import cancel
+    from ecarsi.persample_workflow import sample_step
+    spec, _ = setup(tmp_path)
+    root = Path(spec['bridge_root'])
+    config = read(root / 'config.json')
+    save(root / 'config.json', dict(config, pool_root=spec['pool_root']))
+    spec = dict(spec, session_id='recovery', output_root=str(tmp_path / 'recovery'),
+        trace=dict(workflow_id='persample/test', dataset_id=spec['dataset_id'],
+                   unit_id='osp.annotate', sample_id='sample'))
+    ref = session.create_session(spec)
+    turn = session.submit_turn(ref, 0)
+    bridge.serve(root, once=True)
+    first = bridge.status(root, turn)['attempts'][0]['pool_request_id']
+    completed_tool(spec, dict(request_id=first), dict(outcome='timeout', elapsed_seconds=5))
+    bridge.serve(root, once=True)
+    second = bridge.status(root, turn)['attempts'][-1]['pool_request_id']
+    assert second != first
+    cancel(spec['pool_root'], first)
+    assert not dispatch.completed_replacement(spec['pool_root'], first, root)
+    completed_tool(spec, dict(request_id=second), dict(outcome='success', response={'kind': 'tools'}, worker={}))
+    bridge.serve(root, once=True)
+    assert dispatch.completed_replacement(spec['pool_root'], first, root)
+    assert sample_step('recoverable', [dict(spec, run_id='test'), 'sample'])
+    assert not dispatch.completed_replacement(spec['pool_root'], second, root)
+    # A cancellation without its terminal process receipt is still uncertain.
+    p = Path(spec['pool_root']) / 'requests' / first
+    receipt = p / read(p / 'request.json')['attempt_id'] / 'receipt.json'
+    before = read(receipt); receipt.unlink()
+    assert not dispatch.completed_replacement(spec['pool_root'], first, root)
+    save(receipt, before)
+    # Cancelling the accepted replacement removes recovery eligibility too.
+    cancel(spec['pool_root'], second)
+    assert not dispatch.completed_replacement(spec['pool_root'], first, root)
+    assert not sample_step('recoverable', [dict(spec, run_id='test'), 'sample'])
+
+
 def test_audited_retry_survives_dispatch_restart_and_preserves_failed_attempt(tmp_path):
     import pytest
     from tests.test_agent_session import setup, completed_tool

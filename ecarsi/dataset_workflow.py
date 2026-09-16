@@ -103,7 +103,11 @@ async def resume_dataset(client, identity, task_queue, reason):
             if read(path)['spec'].get('trace', {}).get('workflow_id') in identities:
                 state = inspect(spec[service], path.parent.name)['state']
                 if state not in allowed:
-                    raise ValueError(f'Reconcile {path.parent.name} ({state}) before resume')
+                    from .agent_dispatch import completed_replacement
+                    if service != 'pool_root' or not completed_replacement(
+                            spec['pool_root'], path.parent.name, spec['bridge_root']):
+                        raise ValueError(f'Reconcile {path.parent.name} ({state}) before resume')
+                    state = 'superseded_model_attempt'
                 requests.append(dict(service=service, request_id=path.parent.name, state=state))
     from uuid import uuid4
     audit = root / 'recoveries' / (uuid4().hex + '.json')

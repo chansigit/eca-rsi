@@ -103,7 +103,10 @@ def sample_step(action, args):
                 if trace.get("workflow_id") == "persample/" + spec["run_id"] and trace.get("sample_id") == sample:
                     found = True
                     if inspect(root, path.parent.name)["state"] not in allowed:
-                        return False
+                        from .agent_dispatch import completed_replacement
+                        if root != spec['pool_root'] or not completed_replacement(
+                                root, path.parent.name, spec['bridge_root']):
+                            return False
         return found
     if action == "publish":
         spec, results, failed, totals = args

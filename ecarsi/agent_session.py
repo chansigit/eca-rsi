@@ -433,8 +433,14 @@ def tool_request(session_ref, reply_path, index, previous=None):
            "inputs": [arguments, reference(reply_path), *state_inputs, *tool["inputs"]],
            "trace": {"workflow_id": "agent/" + s["session_id"], "dataset_id": s["dataset_id"],
                      "unit_id": tool["name"], **s.get("trace", {}), "depends_on": [previous or turn_id]}}
-    from .agent_tool_execution import plan
-    request = plan(request, directory, s["pool_root"])
+    if len(calls) > 1:
+        # The model already requested this batch. Prefetching its other calls
+        # would return the same evidence twice in the continuation.
+        from .agent_tool_execution import plan
+        request = plan(request, directory, s['pool_root'])
+    else:
+        from .agent_evidence import plan
+        request = plan(request, directory, s)
     if (state_inputs and len(args) == 6 and args[:3] == ['-m', 'ecarsi.persample_v2', 'tool']
             and tool['name'] in {'check_genes', 'check_qc_scores', 'submit_annotation'}):
         state = verified(state_ref)

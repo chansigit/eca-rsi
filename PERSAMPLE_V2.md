@@ -63,10 +63,12 @@ patch marker preserves the earlier whole-sample admission behavior when replayin
 older histories. Partition still loads the organized matrix once per batch, so
 its memory budget must cover that matrix.
 
-Evidence reads request at most 256 MiB and never load the expression matrix.
-Table reads combine up to four complete 60,000-character pages, preserving exact
-text, page coverage and an explicit next offset for larger evidence. A rejected
-annotation lists missing pages/checks; scientific validation remains unchanged.
+Standalone legacy evidence reads request at most 256 MiB without loading the
+expression matrix. New single-tool requests can pack missing tables, figures
+and current QC into one Worker response, using the registered matrix-reading
+budget when QC is included. See [evidence batching](AGENT_BRIDGE_V2.md#pack-mandatory-evidence-on-the-worker)
+for response limits and pending-page handling. Marker selection remains with the
+model. A rejected annotation lists missing pages/checks; scientific validation remains unchanged.
 Execution plans are fixed before submission and reuse their exact request on
 activity retries. Existing requests and pinned scientific programs are retained.
 

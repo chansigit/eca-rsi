@@ -194,6 +194,44 @@ def settings_timeout(attempt):
     return read(attempt["plan"]["path"])["timeout_seconds"]
 
 
+def completed_replacement(pool_root, request_id, bridge_root):
+    """A fenced model-only attempt cannot block recovery after its reply succeeded."""
+    from .agent_session import verified
+    from .agent_bridge import status as bridge_status
+    request = read(Path(pool_root) / 'requests' / request_id / 'request.json', {})
+    spec = request.get('spec', {})
+    args = spec.get('args', [])
+    if (spec.get('operation_id') != 'agent.call' or len(args) != 4 or
+            args[:3] != ['-m', 'ecarsi.agent_dispatch', 'execute']):
+        return False
+    current = status(pool_root, request_id)
+    if current['state'] not in {'failed', 'cancelled'} or not current.get('receipt'):
+        return False
+    plan_ref = next((r for r in spec['inputs'] if r['path'] == args[3]), None)
+    if plan_ref is None:
+        return False
+    plan = verified(plan_ref)
+    turn = plan['request']['spec']
+    if turn['operation_id'] != 'agent.turn' or verified(turn['session']).get('protocol', 1) < 2:
+        return False
+    folder = Path(bridge_root).resolve() / 'requests' / turn['request_id']
+    if Path(args[3]).resolve().parent != folder or read(folder / 'request.json') != plan['request']:
+        return False
+    result = bridge_status(bridge_root, folder.name)
+    attempts = result.get('attempts', [])
+    if (result['state'] != 'reply_saved' or not attempts or
+            request_id not in [a['pool_request_id'] for a in attempts[:-1]] or
+            result.get('pool_root') != str(pool_root) or
+            result.get('pool_request_id') != attempts[-1]['pool_request_id']):
+        return False
+    winner = status(pool_root, result['pool_request_id'])
+    if winner['state'] != 'succeeded':
+        return False
+    output = next(o for o in winner['receipt']['outputs'] if Path(o['path']).name == 'result.json')
+    response = verified({k: output[k] for k in ('path', 'sha256')})
+    return response.get('outcome') == 'success' and response.get('response') == result.get('response')
+
+
 def session_order(queued, wait_seconds, cache, now, offset):
     """Advance existing sessions while reserving one in four choices for aged FIFO."""
     sessions = deque(sorted(queued, key=lambda x: (cache[x[1].name]['first'], x[0])))
