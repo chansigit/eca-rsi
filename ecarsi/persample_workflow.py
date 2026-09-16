@@ -213,7 +213,9 @@ class PersampleWorkflow:
 
     @set_in_flight_limit.validator
     def validate_in_flight_limit(self, limit: int):
-        if type(limit) is not int or limit < getattr(self, "_batch_size", 1):
+        if not hasattr(self, "_batch_size"):
+            raise ValueError("Sample admission is not initialized; retry after the workflow starts")
+        if type(limit) is not int or limit < self._batch_size:
             raise ValueError("Sample limit must be an integer at least as large as batch_size")
 
     @workflow.query

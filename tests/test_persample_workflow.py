@@ -91,3 +91,16 @@ def test_resume_retains_incomplete_publication_and_cannot_replace_complete(tmp_p
     assert incomplete in [read(p) for p in tmp_path.glob("publication-*.json")]
     with pytest.raises(ValueError, match="Cannot replace"):
         sample_step("publish", [spec, [], [{"sample": "s", "error": "later"}], totals])
+
+
+def test_admission_update_cannot_deadlock_an_uninitialized_or_larger_batch():
+    from ecarsi.persample_workflow import PersampleWorkflow
+    workflow = PersampleWorkflow()
+    with pytest.raises(ValueError, match="not initialized"):
+        workflow.set_in_flight_limit(1)
+    workflow._batch_size = 3
+    for value in (2, True, 3.5):
+        with pytest.raises(ValueError, match="at least as large as batch_size"):
+            workflow.set_in_flight_limit(value)
+    assert workflow.set_in_flight_limit(16) == 16
+    assert workflow.in_flight_limit() == 16
