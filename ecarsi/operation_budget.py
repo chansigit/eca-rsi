@@ -35,3 +35,38 @@ def from_compute(request, computed, policy_path, pool_root):
                              inputs=[*request['inputs'], reference(receipt_path)])
     immutable(policy_path, dict(base_digest=digest(request), request=optimized))
     return optimized
+
+
+def from_deg_buffers(request, prepared, policy_path, pool_root):
+    """Budget the mapped DEG workspace, not the dataset's counts and graph layers."""
+    saved = read(policy_path)
+    if saved is not None:
+        if saved['base_digest'] != digest(request):
+            raise ValueError('DEG resource request changed')
+        return saved['request']
+    if (Path(pool_root) / 'requests' / request['request_id'] / 'request.json').exists():
+        return request
+    source = Path(prepared['path']).resolve()
+    try:
+        source.relative_to(Path(pool_root).resolve() / 'requests')
+    except ValueError:
+        return request
+    receipt_path = source.parent.parent / 'receipt.json'
+    receipt = read(receipt_path, {})
+    if (receipt.get('state') != 'succeeded' or request.get('gpu') or
+            prepared not in [{k: o[k] for k in ('path', 'sha256')} for o in receipt.get('outputs', [])]):
+        return request
+    bundle = verified(prepared)
+    files = {k.removeprefix('deg_input/'): v for k, v in bundle.get('files', {}).items() if k.startswith('deg_input/')}
+    if set(files) not in ({'metadata.h5ad', 'matrix.npy'}, {'metadata.h5ad', 'data.npy', 'indices.npy', 'indptr.npy'}):
+        return request  # Unknown input layouts keep their original reservation.
+    sizes = {name: Path(ref['path']).stat().st_size for name, ref in files.items()}
+    # CPU comparisons map the shared expression buffers and own their mutable
+    # sparse workspace/subset. Allow four full buffer copies plus 2 GiB for
+    # imports, metadata, rank chunks and result tables; local tasks use the same
+    # conservative full-input estimate. Never extrapolate from instantaneous RSS.
+    memory = math.ceil((2048 + 4 * sum(sizes.values()) / 2**20) / 256) * 256
+    optimized = dict(request, memory_mb=min(request['memory_mb'], memory))
+    immutable(policy_path, dict(base_digest=digest(request), input=prepared,
+        buffer_bytes=sizes, workspace_copies=4, fixed_memory_mb=2048, request=optimized))
+    return optimized

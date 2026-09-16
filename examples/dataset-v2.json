@@ -73,7 +73,7 @@
       "memory_mb": 8192,
       "timeout_seconds": 600
     },
-    "max_in_flight_deg": 6,
+    "max_in_flight_deg": 16,
     "max_refinements": 2,
     "config": {
       "tissue": "prostate",
@@ -98,7 +98,7 @@
       "max_refinements": 2
     },
     "max_in_flight_lineages": 2,
-    "max_in_flight_deg": 6,
+    "max_in_flight_deg": 16,
     "prepare_budget": {
       "cpus": 1,
       "memory_mb": 4096,

@@ -127,16 +127,35 @@ def crosssample_step(action, args):
     else:
         raise ValueError('Unknown cross-sample operation')
     unit = 'cross-sample.' + (payload['phase'] + '.prepare' if action == 'agent' else action)
-    submit(spec['pool_root'], dict(request_id=request_id, operation_id=unit,
+    request = dict(request_id=request_id, operation_id=unit,
            args=['-m', 'ecarsi.crosssample_v2', *command], **budget, **accelerator,
            inputs=refs + [reference(Path(__file__).with_name(name)) for name in ('crosssample_v2.py', 'round_policy.py')], outputs=[output],
            trace=dict(workflow_id='cross-sample/' + spec['run_id'], dataset_id=spec['dataset_id'],
-                      unit_id=unit, depends_on=parents)))
+                      unit_id=unit, depends_on=parents))
+    if action == 'deg':
+        from .operation_budget import from_deg_buffers
+        request = from_deg_buffers(request, refs[0], root / (request_id + '.resources.json'), spec['pool_root'])
+    submit(spec['pool_root'], request)
     return {'id': request_id, 'output': output}
 
 
 @workflow.defn
 class CrosssampleWorkflow:
+    @workflow.update
+    def set_deg_limit(self, limit: int) -> int:
+        self.validate_deg_limit(limit)
+        self._deg_limit = limit
+        return limit
+
+    @set_deg_limit.validator
+    def validate_deg_limit(self, limit: int):
+        if type(limit) is not int or not 1 <= limit <= 256:
+            raise ValueError('DEG submission window must be an integer from 1 to 256')
+
+    @workflow.query
+    def deg_limit(self):
+        return getattr(self, '_deg_limit', None)
+
     @workflow.query
     def stage(self):
         return getattr(self, '_stage', 'created')
@@ -144,6 +163,7 @@ class CrosssampleWorkflow:
     @workflow.run
     async def run(self, spec):
         from .work_coordinator import AgentWorkflow
+        self._deg_limit = getattr(self, '_deg_limit', spec['max_in_flight_deg'])
 
         async def run_operation(action, paths, parents, **details):
             request = await call(crosssample_step, action, [spec, dict(paths=paths, **details), parents])
@@ -177,7 +197,7 @@ class CrosssampleWorkflow:
             plan = await call(crosssample_step, 'read', [prepared])
             pending, results, next_index = {}, {}, 0
             while next_index < len(plan['tasks']) or pending:
-                while next_index < len(plan['tasks']) and len(pending) < spec['max_in_flight_deg']:
+                while next_index < len(plan['tasks']) and len(pending) < self._deg_limit:
                     index = next_index
                     task = asyncio.create_task(run_operation('deg', [prepared], [parent], index=index))
                     pending[task] = index

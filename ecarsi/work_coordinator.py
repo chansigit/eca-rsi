@@ -415,6 +415,10 @@ async def main():
     p = commands.add_parser("set-persample-limit")
     p.add_argument("run_id")
     p.add_argument("limit", type=int)
+    p = commands.add_parser('set-deg-limit')
+    p.add_argument('stage', choices=['cross-sample', 'zoom-in'])
+    p.add_argument('run_id')
+    p.add_argument('limit', type=int)
     for name in ("status", "status-agent", "status-persample", "resume-persample", "status-crosssample", "resume-crosssample", "status-zoomin", "resume-zoomin", "status-dataset"):
         p = commands.add_parser(name)
         p.add_argument("run_id")
@@ -468,6 +472,14 @@ async def main():
         handle = client.get_workflow_handle('persample/' + identifier(args.run_id))
         limit = await handle.execute_update(PersampleWorkflow.set_in_flight_limit, args.limit)
         print(json.dumps(dict(workflow_id=handle.id, max_in_flight_samples=limit)))
+    elif args.command == 'set-deg-limit':
+        from .crosssample_workflow import CrosssampleWorkflow
+        from .zoomin_workflow import ZoominWorkflow
+        from .warm_pool.state import identifier
+        kind = CrosssampleWorkflow if args.stage == 'cross-sample' else ZoominWorkflow
+        handle = client.get_workflow_handle(args.stage + '/' + identifier(args.run_id))
+        limit = await handle.execute_update(kind.set_deg_limit, args.limit)
+        print(json.dumps(dict(workflow_id=handle.id, max_in_flight_deg=limit)))
     elif args.command == 'resume-dataset':
         from .dataset_workflow import resume_dataset
         from .warm_pool.state import identifier

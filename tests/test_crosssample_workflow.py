@@ -28,7 +28,8 @@ def test_gpu_selection_and_large_fanin(tmp_path):
     with pytest.raises(ValueError):validate_trace({**trace,'depends_on':['d'+str(i) for i in range(4097)]})
 
 
-def test_workflow_fanout_and_annotation_order(monkeypatch):
+@pytest.mark.parametrize('change_limit', [False, True])
+def test_workflow_fanout_and_annotation_order(monkeypatch, change_limit):
     import ecarsi.crosssample_workflow as module
     async def scenario():
         active=peak=0;events=[];requests={}
@@ -51,6 +52,8 @@ def test_workflow_fanout_and_annotation_order(monkeypatch):
             if request['id'].startswith('deg-'):
                 active+=1;peak=max(peak,active)
                 await asyncio.sleep(.001)
+                if change_limit and request['id']=='deg-0':
+                    assert workflow.set_deg_limit(5) == 5
                 active-=1
             return request['id']
         async def child(fn,session,**kwargs):return 'decision-'+session['session_id'].split('-')[1]
@@ -60,7 +63,7 @@ def test_workflow_fanout_and_annotation_order(monkeypatch):
         monkeypatch.setattr(module.workflow,'wait',asyncio.wait)
         workflow=CrosssampleWorkflow()
         assert await workflow.run({'max_in_flight_deg':3,'max_refinements':0})=='publication'
-        assert peak==3 and events.index('assemble')>events.index('deg-7')
+        assert peak==(5 if change_limit else 3) and events.index('assemble')>events.index('deg-7')
         assert events.index('agent-type')<events.index('agent-quality')<events.index('finalize')
         assert len(requests['assemble'][1])==9
         assert requests['finalize'][0]['paths']==['assemble','decision-type','decision-quality']

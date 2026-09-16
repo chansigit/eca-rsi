@@ -21,7 +21,7 @@ Use the deployment's recorded source revision and science image. The image must 
   "deg_budget": {"cpus": 1, "memory_mb": 4096, "timeout_seconds": 1800},
   "tool_budget": {"cpus": 1, "memory_mb": 8192, "timeout_seconds": 600},
   "finalize_budget": {"cpus": 2, "memory_mb": 16384, "timeout_seconds": 1800},
-  "max_in_flight_deg": 8, "max_refinements": 2,
+  "max_in_flight_deg": 16, "max_refinements": 2,
   "config": {
     "batch_col": "eca_sample_id", "species": "human", "tissue": "prostate",
     "n_top_genes": 3000, "n_pcs": 30, "n_neighbors": 15,
@@ -31,6 +31,28 @@ Use the deployment's recorded source revision and science image. The image must 
 ```
 
 Budgets are examples, not dataset-size estimates. Set them for the input and available workers. The output directory must be fresh. Species and sample key must match Organize's accepted mapping. `auto` prefers GPU above the configured threshold and permits CPU fallback; `rapids` requires GPU; `cpu` uses Scanpy. `max_in_flight_deg` bounds each dataset's dispatched comparisons; worker resources control actual concurrency.
+
+CPU DEG requests with the recognized mapped-buffer layout use a persisted memory
+estimate: four times the expression/metadata file bytes plus 2 GiB, rounded up to
+256 MiB and capped by `deg_budget.memory_mb`. This allows private sparse copies,
+rank workspaces and imports without reserving counts/graph layers that DEG never
+loads. Unknown layouts, unaccepted inputs and GPU requests retain their declared
+budgets. Existing requests never change. A replay over 1,262 completed comparisons
+from 20 development datasets retained at least 2.17 times their observed RSS peak;
+this is calibration evidence, not a guarantee for every future input/runtime.
+
+The dispatch window can also be updated without restarting a workflow:
+
+```bash
+python -m ecarsi.work_coordinator --service-root /absolute/control \
+  set-deg-limit cross-sample RUN_ID 16
+```
+
+The acknowledged update is durable in Temporal history. Lowering the window lets
+already dispatched work finish before refilling; it does not cancel comparisons.
+The configured `max_in_flight_deg` remains the initial value for each new workflow.
+The reusable dataset example now uses 16. Pool grants still decide how many of
+these submitted requests actually execute together.
 
 ```bash
 python -m ecarsi.work_coordinator --temporal HOST:7233 start-crosssample spec.json

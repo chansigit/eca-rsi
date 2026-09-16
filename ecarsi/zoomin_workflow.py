@@ -92,15 +92,34 @@ def zoomin_step(action,args):
     packet=immutable(root/(request_id+'.json'),dict(spec=spec,refs=refs,request_id=request_id,**{k:v for k,v in payload.items() if k!='paths'}))
     unit='zoom-in.'+(payload['kind']+'.prepare' if action=='agent' else action)
     program=Path(__file__).with_name('zoomin_v2.py')
-    submit(spec['pool_root'],dict(request_id=request_id,operation_id=unit,
+    request=dict(request_id=request_id,operation_id=unit,
         args=['-m','ecarsi.zoomin_v2',action,packet['path']],**spec[budget],**gpu,
         inputs=[packet,*[reference(program.with_name(n)) for n in ('zoomin_v2.py','crosssample_v2.py','persample_v2.py')],spec['input'],*refs],outputs=[output],
-        trace=dict(workflow_id='zoom-in/'+spec['run_id'],dataset_id=spec['dataset_id'],unit_id=unit,depends_on=parents)))
+        trace=dict(workflow_id='zoom-in/'+spec['run_id'],dataset_id=spec['dataset_id'],unit_id=unit,depends_on=parents))
+    if action=='deg':
+        from .operation_budget import from_deg_buffers
+        request=from_deg_buffers(request,refs[0],root/(request_id+'.resources.json'),spec['pool_root'])
+    submit(spec['pool_root'],request)
     return {'id':request_id,'output':output}
 
 
 @workflow.defn
 class ZoominWorkflow:
+    @workflow.update
+    def set_deg_limit(self, limit: int) -> int:
+        self.validate_deg_limit(limit)
+        self._deg_limit = limit
+        return limit
+
+    @set_deg_limit.validator
+    def validate_deg_limit(self, limit: int):
+        if type(limit) is not int or not 1 <= limit <= 256:
+            raise ValueError('DEG submission window must be an integer from 1 to 256')
+
+    @workflow.query
+    def deg_limit(self):
+        return getattr(self, '_deg_limit', None)
+
     @workflow.query
     def stage(self):
         return getattr(self,'_stage','created')
@@ -108,6 +127,7 @@ class ZoominWorkflow:
     @workflow.run
     async def run(self,spec):
         from .work_coordinator import AgentWorkflow
+        self._deg_limit=getattr(self,'_deg_limit',spec['max_in_flight_deg'])
         async def run(action,paths,parents,**details):
             request=await call(zoomin_step,action,[spec,dict(paths=paths,**details),parents])
             return await await_pool(spec,request),request['id']
@@ -138,7 +158,7 @@ class ZoominWorkflow:
                     bundle=await call(zoomin_step,'read',[computed])
                     pending,comparisons,next_index={},{},0
                     while next_index<len(bundle['tasks']) or pending:
-                        while next_index<len(bundle['tasks']) and len(pending)<spec['max_in_flight_deg']:
+                        while next_index<len(bundle['tasks']) and len(pending)<self._deg_limit:
                             task=asyncio.create_task(run('deg',[computed],[compute_parent],index=next_index))
                             pending[task]=next_index;next_index+=1
                         done,_=await workflow.wait(pending,return_when=asyncio.FIRST_COMPLETED)

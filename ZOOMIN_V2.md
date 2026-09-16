@@ -24,6 +24,12 @@ python -m ecarsi.work_coordinator --temporal HOST:7233 resume-zoomin RUN_ID
 
 The spec requires `run_id`, `dataset_id`, an SHA-256 `input` reference to the completed cross-sample publication, a fresh absolute `output_root`, `pool_root`, `bridge_root`, `max_in_flight_lineages`, and `max_in_flight_deg`. Set `prepare_budget`, `subset_budget`, `compute_budget`, `deg_budget`, `tool_budget`, and `merge_budget`, each with positive integer `cpus`, `memory_mb`, and `timeout_seconds`.
 
+CPU comparisons share cross-sample's persisted mapped-buffer memory estimator.
+Their configured per-lineage dispatch window can be changed with
+`python -m ecarsi.work_coordinator --service-root /absolute/control set-deg-limit zoom-in RUN_ID 16`.
+The update survives Coordinator restart, preserves already dispatched work, and
+leaves physical CPU/memory/GPU concurrency to the Pool scheduler.
+
 `config` requires `batch_col`, `species`, `tissue`, `min_cells`, `n_top_genes`, `n_pcs`, `n_neighbors`, `compute_backend`, `gpu_min_cells`, `gpu_memory_mb`, and `max_refinements`. Species and sample key must match the accepted cross-sample run. Use the existing ZMIP minimum size of 800 unless the experiment explicitly calls for a different value; small acceptance subsets may use a documented lower limit.
 
 Resume accepts only a failed workflow whose saved spec and input are unchanged and whose external outcomes have been reconciled. It reuses accepted Pool/Bridge results. Unknown executions are not blindly repeated. Process restart recovery is separate from Temporal Service storage survival after node expiry; persistent service relocation and large-data resource calibration remain separate production gates.
