@@ -96,7 +96,7 @@ def dispatch(root, folder, config, model):
 
 def _dispatch(root, folder, config, model):
     """Persist intent before enqueueing so dispatcher replacement cannot duplicate a turn."""
-    from .agent_session import immutable
+    from .agent_session import immutable, archive_adapter
     request = read(folder / "request.json")
     settings = policy(config)
     state = read(folder / "state.json", {})
@@ -106,7 +106,7 @@ def _dispatch(root, folder, config, model):
     plan_path = folder / f"dispatch-{number}.json"
     plan = read(plan_path) or dict(request=request, model=model, timeout_seconds=settings["response_timeout_seconds"],
                 cpus=settings["worker_cpus"], memory_mb=settings["worker_memory_mb"],
-                adapter_sha256=file_digest(Path(__file__).with_name("agent_session.py")))
+                adapter_sha256=archive_adapter(root)["sha256"])
     plan_ref = immutable(plan_path, plan)
     attempt = dict(pool_request_id=pool_id, model=plan["model"], plan=plan_ref, submitted_at=time.time())
     attempts.append(attempt)
@@ -282,7 +282,7 @@ def load_worker_key(model):
 
 def execute(plan_path):
     from .agent_bridge import run_organize, sdk_restore_compat
-    from .agent_session import run_turn, verified
+    from .agent_session import run_turn, verified, validate_turn, pinned_adapter
     plan = read(plan_path)
     folder = Path.cwd()
     started = time.time()
@@ -290,7 +290,12 @@ def execute(plan_path):
     save(folder / "started.json", dict(started_at=started, worker=worker, model=plan["model"]))
     outcome, response, error = "local_error", None, None
     try:
-        if file_digest(Path(__file__).with_name("agent_session.py")) != plan["adapter_sha256"]:
+        spec = plan["request"]["spec"]
+        if spec["operation_id"] == "agent.turn":
+            session = verified(spec["session"])
+            pinned_adapter(session["spec"]["bridge_root"], plan["adapter_sha256"])
+            validate_turn(spec)
+        elif file_digest(Path(__file__).with_name("agent_session.py")) != plan["adapter_sha256"]:
             raise ValueError("Agent adapter changed after dispatch")
         load_worker_key(plan["model"])
         os.environ["OPENAI_AGENTS_REQUEST_TIMEOUT_S"] = str(plan["timeout_seconds"])

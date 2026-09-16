@@ -13,6 +13,22 @@ from ecarsi import agent_bridge as bridge, agent_dispatch as dispatch, agent_ses
 from ecarsi.warm_pool.state import save, read, status
 
 
+def test_local_session_validation_does_not_poison_model_health(tmp_path, monkeypatch):
+    from tests.test_agent_session import setup
+    spec, ref = setup(tmp_path)
+    request_id = session.submit_turn(ref, 0)
+    root = Path(spec['bridge_root'])
+    request = read(root/'requests'/request_id/'request.json')
+    plan = tmp_path/'plan.json'
+    save(plan, dict(request=request, model=read(ref['path'])['model'], timeout_seconds=5,
+                    adapter_sha256=session.file_digest(Path(session.__file__))))
+    save(ref['path'], dict(read(ref['path']), adapter_sha256='0'*64))
+    monkeypatch.chdir(tmp_path)
+    dispatch.execute(plan)
+    result = read(tmp_path/'result.json')
+    assert result['outcome'] == 'local_error' and result['error'] == 'ValueError'
+
+
 def test_worker_timeout_fallback_continuation_and_dispatcher_recovery(tmp_path):
     calls = []
     class Provider(BaseHTTPRequestHandler):

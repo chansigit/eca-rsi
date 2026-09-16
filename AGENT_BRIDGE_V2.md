@@ -7,6 +7,16 @@ separate Pool tasks. Model waits use a small, explicit worker budget; heavy
 programs retain their own CPU/memory/GPU budgets. Waiting for a tool releases the
 Bridge model slot. The Bridge process never imports a provider client in Pool mode.
 
+New sessions and dispatches archive the exact model-call adapter source in
+`BRIDGE_ROOT/adapters/<sha256>.py`. An existing session continues with its verified
+revision after a service upgrade; its saved specification and conversation are
+not rewritten. Missing or modified snapshots fail closed before provider access.
+Sessions created before source archiving need their exact recorded revision
+restored from version control once. This archives the model-call adapter, not
+all scientific dependencies: tool inputs, runtime images and SDK versions retain
+their separate integrity checks. Local session validation failures do not count
+as provider health failures.
+
 New sessions use a portable conversation record: public messages, tool calls and
 verified tool results. Switching a model resends the pending model turn with this
 context; it never reruns completed tools. Old SDK sessions keep their pinned

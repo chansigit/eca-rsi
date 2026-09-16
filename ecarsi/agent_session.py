@@ -4,9 +4,12 @@ Tools are trusted application registrations, never model-selected commands or bu
 The Agents SDK interruption is a machine handoff, not a human approval request.
 """
 import json
+import hashlib
 import os
 from pathlib import Path
-from types import SimpleNamespace
+import re
+import tempfile
+from types import ModuleType, SimpleNamespace
 
 from .warm_pool.state import digest, file_digest, identifier, lock, read, save, validate
 
@@ -33,6 +36,51 @@ def immutable(path, value):
         if old is None:
             save(path, value)
     return reference(path)
+
+
+def archive_adapter(bridge_root, source=None):
+    """Keep the exact model-call adapter available for the lifetime of its sessions."""
+    from .agent_bridge import root_path
+    from .warm_pool.state import sync_directory
+    directory = root_path(bridge_root) / "adapters"
+    directory.mkdir(mode=0o700, exist_ok=True)
+    content = Path(source or __file__).read_bytes()
+    sha = hashlib.sha256(content).hexdigest()
+    path = directory / (sha + ".py")
+    with lock(directory / "archive.lock"):
+        if not path.exists():
+            fd, temporary = tempfile.mkstemp(dir=directory, prefix=".adapter-")
+            try:
+                with os.fdopen(fd, "wb") as stream:
+                    stream.write(content)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.chmod(temporary, 0o400)
+                os.replace(temporary, path)
+                sync_directory(directory)
+            finally:
+                if os.path.exists(temporary):
+                    os.unlink(temporary)
+        if file_digest(path) != sha:
+            raise ValueError("Archived agent adapter changed")
+    return reference(path)
+
+
+def pinned_adapter(bridge_root, sha):
+    """Load verified source, without changing the currently imported application module."""
+    from .agent_bridge import root_path
+    if not isinstance(sha, str) or not re.fullmatch(r"[a-f0-9]{64}", sha):
+        raise ValueError("Invalid agent adapter digest")
+    if file_digest(Path(__file__)) == sha:
+        return None
+    path = root_path(bridge_root) / "adapters" / (sha + ".py")
+    content = path.read_bytes()
+    if hashlib.sha256(content).hexdigest() != sha:
+        raise ValueError("Archived agent adapter changed")
+    module = ModuleType("ecarsi._agent_adapter_" + sha)
+    module.__file__, module.__package__ = str(path), "ecarsi"
+    exec(compile(content, str(path), "exec"), module.__dict__)
+    return module
 
 
 def validate_spec(spec):
@@ -122,9 +170,10 @@ def create_session(spec):
         api = os.environ.get("OPENAI_AGENTS_API", "responses")
         if api not in {"responses", "chat_completions"}:
             raise ValueError("Unsupported Agents API mode")
+        adapter = archive_adapter(spec["bridge_root"])
         save(path, {"spec": spec, "model": models[0], "api_mode": api,
                     "protocol": 2 if config.get("pool_root") else 1,
-                    "sdk_version": agents.__version__, "adapter_sha256": file_digest(Path(__file__))})
+                    "sdk_version": agents.__version__, "adapter_sha256": adapter["sha256"]})
     return reference(path)
 
 
@@ -132,6 +181,9 @@ def validate_turn(spec):
     if set(spec) != {"request_id", "operation_id", "session", "context", "trace"}:
         raise ValueError("Agent turn requires session/context references and trace")
     session = verified(spec["session"])
+    adapter = pinned_adapter(session["spec"]["bridge_root"], session["adapter_sha256"])
+    if adapter is not None:
+        return adapter.validate_turn(spec)
     if not spec["request_id"].startswith(session["spec"]["session_id"] + ".turn-"):
         raise ValueError("Turn request does not belong to its session")
     number = int(spec["request_id"].rsplit(".turn-", 1)[1])
@@ -179,6 +231,10 @@ def portable_history(items):
 
 async def run_turn(request, folder, *, model=None):
     """One model/tool boundary; no registered program can execute in this process."""
+    session = verified(request["spec"]["session"])
+    adapter = pinned_adapter(session["spec"]["bridge_root"], session["adapter_sha256"])
+    if adapter is not None:
+        return await adapter.run_turn(request, folder, model=model)
     from agents import Agent, FunctionTool, ModelSettings, RunConfig, Runner, RunState
     import agents
     from harness_bridge._harness_openai import _client, _model, PROVIDERS

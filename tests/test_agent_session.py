@@ -67,6 +67,37 @@ def execute_turn(root, request_id):
     return root / "requests" / request_id / "result.json"
 
 
+def test_pinned_adapter_survives_upgrade_and_rejects_tampering(tmp_path):
+    from harness_bridge import _harness_openai as adapter
+    spec, ref = setup(tmp_path)
+    # A distinct, complete adapter revision is retained, not a patched live module.
+    previous = tmp_path / "previous.py"
+    previous.write_bytes(Path(session.__file__).read_bytes() + b"\n# previous release\n")
+    archived = session.archive_adapter(spec["bridge_root"], previous)
+    saved = read(ref["path"])
+    saved["adapter_sha256"] = archived["sha256"]
+    save(ref["path"], saved)
+    ref = session.reference(ref["path"])
+    before = Path(ref["path"]).read_bytes()
+    request_id = session.submit_turn(ref, 0)
+    request = read(Path(spec["bridge_root"]) / "requests" / request_id / "request.json")
+    loaded = session.pinned_adapter(spec["bridge_root"], archived["sha256"])
+    assert loaded.__file__ == archived["path"]
+    model = ScriptedModel()
+    with patch.object(adapter, "_client", return_value=Client()), patch.object(adapter, "_model", return_value=model):
+        reply = execute_turn(Path(spec["bridge_root"]), request_id)
+    assert read(reply)["response"]["kind"] == "tools" and len(model.inputs) == 1
+    assert Path(ref["path"]).read_bytes() == before
+    snapshot = Path(archived["path"])
+    snapshot.chmod(0o600)
+    snapshot.write_text("raise AssertionError('must not execute unverified source')")
+    with pytest.raises(ValueError, match="Archived agent adapter changed"):
+        session.validate_turn(request["spec"])
+    snapshot.unlink()
+    with pytest.raises(FileNotFoundError):
+        session.validate_turn(request["spec"])
+
+
 def completed_tool(spec, item, value=None):
     folder = Path(spec["pool_root"]) / "requests" / item["request_id"]
     request = read(folder / "request.json")
