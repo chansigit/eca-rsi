@@ -13,6 +13,68 @@ from ecarsi import agent_bridge as bridge, agent_dispatch as dispatch, agent_ses
 from ecarsi.warm_pool.state import save, read, status
 
 
+def test_audited_retry_survives_dispatch_restart_and_preserves_failed_attempt(tmp_path):
+    import pytest
+    from tests.test_agent_session import setup, completed_tool
+    spec, ref = setup(tmp_path)
+    root = Path(spec['bridge_root'])
+    config = read(root / 'config.json')
+    config.update(pool_root=spec['pool_root'], routing=dict(max_attempts=1))
+    save(root / 'config.json', config)
+    saved = read(ref['path']); saved['protocol'] = 2
+    save(ref['path'], saved); ref = session.reference(ref['path'])
+    request_id = session.submit_turn(ref, 0)
+    bridge.serve(root, once=True)
+    attempt = bridge.status(root, request_id)['attempts'][0]
+    completed_tool(spec, dict(request_id=attempt['pool_request_id']),
+                   dict(outcome='timeout', elapsed_seconds=5))
+    bridge.serve(root, once=True)
+    folder = root / 'requests' / request_id
+    failure = read(folder / 'result.json')
+    assert failure['state'] == 'failed'
+    assert bridge.retry_turn(root, request_id, reason='deadline corrected')['state'] == 'queued'
+    assert read(folder / 'result.json') == failure  # Durable intent, before archival.
+    bridge.serve(root, once=True)
+    recovered = bridge.status(root, request_id)
+    assert recovered['state'] == 'running' and recovered['attempt_limit'] == 2
+    assert len(recovered['attempts']) == 2 and recovered['attempts'][0] == attempt
+    assert list(folder.glob('failed-result-*.json'))
+    assert session.verified(recovered['recovery'])['result'] == failure
+    with pytest.raises(ValueError, match='Only failed'):
+        bridge.retry_turn(root, request_id, reason='do not duplicate a running attempt')
+
+
+def test_continuations_advance_older_sessions_without_starving_aged_requests(tmp_path):
+    queued = []
+    for identity, first, submitted in [('old', 10, 990), ('new', 900, 950), ('aged', 20, 50)]:
+        session_path = tmp_path / (identity + '.json')
+        save(session_path, dict(spec=dict(session_id=identity)))
+        initial = tmp_path / 'requests' / (identity + '.turn-0')
+        initial.mkdir(parents=True)
+        save(initial / 'request.json', dict(submitted_at=first))
+        folder = tmp_path / 'requests' / (identity + '.turn-1')
+        folder.mkdir()
+        save(folder / 'request.json', dict(spec=dict(session=dict(path=str(session_path)))))
+        queued.append((submitted, folder))
+    order = dispatch.queue_order(tmp_path, queued, 100, {}, now=1000)
+    assert [p.name for _, p in order] == ['old.turn-1', 'aged.turn-1', 'new.turn-1']
+    fair = dispatch.queue_order(tmp_path, queued, 100, {}, now=1000, offset=3)
+    assert next(fair)[1].name == 'aged.turn-1'
+    assert len(list(fair)) == 2  # No duplicate dispatch from the two priority lists.
+    # A long queue must not force every continuation back behind all older turns.
+    all_aged = [(100, queued[0][1]), (50, queued[1][1]), (80, queued[2][1])]
+    assert next(dispatch.queue_order(tmp_path, all_aged, 100, {}, now=1000))[1].name == 'old.turn-1'
+    # A newly ready downstream operation receives a turn even with many older
+    # sample sessions. The scheduler uses trace kinds, never dataset names.
+    downstream = tmp_path / 'requests/downstream'
+    downstream.mkdir()
+    save(downstream / 'request.json', dict(spec=dict(operation_id='agent.turn',
+        trace=dict(unit_id='cross-sample.inclusion'))))
+    combined = list(dispatch.queue_order(tmp_path, queued + [(999, downstream)], 100, {}, now=1000))
+    assert downstream in [p for _, p in combined[:2]]
+    assert len({p for _, p in combined}) == 4
+
+
 def test_local_session_validation_does_not_poison_model_health(tmp_path, monkeypatch):
     from tests.test_agent_session import setup
     spec, ref = setup(tmp_path)
@@ -201,6 +263,27 @@ def test_model_cooldown_expiry_and_capacity():
     assert dispatch.model_health({'a':event}, [model], Counter(), settings, now=110)[0]['state'] == 'cooling_down'
     assert dispatch.model_health({'a':event}, [model], Counter(), settings, now=121)[0]['state'] == 'ready'
     assert dispatch.model_health({}, [model], Counter({dispatch.model_key(model):1}), settings, now=121)[0]['state'] == 'busy'
+
+
+def test_health_cache_keeps_per_model_admission_limits(tmp_path):
+    from tests.test_agent_session import setup
+    spec, ref = setup(tmp_path)
+    root = Path(spec['bridge_root'])
+    config = read(root / 'config.json')
+    primary = read(ref['path'])['model']
+    save(config['catalog'], dict(models=[primary, dict(primary, model='backup')]))
+    save(root / 'config.json', dict(config, pool_root=spec['pool_root'], concurrency=8,
+                                   routing=dict(model_concurrency=1)))
+    requests = []
+    for i in range(5):
+        current = session.create_session(dict(spec, session_id='cache-' + str(i),
+            output_root=str(tmp_path / ('cache-' + str(i)))))
+        requests.append(session.submit_turn(current, 0))
+    for _ in range(2):
+        bridge.serve(root, once=True)
+        states = [bridge.status(root, request) for request in requests]
+        assert Counter(s['state'] for s in states) == {'running': 2, 'queued': 3}
+        assert sorted(s['attempts'][0]['model']['model'] for s in states if s['state'] == 'running') == sorted([primary['model'], 'backup'])
 
 
 def test_timeline_uses_worker_attempt_and_preserves_dependencies():

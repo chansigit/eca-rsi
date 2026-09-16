@@ -253,7 +253,7 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
         for folder in (pool / "requests").iterdir():
             if not (folder / "request.json").is_file():
                 continue
-            if folder.name in pool_done and not (folder / "cancel.json").is_file():
+            if pool_done.get(folder.name, {}).get('state') == 'succeeded' and not (folder / "cancel.json").is_file():
                 pool_rows.append(pool_done[folder.name])
                 continue
             item = pool_status(pool, folder.name)
@@ -283,7 +283,7 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
         for folder in sorted((bridge / "requests").iterdir()):
             if not (folder / "request.json").is_file():
                 continue
-            if folder.name in bridge_done:
+            if bridge_done.get(folder.name, {}).get('state') == 'reply_saved':
                 bridge_rows.append(bridge_done[folder.name])
                 continue
             item = bridge_status(bridge, folder.name)

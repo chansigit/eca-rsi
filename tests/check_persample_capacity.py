@@ -12,13 +12,13 @@ from ecarsi.persample_workflow import PersampleWorkflow
 @activity.defn(name="sample_step")
 def sample_step(action, args):
     if action == "partition":
-        return dict(id=str(args[1]), output="partition.json")
+        return dict(id=f'{args[1]}:{args[0].get("test_samples", 2)}', output="partition.json")
     if action == "read":
-        offset = int(args[0])
-        return dict(total_samples=2, next_offset=offset + 1,
+        offset, total = map(int, args[0].split(':'))
+        return dict(total_samples=total, next_offset=offset + 1,
                     entries=[dict(sample_id=str(offset))])
     if action == "publish":
-        assert len(args[1]) == 2 and not args[2]
+        assert len(args[1]) == args[3]['total_samples'] and not args[2]
         return "published"
     raise AssertionError(action)
 
@@ -32,13 +32,23 @@ def check_pool(root, request_id, output):
 class WaitingSample:
     def __init__(self):
         self.released = False
+        self.computed = False
 
     @workflow.signal
     def release(self):
         self.released = True
 
+    @workflow.signal
+    def compute_ready(self):
+        self.computed = True
+
     @workflow.run
-    async def run(self, spec, entry, parent):
+    async def run(self, spec, entry, parent, notify_computed=False):
+        if notify_computed:
+            await workflow.wait_condition(lambda: self.computed or self.released)
+            owner = workflow.info().parent
+            await workflow.get_external_workflow_handle(owner.workflow_id, run_id=owner.run_id).signal(
+                'sample_computed', entry['sample_id'])
         await workflow.wait_condition(lambda: self.released)
         return entry['sample_id']
 
@@ -83,7 +93,31 @@ async def check(endpoint):
             assert await asyncio.wait_for(handle.result(), 20) == 'published'
         await Replayer(workflows=[PersampleWorkflow],
                        workflow_runner=UnsandboxedWorkflowRunner()).replay_workflow(await handle.fetch_history())
-    print(identity + ': admission wakeup, invalid update, restart persistence, drain and replay passed')
+        identity += '-separate'
+        async with worker():
+            handle = await client.start_workflow(PersampleWorkflow.run,
+                dict(batch_size=1, max_in_flight_samples=1, max_prepared_samples=2,
+                     test_samples=3, pool_root='test'), id=identity, task_queue=identity)
+            await exists('/sample-0')
+            await client.get_workflow_handle(identity + '/sample-0').signal('compute_ready')
+            await exists('/sample-1')
+            assert (await client.get_workflow_handle(identity + '/sample-0').describe()).status.name == 'RUNNING'
+            await client.get_workflow_handle(identity + '/sample-1').signal('compute_ready')
+            await asyncio.sleep(.5)
+            from temporalio.service import RPCError, RPCStatusCode
+            try:
+                await client.get_workflow_handle(identity + '/sample-2').describe()
+                raise AssertionError('Prepared backlog bound was exceeded')
+            except RPCError as exc:
+                assert exc.status == RPCStatusCode.NOT_FOUND
+            await client.get_workflow_handle(identity + '/sample-0').signal('release')
+            await exists('/sample-2')
+            for index in (1, 2):
+                await client.get_workflow_handle(identity + '/sample-' + str(index)).signal('release')
+            assert await asyncio.wait_for(handle.result(), 20) == 'published'
+        await Replayer(workflows=[PersampleWorkflow],
+                       workflow_runner=UnsandboxedWorkflowRunner()).replay_workflow(await handle.fetch_history())
+    print(identity + ': admission wakeup, restart, replay, compute/model separation and backlog bound passed')
 
 
 if __name__ == '__main__':

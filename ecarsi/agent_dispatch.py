@@ -1,7 +1,7 @@
 """Bridge routing and Pool execution. Only the worker imports provider clients."""
 import argparse
 import asyncio
-from collections import Counter
+from collections import Counter, deque
 from contextlib import nullcontext
 import json
 import os
@@ -15,7 +15,7 @@ from .warm_pool.state import digest, file_digest, lock, read, save, submit, stat
 
 DEFAULT_POLICY = dict(response_timeout_seconds=900, cooldown_seconds=300,
                       failure_threshold=2, model_concurrency=2, max_attempts=3,
-                      worker_cpus=1, worker_memory_mb=1024)
+                      worker_cpus=1, worker_memory_mb=1024, session_wait_seconds=900)
 
 
 def policy(config):
@@ -89,8 +89,14 @@ def record_event(root, folder, attempt, outcome, *, elapsed=None, model_failure=
 
 def dispatch(root, folder, config, model):
     with lock(folder / "request.lock"):
-        if read(folder / "result.json") is not None:
-            return None
+        result = read(folder / "result.json")
+        if result is not None:
+            if (result.get('state') != 'failed' or
+                    read(folder / 'state.json', {}).get('retry_of') != digest(result)):
+                return None
+            from .agent_session import immutable
+            immutable(folder / ('failed-result-' + digest(result) + '.json'), result)
+            (folder / 'result.json').unlink()
         return _dispatch(root, folder, config, model)
 
 
@@ -110,7 +116,7 @@ def _dispatch(root, folder, config, model):
     plan_ref = immutable(plan_path, plan)
     attempt = dict(pool_request_id=pool_id, model=plan["model"], plan=plan_ref, submitted_at=time.time())
     attempts.append(attempt)
-    save(folder / "state.json", dict(state="running", execution="pool", pool_root=config["pool_root"],
+    save(folder / "state.json", dict(state, state="running", execution="pool", pool_root=config["pool_root"],
          started_at=state.get("started_at", time.time()), attempts=attempts))
     enqueue(folder, config, attempt)
     return attempt
@@ -177,7 +183,7 @@ def _reconcile_pool(root, folder, config, events):
         # is not equivalent to a tool-free model turn and must not be blindly repeated.
         spec = read(folder / "request.json")["spec"]
         safe = spec["operation_id"] == "agent.turn" and verified(spec["session"]).get("protocol", 1) >= 2
-        retry = safe and len(state["attempts"]) < policy(config)["max_attempts"] and outcome != "local_error"
+        retry = safe and len(state["attempts"]) < state.get('attempt_limit', policy(config)["max_attempts"]) and outcome != "local_error"
         save(folder / "state.json", dict(state, state="queued" if retry else "failed",
                                          last_outcome=outcome, updated_at=time.time()))
         if not retry:
@@ -188,6 +194,55 @@ def settings_timeout(attempt):
     return read(attempt["plan"]["path"])["timeout_seconds"]
 
 
+def session_order(queued, wait_seconds, cache, now, offset):
+    """Advance existing sessions while reserving one in four choices for aged FIFO."""
+    sessions = deque(sorted(queued, key=lambda x: (cache[x[1].name]['first'], x[0])))
+    aged = deque(sorted((x for x in queued if now - x[0] >= wait_seconds), key=lambda x: x[0]))
+    chosen = set()
+    while len(chosen) < len(queued):
+        for items in (sessions, aged):
+            while items and items[0][1] in chosen:
+                items.popleft()
+        # ponytail: fixed 3:1 service share; tune only from measured completion
+        # throughput. All-aged FIFO alone restores the round-robin convoy.
+        items = aged if offset % 4 == 3 and aged else sessions
+        item = items.popleft()
+        chosen.add(item[1])
+        offset += 1
+        yield item
+
+
+def queue_order(root, queued, wait_seconds, cache, now=None, offset=0, served=None):
+    """Round-robin ready operation kinds so sample fan-out cannot bury later stages."""
+    now = time.time() if now is None else now
+    groups = {}
+    for submitted, folder in queued:
+        if folder.name not in cache:
+            spec = read(folder / 'request.json')['spec']
+            ref, first = spec.get('session'), submitted
+            if ref:
+                session = read(ref['path'])['spec']
+                initial = read(root / 'requests' / (session['session_id'] + '.turn-0') / 'request.json')
+                if initial:
+                    first = initial['submitted_at']
+            cache[folder.name] = dict(first=first,
+                unit=spec.get('trace', {}).get('unit_id', spec.get('operation_id', 'agent.turn')))
+        groups.setdefault(cache[folder.name]['unit'], []).append((submitted, folder))
+    names = sorted(groups)
+    if not names:
+        return
+    rotation = offset % len(names)
+    names = names[rotation:] + names[:rotation]
+    queues = deque(iter(session_order(groups[name], wait_seconds, cache, now,
+        served.get(name, 0) if served is not None else offset)) for name in names)
+    while queues:
+        items = queues.popleft()
+        item = next(items, None)
+        if item is not None:
+            yield item
+            queues.append(items)
+
+
 def serve(root, *, once=False):
     from .agent_bridge import root_path, status as bridge_status, reconcile
     from .model_web import normalized_models
@@ -195,7 +250,9 @@ def serve(root, *, once=False):
     (root / "model-events").mkdir(mode=0o700, exist_ok=True)
     # Read immutable events once per service lifetime; no growing history scan per tick.
     events = {e["pool_request_id"]: e for p in (root / "model-events").glob("*.json") if (e := read(p))}
-    finished = {}
+    finished, ordering = {}, {}
+    dispatch_count = len(events)
+    served = Counter()
     with lock(root / "service.lock", blocking=False):
         while True:
             scanning = time.monotonic()
@@ -206,8 +263,11 @@ def serve(root, *, once=False):
             active, queued, legacy_active = Counter(), [], 0
             error = None
             for folder in sorted((root / "requests").iterdir()):
-                if folder.name in finished or not (folder / "request.json").is_file():
+                # Successful replies are immutable; failed requests can be
+                # explicitly reopened. Revisit only those few failures.
+                if finished.get(folder.name) == 'reply_saved' or not (folder / "request.json").is_file():
                     continue
+                finished.pop(folder.name, None)
                 state = bridge_status(root, folder.name)
                 if state["state"] == "running" and state.get("execution") == "pool":
                     try:
@@ -231,12 +291,19 @@ def serve(root, *, once=False):
                     active[model_key(state["attempts"][-1]["model"])] += 1
                 else:
                     legacy_active += 1
-            for _, folder in sorted(queued):
+            health = {}
+            for _, folder in queue_order(root, queued, settings['session_wait_seconds'], ordering,
+                                         offset=dispatch_count, served=served):
                 if sum(active.values()) + legacy_active >= config["concurrency"]:
                     break
                 try:
                     models = routes(config, read(folder / "request.json"))
-                    rows = model_health(events, models, active, settings)
+                    rows = []
+                    for model in models:
+                        key = model_key(model)
+                        if key not in health:
+                            health[key] = model_health(events, [model], active, settings)[0]
+                        rows.append(health[key])
                     tried = {model_key(a["model"]) for a in read(folder / "state.json", {}).get("attempts", [])}
                     untried = [row for row in rows if row["key"] not in tried]
                     ready = [row for row in (untried or rows) if row["state"] == "ready"]
@@ -245,6 +312,11 @@ def serve(root, *, once=False):
                         attempt = dispatch(root, folder, config, selected["model"])
                         if attempt:
                             active[model_key(attempt["model"])] += 1
+                            dispatch_count += 1
+                            served[ordering[folder.name]['unit']] += 1
+                            selected['in_flight'] += 1
+                            if selected['in_flight'] >= settings['model_concurrency']:
+                                selected['state'] = 'busy'
                 except Exception as exc:
                     error = type(exc).__name__
                     save(folder / "dispatch-error.json", dict(error=error, observed_at=time.time()))

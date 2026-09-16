@@ -37,7 +37,8 @@ are configurable in the Bridge `config.json` under `routing`:
   "model_concurrency": 2,
   "max_attempts": 3,
   "worker_cpus": 1,
-  "worker_memory_mb": 1024
+  "worker_memory_mb": 1024,
+  "session_wait_seconds": 900
 }
 ```
 
@@ -61,6 +62,29 @@ provide the tool plan. Superseded/late replies cannot execute tools or advance t
 workflow. Legacy harness sessions that can execute arbitrary programs do not
 receive this retry policy. Provider RPM/TPM quotas are not inferred from the
 per-model concurrency limit.
+
+Ready operation kinds (`trace.unit_id`) take turns receiving model admissions,
+so a large per-sample fan-out cannot bury a newly ready cross-sample or Zoom-in
+decision. Within each kind, queue ordering favors earlier-started sessions so accepted tool results can
+lead to completed annotations without every continuation rejoining the end of
+the batch. One in four admission choices within that kind is reserved for the oldest request
+waiting at least `session_wait_seconds`; model compatibility, cooldown and
+capacity still apply. This is a simple service share, not a latency guarantee
+or a global limit on the number of open sessions. Health history is aggregated
+once per model per dispatch tick, not once per queued request.
+
+After correcting a transient failure, a terminal, tool-free protocol-2 turn can
+be explicitly reopened with a bounded new attempt allowance:
+
+```bash
+python -m ecarsi.agent_bridge retry-turn /absolute/development/bridge REQUEST_ID \
+  --reason 'Corrected timeout or provider availability; prior attempts are terminal'
+```
+
+The command retains the old failure, attempts and an immutable recovery record.
+It rejects uncertain attempts, cancellations, invalid local state and legacy
+sessions that may execute tools. Running parents can consume the repaired
+request; terminal parents use their normal stage/dataset resume command.
 
 ## Service interruption
 
@@ -118,9 +142,10 @@ It also separates `running`, `unresolved`, and `available` slots. Legacy uncerta
 executions retain capacity until reconciled. Portable model attempts follow the
 bounded fallback policy above.
 
-The dispatcher caches terminal `reply_saved`/`failed` records in memory and
+The dispatcher caches immutable `reply_saved` records in memory and
 rebuilds that cache from disk after restart. It continues checking queued,
-running and uncertain requests; late replies still release their reserved slot.
+running, failed and uncertain requests; audited retries are visible without
+clearing a cache, and late replies still release their reserved slot.
 `dispatch_scan_seconds` records loop processing time. In the 2026-09-15 live
 acceptance with over 1,100 retained requests, update intervals fell from about
 7.5 seconds to 1.03 seconds; hot scans took 15–30 ms. Both calls running during
@@ -196,6 +221,10 @@ model to choose arbitrary executables or write arbitrary code. Programs must
 validate their scientific arguments and write only their declared outputs; the
 current Pool container is not a hostile-code sandbox. A stateful Python REPL is
 not transparently migrated: tools communicate through explicit saved artifacts.
+
+Coordinator polls queued model requests every 15 seconds and running ones every
+3 seconds, with a Temporal patch marker preserving earlier timer histories.
+This reduces empty history growth; completion is still polled, not pushed.
 
 One model turn is a durable Bridge request. SDK interruptions are automatically
 resolved by Coordinator policy after successful Pool receipts, without human

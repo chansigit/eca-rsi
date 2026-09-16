@@ -428,11 +428,20 @@ def tool_request(session_ref, reply_path, index, previous=None):
         verified(state_ref)
         state_inputs = [state_ref]
         args = [state_ref["path"] if a == "{state}" else a for a in args]
-    submit(s["pool_root"], {"request_id": request_id, "operation_id": tool["name"], "args": args,
+    request = {"request_id": request_id, "operation_id": tool["name"], "args": args,
            **{k: tool[k] for k in ("cpus", "memory_mb", "timeout_seconds", "outputs")},
            "inputs": [arguments, reference(reply_path), *state_inputs, *tool["inputs"]],
            "trace": {"workflow_id": "agent/" + s["session_id"], "dataset_id": s["dataset_id"],
-                     "unit_id": tool["name"], **s.get("trace", {}), "depends_on": [previous or turn_id]}})
+                     "unit_id": tool["name"], **s.get("trace", {}), "depends_on": [previous or turn_id]}}
+    from .agent_tool_execution import plan
+    request = plan(request, directory, s["pool_root"])
+    if (state_inputs and len(args) == 6 and args[:3] == ['-m', 'ecarsi.persample_v2', 'tool']
+            and tool['name'] in {'check_genes', 'check_qc_scores', 'submit_annotation'}):
+        state = verified(state_ref)
+        if state['version'] == 0:
+            from .operation_budget import from_compute
+            request = from_compute(request, state['bundle'], directory / 'resources.json', s['pool_root'])
+    submit(s["pool_root"], request)
     return {"request_id": request_id, "result_file": tool["result_file"], "index": index}
 
 

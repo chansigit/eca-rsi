@@ -78,6 +78,11 @@ This starts a new Temporal run under the same workflow ID and immutable dataset 
 
 Completed Organize, per-sample, cross-sample and Zoom-in stages are reused only after checking their specifications, upstream references, accepted Pool outputs and cell totals. These checks traverse stage boundaries; they do not repeat numerical work or model decisions. Downstream workers retain the normal artifact-integrity checks. Incomplete stages reuse their existing operation IDs and saved agent sessions. A changed input/configuration or an unaccepted output blocks recovery instead of silently overwriting it.
 
+Organize recovery reuses its publication validator: the worker manifest and the
+relocated published manifest intentionally have different paths and records.
+Both artifact identities and the accepted worker completion remain required;
+raw equality between the two publication representations is not the contract.
+
 The dataset keeps recovery intent and new Temporal run IDs in `recoveries/`. Before replacing an incomplete `publication.json`, it archives the previous record as `publication-<digest>.json`. Completed publications cannot be replaced by different results. Recovery does not relax scientific validation or resolve an uncertain provider call by assuming it failed.
 
 ## Acceptance scope

@@ -52,11 +52,31 @@ Example explicit spec; size the budgets for the actual data and workers:
 }
 ```
 
-The output root must be fresh. `batch_size` limits preparation per grant;
-`max_in_flight_samples` includes samples waiting on models; `max_batch_bytes`
-limits each prepared batch on disk. These are per-workflow limits, not a global
-storage quota. Partition currently loads the organized matrix once per batch,
-so its memory budget must cover that matrix.
+The output root must be fresh. `batch_size` limits preparation per grant.
+For new workflows, `max_in_flight_samples` bounds sample computation; an accepted
+compute receipt releases that slot before annotation starts. Optional
+`max_prepared_samples` bounds all unfinished sample children, including model
+waits (default `max(32, 4 * max_in_flight_samples)`, at least `batch_size`).
+`max_batch_bytes` bounds each prepared batch on disk. These are per-workflow
+bounds, not a global storage quota or global annotation-session limit. A Temporal
+patch marker preserves the earlier whole-sample admission behavior when replaying
+older histories. Partition still loads the organized matrix once per batch, so
+its memory budget must cover that matrix.
+
+Evidence reads request at most 256 MiB and never load the expression matrix.
+Table reads combine up to four complete 60,000-character pages, preserving exact
+text, page coverage and an explicit next offset for larger evidence. A rejected
+annotation lists missing pages/checks; scientific validation remains unchanged.
+Execution plans are fixed before submission and reuse their exact request on
+activity retries. Existing requests and pinned scientific programs are retained.
+
+For initial-clustering marker/QC/annotation checks and sample finalization, an
+accepted upstream compute peak can reduce an oversized memory reservation:
+twice measured peak plus 1 GiB, rounded up to 256 MiB, with a 2-GiB floor and no
+increase beyond the original declaration. The receipt and resulting plan are
+pinned. Re-clustering retains its original budget. This is conservative empirical
+calibration, not a guaranteed bound: RSS sampling can miss spikes, and automatic
+budget escalation after an OOM is not implemented.
 
 ### CPU and GPU execution
 
@@ -96,9 +116,10 @@ actions remain proposals; they do not silently remove additional cells.
 Stable request IDs and receipts allow Coordinator process replacement without
 repeating accepted computation or model turns. A failed sample does not cancel
 independent siblings. Once they finish, the parent publishes an `incomplete`
-record and fails visibly. Automatic retry of failed Pool attempts is not
-implemented. Unknown external outcomes are never
-treated as proof that a task stopped.
+record and fails visibly. Confirmed local interruptions can be retried up to two
+times by the shared Pool checker; scientific errors and memory-limit failures
+remain visible. Unknown external outcomes are never treated as proof that a task
+stopped.
 
 After the underlying failure is resolved, `resume-persample` starts a new
 Temporal run under the same logical Workflow ID. It verifies the saved spec
@@ -117,10 +138,10 @@ stable request IDs, within the same in-flight limit and at most once per sample.
 This can consume repaired results without repeating accepted science. Any remaining failed, cancelled or unknown request blocks that replay;
 it does not authorize a new compute attempt or an uncertain provider retry.
 
-CPU Scanpy and GPU RAPIDS are connected. Automatic Organize-to-all-units chaining,
-global storage admission, production Temporal database failover, and the new
-cross-sample/Zoom-in workflows remain separate work. The development integration
-does not resume production datasets.
+CPU Scanpy and GPU RAPIDS are connected. `DATASET_V2.md` describes the integrated
+Organize, per-sample, cross-sample and Zoom-in workflow. Global storage admission
+and production Temporal database failover remain separate work. The development
+integration does not resume production datasets.
 
 ## GPU workflow acceptance, 2026-09-15
 

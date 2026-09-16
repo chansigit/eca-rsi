@@ -15,7 +15,7 @@ def validate_spec(spec, *, resume=False):
     required = {"run_id", "dataset_id", "unit", "output_root", "pool_root", "bridge_root",
                 "partition_budget", "compute_budget", "tool_budget", "finalize_budget", "config",
                 "batch_size", "max_in_flight_samples", "max_batch_bytes"}
-    if not isinstance(spec, dict) or set(spec) - {'depends_on'} != required:
+    if not isinstance(spec, dict) or set(spec) - {'depends_on', 'max_prepared_samples'} != required:
         raise ValueError("Per-sample needs explicit input, services, compute and backlog budgets")
     identifier(spec["run_id"])
     if 'depends_on' in spec:
@@ -47,6 +47,9 @@ def validate_spec(spec, *, resume=False):
             raise ValueError(key + " must be positive")
     if spec["batch_size"] > spec["max_in_flight_samples"]:
         raise ValueError("Batch size exceeds the in-flight sample limit")
+    if 'max_prepared_samples' in spec and (type(spec['max_prepared_samples']) is not int
+            or spec['max_prepared_samples'] < spec['batch_size']):
+        raise ValueError('Prepared sample bound must be an integer at least as large as batch_size')
     cfg = spec["config"]
     required_config = {"scrublet", "decontx", "resolution", "tissue"}
     if (not required_config <= set(cfg) or set(cfg) - required_config - {"compute_backend", "gpu_min_cells", "gpu_memory_mb"}
@@ -164,10 +167,14 @@ def sample_step(action, args):
         parents = [parent]
     else:
         raise ValueError("Unknown per-sample activity")
-    submit(spec["pool_root"], {"request_id": request_id, "operation_id": unit,
+    request = {"request_id": request_id, "operation_id": unit,
         "trace": {**trace, "unit_id": unit, "depends_on": parents},
         "args": ["-m", "ecarsi.persample_v2", *command], **budget, **accelerator,
-        "inputs": inputs + [reference(Path(__file__).with_name("persample_v2.py"))], "outputs": [output]})
+        "inputs": inputs + [reference(Path(__file__).with_name("persample_v2.py"))], "outputs": [output]}
+    if action == 'finalize':
+        from .operation_budget import from_compute
+        request = from_compute(request, reference(computed), root / (request_id + '.resources.json'), spec['pool_root'])
+    submit(spec["pool_root"], request)
     return {"id": request_id, "output": output}
 
 
@@ -190,10 +197,14 @@ async def await_pool(spec, request):
 @workflow.defn
 class SampleWorkflow:
     @workflow.run
-    async def run(self, spec, entry, parent):
+    async def run(self, spec, entry, parent, notify_computed=False):
         from .work_coordinator import AgentWorkflow
         request = await call(sample_step, "compute", [spec, entry, parent])
         computed = await await_pool(spec, request)
+        if notify_computed:
+            owner = workflow.info().parent
+            await workflow.get_external_workflow_handle(owner.workflow_id, run_id=owner.run_id).signal(
+                'sample_computed', entry['sample_id'])
         bundle = await call(sample_step, "read", [computed])
         annotation, parent = None, request["id"]
         if not bundle["empty"]:
@@ -208,6 +219,13 @@ class SampleWorkflow:
 
 @workflow.defn
 class PersampleWorkflow:
+    def __init__(self):
+        self._computed = set()
+
+    @workflow.signal
+    def sample_computed(self, sample: str):
+        self._computed.add(sample)
+
     @workflow.update
     def set_in_flight_limit(self, limit: int) -> int:
         self.validate_in_flight_limit(limit)
@@ -233,26 +251,31 @@ class PersampleWorkflow:
     async def run(self, spec):
         self._batch_size = spec["batch_size"]
         self._in_flight_limit = getattr(self, "_in_flight_limit", spec["max_in_flight_samples"])
+        separate = workflow.patched('persample-compute-admission-v2')
+        prepared_limit = spec.get('max_prepared_samples', max(32, spec['max_in_flight_samples'] * 4))
         offset, total, pending, completed, failed, parent = 0, None, {}, [], [], None
         totals, inputs, replayed = None, {}, set()
         while True:
             recover = bool(failed) and workflow.patched("persample-recovered-receipts-v1")
             if recover:
                 for failure in list(failed):
-                    if len(pending) >= self._in_flight_limit:
+                    if len(pending) >= (prepared_limit if separate else self._in_flight_limit):
                         break
                     sample = failure["sample"]
                     if sample in replayed or not await call(sample_step, "recoverable", [spec, sample]):
                         continue
                     entry, predecessor, identity = inputs[sample]
                     handle = await workflow.start_child_workflow(SampleWorkflow.run,
-                        args=[spec, entry, predecessor], id=identity + "/recovered")
+                        args=[spec, entry, predecessor, True] if separate else [spec, entry, predecessor],
+                        id=identity + "/recovered")
                     pending[handle] = sample
                     replayed.add(sample)
                     failed.remove(failure)
             if total is not None and offset >= total and not pending:
                 break
-            if (total is None or offset < total) and len(pending) <= self._in_flight_limit - spec["batch_size"]:
+            computing = sum(sample not in self._computed for sample in pending.values()) if separate else len(pending)
+            if ((total is None or offset < total) and computing <= self._in_flight_limit - spec["batch_size"]
+                    and (not separate or len(pending) <= prepared_limit - spec['batch_size'])):
                 self._stage = "partitioning"
                 request = await call(sample_step, "partition", [spec, offset, parent])
                 path = await await_pool(spec, request)
@@ -262,7 +285,8 @@ class PersampleWorkflow:
                 for index, entry in enumerate(batch["entries"]):
                     # IDs depend on immutable sample order, not worker placement or completion order.
                     identity = workflow.info().workflow_id + "/sample-" + str(offset - len(batch["entries"]) + index)
-                    handle = await workflow.start_child_workflow(SampleWorkflow.run, args=[spec, entry, parent], id=identity)
+                    handle = await workflow.start_child_workflow(SampleWorkflow.run,
+                        args=[spec, entry, parent, True] if separate else [spec, entry, parent], id=identity)
                     pending[handle] = entry["sample_id"]
                     inputs[entry["sample_id"]] = (entry, parent, identity)
                 if not pending and offset < total:
@@ -270,9 +294,11 @@ class PersampleWorkflow:
                 continue
             self._stage = "processing samples"
             limit = self._in_flight_limit
+            computed_count = len(self._computed)
             try:
                 await workflow.wait_condition(
-                    lambda: self._in_flight_limit != limit or any(handle.done() for handle in pending),
+                    lambda: self._in_flight_limit != limit or len(self._computed) != computed_count
+                    or any(handle.done() for handle in pending),
                     timeout=30 if recover and any(f["sample"] not in replayed for f in failed) else None)
             except asyncio.TimeoutError:
                 pass

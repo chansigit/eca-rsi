@@ -12,6 +12,21 @@ def put(path, value):
 
 
 class ObservatoryTest(unittest.TestCase):
+    def test_failed_requests_are_refreshed_after_audited_recovery(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bridge = root / 'organize-v2-bridge'
+            bridge.mkdir(mode=0o700)
+            put(bridge / 'config.json', {'concurrency': 1})
+            folder = bridge / 'requests/turn'
+            put(folder / 'request.json', {'submitted_at': 1, 'spec': {}})
+            put(folder / 'result.json', {'state': 'failed', 'reason': 'timeout'})
+            cache = {}
+            self.assertEqual(snapshot(root, temporal_port=0, cache=cache)['bridge_requests'][0]['state'], 'failed')
+            from ecarsi.warm_pool.state import digest
+            put(folder / 'state.json', {'state': 'queued', 'retry_of': digest({'state': 'failed', 'reason': 'timeout'})})
+            self.assertEqual(snapshot(root, temporal_port=0, cache=cache)['bridge_requests'][0]['state'], 'queued')
+
     def test_dataset_pages_cover_history_before_task_limit(self):
         rows = [dict(id=f"d{d}-t{t}", operation="organize.prepare", state="succeeded",
                      submitted_at=d * 30 + t + 1, started_at=d * 30 + t + 1,

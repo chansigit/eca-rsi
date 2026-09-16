@@ -149,8 +149,41 @@ def status(root, request_id):
     if request is None:
         raise KeyError(request_id)
     result = read(folder / "result.json")
-    state = {**read(folder / "state.json", {"state": "queued"}), **(result or {})}
+    state = read(folder / "state.json", {"state": "queued"})
+    if result and result.get('state') == 'failed' and state.get('retry_of') == digest(result):
+        result = None  # Audited retry intent survives a crash before result archival.
+    state = {**state, **(result or {})}
     return {"request_id": request_id, "submitted_at": request["submitted_at"], **state}
+
+
+def retry_turn(root, request_id, *, reason):
+    """Explicit bounded recovery of a tool-free model turn, retaining failed attempts."""
+    from .agent_session import immutable, verified, reference
+    from .agent_dispatch import policy
+    from .warm_pool.state import status as pool_status
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError('A model recovery reason is required')
+    root = root_path(root)
+    folder = root / 'requests' / identifier(request_id)
+    with lock(folder / 'request.lock'):
+        request, result, state = read(folder / 'request.json'), read(folder / 'result.json'), read(folder / 'state.json', {})
+        spec = request['spec']
+        if (spec['operation_id'] != 'agent.turn' or verified(spec['session']).get('protocol', 1) < 2
+                or not result or result.get('state') != 'failed'
+                or result.get('reason') not in {'timeout', 'provider_error', 'worker_failed', 'worker_lost'}):
+            raise ValueError('Only failed, tool-free transient model requests can be retried')
+        if state.get('retry_of') == digest(result):
+            return status(root, request_id)
+        for attempt in state.get('attempts', []):
+            current = pool_status(state['pool_root'], attempt['pool_request_id'])
+            if current['state'] not in {'succeeded', 'failed', 'cancelled'}:
+                raise ValueError('Prior worker attempt is not terminal: ' + attempt['pool_request_id'])
+        config = read(root / 'config.json')
+        audit = immutable(folder / ('recovery-' + digest(result) + '.json'),
+            dict(reason=reason, request=reference(folder / 'request.json'), result=result, previous_state=state))
+        save(folder / 'state.json', dict(state, state='queued', retry_of=digest(result), recovery=audit,
+            attempt_limit=len(state.get('attempts', [])) + policy(config)['max_attempts'], updated_at=time.time()))
+    return status(root, request_id)
 
 
 def cancel(root, request_id):
@@ -378,6 +411,10 @@ def main():
     p.add_argument('root')
     p.add_argument('request_id')
     p.add_argument('--reason', required=True)
+    p = commands.add_parser('retry-turn', help='audit and retry a failed tool-free model request')
+    p.add_argument('root')
+    p.add_argument('request_id')
+    p.add_argument('--reason', required=True)
     for name in ("serve", "submit", "status", "cancel", "_execute"):
         p = commands.add_parser(name)
         p.add_argument("root")
@@ -395,6 +432,9 @@ def main():
     elif args.command == 'confirm-stopped':
         import json
         print(json.dumps(confirm_stopped(args.root, args.request_id, reason=args.reason), ensure_ascii=True))
+    elif args.command == 'retry-turn':
+        import json
+        print(json.dumps(retry_turn(args.root, args.request_id, reason=args.reason), ensure_ascii=True))
     else:
         import json
         result = (submit(args.root, read(args.request_file)) if args.command == "submit" else

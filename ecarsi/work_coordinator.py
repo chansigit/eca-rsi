@@ -102,7 +102,7 @@ def check_bridge(root: str, request_id: str) -> dict:
         return {"state": "waiting", "detail": "unknown_external_result"}
     if result["state"] == "failed":
         return {"state": result["state"], "detail": result.get("reason")}
-    return {"state": "waiting"}
+    return {"state": "waiting", "poll_seconds": 15 if result['state'] == 'queued' else 3}
 
 
 @activity.defn
@@ -249,7 +249,8 @@ class AgentWorkflow:
                     break
                 if result["state"] != "waiting":
                     raise ApplicationError(f"{request}: {result['state']}", non_retryable=True)
-                await workflow.sleep(2)
+                await workflow.sleep(result.get('poll_seconds', 2)
+                    if workflow.patched('agent-queued-poll-backoff-v1') else 2)
             reply = result["path"]
             decision = await call(agent_step, "decision", [reply])
             if decision["kind"] == "final":

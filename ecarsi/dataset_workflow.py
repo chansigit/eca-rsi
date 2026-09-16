@@ -168,9 +168,12 @@ def dataset_step(action, args):
             return verified(ref)
         if stage == 'organize':
             result = check_pool(spec['pool_root'], spec['run_id'] + '.execute', 'completion.json')
-            if result['state'] != 'ready' or verified(reference(result['path'])) != publication:
-                raise ValueError('Organize publication no longer matches its accepted execution')
-            return str(root)
+            if result['state'] != 'ready':
+                raise ValueError('Organize execution is no longer accepted')
+            # Publication relocates the manifest. Reuse its full validation rather
+            # than comparing the intentionally different worker/published records.
+            from .organize_v2 import publish
+            return publish(Path(result['path']).parent, root)
         if read(root / 'spec.json') != spec:
             raise ValueError('Saved stage specification changed')
         if publication.get('state') != 'complete' or publication['input'] != spec.get('input', spec.get('input_manifest')):

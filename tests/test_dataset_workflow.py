@@ -7,6 +7,23 @@ from ecarsi.dataset_workflow import AnalysisUnitWorkflow, dataset_step
 from ecarsi.warm_pool.state import save
 
 
+def test_organize_resume_accepts_relocated_publication_but_rejects_changed_data(tmp_path, monkeypatch):
+    from tests.test_organize_v2_publish import outputs
+    from ecarsi.organize_v2 import publish
+    from ecarsi import layout as L
+    import ecarsi.work_coordinator as coordinator
+
+    output, destination = outputs(tmp_path)
+    publish(output, destination)
+    spec = dict(output_root=str(destination), pool_root=str(tmp_path), run_id='organize')
+    monkeypatch.setattr(coordinator, 'check_pool', lambda *args: {
+        'state': 'ready', 'path': str(output / 'completion.json')})
+    assert dataset_step('completed', ['organize', spec]) == str(destination)
+    L.input_h5ad(L.unit_dir(destination, 'unit')).write_bytes(b'corrupted')
+    with pytest.raises(ValueError, match='Organize output changed'):
+        dataset_step('completed', ['organize', spec])
+
+
 def test_round_uses_legacy_convergence_and_conserves_cell_counts(tmp_path):
     policy = dict(rounds=None, cap=10, extra_rounds_after_convergence=0, max_removed=1000)
     spec = dict(output_root=str(tmp_path), round_policy=policy)
