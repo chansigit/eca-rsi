@@ -375,6 +375,7 @@ def test_mixed_read_and_decision_batch_cannot_dispatch_any_tool(tmp_path):
     from harness_bridge import _harness_openai as adapter
     class MixedModel(ScriptedModel):
         async def get_response(self, **kwargs):
+            assert kwargs['model_settings'].tool_choice == 'required'
             output = [ResponseFunctionToolCall(type='function_call', name=name, call_id=name,
                       arguments='{"value":7}', id=name, status='completed') for name in ('compute', 'submit')]
             return ModelResponse(output=output, usage=Usage(requests=1, input_tokens=10, output_tokens=4), response_id='mixed')

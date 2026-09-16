@@ -87,4 +87,10 @@ def launch(root, cpu_ids, memory_mb, work_dir, prefix, job_id=None, time_limit_s
             command += ["--gpu", gpu_id]
         os.environ["APPTAINER_NV"] = "1"
         os.environ["APPTAINERENV_CUDA_VISIBLE_DEVICES"] = ",".join(profile["gpu_ids"])
+    # Clean scientific environments still need explicitly allowed agent keys.
+    # Inherit them once at launch; never put values in argv or startup records.
+    from ecarsi.model_web import PROVIDERS
+    for key in {provider[0] for provider in PROVIDERS.values()}:
+        if os.environ.get(key):
+            os.environ['APPTAINERENV_' + key] = os.environ[key]
     os.execvp(command[0], command)

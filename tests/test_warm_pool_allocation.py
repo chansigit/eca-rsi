@@ -54,10 +54,15 @@ def test_slurm_launch_passes_every_granted_gpu_to_one_worker(tmp_path, monkeypat
     monkeypatch.setattr("ecarsi.pool.slurm.inventory", lambda *a, **k: profile)
     monkeypatch.setenv("APPTAINER_NV", "0")
     monkeypatch.setenv("APPTAINERENV_CUDA_VISIBLE_DEVICES", "")
+    monkeypatch.setenv('ARK_API_KEY', 'test-worker-key')
+    monkeypatch.setenv('APPTAINERENV_ARK_API_KEY', '')
     commands = []
     monkeypatch.setattr(allocation.os, "execvp", lambda executable, args: commands.append(args))
     allocation.launch(tmp_path, [4, 7], 1024, tmp_path / "worker", ["python"], job_id="123", gpu=True)
     assert len(commands) == 1 and commands[0].count("--gpu") == 2
     assert commands[0][-4:] == ["--gpu", "GPU-a1", "--gpu", "GPU-b2"]
     assert os.environ["APPTAINERENV_CUDA_VISIBLE_DEVICES"] == "GPU-a1,GPU-b2"
+    assert os.environ['APPTAINERENV_ARK_API_KEY'] == 'test-worker-key'
+    assert 'test-worker-key' not in str(commands)
+    assert all('test-worker-key' not in p.read_text() for p in (tmp_path/'worker').glob('*.json'))
     assert read(next((tmp_path / "worker").glob("allocation-*.json")))["gpu_ids"] == profile["gpu_ids"]

@@ -194,6 +194,23 @@ def settings_timeout(attempt):
     return read(attempt["plan"]["path"])["timeout_seconds"]
 
 
+def credential_timeout(state):
+    """Recognize older credential-load timeouts from their accepted worker receipt."""
+    from .agent_session import verified
+    attempt = state.get('attempts', [])[-1:]
+    if not attempt:
+        return False
+    current = status(state['pool_root'], attempt[0]['pool_request_id'])
+    if current['state'] != 'succeeded':
+        return False
+    outputs = [o for o in current['receipt']['outputs'] if Path(o['path']).name == 'result.json']
+    if len(outputs) != 1:
+        return False
+    response = verified({k: outputs[0][k] for k in ('path', 'sha256')})
+    return (response.get('outcome') == 'local_error' and response.get('error') == 'TimeoutExpired'
+            and response.get('response') is None)
+
+
 def completed_replacement(pool_root, request_id, bridge_root):
     """A fenced model-only attempt cannot block recovery after its reply succeeded."""
     from .agent_session import verified
@@ -433,6 +450,10 @@ def execute(plan_path):
                 outcome, response = "success", saved
             else:
                 outcome = "timeout" if isinstance(exc, TimeoutError) or "Timeout" in error else "provider_error"
+    except subprocess.TimeoutExpired as exc:
+        # Shell credential setup precedes the provider request. A transient
+        # worker startup delay is retryable and must not poison model health.
+        outcome, error = 'worker_setup_timeout', type(exc).__name__
     except Exception as exc:
         error = type(exc).__name__
     save(folder / "result.json", dict(outcome=outcome, response=response, error=error, worker=worker,

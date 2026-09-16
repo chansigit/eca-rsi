@@ -199,6 +199,9 @@ def agent_step(action: str, args: list):
     if action == "decision":
         reply = read(args[0])["response"]
         return {"kind": reply["kind"], "calls": len(reply["calls"])}
+    if action == 'parallel':
+        from .agent_parallel import choose
+        return choose(*args)
     if action == "finish":
         spec = session.verified(args[0])["spec"]
         if session.turn_reply(args[0], args[1])["kind"] != "final":
@@ -256,13 +259,15 @@ class AgentWorkflow:
             if decision["kind"] == "final":
                 self._stage = "complete"
                 return await call(agent_step, "finish", [session, reply])
-            if decision["kind"] != "tools" or not 1 <= decision["calls"] <= 16:
+            wider_batch = workflow.patched('agent-read-batch-window-v1')
+            if decision["kind"] != "tools" or not 1 <= decision["calls"] <= (64 if wider_batch else 16):
                 raise ApplicationError("Invalid agent tool boundary", non_retryable=True)
             self._stage = "tools"
             accepted, parents = [], []
-            # Ordered tools are the conservative default; never infer independence from a model batch.
-            for index in range(decision["calls"]):
-                item = await call(agent_step, "tool", [session, reply, index, parents[-1] if parents else None])
+            parallel = await call(agent_step, 'parallel', [session, reply]) if wider_batch else False
+
+            async def run_tool(index, previous):
+                item = await call(agent_step, "tool", [session, reply, index, previous])
                 while True:
                     result = await call(check_pool, spec["pool_root"], item["request_id"], item["result_file"])
                     if result["state"] == "ready":
@@ -270,9 +275,28 @@ class AgentWorkflow:
                     if result["state"] != "waiting":
                         raise ApplicationError(f"{item['request_id']}: {result['state']}", non_retryable=True)
                     await workflow.sleep(2)
-                accepted.append({**item, "path": result["path"]})
-                parents.append(item["request_id"])
-            context = await call(agent_step, "resume", [session, reply, accepted])
+                return {**item, "path": result["path"]}
+
+            if parallel:
+                # Bound per-agent fan-out; Pool still enforces aggregate CPU/RAM/GPU grants.
+                pending, index = {}, 0
+                while index < decision['calls'] or pending:
+                    while index < decision['calls'] and len(pending) < 4:
+                        task = asyncio.create_task(run_tool(index, None))
+                        pending[task] = index
+                        index += 1
+                    done, _ = await workflow.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                    for task in sorted(done, key=lambda t: pending[t]):
+                        pending.pop(task)
+                        accepted.append(await task)
+                accepted.sort(key=lambda item: item['index'])
+                parents = [item['request_id'] for item in accepted]
+            else:
+                for index in range(decision['calls']):
+                    item = await run_tool(index, parents[-1] if parents else None)
+                    accepted.append(item)
+                    parents.append(item['request_id'])
+            context = await call(agent_step, "resume", [session, reply, accepted, True] if parallel else [session, reply, accepted])
             if spec.get("completion_tool"):
                 completed = await call(agent_step, "complete_tool", [session, context])
                 if completed:

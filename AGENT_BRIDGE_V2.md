@@ -351,9 +351,10 @@ preserved and no registered tool was replayed.
 
 A registered tool may declare `read_only: true`. New portable sessions with such
 tools enable the provider's native batched function calls and tell the model to
-combine independent evidence requests. Worker executions still run in order,
-with the accepted state passed between them. Every output must be present in
-order before the conversation resumes. Missing or reordered results are rejected.
+combine independent evidence requests. Known evidence readers may run concurrently
+with observation-state merging; generic tools retain ordered execution. Every
+output must be present in original call order before the conversation resumes.
+Missing or reordered results are rejected.
 
 A batch containing any undeclared/non-read-only tool is rejected before any
 program runs. Decision submission tools cannot declare themselves read-only and
@@ -368,8 +369,8 @@ Before a new evidence tool request is submitted, `agent_evidence.plan` records
 its exact execution in `execution.json`. Existing requests and saved plans retain
 their original command. This works with existing single-tool sessions: one model
 request can return several observations, without changing its model-call policy.
-If the model already requested multiple tools in the same turn, normal ordered
-execution is retained to avoid automatically reading its requested evidence twice.
+If the model already requested multiple tools in the same turn, automatic
+prefetch is disabled to avoid reading its requested evidence twice.
 
 The Worker invokes the original registered tools sequentially, carrying forward
 their immutable state. It can return up to eight continuous evidence pages or
@@ -412,3 +413,27 @@ Long retained workflow histories still make cold recovery expensive; large model
 responses can also exhaust the configured deadline. The Testis type-annotation
 turn hit three 300-second deadlines in this observation window and needs separate
 diagnosis; evidence packing must not be reported as a fix for that timeout.
+
+Registered independent evidence calls now use a four-request sliding window per
+agent. A model turn may return up to 64 calls; that response limit is separate
+from concurrent execution. Only known read-only tools with mergeable observation
+state are eligible. The continuation verifies every accepted result and merges
+read paths, inventory coverage, lookup records and QC flags; changed scientific
+data, labels or clustering versions are rejected. Decisions and generic tools
+remain ordered. An immutable per-turn policy preserves both old ordered batches
+and new parallel batches across recovery. Temporal patching retains old histories.
+
+Light readers reserve at most 2 GiB rather than the parent matrix budget. Matrix
+readers can reuse the existing accepted-compute peak policy; evidence batches
+that perform QC retain matrix headroom. Already submitted requests stay exact.
+New agent adapters require a tool call when a completion tool is registered, so
+a free-text conclusion cannot replace a validated submission. Archived adapters
+retain their original behavior.
+
+Worker credential-shell timeouts are bounded transient setup failures, not model
+failures or corrupt session state. They retry under the existing attempt budget
+without affecting model cooldown. Audited recovery also recognizes this specific
+failure in older receipts; unrelated local errors remain terminal. New Slurm
+workers inherit the supported API-key variables through Apptainer's explicit
+environment forwarding, keeping values out of commands and state files. Existing
+workers keep their inherited environment until relaunched.

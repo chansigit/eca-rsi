@@ -287,11 +287,12 @@ async def run_turn(request, folder, *, model=None):
         if batchable:
             instructions += ("\n\nBatch independent evidence requests in the same model turn when their "
                 "arguments are already known. Eligible read-only tools: " + ", ".join(batchable) +
-                ". Worker execution remains ordered. Request all other tools individually. "
+                ". Registered independent reads may execute concurrently; changes remain ordered. Request all other tools individually. "
                 "Never submit a decision until its required evidence has been returned and reviewed.")
         agent = Agent(name="RSI durable agent", instructions=instructions,
                       model=_model(chosen["model"], session["api_mode"], client), tools=tools,
-                      model_settings=ModelSettings(parallel_tool_calls=bool(batchable), store=False))
+                      model_settings=ModelSettings(parallel_tool_calls=bool(batchable), store=False,
+                          tool_choice='required' if session['spec'].get('completion_tool') else None))
         run_input = "Carry out the task using the registered tools, then report the result."
         before_in = before_out = 0
         if context and portable:
@@ -376,7 +377,7 @@ def tool_request(session_ref, reply_path, index, previous=None):
     reply_path = Path(reply_path)
     reply = turn_reply(session_ref, reply_path)
     calls = reply["calls"]
-    if reply["kind"] != "tools" or not 1 <= len(calls) <= 16 or len({c["call_id"] for c in calls}) != len(calls):
+    if reply["kind"] != "tools" or not 1 <= len(calls) <= 64 or len({c["call_id"] for c in calls}) != len(calls):
         raise ValueError("Expected distinct pending tool calls")
     if len(calls) > 1:
         readonly = {t["name"] for t in s["tools"] if t.get("read_only")}
@@ -422,7 +423,9 @@ def tool_request(session_ref, reply_path, index, previous=None):
         else:
             saved = read(reply_path.parent / "request.json")["spec"].get("context")
             if saved:
-                prior_result = verified(verified(saved)["results"][-1]["output"])
+                context = verified(saved)
+                prior_result = ({'state': context['tool_state']} if 'tool_state' in context else
+                                verified(context["results"][-1]["output"]))
         if prior_result is not None:
             state_ref = prior_result["state"]
         verified(state_ref)
@@ -447,11 +450,13 @@ def tool_request(session_ref, reply_path, index, previous=None):
         if state['version'] == 0:
             from .operation_budget import from_compute
             request = from_compute(request, state['bundle'], directory / 'resources.json', s['pool_root'])
+    from .agent_parallel import budget
+    request = budget(request, directory, s, tool, state_ref if state_inputs else None)
     submit(s["pool_root"], request)
     return {"request_id": request_id, "result_file": tool["result_file"], "index": index}
 
 
-def continuation(session_ref, reply_path, accepted):
+def continuation(session_ref, reply_path, accepted, parallel=False):
     s = verified(session_ref)["spec"]
     reply = turn_reply(session_ref, reply_path)
     if [a["index"] for a in accepted] != list(range(len(reply["calls"]))):
@@ -471,9 +476,20 @@ def continuation(session_ref, reply_path, accepted):
         ref = {k: output[k] for k in ("path", "sha256")}
         verified(ref)
         results.append({**reply["calls"][item["index"]], "output": ref, "pool_request_id": item["request_id"]})
-    return immutable(Path(s["output_root"]) / (Path(reply_path).parent.name + ".continuation.json"),
-                     {"reply": reference(reply_path), "sdk_state": reply["sdk_state"],
-                      "usage_total": reply["usage_total"], "results": results})
+    context = {"reply": reference(reply_path), "sdk_state": reply["sdk_state"],
+               "usage_total": reply["usage_total"], "results": results}
+    if parallel:
+        from .agent_parallel import eligible, merge_states
+        if not eligible(s, reply['calls']):
+            raise ValueError('Unregistered parallel evidence batch')
+        prior = read(Path(reply_path).parent / 'request.json')['spec'].get('context')
+        base = s['tool_state']
+        if prior:
+            previous = verified(prior)
+            base = previous.get('tool_state') or verified(previous['results'][-1]['output'])['state']
+        merged = merge_states(verified(base), [verified(verified(r['output'])['state']) for r in results])
+        context['tool_state'] = immutable(Path(s['output_root']) / (Path(reply_path).parent.name + '.state.json'), merged)
+    return immutable(Path(s["output_root"]) / (Path(reply_path).parent.name + ".continuation.json"), context)
 
 
 def complete_tool(session_ref, context_ref):

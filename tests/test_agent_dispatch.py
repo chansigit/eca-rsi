@@ -129,6 +129,30 @@ def test_local_session_validation_does_not_poison_model_health(tmp_path, monkeyp
     assert result['outcome'] == 'local_error' and result['error'] == 'ValueError'
 
 
+def test_credential_timeout_retries_without_calling_or_penalizing_provider(tmp_path, monkeypatch):
+    from tests.test_agent_session import setup, completed_tool
+    spec, _ = setup(tmp_path)
+    root = Path(spec['bridge_root'])
+    save(root/'config.json', dict(read(root/'config.json'), pool_root=spec['pool_root']))
+    spec = dict(spec, session_id='setup-retry', output_root=str(tmp_path/'setup-retry'))
+    ref = session.create_session(spec)
+    turn = session.submit_turn(ref, 0);bridge.serve(root, once=True)
+    first = bridge.status(root, turn)['attempts'][0]
+    def fail_setup(*args):
+        raise subprocess.TimeoutExpired('credential shell', 30)
+    monkeypatch.setattr(dispatch, 'load_worker_key', fail_setup)
+    monkeypatch.chdir(tmp_path)
+    dispatch.execute(first['plan']['path'])
+    result = read(tmp_path/'result.json')
+    assert result['outcome'] == 'worker_setup_timeout' and result['response'] is None
+    completed_tool(spec, dict(request_id=first['pool_request_id']), result)
+    bridge.serve(root, once=True)
+    observed = bridge.status(root, turn)
+    assert len(observed['attempts']) == 2 and observed['state'] == 'running'
+    events = [read(p) for p in (root/'model-events').glob('*.json')]
+    assert len(events) == 1 and events[0]['model_failure'] is False
+
+
 def test_retry_waits_for_untried_backup_before_reusing_failed_primary(tmp_path):
     from tests.test_agent_session import setup
     spec, ref = setup(tmp_path)

@@ -25,7 +25,9 @@ def reject_arguments(session_ref, reply_path, index, previous, message):
     else:
         context = read(Path(reply_path).parent/'request.json')['spec'].get('context')
         if context:
-            result = session.verified(session.verified(context)['results'][-1]['output'])
+            saved = session.verified(context)
+            result = ({'state': saved['tool_state']} if 'tool_state' in saved else
+                      session.verified(saved['results'][-1]['output']))
     if state is not None and result is not None:
         state = result['state']
     if state is not None:
