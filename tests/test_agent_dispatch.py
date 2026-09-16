@@ -85,6 +85,13 @@ def test_worker_timeout_fallback_continuation_and_dispatcher_recovery(tmp_path):
                 outputs=[dict(**session.reference(output/'result.json'), size=(output/'result.json').stat().st_size)]))
             return result
 
+        request = read(pool/'requests'/first['pool_request_id']/'request.json')
+        accepted = pool/'requests'/first['pool_request_id']/request['attempt_id']/'accepted.json'
+        save(accepted, dict(started_at=time.time() - 30))
+        assert status(pool, first['pool_request_id'])['state'] == 'unknown_external_result'
+        bridge.serve(root, once=True)
+        assert len(bridge.status(root, request_id)['attempts']) == 1
+        assert not list((root/'model-events').glob('*.json'))
         assert execute(first)['outcome'] == 'timeout'
         bridge.serve(root, once=True)
         attempts = bridge.status(root, request_id)['attempts']

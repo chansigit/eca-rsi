@@ -150,12 +150,16 @@ def _reconcile_pool(root, folder, config, events):
         response = verified({k: ref[k] for k in ("path", "sha256")})
         outcome = response["outcome"]
         elapsed = response.get("elapsed_seconds", elapsed)
-    elif current["receipt"] or current["state"] == "unknown_external_result":
-        outcome = "worker_lost" if not current["receipt"] else "worker_failed"
+    elif current["receipt"]:
+        outcome = "worker_failed"
     elif elapsed is not None and elapsed > settings_timeout(attempt) + 30:
         # The task wrapper also has a hard deadline. Fence output first; only
         # read-only model turns can be safely reissued while the provider is uncertain.
         outcome = "timeout"
+    elif (current["state"] == "unknown_external_result" and elapsed is None
+          and time.time() - current["accepted"]["started_at"] > settings_timeout(attempt) + 60):
+        outcome = "worker_lost"
+    # A stale heartbeat alone is not loss: a busy host may still finish and publish.
     if outcome is None:
         return
     if current["state"] not in {"succeeded", "failed", "cancelled"}:

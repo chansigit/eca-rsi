@@ -297,3 +297,10 @@ lock, so a cancelled call cannot publish a late reply or start another attempt.
 An already accepted reply is preserved. Provider-side inference or billing may
 continue after local cancellation. Legacy execution with an uncertain external
 outcome still requires explicit reconciliation.
+
+A transient stale Pool heartbeat is treated as an unknown observation rather than
+immediate worker loss. Bridge waits for a valid receipt or the attempt's existing
+response/startup deadline before fencing and retrying. A confirmed failed receipt
+still permits the normal safe retry policy. The scale run exposed one unnecessary
+model retry from the former immediate-stale rule; the accepted continuation was
+preserved and no registered tool was replayed.
