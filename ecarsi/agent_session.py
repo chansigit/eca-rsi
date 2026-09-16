@@ -429,7 +429,11 @@ def tool_request(session_ref, reply_path, index, previous=None):
     if reply["kind"] != "tools" or not 1 <= len(calls) <= 64 or len({c["call_id"] for c in calls}) != len(calls):
         raise ValueError("Expected distinct pending tool calls")
     if len(calls) > 1:
-        readonly = {t["name"] for t in s["tools"] if t.get("read_only")}
+        # Current host policy, not only the session's saved copy of it: sessions
+        # saved before a tool was declared read-only otherwise reject the same
+        # batch turn after turn. Parallel execution still needs the saved flag.
+        from .agent_parallel import READS
+        readonly = {t["name"] for t in s["tools"] if t.get("read_only") or t["name"] in READS}
         if any(call["name"] not in readonly or call["name"] == s.get("completion_tool") for call in calls):
             raise ToolRejection("Batch only declared read-only tools; request decisions and changes individually")
     call = calls[index]

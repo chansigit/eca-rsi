@@ -34,6 +34,22 @@ class TwoCalls(Model):
         yield
 
 
+class UndeclaredRead(Model):
+    """A batch of reads where the saved session never declared check_qc_scores read-only."""
+
+    async def get_response(self, **kwargs):
+        return ModelResponse(response_id="response-1",
+            usage=Usage(requests=1, input_tokens=5, output_tokens=2),
+            output=[ResponseFunctionToolCall(type="function_call", name="read_evidence", call_id="call-a",
+                        arguments='{"offset":0}', id="fc-a", status="completed"),
+                    ResponseFunctionToolCall(type="function_call", name="check_qc_scores", call_id="call-b",
+                        arguments='{}', id="fc-b", status="completed")])
+
+    async def stream_response(self, **kwargs):
+        raise AssertionError("Streaming not used")
+        yield
+
+
 class Client:
     async def close(self):
         pass
@@ -91,6 +107,27 @@ def test_batching_an_unbatchable_tool_returns_a_correction_not_a_failure(tmp_pat
     # No registered scientific program was launched by the rejected batch.
     assert not any(read(p)["spec"]["args"][0] == "-c"
                    for p in (Path(spec["pool_root"]) / "requests").glob("*/request.json"))
+
+
+def test_saved_session_batches_by_current_policy_not_its_stale_copy(tmp_path):
+    from harness_bridge import _harness_openai as adapter
+    spec, ref = build(tmp_path)
+    spec["tools"][1] = dict(spec["tools"][1], name="check_qc_scores", parameters={
+        "type": "object", "properties": {}, "required": [], "additionalProperties": False})
+    spec = dict(spec, session_id="stale-policy", output_root=str(tmp_path / "stale"))
+    ref = session.create_session(spec)
+    root = Path(spec["bridge_root"])
+    request = session.submit_turn(ref, 0)
+    save(root / "requests" / request / "state.json", {"state": "running", "started_at": 1})
+    with patch.object(adapter, "_client", return_value=Client()), \
+         patch.object(adapter, "_model", return_value=UndeclaredRead()):
+        bridge.execute(root, request)
+    reply = root / "requests" / request / "result.json"
+    # check_qc_scores is read-only under current policy, so the batch executes sequentially.
+    first = session.tool_request(ref, reply, 0)
+    submitted = read(Path(spec["pool_root"]) / "requests" / first["request_id"] / "request.json")
+    assert submitted["spec"]["operation_id"] == "read_evidence"
+    assert submitted["spec"]["args"][:2] != ["-m", "ecarsi.agent_tool_errors"]
 
 
 def test_registered_reads_share_one_batching_policy():
