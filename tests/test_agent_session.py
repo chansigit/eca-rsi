@@ -98,6 +98,16 @@ def test_pinned_adapter_survives_upgrade_and_rejects_tampering(tmp_path):
         session.validate_turn(request["spec"])
 
 
+def test_recovery_keeps_original_tool_policy_when_batching_is_introduced(tmp_path):
+    spec, ref = setup(tmp_path)
+    upgraded = {**spec, "tools": [dict(t, read_only=True) for t in spec["tools"]]}
+    assert session.create_session(upgraded) == ref
+    assert session.verified(ref)["spec"] == spec
+    changed = {**upgraded, "tools": [dict(t, memory_mb=t["memory_mb"]+1) for t in upgraded["tools"]]}
+    with pytest.raises(ValueError, match="another specification"):
+        session.create_session(changed)
+
+
 def completed_tool(spec, item, value=None):
     folder = Path(spec["pool_root"]) / "requests" / item["request_id"]
     request = read(folder / "request.json")

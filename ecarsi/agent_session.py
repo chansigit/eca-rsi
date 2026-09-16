@@ -160,7 +160,13 @@ def create_session(spec):
     with lock(root / "session.lock"):
         old = read(path)
         if old is not None:
-            if old["spec"] != spec:
+            # Adding batching declarations must not upgrade an existing session's
+            # tool policy during workflow recovery. All other fields stay exact.
+            declared = {t["name"] for t in old["spec"]["tools"] if "read_only" in t}
+            original_policy = {**spec, "tools": [
+                {k: v for k, v in t.items() if k != "read_only" or t["name"] in declared}
+                for t in spec["tools"]]}
+            if old["spec"] != original_policy:
                 raise ValueError("Session directory already belongs to another specification")
             return reference(path)
         config = read(Path(spec["bridge_root"]) / "config.json")
