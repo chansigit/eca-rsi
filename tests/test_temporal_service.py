@@ -59,7 +59,8 @@ def test_coordinator_reconnects_without_resubmitting_work(monkeypatch):
         async def connect(address):
             return address
 
-        async def worker(client, queue):
+        async def worker(client, queue, workflow_slots):
+            assert workflow_slots == 3
             connected.append(client)
             entered.set()
             try:
@@ -76,7 +77,7 @@ def test_coordinator_reconnects_without_resubmitting_work(monkeypatch):
         monkeypatch.setattr(coordinator.Client, 'connect', connect)
         monkeypatch.setattr(coordinator, 'run_worker', worker)
         monkeypatch.setattr(coordinator.asyncio, 'wait', fast_wait)
-        following = asyncio.create_task(coordinator.follow_service('shared', 'queue'))
+        following = asyncio.create_task(coordinator.follow_service('shared', 'queue', 3))
         try:
             await asyncio.wait_for(entered.wait(), 1)
             entered.clear()

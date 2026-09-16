@@ -4,6 +4,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 import json
+import os
 from pathlib import Path
 
 from temporalio import activity, workflow
@@ -303,20 +304,26 @@ def validate_spec(spec):
     return spec
 
 
-async def run_worker(client, task_queue):
+async def run_worker(client, task_queue, workflow_slots=None):
     from .persample_workflow import PersampleWorkflow, SampleWorkflow, sample_step
     from .crosssample_workflow import CrosssampleWorkflow, crosssample_step
     from .zoomin_workflow import ZoominWorkflow, zoomin_step
     from .dataset_workflow import DatasetWorkflow, AnalysisUnitWorkflow, dataset_step
+    if workflow_slots is None:
+        cpus = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
+        workflow_slots = max(1, min(8, cpus // 2))
+    if workflow_slots < 1:
+        raise ValueError("Workflow slots must be positive")
+    # The SDK default permits 500 concurrent replays; cold recovery must fit this host.
     with ThreadPoolExecutor(max_workers=16) as executor:
-        async with Worker(client, task_queue=task_queue,
+        async with Worker(client, task_queue=task_queue, max_concurrent_workflow_tasks=workflow_slots,
                 workflows=[OrganizeWorkflow, AgentWorkflow, PersampleWorkflow, SampleWorkflow, CrosssampleWorkflow, ZoominWorkflow, DatasetWorkflow, AnalysisUnitWorkflow],
                 activities=ACTIVITIES + [agent_step, sample_step, crosssample_step, zoomin_step, dataset_step],
                 activity_executor=executor, max_concurrent_activities=16):
             await asyncio.Future()
 
 
-async def follow_service(root, task_queue):
+async def follow_service(root, task_queue, workflow_slots=None):
     """Reconnect after a service handoff without cancelling Pool or Bridge work."""
     from .temporal_service import endpoint
     last_state = None
@@ -333,7 +340,7 @@ async def follow_service(root, task_queue):
             continue
         print('Connected to Temporal service generation ' + current['generation'], flush=True)
         last_state = None
-        running = asyncio.create_task(run_worker(client, task_queue))
+        running = asyncio.create_task(run_worker(client, task_queue, workflow_slots))
         try:
             while True:
                 done, _ = await asyncio.wait([running], timeout=5)
@@ -358,7 +365,8 @@ async def main():
     connection.add_argument("--service-root", type=Path, help="shared Temporal service discovery directory")
     parser.add_argument("--task-queue", default=QUEUE)
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("worker")
+    p = commands.add_parser("worker")
+    p.add_argument("--workflow-slots", type=int, help="concurrent workflow activations; default uses up to half the available CPUs, capped at 8")
     p = commands.add_parser("start")
     p.add_argument("spec", type=Path)
     p = commands.add_parser("start-agent")
@@ -374,12 +382,15 @@ async def main():
     p = commands.add_parser("resume-dataset")
     p.add_argument("run_id")
     p.add_argument("--reason", required=True)
+    p = commands.add_parser("set-persample-limit")
+    p.add_argument("run_id")
+    p.add_argument("limit", type=int)
     for name in ("status", "status-agent", "status-persample", "resume-persample", "status-crosssample", "resume-crosssample", "status-zoomin", "resume-zoomin", "status-dataset"):
         p = commands.add_parser(name)
         p.add_argument("run_id")
     args = parser.parse_args()
     if args.command == 'worker' and args.service_root:
-        await follow_service(args.service_root, args.task_queue)
+        await follow_service(args.service_root, args.task_queue, args.workflow_slots)
         return
     if args.service_root:
         from .temporal_service import endpoint
@@ -392,7 +403,7 @@ async def main():
         runtime = Runtime(telemetry=TelemetryConfig(), worker_heartbeat_interval=None)
     client = await Client.connect(args.temporal, runtime=runtime)
     if args.command == "worker":
-        await run_worker(client, args.task_queue)
+        await run_worker(client, args.task_queue, args.workflow_slots)
     elif args.command in {"start", "start-agent", "start-persample", "start-crosssample", "start-zoomin", "start-dataset"}:
         if args.command == "start-dataset":
             from .dataset_workflow import DatasetWorkflow, validate_spec as validate_dataset
@@ -421,6 +432,12 @@ async def main():
                       id=identity, task_queue=args.task_queue,
                       id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE)
         print(handle.id)
+    elif args.command == 'set-persample-limit':
+        from .persample_workflow import PersampleWorkflow
+        from .warm_pool.state import identifier
+        handle = client.get_workflow_handle('persample/' + identifier(args.run_id))
+        limit = await handle.execute_update(PersampleWorkflow.set_in_flight_limit, args.limit)
+        print(json.dumps(dict(workflow_id=handle.id, max_in_flight_samples=limit)))
     elif args.command == 'resume-dataset':
         from .dataset_workflow import resume_dataset
         from .warm_pool.state import identifier

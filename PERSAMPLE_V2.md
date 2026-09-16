@@ -189,3 +189,29 @@ That waiting mechanism needs improvement before sustained large batches.
 Node/database-loss recovery and automatic failed-compute attempts remain
 unvalidated. Passing the focused tests and this batch does not establish
 unattended production readiness.
+
+## Adjust admission during a run
+
+The in-flight limit bounds prepared samples, including those awaiting annotation.
+It does not reserve CPU or memory for the whole sample workflow: Pool grants each
+compute/tool/finalize operation separately. A small limit can still exhaust the
+prepared backlog while agents are waiting and leave later samples uncomputed.
+
+A running per-sample workflow accepts a durable Temporal update:
+
+```bash
+python -m ecarsi.work_coordinator --service-root /shared/rsi/control \
+  set-persample-limit PER_SAMPLE_RUN_ID 16
+```
+
+The positive integer must be at least `batch_size`. Increasing it immediately
+wakes admission; decreasing it drains existing children without cancelling them.
+The update survives Coordinator restart and is recorded in Temporal history.
+Original inputs, scientific settings, resource grants and accepted results remain
+immutable. It applies to this running per-sample workflow; configure
+`max_in_flight_samples` in the dataset specification for future runs.
+
+`python tests/check_persample_capacity.py HOST:PORT` exercises this behavior on an
+isolated task queue, including invalid update rejection, admission while existing
+children wait, worker replacement, draining and deterministic replay. It makes no
+model calls and submits no scientific Pool tasks.

@@ -134,3 +134,17 @@ that all scientific workflows have completed. `manifest.json` records all inputs
 and budgets; `status.json` and `throughput.jsonl` record workflow, operation, model
 and worker status every minute. Preparation receipts and memory measurements are
 in `durable-control-20260915/metadata-pool-check-results.json`.
+
+The scale test also reached the per-dataset preparation limit: the first 27
+Organize publications described 283 samples, but only 104 could be prepared under
+the four-sample limit while annotation waited. The new per-sample admission update
+allows the running workflows to increase that limit without restarting their
+science or bypassing model decisions. All 27 existing per-sample histories passed
+replay before deployment; the isolated update/restart check also passed.
+
+Cold Coordinator recovery exposed the SDK's default of 500 concurrent workflow
+activations, producing over 500 threads and repeated workflow-task timeouts on an
+8-CPU control allocation. Coordinator now defaults to half its available CPUs,
+with a minimum of one and maximum of eight concurrent activations. Override with
+`worker --workflow-slots N` when appropriate. This limit concerns short workflow
+activations, not the number of running datasets, numerical tasks, or model calls.

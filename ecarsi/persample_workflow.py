@@ -205,19 +205,36 @@ class SampleWorkflow:
 
 @workflow.defn
 class PersampleWorkflow:
+    @workflow.update
+    def set_in_flight_limit(self, limit: int) -> int:
+        self.validate_in_flight_limit(limit)
+        self._in_flight_limit = limit
+        return limit
+
+    @set_in_flight_limit.validator
+    def validate_in_flight_limit(self, limit: int):
+        if type(limit) is not int or limit < getattr(self, "_batch_size", 1):
+            raise ValueError("Sample limit must be an integer at least as large as batch_size")
+
+    @workflow.query
+    def in_flight_limit(self):
+        return getattr(self, "_in_flight_limit", None)
+
     @workflow.query
     def stage(self):
         return getattr(self, "_stage", "created")
 
     @workflow.run
     async def run(self, spec):
+        self._batch_size = spec["batch_size"]
+        self._in_flight_limit = getattr(self, "_in_flight_limit", spec["max_in_flight_samples"])
         offset, total, pending, completed, failed, parent = 0, None, {}, [], [], None
         totals, inputs, replayed = None, {}, set()
         while True:
             recover = bool(failed) and workflow.patched("persample-recovered-receipts-v1")
             if recover:
                 for failure in list(failed):
-                    if len(pending) >= spec["max_in_flight_samples"]:
+                    if len(pending) >= self._in_flight_limit:
                         break
                     sample = failure["sample"]
                     if sample in replayed or not await call(sample_step, "recoverable", [spec, sample]):
@@ -230,7 +247,7 @@ class PersampleWorkflow:
                     failed.remove(failure)
             if total is not None and offset >= total and not pending:
                 break
-            if (total is None or offset < total) and len(pending) <= spec["max_in_flight_samples"] - spec["batch_size"]:
+            if (total is None or offset < total) and len(pending) <= self._in_flight_limit - spec["batch_size"]:
                 self._stage = "partitioning"
                 request = await call(sample_step, "partition", [spec, offset, parent])
                 path = await await_pool(spec, request)
@@ -247,8 +264,14 @@ class PersampleWorkflow:
                     raise ApplicationError("Partition made no progress", non_retryable=True)
                 continue
             self._stage = "processing samples"
-            done, _ = await workflow.wait(pending, return_when=asyncio.FIRST_COMPLETED,
-                timeout=30 if recover and any(f["sample"] not in replayed for f in failed) else None)
+            limit = self._in_flight_limit
+            try:
+                await workflow.wait_condition(
+                    lambda: self._in_flight_limit != limit or any(handle.done() for handle in pending),
+                    timeout=30 if recover and any(f["sample"] not in replayed for f in failed) else None)
+            except asyncio.TimeoutError:
+                pass
+            done = {handle for handle in pending if handle.done()}
             for handle in sorted(done, key=lambda h: pending[h]):
                 sample = pending.pop(handle)
                 try:
