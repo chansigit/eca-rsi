@@ -80,7 +80,11 @@ def check_pool(root: str, request_id: str, output: str) -> dict:
     if state["state"] == "failed" and state["receipt"].get("retryable") is True:
         request = read(Path(root) / "requests" / request_id / "request.json")
         if request.get("retry_count", 0) < 2:
-            retry(root, request_id, reason="Automatic recovery after a confirmed local interruption")
+            if str(state["receipt"].get("error", "")).startswith("MemoryError"):
+                retry(root, request_id, memory_mb=2 * request["spec"]["memory_mb"],
+                      reason="Automatic retry at twice the budget after the RSS watchdog")
+            else:
+                retry(root, request_id, reason="Automatic recovery after a confirmed local interruption")
             return {"state": "waiting"}
     if state["state"] == "unknown_external_result":
         return {"state": "waiting", "detail": "unknown_external_result"}

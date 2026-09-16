@@ -41,6 +41,7 @@ def test_recovery_cache_skips_terminal_history_but_rechecks_retry_and_live_owner
     retry(tmp_path, 'finished', reason='confirmed failure')
     current = read(folder / 'request.json')
     save(folder / current['attempt_id'] / 'accepted.json', accepted)
+    worker.mark_active(tmp_path, 'finished')  # run() marks every acceptance on this host
     assert set(worker.reconcile_local(tmp_path, [cpu])) == {'live', 'finished'}
 
 

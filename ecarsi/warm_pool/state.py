@@ -146,7 +146,9 @@ def validate(spec):
 
 
 def submit(root, spec):
-    root, spec = pool_root(root), validate(spec)
+    from ..operation_budget import measured_ceiling
+    root, requested = pool_root(root), validate(spec)
+    spec = measured_ceiling(requested)
     folder = root / "requests" / spec["request_id"]
     folder.mkdir(mode=0o700, exist_ok=True)
     sync_directory(folder.parent)
@@ -155,8 +157,9 @@ def submit(root, spec):
         fingerprint = digest(spec)
         if existing:
             # An audited retry may raise the memory budget; the caller's original
-            # request still identifies the same work.
-            if fingerprint not in {existing["digest"], existing.get("original_digest")}:
+            # request still identifies the same work. So does the uncapped budget
+            # of a request saved before measured ceilings existed.
+            if not {fingerprint, digest(requested)} & {existing["digest"], existing.get("original_digest")}:
                 raise ValueError("request ID already exists with different content")
         else:
             config = read(root / "config.json")

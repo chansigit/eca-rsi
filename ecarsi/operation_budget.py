@@ -6,6 +6,33 @@ from .agent_session import immutable, reference, verified
 from .warm_pool.state import digest, read
 
 
+# Measured 2026-09-16 over 40,286 succeeded receipts of the 28-tissue Tabula Sapiens batch:
+# ceiling = 2 x max peak RSS + 1 GiB, rounded up to 256 MiB. Only operations without
+# per-request measured sizing are listed (the others use from_compute / from_artifact /
+# from_deg_buffers). Fixed stage budgets reserved 7x what ran (1,395 vs 199 GiB-hours) and
+# three 24 GiB tool calls filled two nodes. An attempt that still exceeds its ceiling is
+# retried at 2x by check_pool, so a larger dataset costs one short failed attempt.
+MEASURED_CEILING_MB = {
+    'check_genes': 9472, 'check_qc_scores': 9984, 'read_evidence': 3072, 'deg_sql': 1792,
+    'deg_lookup': 1792, 'list_evidence': 5376, 'annotation_status': 5632, 'type_context': 6400,
+    'sample_inventory': 1536, 'submit_quality': 5632, 'submit_decision': 9984,
+    'submit_annotation': 4096, 'submit_types': 5632, 'submit_plan': 5632,
+    'finalize_annotation': 1536, 'subcluster': 6144, 'zoom-in.assemble': 2560,
+    'cross-sample.assemble': 2560, 'zoom-in.apply': 11008, 'persample.partition': 7424,
+    'zoom-in.lineage.prepare': 1536, 'zoom-in.plan.prepare': 1536,
+    'cross-sample.type.prepare': 1536, 'cross-sample.quality.prepare': 1536,
+    'cross-sample.inclusion.prepare': 1536, 'inspect_source': 5120, 'organize.prepare': 8192,
+}
+
+
+def measured_ceiling(spec):
+    """Cap a fixed stage budget at the measured ceiling; never raise, never touch unknown operations."""
+    ceiling = MEASURED_CEILING_MB.get(spec.get('operation_id'))
+    if ceiling is None or spec['memory_mb'] <= ceiling:
+        return spec
+    return dict(spec, memory_mb=ceiling)
+
+
 def from_compute(request, computed, policy_path, pool_root):
     """Never change an existing request or use another pool's unaccepted estimate."""
     saved = read(policy_path)

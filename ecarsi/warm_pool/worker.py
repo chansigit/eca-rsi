@@ -67,46 +67,67 @@ def stop_group(pgid):
     raise RuntimeError("attempt process group has not stopped; resources remain uncertain")
 
 
+def active_index(root):
+    """Attempts accepted on this host that may still own CPUs: one marker file per request."""
+    return Path(root) / "cache" / "active" / socket.gethostname().split(".")[0]
+
+
+def mark_active(root, request_id):
+    index = active_index(root)
+    index.mkdir(mode=0o700, parents=True, exist_ok=True)
+    (index / identifier(request_id)).touch()
+
+
 def reconcile_local(root, cpu_ids, gpu_ids=(), shared=False):
     """Do not re-advertise CPUs while a previous local execution can be alive.
 
+    Only attempts this host accepted can hold its CPUs, so only the host's active
+    index is visited (a full walk of every saved request cost 72 of 534 reserved
+    CPU-hours on 2026-09-16). The index is seeded once from a full walk when a host
+    first runs this code; run() marks every acceptance afterwards.
+
     shared=True is a model turn: it shares its core with other live model turns by
     design (fractional HQ slot), so those neighbours are not pending; orphans still are."""
+    root = Path(root)
     host = socket.gethostname().split(".")[0]
     boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    index = active_index(root)
+    if not (index / ".seeded").exists():
+        index.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with lock(index.with_name(index.name + ".seed.lock")):
+            if not (index / ".seeded").exists():
+                for folder in (root / "requests").iterdir():
+                    request = read(folder / "request.json")
+                    if not request:
+                        continue
+                    attempt = folder / request["attempt_id"]
+                    if read(attempt / "accepted.json", {}).get("host") == host and not read(attempt / "receipt.json"):
+                        (index / folder.name).touch()
+                (index / ".seeded").touch()
     pending = []
-    cache_path = root / 'cache' / 'local-recovery' / (host + '-' + boot + '.json')
-    cache = read(cache_path, {})
-    completed = cache.get('completed', {})
-    observed = {}
-    # Every new executor uses this guard, not just worker reconnections. Share
-    # terminal fingerprints across those processes; retries replace request.json.
-    # ponytail: retain one stat per request. An active-attempt journal can replace
-    # this scan if metadata checks, rather than historical JSON reads, dominate.
-    for folder in (root / "requests").iterdir():
-        try:
-            info = (folder / 'request.json').stat()
-        except FileNotFoundError:
+    for marker in index.iterdir():
+        if marker.name.startswith("."):
             continue
-        stamp = [info.st_ino, info.st_mtime_ns, info.st_size]
-        if completed.get(folder.name) == stamp:
-            observed[folder.name] = stamp
-            continue
+        folder = root / "requests" / marker.name
         request = read(folder / "request.json")
         if not request:
+            marker.unlink(missing_ok=True)
             continue
         attempt = folder / request["attempt_id"]
-        if read(attempt / 'receipt.json'):
-            observed[folder.name] = stamp
+        if read(attempt / "receipt.json"):
+            marker.unlink(missing_ok=True)
             continue
         accepted = read(attempt / "accepted.json")
-        if (not accepted or accepted["host"] != host or not (set(cpu_ids).intersection(accepted["cpu_ids"])
-                or set(gpu_ids).intersection(accepted.get("gpu_ids", [])))):
+        if not accepted:
+            continue  # accepted on this host but its attempt was replaced; a retry re-marks it
+        if accepted["host"] != host or not (set(cpu_ids).intersection(accepted["cpu_ids"])
+                or set(gpu_ids).intersection(accepted.get("gpu_ids", []))):
             continue
         neighbour = shared and request["spec"]["operation_id"] == "agent.call"
         try:
             with lock(attempt / "execution.lock", blocking=False):
                 if read(attempt / "receipt.json"):
+                    marker.unlink(missing_ok=True)
                     continue
                 same_boot = accepted["identity"]["boot_id"] == boot
                 if same_boot and (identity(accepted["identity"]["pid"]) == accepted["identity"]
@@ -121,20 +142,10 @@ def reconcile_local(root, cpu_ids, gpu_ids=(), shared=False):
                      request_id=request["spec"]["request_id"], attempt_id=request["attempt_id"],
                      request_digest=request["digest"], runtime_digest=request["runtime_digest"],
                      started_at=accepted["started_at"], finished_at=time.time()))
+                marker.unlink(missing_ok=True)
         except BlockingIOError:
             if not neighbour:
                 pending.append(request["spec"]["request_id"])
-    if observed != completed:
-        cache_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        try:
-            with lock(cache_path.with_suffix('.lock'), blocking=False):
-                # A racing writer may only omit newer terminal entries, causing
-                # an extra read next time. Never cache an unfinished execution.
-                latest = read(cache_path, {})
-                if time.time() - latest.get('updated_at', 0) >= 30:
-                    save(cache_path, dict(updated_at=time.time(), completed=observed))
-        except BlockingIOError:
-            pass
     return pending
 
 
@@ -256,6 +267,7 @@ def run(folder, request, ownership):
                             cpu_ids=cpus, gpu_ids=[gpu_id] if gpu_id else [],
                             compute_backend="rapids" if gpu_id else "cpu", started_at=time.time())
             save(attempt / "accepted.json", accepted)
+            mark_active(folder.parent.parent, spec["request_id"])
         env = {k: v for k, v in os.environ.items() if not k.startswith(("ECA_DRIVER_", "ECA_POOL_"))}
         env.update(MSP_COMPUTE_ENDPOINT="local", OSP_COMPUTE_ENDPOINT="local", CUDA_VISIBLE_DEVICES=gpu_id or "",
                    RSI_COMPUTE_BACKEND="rapids" if gpu_id else "cpu", PYTHONUNBUFFERED="1")
@@ -330,7 +342,10 @@ def run(folder, request, ownership):
         receipt["state"] = "succeeded"
         return 0
     except Exception as exc:
-        receipt.update(error=type(exc).__name__ + ": " + str(exc), retryable=isinstance(exc, InterruptedError))
+        # A host-RSS kill is retryable at a larger budget (check_pool doubles it); a
+        # GPU-memory kill is not, its budget came from the device inventory.
+        receipt.update(error=type(exc).__name__ + ": " + str(exc),
+                       retryable=isinstance(exc, InterruptedError) or isinstance(exc, MemoryError) and "RSS" in str(exc))
         with (attempt / "stderr.log").open("a", encoding="utf-8") as stream:
             traceback.print_exc(file=stream)
         return 1
