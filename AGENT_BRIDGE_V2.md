@@ -60,8 +60,8 @@ portable model turn selects an untried eligible alternative first.
 If an untried alternative is busy or cooling, that retry waits rather than
 spending its remaining attempts on the same failed primary. Other queued
 requests can still use available model capacity. Consecutive
-provider failures put that model in cooldown; after cooldown it is eligible for
-a new request. Attempts and retries are bounded. Settings are reread each tick;
+provider failures put that model in cooldown. A later accepted successful reply
+clears that cooldown; otherwise it expires after the configured interval. Attempts and retries are bounded. Settings are reread each tick;
 an already dispatched task retains its original resource budget and timeout.
 
 `summary.json.models` exposes state, in-flight admissions, consecutive failures,

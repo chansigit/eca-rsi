@@ -181,8 +181,8 @@ replay before deployment; the isolated update/restart check also passed.
 
 Cold Coordinator recovery exposed the SDK's default of 500 concurrent workflow
 activations, producing over 500 threads and repeated workflow-task timeouts on an
-8-CPU control allocation. Coordinator now defaults to half its available CPUs,
-with a minimum of one and maximum of eight concurrent activations. Override with
+8-CPU control allocation. Coordinator now defaults to two concurrent activations per process,
+bounding cold replay while keeping normal and sticky task admission responsive. Override with
 `worker --workflow-slots N` when appropriate. This limit concerns short workflow
 activations, not the number of running datasets, numerical tasks, or model calls.
 
@@ -208,3 +208,53 @@ retained. New calls have a 300-second bound, and retries wait for an untried
 alternative instead of repeatedly consuming their budget on the same primary.
 The final scientific workflows have **not yet passed full-batch acceptance**.
 The GPU allocation remains pending, so these results establish no GPU speedup.
+
+
+### Bounded parallelism and recovery follow-up (2026-09-15, Pacific time)
+
+The development batch now admits independent read-only agent tools in windows
+of four, and cross-sample/Zoom-in DEG windows can be updated durably to 16.
+Pool CPU/memory/GPU admission still applies. Across 1,262 completed DEG tasks in
+20 datasets, the proposed workspace budgets exceeded observed peak RSS by at
+least 2.18 times. The first 53 tasks actually executed with the reduced budgets
+all succeeded. This is empirical headroom, not a guarantee for unseen inputs.
+
+A simultaneous live Coordinator comparison covered 483 activations at one slot
+and 1,033 at two slots, excluding the first 15 seconds after restart. Median
+schedule-to-start delay fell from 0.910 to 0.154 seconds, and P95 from 9.954 to
+2.236 seconds. Execution P95 stayed similar (0.342 versus 0.299 seconds). Four
+control processes now use two slots each. Different task mixes and a short
+observation window prevent interpreting this as an end-to-end pipeline speedup.
+Temporal distinguishes polling/admission capacity from actual task execution;
+see its [worker performance documentation](https://github.com/temporalio/documentation/blob/main/docs/develop/worker-performance/index.mdx).
+
+Bridge also clears an obsolete cooldown when a newer accepted model reply
+succeeds. After deployment, its existing 16-call capacity was occupied again
+(12 Turbo, 4 Pro); increasing the configured provider concurrency was unnecessary
+for that recovery. Long/empty model responses remain a throughput concern.
+
+During this work, an invalid live source edit caused 13 task attempts to fail
+while importing code. Eight non-model requests were retried successfully; three
+model turns obtained accepted replacement replies. The original attempt
+receipts remain intact. Adapter publication now rejects invalid Python, unused
+dispatch snapshots are not executed, and subsequent source replacements were
+syntax-checked before atomic publication. Full immutable application releases
+remain a deployment hardening item; archive validation alone does not isolate
+all imports from a mutable development checkout.
+
+Sixteen terminal dataset parents were resumed after their prerequisites were
+reconciled. Older sessions that ended without their required submission can
+create one audited repair session, which rereads evidence and preserves the
+original scientific checks. At the post-recovery snapshot, 25 datasets were
+running and three still failed; this is recovery progress, not completed delivery
+or sustained high CPU utilization. The GPU allocation was still pending.
+
+Evidence is under
+`/scratch/users/chensj16/eca-runs/warmpool-v2-development/throughput-review-20260915`:
+`parallel-live.json`, `deg-budget-live.json`, `deg-budget-backtest/report.json`,
+`activation-canary-comparison.json`, `recover-edit-window.json`,
+`resume-submission-contract.json`, and `restore-deg-window.json`.
+Relevant checks: 38 submission/parallel/recovery tests, four control-service tests,
+and 12 dispatch tests passed. Earlier parallel and DEG changes also replayed
+real Temporal histories before deployment. The batch monitor continues recording
+Pool usage, task receipts, model outcomes and workflow state every minute.

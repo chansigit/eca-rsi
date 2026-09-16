@@ -346,6 +346,12 @@ def test_model_cooldown_expiry_and_capacity():
     assert dispatch.model_health({'a':event}, [model], Counter(), settings, now=110)[0]['state'] == 'cooling_down'
     assert dispatch.model_health({'a':event}, [model], Counter(), settings, now=121)[0]['state'] == 'ready'
     assert dispatch.model_health({}, [model], Counter({dispatch.model_key(model):1}), settings, now=121)[0]['state'] == 'busy'
+    recovered = dict(model=model, outcome='success', finished_at=105)
+    health = dispatch.model_health({'a': event, 'b': recovered}, [model], Counter(), settings, now=110)[0]
+    assert health['state'] == 'ready' and health['cooldown_until'] is None
+    later = dict(event, finished_at=108)
+    assert dispatch.model_health({'a': event, 'b': recovered, 'c': later}, [model], Counter(), settings, now=110)[0]['state'] == 'cooling_down'
+
 
 
 def test_health_cache_keeps_per_model_admission_limits(tmp_path):

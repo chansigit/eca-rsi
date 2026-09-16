@@ -31,11 +31,13 @@ python -m ecarsi.work_coordinator --service-root /shared/rsi/control \
 
 The submission and worker must use the same task queue. Existing `--temporal HOST:PORT` commands remain available. The service creates the `default` namespace with 30-day completed-history retention. Published scientific artifacts and Pool/Bridge receipts have their own lifetimes; they are not deleted by Temporal history retention.
 
-Each Coordinator process defaults to one concurrent workflow activation
-(`--workflow-slots 1`); its 16 activity slots and external Pool computations remain
+Each Coordinator process defaults to two concurrent workflow activations
+(`--workflow-slots 2`); its 16 activity slots and external Pool computations remain
 concurrent. Cold recovery of approximately 14,000-event agent histories exceeded
 the 10-second workflow-task deadline with several Python replays competing in
-one process. The explicit override remains available, but tune it against cold
+one process. A single slot then left sticky continuations waiting almost 10 seconds
+even while the control process was mostly idle. Two slots keep polling responsive
+with a small replay budget. The explicit override remains available, but tune it against cold
 replay latency as well as steady-state throughput. This setting does not limit
 the number of active datasets or model calls.
 Several Coordinator processes may poll the same task queue. Scale their count

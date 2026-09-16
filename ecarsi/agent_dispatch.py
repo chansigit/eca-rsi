@@ -58,6 +58,7 @@ def model_health(events, models, active, settings, now=None):
         for event in history:
             if event["outcome"] == "success":
                 failures = 0
+                cooldown = 0  # A newer accepted reply demonstrates recovery.
             elif event.get("model_failure", True):
                 failures += 1
                 if failures >= settings["failure_threshold"]:
