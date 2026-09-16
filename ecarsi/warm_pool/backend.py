@@ -130,6 +130,20 @@ def resource_sample(cpu_ids, previous=None, gpu_ids=()):
                 memory_total_bytes=memory.get("MemTotal"), gpus=gpus), counters
 
 
+AGENT_CALL_SHARE = "0.125"  # ponytail: a model turn only waits on HTTP; eight share one core
+
+
+def hq_shares(spec):
+    """(--cpus, runtime marker) HQ asks for a request: whole cores for compute, a slice for a model turn.
+
+    A full core per waiting model call starved compute of slots (2026-09-16: 38 of 64 bigmem
+    CPUs parked in agent.call while DEG tasks queued). The wrapper still sees one bound core,
+    which is what spec["cpus"] == 1 promises."""
+    if spec["operation_id"] == "agent.call":
+        return AGENT_CALL_SHARE, AGENT_CALL_SHARE
+    return str(spec["cpus"]), "1"
+
+
 class HyperQueue:
     def __init__(self, root):
         self.root = pool_root(root)
@@ -204,9 +218,10 @@ class HyperQueue:
                     continue
                 save(folder / "backend.json", dict(state="submitting", generation=generation, observed_at=time.time()))
                 spec = request["spec"]
-                args = ["submit", "--name", name, "--cpus", str(spec["cpus"]),
+                cpu_share, runtime_share = hq_shares(spec)
+                args = ["submit", "--name", name, "--cpus", cpu_share,
                         "--resource", "mem=" + str(spec["memory_mb"]),
-                        "--resource", "runtime/" + request["runtime_digest"] + "=1",
+                        "--resource", "runtime/" + request["runtime_digest"] + "=" + runtime_share,
                         "--time-request", str(spec["time_request_seconds"]) + "s",
                         "--pin", "taskset", "--crash-limit", "never-restart", "--directives", "off",
                         "--cwd", str(attempt), "--stdout", str(attempt / "hq-%{INSTANCE_ID}.stdout"),

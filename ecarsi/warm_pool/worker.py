@@ -67,8 +67,11 @@ def stop_group(pgid):
     raise RuntimeError("attempt process group has not stopped; resources remain uncertain")
 
 
-def reconcile_local(root, cpu_ids, gpu_ids=()):
-    """Do not re-advertise CPUs while a previous local execution can be alive."""
+def reconcile_local(root, cpu_ids, gpu_ids=(), shared=False):
+    """Do not re-advertise CPUs while a previous local execution can be alive.
+
+    shared=True is a model turn: it shares its core with other live model turns by
+    design (fractional HQ slot), so those neighbours are not pending; orphans still are."""
     host = socket.gethostname().split(".")[0]
     boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
     pending = []
@@ -100,6 +103,7 @@ def reconcile_local(root, cpu_ids, gpu_ids=()):
         if (not accepted or accepted["host"] != host or not (set(cpu_ids).intersection(accepted["cpu_ids"])
                 or set(gpu_ids).intersection(accepted.get("gpu_ids", [])))):
             continue
+        neighbour = shared and request["spec"]["operation_id"] == "agent.call"
         try:
             with lock(attempt / "execution.lock", blocking=False):
                 if read(attempt / "receipt.json"):
@@ -107,7 +111,8 @@ def reconcile_local(root, cpu_ids, gpu_ids=()):
                 same_boot = accepted["identity"]["boot_id"] == boot
                 if same_boot and (identity(accepted["identity"]["pid"]) == accepted["identity"]
                         or accepted.get("pgid") and group_usage(accepted["pgid"])["processes"]):
-                    pending.append(request["spec"]["request_id"])
+                    if not neighbour:
+                        pending.append(request["spec"]["request_id"])
                     continue
                 # No live owner, inherited execution lock, or recorded process
                 # group remains. Do not start a new numerical attempt here.
@@ -117,7 +122,8 @@ def reconcile_local(root, cpu_ids, gpu_ids=()):
                      request_digest=request["digest"], runtime_digest=request["runtime_digest"],
                      started_at=accepted["started_at"], finished_at=time.time()))
         except BlockingIOError:
-            pending.append(request["spec"]["request_id"])
+            if not neighbour:
+                pending.append(request["spec"]["request_id"])
     if observed != completed:
         cache_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         try:
@@ -223,7 +229,8 @@ def run(folder, request, ownership):
         # An HQ task wrapper can itself die while descendants still exist. HQ
         # may already have freed its grant; check locally before new compute.
         phase_started = time.monotonic()
-        while reconcile_local(folder.parent.parent, cpus, [gpu_id] if gpu_id else []):
+        while reconcile_local(folder.parent.parent, cpus, [gpu_id] if gpu_id else [],
+                              shared=spec["operation_id"] == "agent.call"):
             if read(folder / "cancel.json"):
                 receipt["state"] = "cancelled"
                 return 0
