@@ -38,6 +38,9 @@ the 10-second workflow-task deadline with several Python replays competing in
 one process. The explicit override remains available, but tune it against cold
 replay latency as well as steady-state throughput. This setting does not limit
 the number of active datasets or model calls.
+Several Coordinator processes may poll the same task queue. Scale their count
+within the existing control allocation when Python replay is CPU-bound, reserving
+capacity for the Temporal service, database and other control components.
 
 The observatory can follow the same record:
 

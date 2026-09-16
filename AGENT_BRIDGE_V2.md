@@ -400,3 +400,15 @@ successful attempt whose verified output matches the accepted Bridge reply.
 Historical timeout cancellations therefore do not block that recovery. An
 uncertain Worker, a cancelled replacement, or an ordinary scientific tool failure
 still requires reconciliation; their safety checks remain unchanged.
+
+In the 2026-09-15 development batch, Prostate received six sample inventories in
+one response; Eye's next model request advanced from inventory offset 2 to 10.
+The first twelve completed batches returned 46 registered observations with no
+tool errors. Forty-two focused tests passed, including full text/Unicode delivery,
+oversized-image read-state rollback, native model batches, pinned execution plans,
+and recovery with a verified replacement model attempt. These checks establish
+evidence delivery and recovery behavior, not sustained high Pool utilization.
+Long retained workflow histories still make cold recovery expensive; large model
+responses can also exhaust the configured deadline. The Testis type-annotation
+turn hit three 300-second deadlines in this observation window and needs separate
+diagnosis; evidence packing must not be reported as a fix for that timeout.
