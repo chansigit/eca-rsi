@@ -75,6 +75,10 @@ def crosssample_step(action, args):
     from .warm_pool.state import digest, submit
     if action == 'read':
         return verified(reference(args[0]))
+    if action == 'session':
+        from .agent_parallel import READS
+        session = verified(reference(args[0]))
+        return dict(session, tools=[dict(t, read_only=t['name'] in READS) for t in session['tools']])
     if action == 'accepted':
         from .persample_workflow import sample_step
         return sample_step('accepted_annotation', args)
@@ -173,7 +177,8 @@ class CrosssampleWorkflow:
         async def judge(phase, evidence, parent, types=None):
             self._stage = phase + ' annotation' if phase != 'inclusion' else 'sample inclusion'
             path, _ = await run_operation('agent', [evidence] + ([types] if types else []), [parent], phase=phase)
-            session = await call(crosssample_step, 'read', [path])
+            policy = 'session' if workflow.patched('agent-session-policy-v1') else 'read'
+            session = await call(crosssample_step, policy, [path])
             result = await workflow.execute_child_workflow(AgentWorkflow.run, session,
                 id=workflow.info().workflow_id + '/' + session['session_id'])
             accepted = await call(crosssample_step, 'accepted', [result])

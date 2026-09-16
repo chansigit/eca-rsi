@@ -91,6 +91,24 @@ def launch(root, cpu_ids, memory_mb, work_dir, prefix, job_id=None, time_limit_s
     # Inherit them once at launch; never put values in argv or startup records.
     from ecarsi.model_web import PROVIDERS
     for key in {provider[0] for provider in PROVIDERS.values()}:
+        if not os.environ.get(key):
+            os.environ[key] = shell_variable(key)
         if os.environ.get(key):
             os.environ['APPTAINERENV_' + key] = os.environ[key]
     os.execvp(command[0], command)
+
+
+def shell_variable(key):
+    """Read one exported variable from the user's shell configuration, on the host.
+
+    Workers launched from a shell without the key otherwise make every model
+    call source .bashrc inside the clean container, where it stalls for 30 s.
+    """
+    import subprocess
+    script = 'source "$HOME/.bashrc" >/dev/null 2>&1; printf %s "${!1}"'
+    try:
+        result = subprocess.run(['bash', '--noprofile', '--norc', '-c', script, 'bash', key],
+                                capture_output=True, timeout=30, check=True)
+    except (subprocess.SubprocessError, OSError):
+        return ''
+    return result.stdout.decode()

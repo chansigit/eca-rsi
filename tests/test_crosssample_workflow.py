@@ -34,7 +34,7 @@ def test_workflow_fanout_and_annotation_order(monkeypatch, change_limit):
     async def scenario():
         active=peak=0;events=[];requests={}
         async def call(fn,action,args):
-            if action=='read':
+            if action in ('read','session'):
                 path=args[0]
                 if path=='inspect':return {'samples':[{},{}]}
                 if path=='compute':return {'tasks':list(range(8))}
@@ -61,6 +61,7 @@ def test_workflow_fanout_and_annotation_order(monkeypatch, change_limit):
         monkeypatch.setattr(module.workflow,'execute_child_workflow',child)
         monkeypatch.setattr(module.workflow,'info',lambda:SimpleNamespace(workflow_id='cross-sample/test'))
         monkeypatch.setattr(module.workflow,'wait',asyncio.wait)
+        monkeypatch.setattr(module.workflow,'patched',lambda name:True)
         workflow=CrosssampleWorkflow()
         assert await workflow.run({'max_in_flight_deg':3,'max_refinements':0})=='publication'
         assert peak==(5 if change_limit else 3) and events.index('assemble')>events.index('deg-7')

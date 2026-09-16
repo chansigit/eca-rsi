@@ -213,9 +213,10 @@ def agent_step(action: str, args: list):
         from .agent_tool_errors import reject_arguments
         try:
             return session.tool_request(*args)
-        except ValidationError as exc:
-            # A model can correct its arguments; never run an invalid command or lose its session.
-            return reject_arguments(*args, message=exc.message)
+        except (ValidationError, session.ToolRejection) as exc:
+            # A model can correct its request; never run an invalid command, and
+            # never let a malformed model call fail the whole dataset.
+            return reject_arguments(*args, message=getattr(exc, "message", None) or str(exc))
     operations = {"create": session.create_session, "model": session.submit_turn,
                   "resume": session.continuation,
                   "complete_tool": session.complete_tool}

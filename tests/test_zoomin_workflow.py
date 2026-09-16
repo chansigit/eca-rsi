@@ -29,7 +29,7 @@ def test_model_wait_releases_lineage_compute_admission(monkeypatch, fail_first):
     async def scenario():
         second_compute=asyncio.Event();requests={};prepared_count=0;events=[]
         async def call(fn,action,args):
-            if action=='read':
+            if action in ('read','session'):
                 path=args[0]
                 if path=='lineage-decision':return {'evidence':{'path':'evidence'}}
                 if path=='plan-decision':return {'proposal':{'lineages':[{'zoom':True},{'zoom':True}]}}

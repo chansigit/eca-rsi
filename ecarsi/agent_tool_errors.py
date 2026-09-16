@@ -35,8 +35,8 @@ def reject_arguments(session_ref, reply_path, index, previous, message):
     request_id = spec['session_id']+'.tool-'+digest([Path(reply_path).parent.name,call['call_id']])[:16]
     directory = Path(spec['output_root'])/request_id
     directory.mkdir(mode=0o700, exist_ok=True)
-    response = dict(is_error=True, content=('Invalid arguments for '+call['name']+': '+message+
-        '. Correct the arguments and call the registered tool again. Expected schema: '+json.dumps(tool['parameters']))[:16000])
+    response = dict(is_error=True, content=('Rejected call to '+call['name']+': '+message+
+        '. Correct the request and call the registered tool again. Expected schema: '+json.dumps(tool['parameters']))[:16000])
     if state is not None:
         response['state'] = state
     packet = session.immutable(directory/'argument-rejection.json',dict(response=response, output=tool['result_file']))

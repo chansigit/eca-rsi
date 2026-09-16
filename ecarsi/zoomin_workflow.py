@@ -62,6 +62,10 @@ def zoomin_step(action,args):
     from .agent_session import immutable, reference, verified
     from .warm_pool.state import digest, submit
     if action=='read':return verified(reference(args[0]))
+    if action=='session':
+        from .agent_parallel import READS
+        session=verified(reference(args[0]))
+        return dict(session,tools=[dict(t,read_only=t['name'] in READS) for t in session['tools']])
     if action=='accepted':
         from .persample_workflow import sample_step
         return sample_step('accepted_annotation',args)
@@ -99,6 +103,11 @@ def zoomin_step(action,args):
     if action=='deg':
         from .operation_budget import from_deg_buffers
         request=from_deg_buffers(request,refs[0],root/(request_id+'.resources.json'),spec['pool_root'])
+    elif action in {'prepare','markers','subset','merge'}:
+        # These load the whole cross-sample matrix; size them from it, not a constant.
+        from .operation_budget import from_artifact
+        request=from_artifact(request,verified(spec['input'])['files']['annotated.h5ad'],
+                              root/(request_id+'.resources.json'),spec['pool_root'])
     submit(spec['pool_root'],request)
     return {'id':request_id,'output':output}
 
@@ -133,7 +142,8 @@ class ZoominWorkflow:
             return await await_pool(spec,request),request['id']
         async def judge(kind,evidence,parent):
             path,_=await run('agent',[evidence],[parent],kind=kind)
-            session=await call(zoomin_step,'read',[path])
+            policy='session' if workflow.patched('agent-session-policy-v1') else 'read'
+            session=await call(zoomin_step,policy,[path])
             result=await workflow.execute_child_workflow(AgentWorkflow.run,session,
                 id=workflow.info().workflow_id+'/'+session['session_id'])
             accepted=await call(zoomin_step,'accepted',[result])

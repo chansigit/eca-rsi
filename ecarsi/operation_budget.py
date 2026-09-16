@@ -37,6 +37,29 @@ def from_compute(request, computed, policy_path, pool_root):
     return optimized
 
 
+def from_artifact(request, ref, policy_path, pool_root, *, copies=2, fixed_mb=1024):
+    """Raise a ceiling for a step that loads one artifact whole, from its real size.
+
+    A fixed per-stage budget cannot follow dataset size: the 4 GiB Zoom-in
+    preparation killed the two largest tissues while smaller ones peaked near
+    300 MiB. Measured peak was 1.1-1.2x the H5AD on disk; two copies plus a
+    fixed allowance keeps headroom without reserving a whole node.
+    """
+    saved = read(policy_path)
+    if saved is not None:
+        if saved['base_digest'] != digest(request):
+            raise ValueError('Artifact resource request changed')
+        return saved['request']
+    if (Path(pool_root) / 'requests' / request['request_id'] / 'request.json').exists():
+        return request
+    size = Path(ref['path']).stat().st_size / 2**20
+    memory = max(request['memory_mb'], math.ceil((copies * size + fixed_mb) / 256) * 256)
+    optimized = request if memory == request['memory_mb'] else dict(request, memory_mb=memory)
+    immutable(policy_path, dict(base_digest=digest(request), artifact=ref,
+                                artifact_mb=round(size, 1), request=optimized))
+    return optimized
+
+
 def from_deg_buffers(request, prepared, policy_path, pool_root):
     """Budget the mapped DEG workspace, not the dataset's counts and graph layers."""
     saved = read(policy_path)

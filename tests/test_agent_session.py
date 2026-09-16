@@ -332,7 +332,7 @@ def test_invalid_arguments_return_to_model_without_executing_tool(tmp_path,monke
             if turn==1:
                 output=[ResponseFunctionToolCall(type='function_call',name='compute',call_id='bad',arguments='{}',id='bad',status='completed')]
             elif turn==2:
-                assert 'Invalid arguments' in json.dumps(kwargs['input'])
+                assert 'Rejected call to compute' in json.dumps(kwargs['input'])
                 output=[ResponseFunctionToolCall(type='function_call',name='compute',call_id='good',arguments='{"value":7}',id='good',status='completed')]
             else:
                 assert 'worker-node' in json.dumps(kwargs['input'])

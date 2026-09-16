@@ -5,6 +5,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import traceback
 
@@ -256,7 +257,9 @@ def run(folder, request, ownership):
         from .backend import runtime_environment
         env = runtime_environment(runtime, env)
         if runtime.get("image"):
-            cache = folder.parent.parent / "cache" / request["runtime_digest"]
+            # Node-local, per runtime: the shared Lustre cache corrupted its index
+            # under concurrent writers from several nodes. Costs one recompile per node.
+            cache = Path(os.environ.get("L_SCRATCH") or tempfile.gettempdir()) / "rsi-numba" / request["runtime_digest"]
             cache.mkdir(mode=0o700, parents=True, exist_ok=True)
             env["NUMBA_CACHE_DIR"] = str(cache)
         with (attempt / "stdout.log").open("ab", buffering=0) as out, (attempt / "stderr.log").open("ab", buffering=0) as err:

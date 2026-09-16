@@ -14,6 +14,13 @@ from types import ModuleType, SimpleNamespace
 from .warm_pool.state import digest, file_digest, identifier, lock, read, save, validate
 
 
+class ToolRejection(ValueError):
+    """A model-attributable tool request. Returned to the model for correction.
+
+    Host-integrity failures stay plain ValueError and still fail the workflow.
+    """
+
+
 def reference(path):
     path = Path(path).resolve(strict=True)
     return {"path": str(path), "sha256": file_digest(path)}
@@ -161,13 +168,12 @@ def create_session(spec, *, recover_missing_submission=True):
     with lock(root / "session.lock"):
         old = read(path)
         if old is not None:
-            # Adding batching declarations must not upgrade an existing session's
-            # tool policy during workflow recovery. All other fields stay exact.
-            declared = {t["name"] for t in old["spec"]["tools"] if "read_only" in t}
-            original_policy = {**spec, "tools": [
-                {k: v for k, v in t.items() if k != "read_only" or t["name"] in declared}
-                for t in spec["tools"]]}
-            if old["spec"] != original_policy:
+            # read_only is host batching policy, not a scientific contract, and the
+            # saved session keeps its own. Everything else must still match exactly.
+            def contract(value):
+                return {**value, "tools": [{k: v for k, v in tool.items() if k != "read_only"}
+                                           for tool in value["tools"]]}
+            if contract(old["spec"]) != contract(spec):
                 raise ValueError("Session directory already belongs to another specification")
             result = read(root / 'result.json')
             if (recover_missing_submission and old['spec'].get('completion_tool')
@@ -425,13 +431,13 @@ def tool_request(session_ref, reply_path, index, previous=None):
     if len(calls) > 1:
         readonly = {t["name"] for t in s["tools"] if t.get("read_only")}
         if any(call["name"] not in readonly or call["name"] == s.get("completion_tool") for call in calls):
-            raise ValueError("Batch only declared read-only tools; request decisions and changes individually")
+            raise ToolRejection("Batch only declared read-only tools; request decisions and changes individually")
     call = calls[index]
     if len(json.dumps(call)) > 262144:
-        raise ValueError("Tool arguments exceed the 256 KiB handoff limit")
+        raise ToolRejection("Tool arguments exceed the 256 KiB handoff limit")
     tool = next((t for t in s["tools"] if t["name"] == call["name"]), None)
     if tool is None:
-        raise ValueError("Unregistered agent tool")
+        raise ToolRejection("Unregistered agent tool")
     values = call["arguments"]
     if isinstance(values, dict):
         # Some model adapters decode an explicitly JSON-valued string field.
@@ -442,7 +448,7 @@ def tool_request(session_ref, reply_path, index, previous=None):
                   and isinstance(value, (dict, list)) else value for name, value in values.items()}
     Draft202012Validator(tool["parameters"]).validate(values)
     if len(json.dumps(values)) > 262144:
-        raise ValueError("Tool arguments exceed the 256 KiB handoff limit")
+        raise ToolRejection("Tool arguments exceed the 256 KiB handoff limit")
     turn_id = reply_path.parent.name
     request_id = s["session_id"] + ".tool-" + digest([turn_id, call["call_id"]])[:16]
     directory = Path(s["output_root"]) / request_id
