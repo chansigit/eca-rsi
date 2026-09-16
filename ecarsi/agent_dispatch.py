@@ -75,14 +75,14 @@ def model_health(events, models, active, settings, now=None):
     return rows
 
 
-def record_event(root, folder, attempt, outcome, *, elapsed=None, model_failure=True):
+def record_event(root, folder, attempt, outcome, *, elapsed=None, model_failure=True, finished_at=None):
     path = root / "model-events" / (digest([folder.name, attempt["pool_request_id"]]) + ".json")
     existing = read(path)
     if existing:
         return existing
     event = dict(request_id=folder.name, pool_request_id=attempt["pool_request_id"],
                  model=attempt["model"], outcome=outcome, model_failure=model_failure,
-                 elapsed_seconds=elapsed, finished_at=time.time())
+                 elapsed_seconds=elapsed, finished_at=time.time() if finished_at is None else finished_at)
     save(path, event)
     return event
 
@@ -166,7 +166,8 @@ def _reconcile_pool(root, folder, config, events):
         from .warm_pool.state import cancel
         cancel(state["pool_root"], attempt["pool_request_id"])
     model_failure = outcome in {"timeout", "provider_error"}
-    event = record_event(root, folder, attempt, outcome, elapsed=elapsed, model_failure=model_failure)
+    event = record_event(root, folder, attempt, outcome, elapsed=elapsed, model_failure=model_failure,
+                         finished_at=(current["receipt"] or {}).get("finished_at"))
     events[attempt["pool_request_id"]] = event
     if outcome == "success":
         save(folder / "result.json", dict(state="reply_saved", finished_at=time.time(),

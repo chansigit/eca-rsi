@@ -120,6 +120,8 @@ def test_worker_timeout_fallback_continuation_and_dispatcher_recovery(tmp_path):
         bridge.serve(root, once=True)
         attempts = bridge.status(root, request_id)['attempts']
         assert len(attempts) == 2 and attempts[1]['model']['model'] == 'backup'
+        event = next(read(p) for p in (root/'model-events').glob('*.json'))
+        assert event['finished_at'] == status(pool, first['pool_request_id'])['receipt']['finished_at']
         # A config edit must not mutate the already submitted task's budget.
         config['routing']['worker_memory_mb'] = 1536; save(root/'config.json', config)
         bridge.serve(root, once=True)
