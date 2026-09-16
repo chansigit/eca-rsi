@@ -29,6 +29,26 @@ def test_local_session_validation_does_not_poison_model_health(tmp_path, monkeyp
     assert result['outcome'] == 'local_error' and result['error'] == 'ValueError'
 
 
+def test_retry_waits_for_untried_backup_before_reusing_failed_primary(tmp_path):
+    from tests.test_agent_session import setup
+    spec, ref = setup(tmp_path)
+    root=Path(spec['bridge_root']); saved=read(ref['path'])
+    saved['protocol']=2; save(ref['path'],saved); ref=session.reference(ref['path'])
+    primary=saved['model']; backup=dict(primary,model='backup')
+    config=read(root/'config.json'); config['pool_root']=spec['pool_root']
+    save(config['catalog'],dict(models=[primary,backup])); save(root/'config.json',config)
+    request_id=session.submit_turn(ref,0); folder=root/'requests'/request_id
+    save(folder/'state.json',dict(state='queued',attempts=[dict(model=primary)]))
+    (root/'model-events').mkdir()
+    for i in range(2):
+        dispatch.record_event(root,folder,dict(pool_request_id=f'backup-timeout-{i}',model=backup),'timeout')
+    bridge.serve(root,once=True)
+    # Primary has free capacity, but retrying it now would burn the bounded
+    # attempt budget without ever trying the configured fallback.
+    assert bridge.status(root,request_id)['state']=='queued'
+    assert not list((Path(spec['pool_root'])/'requests').iterdir())
+
+
 def test_worker_timeout_fallback_continuation_and_dispatcher_recovery(tmp_path):
     calls = []
     class Provider(BaseHTTPRequestHandler):

@@ -42,7 +42,10 @@ are configurable in the Bridge `config.json` under `routing`:
 ```
 
 The timeout starts on the Worker, not while waiting for Pool resources. A failed
-portable model turn selects an untried eligible alternative first. Consecutive
+portable model turn selects an untried eligible alternative first.
+If an untried alternative is busy or cooling, that retry waits rather than
+spending its remaining attempts on the same failed primary. Other queued
+requests can still use available model capacity. Consecutive
 provider failures put that model in cooldown; after cooldown it is eligible for
 a new request. Attempts and retries are bounded. Settings are reread each tick;
 an already dispatched task retains its original resource budget and timeout.

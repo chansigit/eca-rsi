@@ -238,10 +238,10 @@ def serve(root, *, once=False):
                     models = routes(config, read(folder / "request.json"))
                     rows = model_health(events, models, active, settings)
                     tried = {model_key(a["model"]) for a in read(folder / "state.json", {}).get("attempts", [])}
-                    ready = [row for row in rows if row["state"] == "ready"]
-                    fresh = [row for row in ready if row["key"] not in tried]
-                    if fresh or ready:
-                        selected = (fresh or ready)[0]
+                    untried = [row for row in rows if row["key"] not in tried]
+                    ready = [row for row in (untried or rows) if row["state"] == "ready"]
+                    if ready:
+                        selected = ready[0]
                         attempt = dispatch(root, folder, config, selected["model"])
                         if attempt:
                             active[model_key(attempt["model"])] += 1
