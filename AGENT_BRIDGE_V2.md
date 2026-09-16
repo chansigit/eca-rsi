@@ -304,3 +304,18 @@ response/startup deadline before fencing and retrying. A confirmed failed receip
 still permits the normal safe retry policy. The scale run exposed one unnecessary
 model retry from the former immediate-stale rule; the accepted continuation was
 preserved and no registered tool was replayed.
+
+### Batch independent evidence requests
+
+A registered tool may declare `read_only: true`. New portable sessions with such
+tools enable the provider's native batched function calls and tell the model to
+combine independent evidence requests. Worker executions still run in order,
+with the accepted state passed between them. Every output must be present in
+order before the conversation resumes. Missing or reordered results are rejected.
+
+A batch containing any undeclared/non-read-only tool is rejected before any
+program runs. Decision submission tools cannot declare themselves read-only and
+must be called individually, after their evidence has returned. Existing sessions
+without declarations retain their original single-tool policy. New per-sample,
+cross-sample and Zoom-in sessions declare their evidence readers explicitly;
+subclustering and decision tools remain individual operations.

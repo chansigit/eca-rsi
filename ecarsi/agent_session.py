@@ -60,9 +60,13 @@ def validate_spec(spec):
         raise ValueError("Register between 1 and 16 worker tools")
     names = set()
     for tool in tools:
-        if set(tool) - {"multimodal"} != {"name", "description", "parameters", "args", "cpus", "memory_mb",
+        if set(tool) - {"multimodal", "read_only"} != {"name", "description", "parameters", "args", "cpus", "memory_mb",
                          "timeout_seconds", "inputs", "outputs", "result_file"}:
             raise ValueError("Each tool needs a fixed program, resource budget and output contract")
+        if type(tool.get("read_only", False)) is not bool:
+            raise ValueError("read_only must be boolean")
+        if tool.get("read_only") and tool["name"] == spec.get("completion_tool"):
+            raise ValueError("Decision submission cannot be a read-only tool")
         identifier(tool["name"])
         if tool["name"] in names:
             raise ValueError("Duplicate tool name")
@@ -216,9 +220,16 @@ async def run_turn(request, folder, *, model=None):
         os.environ[PROVIDERS[provider]["base_env"]] = chosen["url"]
     client = _client(provider)
     try:
-        agent = Agent(name="RSI durable agent", instructions=session["spec"]["prompt"],
+        batchable = [t["name"] for t in policy.values() if t.get("read_only")] if portable else []
+        instructions = session["spec"]["prompt"]
+        if batchable:
+            instructions += ("\n\nBatch independent evidence requests in the same model turn when their "
+                "arguments are already known. Eligible read-only tools: " + ", ".join(batchable) +
+                ". Worker execution remains ordered. Request all other tools individually. "
+                "Never submit a decision until its required evidence has been returned and reviewed.")
+        agent = Agent(name="RSI durable agent", instructions=instructions,
                       model=_model(chosen["model"], session["api_mode"], client), tools=tools,
-                      model_settings=ModelSettings(parallel_tool_calls=False, store=False))
+                      model_settings=ModelSettings(parallel_tool_calls=bool(batchable), store=False))
         run_input = "Carry out the task using the registered tools, then report the result."
         before_in = before_out = 0
         if context and portable:
@@ -305,6 +316,10 @@ def tool_request(session_ref, reply_path, index, previous=None):
     calls = reply["calls"]
     if reply["kind"] != "tools" or not 1 <= len(calls) <= 16 or len({c["call_id"] for c in calls}) != len(calls):
         raise ValueError("Expected distinct pending tool calls")
+    if len(calls) > 1:
+        readonly = {t["name"] for t in s["tools"] if t.get("read_only")}
+        if any(call["name"] not in readonly or call["name"] == s.get("completion_tool") for call in calls):
+            raise ValueError("Batch only declared read-only tools; request decisions and changes individually")
     call = calls[index]
     if len(json.dumps(call)) > 262144:
         raise ValueError("Tool arguments exceed the 256 KiB handoff limit")

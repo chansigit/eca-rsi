@@ -286,3 +286,65 @@ def test_invalid_arguments_return_to_model_without_executing_tool(tmp_path,monke
         context=session.continuation(ref,reply,[completed_tool(spec,corrected,{'state':state,'worker':'worker-node','value':49})])
         final=execute_turn(root,session.submit_turn(ref,2,context,[corrected['request_id']]))
         assert read(final)['response']['kind']=='final' and len(model.inputs)==3
+
+
+def test_batched_calls_keep_ordered_worker_state_and_require_every_result(tmp_path):
+    from harness_bridge import _harness_openai as adapter
+    class BatchModel(ScriptedModel):
+        async def get_response(self, **kwargs):
+            assert kwargs['model_settings'].parallel_tool_calls is True
+            self.inputs.append(kwargs['input'])
+            if len(self.inputs) == 1:
+                output = [ResponseFunctionToolCall(type='function_call', name='compute', call_id='call-' + str(i),
+                          arguments=json.dumps({'value': i}), id='fc-' + str(i), status='completed') for i in (7, 8)]
+            else:
+                assert all(label in json.dumps(kwargs['input']) for label in ('first-output', 'second-output'))
+                output = [ResponseOutputMessage(type='message', id='done', role='assistant', status='completed',
+                          content=[ResponseOutputText(type='output_text', text='Both worker results accepted', annotations=[])])]
+            return ModelResponse(output=output, usage=Usage(requests=1, input_tokens=10, output_tokens=4),
+                                 response_id='r' + str(len(self.inputs)))
+    spec, _ = setup(tmp_path)
+    root = Path(spec['bridge_root'])
+    save(root/'config.json', dict(read(root/'config.json'), pool_root=spec['pool_root']))
+    initial = session.immutable(tmp_path/'initial.json', {'version': 0})
+    later = session.immutable(tmp_path/'later.json', {'version': 1})
+    spec = dict(spec, session_id='batched', output_root=str(tmp_path/'batched'), tool_state=initial,
+                tools=[dict(spec['tools'][0], read_only=True, args=spec['tools'][0]['args'] + ['{state}'])])
+    ref = session.create_session(spec)
+    with patch.object(adapter, '_client', return_value=Client()), patch.object(adapter, '_model', return_value=BatchModel()):
+        reply = execute_turn(root, session.submit_turn(ref, 0))
+        first = session.tool_request(ref, reply, 0)
+        accepted_first = completed_tool(spec, first, {'text': 'first-output', 'state': later})
+        second = session.tool_request(ref, reply, 1, first['request_id'])
+        request = read(Path(spec['pool_root'])/'requests'/second['request_id']/'request.json')['spec']
+        assert later in request['inputs'] and request['args'][-1] == later['path']
+        accepted_second = completed_tool(spec, second, {'text': 'second-output', 'state': later})
+        with pytest.raises(ValueError, match='Missing or reordered'):
+            session.continuation(ref, reply, [accepted_second])
+        with pytest.raises(ValueError, match='Missing or reordered'):
+            session.continuation(ref, reply, [accepted_second, accepted_first])
+        context = session.continuation(ref, reply, [accepted_first, accepted_second])
+        final = execute_turn(root, session.submit_turn(ref, 1, context, [second['request_id']]))
+        assert read(final)['response']['kind'] == 'final'
+        assert len(list((Path(spec['pool_root'])/'requests').iterdir())) == 2
+
+
+def test_mixed_read_and_decision_batch_cannot_dispatch_any_tool(tmp_path):
+    from harness_bridge import _harness_openai as adapter
+    class MixedModel(ScriptedModel):
+        async def get_response(self, **kwargs):
+            output = [ResponseFunctionToolCall(type='function_call', name=name, call_id=name,
+                      arguments='{"value":7}', id=name, status='completed') for name in ('compute', 'submit')]
+            return ModelResponse(output=output, usage=Usage(requests=1, input_tokens=10, output_tokens=4), response_id='mixed')
+    spec, _ = setup(tmp_path)
+    root = Path(spec['bridge_root'])
+    save(root/'config.json', dict(read(root/'config.json'), pool_root=spec['pool_root']))
+    spec = dict(spec, session_id='mixed', output_root=str(tmp_path/'mixed'), completion_tool='submit',
+                tools=[dict(spec['tools'][0], read_only=True), dict(spec['tools'][0], name='submit')])
+    ref = session.create_session(spec)
+    with patch.object(adapter, '_client', return_value=Client()), patch.object(adapter, '_model', return_value=MixedModel()):
+        reply = execute_turn(root, session.submit_turn(ref, 0))
+        for index in (0, 1):
+            with pytest.raises(ValueError, match='Batch only declared read-only'):
+                session.tool_request(ref, reply, index)
+        assert not list((Path(spec['pool_root'])/'requests').iterdir())

@@ -217,6 +217,7 @@ def agent_spec(spec, evidence, kind, parent):
     tools = []
     for name, (fields, description, multimodal) in props.items():
         tools.append(dict(name=name, description=description,
+            read_only=name in {'read_evidence','list_evidence','deg_lookup','deg_sql','check_genes','check_qc_scores','type_context'},
             parameters={'type':'object','properties':fields,'required':list(fields),'additionalProperties':False},
             args=['-m','ecarsi.zoomin_v2','tool',name,'{state}','{arguments}'], **spec['compute_budget' if name=='subcluster' else 'tool_budget'],
             inputs=[reference(Path(__file__).with_name(n)) for n in ('zoomin_v2.py','crosssample_v2.py','persample_v2.py')], outputs=['result.json'], result_file='result.json', multimodal=multimodal))

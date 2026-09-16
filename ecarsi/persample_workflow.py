@@ -75,7 +75,10 @@ def sample_step(action, args):
         return read(args[0])
     if action == "agent":
         spec, path, parent = args
-        return annotation_spec(spec, reference(path), parent)
+        session = annotation_spec(spec, reference(path), parent)
+        session["tools"] = [dict(tool, read_only=tool["name"] in {
+            "read_evidence", "check_genes", "check_qc_scores"}) for tool in session["tools"]]
+        return session
     if action == "accepted_annotation":
         result = read(args[0])
         if "output" not in result or verified(result["output"]).get("accepted") is not True:

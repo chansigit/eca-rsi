@@ -297,7 +297,8 @@ def agent_spec(spec, evidence_ref, phase, parent, types_ref=None):
     state=immutable(Path(spec['output_root'])/f'{phase}-{evidence_ref["sha256"][:12]}-state.json',dict(evidence=evidence_ref,phase=phase,types=types_ref,read=[],lookups=[],qc=False))
     tools=[]
     for name,(fields,description,multimodal) in props.items():
-        tools.append(dict(name=name,description=description,parameters={'type':'object','properties':fields,'required':list(fields),'additionalProperties':False},
+        tools.append(dict(name=name,description=description,
+          read_only=name in {'read_evidence','list_evidence','sample_inventory','deg_lookup','deg_sql','check_genes','check_qc_scores','type_context'},parameters={'type':'object','properties':fields,'required':list(fields),'additionalProperties':False},
           args=['-m','ecarsi.crosssample_v2','tool',name,'{state}','{arguments}'],**spec['tool_budget'],
           inputs=[reference(Path(__file__))],outputs=['result.json'],result_file='result.json',multimodal=multimodal))
     return dict(session_id='cross-'+digest([spec['run_id'],phase,evidence_ref,types_ref])[:24],dataset_id=spec['dataset_id'],prompt=prompt,tools=tools,
