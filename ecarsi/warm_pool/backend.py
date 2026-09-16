@@ -144,6 +144,27 @@ def hq_shares(spec):
     return str(spec["cpus"]), "1"
 
 
+def allocation_ended(root, accepted, live_hosts, now=None, grace=300):
+    """The Slurm grant that accepted this attempt is over and nothing from that host is connected.
+
+    Nobody else can write the receipt then: the executor died with the node and no worker
+    from the host will run reconcile_local. A connected worker on the host keeps ownership."""
+    now = time.time() if now is None else now
+    host = accepted.get("host")
+    if any(str(name).split(".")[0] == host for name in live_hosts):
+        return False
+    ends = [record.get("expires_at") or float("inf") for path in (Path(root) / "workers").glob("*/identity.json")
+            if (record := read(path, {})).get("host") == host]
+    return bool(ends) and max(ends) + grace < now
+
+
+def worker_lost_receipt(request, accepted, error):
+    return dict(state="failed", outputs=[], retryable=True, error=error,
+                request_id=request["spec"]["request_id"], attempt_id=request["attempt_id"],
+                request_digest=request["digest"], runtime_digest=request["runtime_digest"],
+                started_at=accepted["started_at"], finished_at=time.time())
+
+
 class HyperQueue:
     def __init__(self, root):
         self.root = pool_root(root)
@@ -162,6 +183,7 @@ class HyperQueue:
         jobs = self.call("job", "list", "--all")
         by_name = {j["name"]: j for j in jobs}
         generation = digest({k: info[k] for k in ("server_uid", "pid", "start_date")})
+        live_hosts = None  # HQ worker hostnames, fetched once per tick and only when needed
         for folder in sorted((self.root / "requests").iterdir()):
             try:
                 stat = (folder / 'request.json').stat()
@@ -201,6 +223,16 @@ class HyperQueue:
                         self.call("job", "cancel", str(job["id"]))
                     self.finished[folder.name] = stamp
                     continue
+                accepted = read(attempt / "accepted.json")
+                if accepted and not (job and (job["task_stats"]["running"] or job["task_stats"]["waiting"])):
+                    if live_hosts is None:
+                        live_hosts = [w["configuration"]["hostname"] for w in self.call("worker", "list") or []
+                                      if not w.get("ended")]
+                    if allocation_ended(self.root, accepted, live_hosts):
+                        save(attempt / "receipt.json", worker_lost_receipt(request, accepted,
+                             "WorkerLost: the Slurm allocation ended before a completion receipt"))
+                        self.finished[folder.name] = stamp
+                        continue
                 if job:
                     counts = job["task_stats"]
                     state = ("running" if counts["running"] else "queued" if counts["waiting"]
