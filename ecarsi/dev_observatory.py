@@ -366,6 +366,18 @@ def serve(root: Path, port: int, temporal_port: int, bind: str,
     cache = {}
     guard = threading.Lock()
 
+    def warm():
+        # The first walk over every saved pool/bridge request takes minutes on
+        # Lustre; do it at startup so the first page load does not look down.
+        try:
+            with guard:
+                cache["snapshot"] = snapshot(root, temporal_port, bind, cache,
+                                             pool_root, bridge_root, temporal_service_root)
+                cache["snapshot_at"] = time.monotonic()
+        except Exception as exc:  # noqa: BLE001 - the request path rebuilds it anyway
+            print(f"observatory warm-up skipped: {exc}", flush=True)
+    threading.Thread(target=warm, daemon=True).start()
+
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             url = urlsplit(self.path)
