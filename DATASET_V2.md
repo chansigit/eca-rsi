@@ -148,3 +148,26 @@ activations, producing over 500 threads and repeated workflow-task timeouts on a
 with a minimum of one and maximum of eight concurrent activations. Override with
 `worker --workflow-slots N` when appropriate. This limit concerns short workflow
 activations, not the number of running datasets, numerical tasks, or model calls.
+
+The 2026-09-16 01:38 UTC snapshot verified all **301 sample computations** across
+the 28 datasets, accounting for exactly **1,084,377 input cells**. Median OSP task
+wall time was 63.4 seconds and peak recorded process-group RSS was 7,840 MiB.
+These are per-task measurements, not sustained end-to-end throughput: the run
+included development fixes and service replacements. Details are in
+`scale-acceptance-20260915-v2/operation-summary-latest.json`.
+
+Scale testing exposed live-upgrade session incompatibilities and transient worker
+observations that prematurely failed child workflows. Failed histories remain
+visible in `failed-workflow-audit.json`; 17 saved sessions were verified unchanged
+after the compatibility fix. The acceptance monitor records child failures,
+performs one audited dataset recovery for these corrected causes through the
+existing recovery API, and submits independent publication/ledger verification
+to Pool when a dataset finishes. An unreconciled failed request blocks recovery.
+
+Model calls remain a separate bottleneck. A 32-call trial produced timeouts and
+was returned to 16 total admissions, eight per model. One Mammary turn exhausted
+three 180-second attempts after a preceding 95,512-token input; its failure was
+retained. New calls have a 300-second bound, and retries wait for an untried
+alternative instead of repeatedly consuming their budget on the same primary.
+The final scientific workflows have **not yet passed full-batch acceptance**.
+The GPU allocation remains pending, so these results establish no GPU speedup.
