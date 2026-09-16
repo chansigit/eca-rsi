@@ -401,7 +401,7 @@ def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit
                         "--cpus", "[" + ",".join(map(str, cpu_ids)) + "]", "--detect-resources", "none",
                         "--resource", f"mem=sum({memory_mb})",
                         "--resource", f"runtime/{digest(runtime)}=sum({len(cpu_ids)})",
-                        "--on-server-lost", "finish-running", "--heartbeat", "1s", "--overview-interval", "5s",
+                        "--on-server-lost", "finish-running", "--overview-interval", "30s",
                         "--work-dir", str(work_dir)] + lifetime + device_resources,
                         env=dict(os.environ, ECA_POOL_WORKER_ID=worker_id),
                         stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,

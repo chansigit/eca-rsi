@@ -80,3 +80,26 @@ def test_confirmed_worker_interruption_recovers_with_a_finite_attempt_budget(tmp
         save(folder/request['attempt_id']/'receipt.json',dict(state='failed',retryable=True,finished_at=1,
             attempt_id=request['attempt_id'],request_digest=request['digest'],runtime_digest=request['runtime_digest']))
         assert check_pool(str(tmp_path),'r','result.json')['state']==('waiting' if retry_number<2 else 'failed')
+
+
+def test_uncertain_observation_waits_for_same_attempt_receipt(tmp_path):
+    from ecarsi.work_coordinator import check_pool, check_bridge
+    from ecarsi.warm_pool.state import submit
+    from ecarsi.agent_session import reference
+    tmp_path.chmod(0o700); (tmp_path/'requests').mkdir(); save(tmp_path/'config.json', {'runtime':{}})
+    submit(tmp_path, dict(request_id='r', operation_id='compute', args=['-c','pass'], cpus=1,
+        memory_mb=64, timeout_seconds=30, outputs=['result.json']))
+    folder=tmp_path/'requests/r'; request=read(folder/'request.json'); attempt=folder/request['attempt_id']
+    save(folder/'backend.json', dict(state='unknown_external_result'))
+    assert check_pool(str(tmp_path),'r','result.json') == dict(state='waiting', detail='unknown_external_result')
+    save(attempt/'accepted.json', dict(started_at=1))
+    assert check_pool(str(tmp_path),'r','result.json')['state']=='waiting'
+    output=attempt/'outputs/result.json'; save(output, dict(value=7))
+    save(attempt/'receipt.json', dict(state='succeeded', outputs=[reference(output)]))
+    assert check_pool(str(tmp_path),'r','result.json')['path']==str(output)
+    assert read(folder/'request.json')==request
+    # An uncertain legacy Bridge execution can also publish a late reply.
+    save(folder/'state.json', dict(state='unknown_external_result'))
+    assert check_bridge(str(tmp_path),'r')['state']=='waiting'
+    save(folder/'result.json', dict(state='reply_saved'))
+    assert check_bridge(str(tmp_path),'r')['state']=='ready'

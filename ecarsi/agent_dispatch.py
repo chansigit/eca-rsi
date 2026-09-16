@@ -156,7 +156,7 @@ def _reconcile_pool(root, folder, config, events):
         # The task wrapper also has a hard deadline. Fence output first; only
         # read-only model turns can be safely reissued while the provider is uncertain.
         outcome = "timeout"
-    elif (current["state"] == "unknown_external_result" and elapsed is None
+    elif (current["state"] == "unknown_external_result" and elapsed is None and current["accepted"]
           and time.time() - current["accepted"]["started_at"] > settings_timeout(attempt) + 60):
         outcome = "worker_lost"
     # A stale heartbeat alone is not loss: a busy host may still finish and publish.

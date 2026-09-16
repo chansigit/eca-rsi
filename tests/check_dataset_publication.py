@@ -3,22 +3,19 @@ import argparse
 import json
 from pathlib import Path
 
-import anndata as an
 import pandas as pd
 
 from ecarsi.agent_session import reference, verified
 from ecarsi.crosssample_v2 import artifact
 from ecarsi.persample_v2 import check_bundle
 from ecarsi.run_state import file_identity
+from ecarsi.design import _obs
 
 
 def obs(path):
-    data = an.read_h5ad(path, backed='r')
-    try:
-        assert data.obs_names.is_unique
-        return data.obs.copy()
-    finally:
-        data.file.close()
+    data = _obs(Path(path))
+    assert data.index.is_unique
+    return data
 
 
 def frame(path):

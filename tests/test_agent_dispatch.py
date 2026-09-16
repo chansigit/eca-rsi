@@ -87,6 +87,14 @@ def test_worker_timeout_fallback_continuation_and_dispatcher_recovery(tmp_path):
         # Restart before the worker starts; queue time is not provider time.
         bridge.serve(root, once=True)
         assert len(list((pool/'requests').iterdir())) == 1 and not calls
+        # HQ may have an uncertain submission before a Worker accepts it.
+        # No startup clock exists yet, and one such task must not stop Bridge.
+        backend = pool/'requests'/first['pool_request_id']/'backend.json'
+        save(backend, dict(state='unknown_external_result'))
+        bridge.serve(root, once=True)
+        assert status(pool, first['pool_request_id'])['accepted'] is None
+        assert len(bridge.status(root, request_id)['attempts']) == 1
+        save(backend, dict(state='queued'))
 
         def execute(attempt):
             request = read(pool/'requests'/attempt['pool_request_id']/'request.json')

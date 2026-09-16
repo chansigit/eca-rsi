@@ -82,7 +82,9 @@ def check_pool(root: str, request_id: str, output: str) -> dict:
         if request.get("retry_count", 0) < 2:
             retry(root, request_id, reason="Automatic recovery after a confirmed local interruption")
             return {"state": "waiting"}
-    if state["state"] in {"failed", "cancelled", "unknown_external_result"}:
+    if state["state"] == "unknown_external_result":
+        return {"state": "waiting", "detail": "unknown_external_result"}
+    if state["state"] in {"failed", "cancelled"}:
         return {"state": state["state"], "detail": (state["receipt"] or {}).get("error")}
     return {"state": "waiting"}
 
@@ -96,7 +98,9 @@ def check_bridge(root: str, request_id: str) -> dict:
         if not path.is_file():
             raise ValueError("Bridge reply receipt is absent")
         return {"state": "ready", "path": str(path)}
-    if result["state"] in {"failed", "unknown_external_result"}:
+    if result["state"] == "unknown_external_result":
+        return {"state": "waiting", "detail": "unknown_external_result"}
+    if result["state"] == "failed":
         return {"state": result["state"], "detail": result.get("reason")}
     return {"state": "waiting"}
 

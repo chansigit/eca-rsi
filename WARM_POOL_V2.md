@@ -192,6 +192,13 @@ The supervisor deliberately disconnects its HQ server: do not substitute
 `hq server stop`, which can cancel running computations. Worker supervisors
 reconnect after their old HQ worker has finished, not while it still owns work.
 An explicit Worker stop requests cancellation rather than graceful draining.
+Worker liveness uses HyperQueue's native 8-second heartbeat default, and native
+hardware overviews are sampled every 30 seconds. The earlier forced 1-second
+heartbeat caused a false worker loss under concurrent load in scale acceptance.
+Unknown backend observations without a Worker acceptance record do not start a
+model-response clock. Coordinator waits for authoritative receipts instead of
+failing a workflow on a temporary unknown observation; no duplicate scientific
+task is submitted merely because a heartbeat was missed.
 
 HQ journal recovery can put previously completed work back in its queue. An
 attempt execution lock and durable receipt make that transport redelivery a
