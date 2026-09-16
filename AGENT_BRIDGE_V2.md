@@ -8,21 +8,25 @@ programs retain their own CPU/memory/GPU budgets. Waiting for a tool releases th
 Bridge model slot. The Bridge process never imports a provider client in Pool mode.
 
 New sessions and dispatches archive the exact model-call adapter source in
-`BRIDGE_ROOT/adapters/<sha256>.py`. An existing session continues with its verified
-revision after a service upgrade; its saved specification and conversation are
-not rewritten. Missing or modified snapshots fail closed before provider access.
+`BRIDGE_ROOT/adapters/<sha256>.py`. Existing dispatches retain their verified
+revision. New dispatches may upgrade protocol-2 transport using an explicit,
+immutable `portable_adapter` reference; their original session validator still
+checks the unchanged specification, tool policy and conversation. Legacy SDK
+sessions cannot use this upgrade. Missing or modified snapshots fail closed.
 Sessions created before source archiving need their exact recorded revision
 restored from version control once. This archives the model-call adapter, not
 all scientific dependencies: tool inputs, runtime images and SDK versions retain
 their separate integrity checks. Local session validation failures do not count
 as provider health failures.
 Adapter source is syntax-checked before publication. Executors validate and load
-the session-pinned adapter; a dispatch-time source snapshot is provenance only.
-Production source changes must be validated before an atomic replacement.
+the session-pinned adapter unless the dispatch explicitly records a portable
+upgrade. Validate changes in an isolated worktree and deploy a fixed release;
+never edit source currently imported by services or workers.
 
-A session with a completion tool cannot finish with free text: new adapters
-require a tool call, and the common executor rejects premature final text from
-older adapters as `incomplete_submission`, using the bounded model fallback.
+A session with a completion tool cannot finish with free text: the common
+executor rejects premature final text as `incomplete_submission`, using bounded
+model fallback. Provider tool selection stays automatic; forced-call decoding
+is not a substitute for host validation.
 The scientific submission tool still performs all evidence/decision checks.
 When explicitly resuming an older session that already ended without submission,
 creation records one immutable repair session with the original specification
@@ -95,6 +99,7 @@ python -m ecarsi.agent_bridge retry-turn /absolute/development/bridge REQUEST_ID
 ```
 
 The command retains the old failure, attempts and an immutable recovery record.
+This also covers `incomplete_submission` after correcting the provider protocol.
 It rejects uncertain attempts, cancellations, invalid local state and legacy
 sessions that may execute tools. Running parents can consume the repaired
 request; terminal parents use their normal stage/dataset resume command.
@@ -439,7 +444,7 @@ and new parallel batches across recovery. Temporal patching retains old historie
 Light readers reserve at most 2 GiB rather than the parent matrix budget. Matrix
 readers can reuse the existing accepted-compute peak policy; evidence batches
 that perform QC retain matrix headroom. Already submitted requests stay exact.
-New agent adapters require a tool call when a completion tool is registered, so
+The common executor requires a tool call when a completion tool is registered, so
 a free-text conclusion cannot replace a validated submission. Archived adapters
 retain their original behavior.
 

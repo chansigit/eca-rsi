@@ -41,6 +41,19 @@ class Client:
         pass
 
 
+def test_provider_summary_retains_empty_reply_evidence_without_payloads():
+    summary = session.provider_summary(200, dict(id='response-1', status='completed',
+        usage=dict(output_tokens=13843), output=[dict(type='message',
+            content=[dict(type='output_text', text='')])]))
+    assert summary['usage']['output_tokens'] == 13843
+    assert summary['output'][0]['text_chars'] == 0
+    summary = session.provider_summary(200, dict(output=[dict(type='function_call', name='submit',
+        arguments='private scientific content')], choices=[dict(finish_reason='length',
+            message=dict(content='private text', tool_calls=[{}]))]))
+    assert summary['choices'][0] == dict(finish_reason='length', text_chars=12, tool_calls=1)
+    assert 'private' not in json.dumps(summary)
+
+
 def setup(tmp):
     catalog = tmp / "models.json"
     save(catalog, {"models": [{"harness": "openai@vllm", "model": "test-model", "url": "http://localhost:1/v1"}]})
@@ -396,7 +409,7 @@ def test_mixed_read_and_decision_batch_cannot_dispatch_any_tool(tmp_path):
     from harness_bridge import _harness_openai as adapter
     class MixedModel(ScriptedModel):
         async def get_response(self, **kwargs):
-            assert kwargs['model_settings'].tool_choice == 'required'
+            assert kwargs['model_settings'].tool_choice is None
             output = [ResponseFunctionToolCall(type='function_call', name=name, call_id=name,
                       arguments='{"value":7}', id=name, status='completed') for name in ('compute', 'submit')]
             return ModelResponse(output=output, usage=Usage(requests=1, input_tokens=10, output_tokens=4), response_id='mixed')

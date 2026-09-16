@@ -170,7 +170,8 @@ def retry_turn(root, request_id, *, reason):
         spec = request['spec']
         if (spec['operation_id'] != 'agent.turn' or verified(spec['session']).get('protocol', 1) < 2
                 or not result or result.get('state') != 'failed'
-                or (result.get('reason') not in {'timeout', 'provider_error', 'worker_failed', 'worker_lost', 'worker_setup_timeout'}
+                or (result.get('reason') not in {'timeout', 'provider_error', 'incomplete_submission',
+                                               'worker_failed', 'worker_lost', 'worker_setup_timeout'}
                     and not (result.get('reason') == 'local_error' and (credential_timeout(state) or invalid_dispatch_snapshot(state))))):
             raise ValueError('Only failed, tool-free transient model requests can be retried')
         if state.get('retry_of') == digest(result):

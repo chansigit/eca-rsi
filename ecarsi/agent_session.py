@@ -250,10 +250,12 @@ def portable_history(items):
     return result
 
 
-async def run_turn(request, folder, *, model=None):
+async def run_turn(request, folder, *, model=None, portable_upgrade=False):
     """One model/tool boundary; no registered program can execute in this process."""
     session = verified(request["spec"]["session"])
-    adapter = pinned_adapter(session["spec"]["bridge_root"], session["adapter_sha256"])
+    if portable_upgrade and session.get('protocol', 1) != 2:
+        raise ValueError('Only portable sessions support an audited adapter upgrade')
+    adapter = None if portable_upgrade else pinned_adapter(session["spec"]["bridge_root"], session["adapter_sha256"])
     if adapter is not None:
         return await adapter.run_turn(request, folder, model=model)
     from agents import Agent, FunctionTool, ModelSettings, RunConfig, Runner, RunState
@@ -296,6 +298,16 @@ async def run_turn(request, folder, *, model=None):
     if chosen["url"]:
         os.environ[PROVIDERS[provider]["base_env"]] = chosen["url"]
     client = _client(provider)
+    # Persist response shape, never prompts, arguments, credentials or clinical data.
+    if hasattr(client, '_client'):
+        async def observe(response):
+            await response.aread()
+            try:
+                body = response.json()
+            except ValueError:
+                body = {}
+            save(folder / 'provider-response.json', provider_summary(response.status_code, body))
+        client._client.event_hooks['response'].append(observe)
     try:
         batchable = [t["name"] for t in policy.values() if t.get("read_only")] if portable else []
         instructions = session["spec"]["prompt"]
@@ -306,8 +318,9 @@ async def run_turn(request, folder, *, model=None):
                 "Never submit a decision until its required evidence has been returned and reviewed.")
         agent = Agent(name="RSI durable agent", instructions=instructions,
                       model=_model(chosen["model"], session["api_mode"], client), tools=tools,
-                      model_settings=ModelSettings(parallel_tool_calls=bool(batchable), store=False,
-                          tool_choice='required' if session['spec'].get('completion_tool') else None))
+                      # Completion is enforced by the host, not provider-specific
+                      # forced-call decoding (which can return an empty response).
+                      model_settings=ModelSettings(parallel_tool_calls=bool(batchable), store=False))
         run_input = "Carry out the task using the registered tools, then report the result."
         before_in = before_out = 0
         if context and portable:
@@ -354,6 +367,21 @@ async def run_turn(request, folder, *, model=None):
         return response
     finally:
         await client.close()
+
+
+def provider_summary(http_status, body):
+    """Bounded diagnostic metadata for empty, truncated and rejected responses."""
+    return dict(http_status=http_status, response_id=body.get('id'), status=body.get('status'),
+        usage=body.get('usage'), incomplete_details=body.get('incomplete_details'),
+        error_code=(body.get('error') or {}).get('code'),
+        output=[dict(type=item.get('type'), name=item.get('name'),
+                     argument_chars=len(item.get('arguments') or ''),
+                     text_chars=sum(len(part.get('text') or '') for part in item.get('content', [])))
+                for item in body.get('output', [])],
+        choices=[dict(finish_reason=item.get('finish_reason'),
+                      text_chars=len(item.get('message', {}).get('content') or ''),
+                      tool_calls=len(item.get('message', {}).get('tool_calls') or []))
+                 for item in body.get('choices', [])])
 
 
 def submit_turn(session_ref, number, context_ref=None, parents=()):

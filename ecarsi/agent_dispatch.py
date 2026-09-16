@@ -103,7 +103,7 @@ def dispatch(root, folder, config, model):
 
 def _dispatch(root, folder, config, model):
     """Persist intent before enqueueing so dispatcher replacement cannot duplicate a turn."""
-    from .agent_session import immutable, archive_adapter
+    from .agent_session import immutable, archive_adapter, verified
     request = read(folder / "request.json")
     settings = policy(config)
     state = read(folder / "state.json", {})
@@ -114,6 +114,12 @@ def _dispatch(root, folder, config, model):
     plan = read(plan_path) or dict(request=request, model=model, timeout_seconds=settings["response_timeout_seconds"],
                 cpus=settings["worker_cpus"], memory_mb=settings["worker_memory_mb"],
                 adapter_sha256=archive_adapter(root)["sha256"])
+    if not plan_path.exists() and request['spec']['operation_id'] == 'agent.turn':
+        session = verified(request['spec']['session'])
+        if session.get('protocol', 1) == 2 and session['adapter_sha256'] != plan['adapter_sha256']:
+            # Upgrade only the portable transport; original session/tool contracts
+            # remain immutable and are validated by their original adapter.
+            plan['portable_adapter'] = archive_adapter(root)
     plan_ref = immutable(plan_path, plan)
     attempt = dict(pool_request_id=pool_id, model=plan["model"], plan=plan_ref, submitted_at=time.time())
     attempts.append(attempt)
@@ -442,7 +448,7 @@ def load_worker_key(model):
 
 def execute(plan_path):
     from .agent_bridge import run_organize, sdk_restore_compat
-    from .agent_session import run_turn, verified, validate_turn
+    from .agent_session import run_turn, verified, validate_turn, pinned_adapter
     plan = read(plan_path)
     folder = Path.cwd()
     started = time.time()
@@ -451,11 +457,19 @@ def execute(plan_path):
     outcome, response, error = "local_error", None, None
     try:
         spec = plan["request"]["spec"]
+        turn, turn_options = run_turn, {}
         if spec["operation_id"] == "agent.turn":
             session = verified(spec["session"])
             # validate_turn loads the session-pinned adapter actually used by
             # run_turn. The dispatch-time snapshot is provenance, not executable.
             validate_turn(spec)
+            if plan.get('portable_adapter'):
+                ref = plan['portable_adapter']
+                if session.get('protocol', 1) != 2 or file_digest(ref['path']) != ref['sha256']:
+                    raise ValueError('Invalid portable adapter upgrade')
+                adapter = pinned_adapter(session['spec']['bridge_root'], ref['sha256'])
+                turn = adapter.run_turn if adapter is not None else run_turn
+                turn_options['portable_upgrade'] = True
         elif file_digest(Path(__file__).with_name("agent_session.py")) != plan["adapter_sha256"]:
             raise ValueError("Agent adapter changed after dispatch")
         load_worker_key(plan["model"])
@@ -464,7 +478,7 @@ def execute(plan_path):
             if plan["request"]["spec"]["operation_id"] == "agent.turn":
                 legacy = verified(plan["request"]["spec"]["session"]).get("protocol", 1) < 2
                 with sdk_restore_compat(folder) if legacy else nullcontext():
-                    response = asyncio.run(asyncio.wait_for(run_turn(plan["request"], folder, model=plan["model"]),
+                    response = asyncio.run(asyncio.wait_for(turn(plan["request"], folder, model=plan["model"], **turn_options),
                                                            timeout=plan["timeout_seconds"]))
             else:
                 from .model_web import PROVIDERS
@@ -495,7 +509,8 @@ def execute(plan_path):
         # submitted scientific result; bounded model fallback can safely retry.
         outcome, error = 'incomplete_submission', 'Required completion tool was not called'
     save(folder / "result.json", dict(outcome=outcome, response=response, error=error, worker=worker,
-                                     elapsed_seconds=time.time()-started, model=plan["model"]))
+                                     elapsed_seconds=time.time()-started, model=plan["model"],
+                                     provider_response=read(folder / 'provider-response.json')))
 
 
 if __name__ == "__main__":

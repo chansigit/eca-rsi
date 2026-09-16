@@ -8,9 +8,42 @@ import subprocess
 import sys
 import threading
 import time
+import pytest
 
 from ecarsi import agent_bridge as bridge, agent_dispatch as dispatch, agent_session as session
 from ecarsi.warm_pool.state import save, read, status
+
+
+def test_portable_upgrade_pins_execution_without_rewriting_session(tmp_path, monkeypatch):
+    from tests.test_agent_session import setup, Client, ScriptedModel
+    from harness_bridge import _harness_openai
+    spec, ref = setup(tmp_path)
+    root = Path(spec['bridge_root'])
+    save(root/'config.json', dict(read(root/'config.json'), pool_root=spec['pool_root']))
+    old = tmp_path/'old.py'
+    old.write_bytes(Path(session.__file__).read_bytes() + b'\n# previous release\n')
+    archived = session.archive_adapter(root, old)
+    saved = read(ref['path'])
+    save(ref['path'], dict(saved, protocol=2, adapter_sha256=archived['sha256']))
+    ref = session.reference(ref['path']); before = Path(ref['path']).read_bytes()
+    turn = session.submit_turn(ref, 0)
+    bridge.serve(root, once=True)
+    plan = bridge.status(root, turn)['attempts'][0]['plan']
+    upgraded = session.verified(plan)['portable_adapter']
+    assert upgraded['sha256'] != archived['sha256']
+    monkeypatch.setattr(_harness_openai, '_client', lambda *a: Client())
+    monkeypatch.setattr(_harness_openai, '_model', lambda *a: ScriptedModel())
+    monkeypatch.setattr(dispatch, 'load_worker_key', lambda *a: None)
+    monkeypatch.chdir(tmp_path)
+    dispatch.execute(plan['path'])
+    assert read(tmp_path/'result.json')['outcome'] == 'success'
+    assert Path(ref['path']).read_bytes() == before
+    assert session.verified(plan)['portable_adapter'] == upgraded
+    Path(upgraded['path']).chmod(0o600)
+    Path(upgraded['path']).write_text('raise AssertionError("unverified code")')
+    monkeypatch.setattr(dispatch, 'load_worker_key', lambda *a: pytest.fail('No provider access'))
+    dispatch.execute(plan['path'])
+    assert read(tmp_path/'result.json')['outcome'] == 'local_error'
 
 
 def test_recovery_ignores_only_terminal_model_attempts_with_an_accepted_replacement(tmp_path):
@@ -51,7 +84,8 @@ def test_recovery_ignores_only_terminal_model_attempts_with_an_accepted_replacem
     assert not sample_step('recoverable', [dict(spec, run_id='test'), 'sample'])
 
 
-def test_audited_retry_survives_dispatch_restart_and_preserves_failed_attempt(tmp_path):
+@pytest.mark.parametrize('outcome', ['timeout', 'incomplete_submission'])
+def test_audited_retry_survives_dispatch_restart_and_preserves_failed_attempt(tmp_path, outcome):
     import pytest
     from tests.test_agent_session import setup, completed_tool
     spec, ref = setup(tmp_path)
@@ -65,7 +99,7 @@ def test_audited_retry_survives_dispatch_restart_and_preserves_failed_attempt(tm
     bridge.serve(root, once=True)
     attempt = bridge.status(root, request_id)['attempts'][0]
     completed_tool(spec, dict(request_id=attempt['pool_request_id']),
-                   dict(outcome='timeout', elapsed_seconds=5))
+                   dict(outcome=outcome, elapsed_seconds=5))
     bridge.serve(root, once=True)
     folder = root / 'requests' / request_id
     failure = read(folder / 'result.json')
@@ -401,9 +435,16 @@ def test_invalid_unused_dispatch_snapshot_recovers_without_relaxing_session_pin(
     snapshot = root/'adapters'/(sha+'.py');snapshot.write_bytes(bad)
     with monkeypatch.context() as m:
         m.setattr(session, 'archive_adapter', lambda *a: session.reference(snapshot))
+        m.setattr(dispatch, 'enqueue', lambda *a: None)
         bridge.serve(root, once=True)
     state = bridge.status(root, turn); attempt = state['attempts'][0]
     plan_path = Path(attempt['plan']['path'])
+    # Recreate the historical plan, before explicit portable upgrades existed.
+    historical = read(plan_path); historical.pop('portable_adapter', None)
+    save(plan_path, historical)
+    state['attempts'][0]['plan'] = session.reference(plan_path)
+    save(root/'requests'/turn/'state.json', state)
+    dispatch.enqueue(root/'requests'/turn, read(root/'config.json'), state['attempts'][0])
     completed_tool(spec, dict(request_id=attempt['pool_request_id']),
                    dict(outcome='local_error', error='IndentationError', response=None))
     assert dispatch.invalid_dispatch_snapshot(state)
