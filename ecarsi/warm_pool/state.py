@@ -154,7 +154,9 @@ def submit(root, spec):
         existing = read(folder / "request.json")
         fingerprint = digest(spec)
         if existing:
-            if existing["digest"] != fingerprint:
+            # An audited retry may raise the memory budget; the caller's original
+            # request still identifies the same work.
+            if fingerprint not in {existing["digest"], existing.get("original_digest")}:
                 raise ValueError("request ID already exists with different content")
         else:
             config = read(root / "config.json")
@@ -180,8 +182,12 @@ def cancel(root, request_id):
     return status(root, request_id)
 
 
-def retry(root, request_id, *, reason, use_current_runtime=False):
-    """New attempt after a confirmed failure; retain the original inputs and audit."""
+def retry(root, request_id, *, reason, use_current_runtime=False, memory_mb=None):
+    """New attempt after a confirmed failure; retain the original inputs and audit.
+
+    memory_mb raises the budget of a request that died on its RSS watchdog; the
+    inputs, program and outputs are unchanged, so the work identity is retained.
+    """
     root = pool_root(root)
     folder = root / "requests" / identifier(request_id)
     if not isinstance(reason, str) or not reason.strip():
@@ -201,6 +207,11 @@ def retry(root, request_id, *, reason, use_current_runtime=False):
             if file_digest(item["path"]) != item["sha256"]:
                 raise ValueError("Retry input changed: " + item["path"])
         runtime = read(root / "config.json")["runtime"] if use_current_runtime else request["runtime"]
+        spec = request["spec"]
+        if memory_mb is not None:
+            if type(memory_mb) is not int or memory_mb <= spec["memory_mb"]:
+                raise ValueError("memory_mb override must exceed the failed attempt's budget")
+            spec = dict(spec, memory_mb=memory_mb)
         attempt_id = uuid.uuid4().hex
         attempt = folder / attempt_id
         attempt.mkdir(mode=0o700)
@@ -209,11 +220,13 @@ def retry(root, request_id, *, reason, use_current_runtime=False):
         save(previous / "request.json", request)
         if not (previous / "backend.json").exists():
             save(previous / "backend.json", read(folder / "backend.json", {}))
-        replacement = dict(request, attempt_id=attempt_id, submitted_at=time.time(),
+        replacement = dict(request, spec=spec, digest=digest(spec),
+            original_digest=request.get("original_digest", request["digest"]),
+            attempt_id=attempt_id, submitted_at=time.time(),
             runtime=runtime, runtime_digest=digest(runtime),
             retry_count=request.get("retry_count", 0) + 1,
             retry=dict(previous_attempt_id=request["attempt_id"], reason=reason,
-                       use_current_runtime=use_current_runtime))
+                       use_current_runtime=use_current_runtime, memory_mb=memory_mb))
         # The old receipt remains authoritative until request.json switches atomically.
         save(folder / "backend.json", dict(state="queued", attempt_id=attempt_id))
         save(folder / "request.json", replacement)

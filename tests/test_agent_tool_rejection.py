@@ -120,3 +120,32 @@ def test_artifact_budget_follows_its_input_size(tmp_path):
     assert from_artifact(request, ref, tmp_path / "large.json", str(pool), copies=1000) == sized
     with pytest.raises(ValueError, match="resource request changed"):
         from_artifact(dict(request, cpus=2), ref, tmp_path / "large.json", str(pool), copies=1000)
+
+
+def test_retry_can_raise_a_memory_budget_without_losing_request_identity(tmp_path):
+    """A prepare step that died on its RSS watchdog is retried larger; resubmission still matches."""
+    import json as _json
+    from ecarsi.warm_pool import state
+    pool = tmp_path / "pool"
+    pool.mkdir(mode=0o700)
+    (pool / "requests").mkdir()
+    state.save(pool / "config.json", {"runtime": {"command": ["/usr/bin/python3"], "files": {}, "version": "test"}})
+    spec = dict(request_id="prepare-1", operation_id="zoom-in.prepare", args=["-c", "pass"], cpus=1,
+                memory_mb=4096, timeout_seconds=30, inputs=[], outputs=["prepared.json"])
+    first = state.submit(str(pool), spec)
+    folder = pool / "requests" / "prepare-1"
+    request = state.read(folder / "request.json")
+    state.save(folder / request["attempt_id"] / "receipt.json", dict(state="failed", finished_at=1.0,
+        attempt_id=request["attempt_id"], request_digest=request["digest"],
+        runtime_digest=request["runtime_digest"], error="MemoryError"))
+    with pytest.raises(ValueError, match="exceed"):
+        state.retry(str(pool), "prepare-1", reason="too small", memory_mb=4096)
+    retried = state.retry(str(pool), "prepare-1", reason="RSS budget was too small", memory_mb=9216)
+    assert retried["state"] == "queued" and retried["attempt_id"] != first["attempt_id"]
+    again = state.read(folder / "request.json")
+    assert again["spec"]["memory_mb"] == 9216 and again["digest"] == state.digest(again["spec"])
+    assert again["original_digest"] == request["digest"]
+    # The Coordinator resubmits its unchanged 4096 MiB request on recovery; same work.
+    assert state.submit(str(pool), spec)["attempt_id"] == retried["attempt_id"]
+    with pytest.raises(ValueError, match="different content"):
+        state.submit(str(pool), dict(spec, cpus=2))

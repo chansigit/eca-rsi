@@ -87,6 +87,7 @@ def main(argv=None):
     repetition.add_argument("request_id")
     repetition.add_argument("--reason", required=True)
     repetition.add_argument("--use-current-runtime", action="store_true", help="explicitly adopt the currently configured runtime")
+    repetition.add_argument("--memory-mb", type=int, help="raise the budget of an attempt that exceeded its RSS watchdog")
     a = p.parse_args(argv)
     if a.command == "init":
         result = initialize(a.root, a.hq, a.runtime)
@@ -114,7 +115,8 @@ def main(argv=None):
     elif a.command == "cancel":
         result = cancel(a.root, a.request_id)
     elif a.command == "retry":
-        result = retry(a.root, a.request_id, reason=a.reason, use_current_runtime=a.use_current_runtime)
+        result = retry(a.root, a.request_id, reason=a.reason, use_current_runtime=a.use_current_runtime,
+                       memory_mb=a.memory_mb)
     else:
         result = status(a.root, a.request_id)
     print(json.dumps(result, indent=2))
