@@ -45,6 +45,7 @@ def archive_adapter(bridge_root, source=None):
     directory = root_path(bridge_root) / "adapters"
     directory.mkdir(mode=0o700, exist_ok=True)
     content = Path(source or __file__).read_bytes()
+    compile(content, str(source or __file__), "exec")
     sha = hashlib.sha256(content).hexdigest()
     path = directory / (sha + ".py")
     with lock(directory / "archive.lock"):
@@ -148,7 +149,7 @@ def validate_spec(spec):
     return spec
 
 
-def create_session(spec):
+def create_session(spec, *, recover_missing_submission=True):
     from .model_web import normalized_models
     import agents
     spec = validate_spec(spec)
@@ -168,6 +169,20 @@ def create_session(spec):
                 for t in spec["tools"]]}
             if old["spec"] != original_policy:
                 raise ValueError("Session directory already belongs to another specification")
+            result = read(root / 'result.json')
+            if (recover_missing_submission and old['spec'].get('completion_tool')
+                    and old.get('protocol', 1) >= 2 and result and 'output' not in result
+                    and result.get('session') == reference(path) and result.get('reply')
+                    and verified(result['reply'])['response']['kind'] == 'final'):
+                # One bounded repair with a fresh required-tool adapter. Keep
+                # the old reply/session intact; re-read evidence from the
+                # original state instead of crediting unseen observations.
+                repair = dict(old['spec'], session_id='repair-' + digest([reference(path), result])[:32],
+                              output_root=str(root / 'submission-recovery'))
+                intent = immutable(root / 'submission-recovery.json', dict(
+                    reason='Agent ended without its required validated submission',
+                    session=reference(path), result=reference(root / 'result.json'), spec=repair))
+                return create_session(verified(intent)['spec'], recover_missing_submission=False)
             return reference(path)
         config = read(Path(spec["bridge_root"]) / "config.json")
         models = normalized_models(read(config["catalog"]))

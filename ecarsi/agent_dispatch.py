@@ -171,7 +171,7 @@ def _reconcile_pool(root, folder, config, events):
     if current["state"] not in {"succeeded", "failed", "cancelled"}:
         from .warm_pool.state import cancel
         cancel(state["pool_root"], attempt["pool_request_id"])
-    model_failure = outcome in {"timeout", "provider_error"}
+    model_failure = outcome in {"timeout", "provider_error", "incomplete_submission"}
     event = record_event(root, folder, attempt, outcome, elapsed=elapsed, model_failure=model_failure,
                          finished_at=(current["receipt"] or {}).get("finished_at"))
     events[attempt["pool_request_id"]] = event
@@ -209,6 +209,37 @@ def credential_timeout(state):
     response = verified({k: outputs[0][k] for k in ('path', 'sha256')})
     return (response.get('outcome') == 'local_error' and response.get('error') == 'TimeoutExpired'
             and response.get('response') is None)
+
+
+def invalid_dispatch_snapshot(state):
+    """Recognize a historical unused snapshot that failed before any API call."""
+    from .agent_session import verified, validate_turn
+    attempt = state.get('attempts', [])[-1:]
+    if not attempt:
+        return False
+    current = status(state['pool_root'], attempt[0]['pool_request_id'])
+    if current['state'] != 'succeeded':
+        return False
+    output = next((o for o in current['receipt']['outputs'] if Path(o['path']).name == 'result.json'), None)
+    if output is None:
+        return False
+    response = verified({k: output[k] for k in ('path', 'sha256')})
+    if (response.get('outcome') != 'local_error' or response.get('response') is not None
+            or response.get('error') not in {'SyntaxError', 'IndentationError'}):
+        return False
+    plan = verified(attempt[0]['plan']); spec = plan['request']['spec']
+    session = verified(spec['session'])
+    if plan['adapter_sha256'] == session['adapter_sha256']:
+        return False
+    validate_turn(spec)  # The adapter that will actually execute must still validate.
+    path = Path(session['spec']['bridge_root']) / 'adapters' / (plan['adapter_sha256'] + '.py')
+    if file_digest(path) != plan['adapter_sha256']:
+        return False
+    try:
+        compile(path.read_bytes(), str(path), 'exec')
+    except SyntaxError:
+        return True
+    return False
 
 
 def completed_replacement(pool_root, request_id, bridge_root):
@@ -410,7 +441,7 @@ def load_worker_key(model):
 
 def execute(plan_path):
     from .agent_bridge import run_organize, sdk_restore_compat
-    from .agent_session import run_turn, verified, validate_turn, pinned_adapter
+    from .agent_session import run_turn, verified, validate_turn
     plan = read(plan_path)
     folder = Path.cwd()
     started = time.time()
@@ -421,7 +452,8 @@ def execute(plan_path):
         spec = plan["request"]["spec"]
         if spec["operation_id"] == "agent.turn":
             session = verified(spec["session"])
-            pinned_adapter(session["spec"]["bridge_root"], plan["adapter_sha256"])
+            # validate_turn loads the session-pinned adapter actually used by
+            # run_turn. The dispatch-time snapshot is provenance, not executable.
             validate_turn(spec)
         elif file_digest(Path(__file__).with_name("agent_session.py")) != plan["adapter_sha256"]:
             raise ValueError("Agent adapter changed after dispatch")
@@ -456,6 +488,11 @@ def execute(plan_path):
         outcome, error = 'worker_setup_timeout', type(exc).__name__
     except Exception as exc:
         error = type(exc).__name__
+    if (outcome == 'success' and spec['operation_id'] == 'agent.turn'
+            and session['spec'].get('completion_tool') and response.get('kind') == 'final'):
+        # This turn cannot execute tools. A free-text conclusion is not a
+        # submitted scientific result; bounded model fallback can safely retry.
+        outcome, error = 'incomplete_submission', 'Required completion tool was not called'
     save(folder / "result.json", dict(outcome=outcome, response=response, error=error, worker=worker,
                                      elapsed_seconds=time.time()-started, model=plan["model"]))
 

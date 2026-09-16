@@ -108,6 +108,27 @@ def test_recovery_keeps_original_tool_policy_when_batching_is_introduced(tmp_pat
         session.create_session(changed)
 
 
+def test_missing_submission_repair_is_bounded_and_preserves_original_evidence(tmp_path):
+    spec, _ = setup(tmp_path)
+    root = Path(spec['bridge_root'])
+    save(root/'config.json', dict(read(root/'config.json'), pool_root=spec['pool_root']))
+    state = session.immutable(tmp_path/'original-state.json', {'read': []})
+    spec = dict(spec, session_id='missing-submit', output_root=str(tmp_path/'missing-submit'),
+                completion_tool='compute', tool_state=state)
+    original = session.create_session(spec)
+    reply = session.immutable(tmp_path/'final-reply.json', {'response': {'kind': 'final'}})
+    result = session.immutable(Path(spec['output_root'])/'result.json', {'session': original, 'reply': reply})
+    repaired = session.create_session(spec)
+    assert repaired != original and session.verified(result)['session'] == original
+    replacement = session.verified(repaired)['spec']
+    assert replacement['tool_state'] == state and replacement['completion_tool'] == 'compute'
+    assert session.create_session(spec) == repaired
+    # A second failure stays visible for review; no recursive retry chain.
+    session.immutable(Path(replacement['output_root'])/'result.json', {'session': repaired, 'reply': reply})
+    assert session.create_session(spec) == repaired
+    assert not (Path(replacement['output_root'])/'submission-recovery').exists()
+
+
 def completed_tool(spec, item, value=None):
     folder = Path(spec["pool_root"]) / "requests" / item["request_id"]
     request = read(folder / "request.json")
@@ -391,3 +412,13 @@ def test_mixed_read_and_decision_batch_cannot_dispatch_any_tool(tmp_path):
             with pytest.raises(ValueError, match='Batch only declared read-only'):
                 session.tool_request(ref, reply, index)
         assert not list((Path(spec['pool_root'])/'requests').iterdir())
+
+
+def test_adapter_archive_rejects_invalid_source_before_publication(tmp_path):
+    import hashlib
+    spec, _ = setup(tmp_path)
+    source = tmp_path/'incomplete.py';source.write_text('if True:\nnot indented\n')
+    sha = hashlib.sha256(source.read_bytes()).hexdigest()
+    with pytest.raises(SyntaxError):
+        session.archive_adapter(spec['bridge_root'], source)
+    assert not (Path(spec['bridge_root'])/'adapters'/(sha+'.py')).exists()

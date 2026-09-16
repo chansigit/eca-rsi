@@ -16,6 +16,19 @@ restored from version control once. This archives the model-call adapter, not
 all scientific dependencies: tool inputs, runtime images and SDK versions retain
 their separate integrity checks. Local session validation failures do not count
 as provider health failures.
+Adapter source is syntax-checked before publication. Executors validate and load
+the session-pinned adapter; a dispatch-time source snapshot is provenance only.
+Production source changes must be validated before an atomic replacement.
+
+A session with a completion tool cannot finish with free text: new adapters
+require a tool call, and the common executor rejects premature final text from
+older adapters as `incomplete_submission`, using the bounded model fallback.
+The scientific submission tool still performs all evidence/decision checks.
+When explicitly resuming an older session that already ended without submission,
+creation records one immutable repair session with the original specification
+and initial evidence state. It rereads evidence; neither the old reply nor a
+scientific result is fabricated. A failed repair does not create another repair.
+
 
 New sessions use a portable conversation record: public messages, tool calls and
 verified tool results. Switching a model resends the pending model turn with this

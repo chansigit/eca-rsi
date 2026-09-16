@@ -153,6 +153,27 @@ def test_credential_timeout_retries_without_calling_or_penalizing_provider(tmp_p
     assert len(events) == 1 and events[0]['model_failure'] is False
 
 
+def test_free_text_cannot_finish_a_session_requiring_submission(tmp_path, monkeypatch):
+    from tests.test_agent_session import setup, completed_tool
+    spec, _ = setup(tmp_path)
+    root = Path(spec['bridge_root'])
+    save(root/'config.json', dict(read(root/'config.json'), pool_root=spec['pool_root']))
+    spec = dict(spec, session_id='contract', output_root=str(tmp_path/'contract'), completion_tool='compute')
+    ref = session.create_session(spec);turn = session.submit_turn(ref, 0)
+    bridge.serve(root, once=True);attempt = bridge.status(root, turn)['attempts'][0]
+    async def premature(*args, **kwargs):
+        return dict(kind='final', final_output='I am done', calls=[])
+    monkeypatch.setattr(session, 'run_turn', premature)
+    monkeypatch.setattr(dispatch, 'load_worker_key', lambda *a: None)
+    monkeypatch.chdir(tmp_path);dispatch.execute(attempt['plan']['path'])
+    result = read(tmp_path/'result.json')
+    assert result['outcome'] == 'incomplete_submission'
+    completed_tool(spec, dict(request_id=attempt['pool_request_id']), result)
+    bridge.serve(root, once=True)
+    assert not (root/'requests'/turn/'result.json').exists()
+    assert len(bridge.status(root, turn)['attempts']) == 2
+
+
 def test_retry_waits_for_untried_backup_before_reusing_failed_primary(tmp_path):
     from tests.test_agent_session import setup
     spec, ref = setup(tmp_path)
@@ -357,3 +378,38 @@ def test_timeline_uses_worker_attempt_and_preserves_dependencies():
     tasks = task_timeline([model, tool], [inbox], 0, 3)['tasks']
     assert [t['id'] for t in tasks] == ['model-worker', 'tool']
     assert tasks[1]['trace']['depends_on'] == ['model-worker']
+
+
+def test_invalid_unused_dispatch_snapshot_recovers_without_relaxing_session_pin(tmp_path, monkeypatch):
+    import pytest
+    from tests.test_agent_session import setup, completed_tool
+    import hashlib
+    spec, ref = setup(tmp_path)
+    root = Path(spec['bridge_root'])
+    save(root/'config.json', dict(read(root/'config.json'), pool_root=spec['pool_root']))
+    spec = dict(spec, session_id='snapshot-retry', output_root=str(tmp_path/'snapshot-retry'))
+    ref = session.create_session(spec)
+    turn = session.submit_turn(ref, 0)
+    bad = b'if True:\ninvalid indentation\n'
+    sha = hashlib.sha256(bad).hexdigest()
+    snapshot = root/'adapters'/(sha+'.py');snapshot.write_bytes(bad)
+    with monkeypatch.context() as m:
+        m.setattr(session, 'archive_adapter', lambda *a: session.reference(snapshot))
+        bridge.serve(root, once=True)
+    state = bridge.status(root, turn); attempt = state['attempts'][0]
+    plan_path = Path(attempt['plan']['path'])
+    completed_tool(spec, dict(request_id=attempt['pool_request_id']),
+                   dict(outcome='local_error', error='IndentationError', response=None))
+    assert dispatch.invalid_dispatch_snapshot(state)
+    bridge.serve(root, once=True)
+    assert bridge.retry_turn(root, turn, reason='Validated session adapter; unused snapshot was invalid')['state'] == 'queued'
+    async def good(*args, **kwargs):
+        return dict(kind='final', final_output='complete', calls=[])
+    monkeypatch.setattr(session, 'run_turn', good)
+    monkeypatch.setattr(dispatch, 'load_worker_key', lambda *a: None)
+    monkeypatch.chdir(tmp_path);dispatch.execute(plan_path)
+    assert read(tmp_path/'result.json')['outcome'] == 'success'
+    saved = read(ref['path']);saved['adapter_sha256'] = sha
+    save(ref['path'], saved)
+    with pytest.raises(ValueError, match='Artifact changed'):
+        dispatch.invalid_dispatch_snapshot(state)
