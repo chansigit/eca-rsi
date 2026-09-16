@@ -111,7 +111,39 @@ Release checks additionally cover repeat publication, exact string IDs such as `
 
 A Pool export of the completed Uterus first-round artifacts succeeded on `sh04-14n18` in 5.2 seconds, with peak RSS 257 MiB (`release-validation-uterus-20260915`). This separate export-validation directory is not the dataset's final two-round release. The Coordinator was updated after 81 historical workflow runs replayed successfully.
 
-The in-progress timing audit (`acceptance-timing.json`, filtered by these workflow IDs) found median Pool queue delays of 3.6–3.9 seconds. Repeated model evidence requests dominate these small runs: cross-sample guidance now explicitly describes the existing all-cluster `check_genes` mode and bounded marker panels, in addition to batched DEG SQL. Saved sessions retain their original prompts. This is a targeted reduction in avoidable round trips, not a measured sustained-throughput improvement. Versioned support for multiple tool requests per model reply remains a next step; the current adapter explicitly asks for one at a time.
+The in-progress timing audit (`acceptance-timing.json`, filtered by these workflow IDs) found median Pool queue delays of 3.6–3.9 seconds. Repeated model evidence requests dominate these small runs: cross-sample guidance now explicitly describes the existing all-cluster `check_genes` mode and bounded marker panels, in addition to batched DEG SQL. Saved sessions retain their original prompts. This is a targeted reduction in avoidable round trips, not a measured sustained-throughput improvement. That timing sample used the earlier one-tool-per-reply adapter. New sessions can now batch explicitly declared read-only tool calls; existing sessions retain their original policy.
+
+## Throughput follow-up, 2026-09-15
+
+The live large batch contains 28 datasets, 301 samples and 1,084,377 input cells.
+Its 301 initial sample computations already existed before this follow-up.
+The changes separate compute admission from annotation backlog, combine complete
+evidence pages, calibrate downstream operation budgets from accepted measurements,
+and share model admission across ready operation kinds. Earlier sessions receive
+completion preference within each kind, with aged-request service retained.
+They also repair Organize resume validation and add audited transient model-turn
+recovery. No sample or required scientific decision is bypassed.
+
+Focused regression checks and replay of 34 real Temporal histories passed.
+The isolated capacity check verifies that a second sample starts computation
+while the first waits for annotation, and that the prepared-backlog bound still
+blocks further admission. Live Kidney recovery reused accepted Organize output;
+Mammary's failed model turn completed through its configured alternative.
+
+In one 638-second development observation window, 31 sample finalizers completed,
+versus 9 in the preceding 600 seconds. Successful model attempts were 94 versus
+53, with 8 versus 3 timeouts. Service replacements, queue-policy changes and task
+mix confound this comparison; it is not a controlled speedup benchmark. Weighted
+five-minute worker CPU usage was still about 6.6%, and no dataset in this large
+batch had reached final release at that snapshot. Pool queue delays during the
+following check were roughly 2 seconds; model-dependent task supply remained the
+main constraint. Pro cooldowns led to reducing the experimental model ceiling
+from 24 total calls to 16, retaining a 12-per-model bound and primary-first routing.
+
+Detailed snapshots, budget receipts, replay evidence and rollout records are in
+`/scratch/users/chensj16/eca-runs/warmpool-v2-development/throughput-review-20260915/`.
+The live batch monitor continues recording usage and completion counts every
+minute and independently checks each dataset publication when it completes.
 
 Remaining production gates include large-dataset budget/history calibration, legacy release presentation, consolidation of upstream-standardization review advisories, and sustained multi-dataset throughput. The `forced_release` flag refers only to the convergence safety cap. Ordinary Coordinator or Temporal service interruption while a workflow is running is recovered through the [shared control service](DURABLE_CONTROL.md), and does not require dataset resubmission.
 
