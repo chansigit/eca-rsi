@@ -184,6 +184,7 @@ class HyperQueue:
         by_name = {j["name"]: j for j in jobs}
         generation = digest({k: info[k] for k in ("server_uid", "pid", "start_date")})
         live_hosts = None  # HQ worker hostnames, fetched once per tick and only when needed
+        submissions = []
         for folder in sorted((self.root / "requests").iterdir()):
             try:
                 stat = (folder / 'request.json').stat()
@@ -266,14 +267,40 @@ class HyperQueue:
                     path = attempt / "job.toml"
                     path.write_text(gpu_jobfile(request, attempt, name, self.config["executor"],
                         os.pathsep.join(filter(None, (str(Path(__file__).resolve().parents[2]), os.environ.get("PYTHONPATH", ""))))))
-                    submitted = self.call("job", "submit-file", str(path))
+                    submissions.append((folder, ("job", "submit-file", str(path))))
                 else:
-                    submitted = self.call(*args)
-                # RSI already persisted acceptance. Flush makes backend lookup
-                # survive ordinary restart; wrapper receipts cover later loss.
-                self.call("journal", "flush")
-                save(folder / "backend.json", dict(state="queued", job_id=submitted["id"],
-                     generation=generation, observed_at=time.time()))
+                    submissions.append((folder, tuple(args)))
+        if not submissions:
+            return
+        # Every hq client call costs ~0.25 s. Submitting inline, one flush each, made a
+        # tick take 5-11 s under load and every new request wait a median 10 s for its
+        # first look. Submit concurrently outside the folder locks, then flush once.
+        from concurrent.futures import ThreadPoolExecutor
+
+        def submit_one(item):
+            folder, command = item
+            try:
+                return folder, self.call(*command), None
+            except Exception as exc:  # noqa: BLE001 - recorded on the request, resubmitted next tick
+                return folder, None, (type(exc).__name__ + ": " + str(exc))[:500]
+        with ThreadPoolExecutor(max_workers=8) as workers:
+            results = list(workers.map(submit_one, submissions))
+        # RSI already persisted acceptance. Flush makes backend lookup
+        # survive ordinary restart; wrapper receipts cover later loss.
+        self.call("journal", "flush")
+        for folder, submitted, error in results:
+            with lock(folder / "request.lock"):
+                previous = read(folder / "backend.json", {})
+                if previous.get("state") != "submitting" or previous.get("generation") != generation:
+                    continue  # cancelled or replaced meanwhile; the stable job name reconciles it
+                if error:
+                    # Not "submitting": that state means a lost reply for a job that may exist,
+                    # which the next tick reconciles by name. This one is retried from scratch.
+                    save(folder / "backend.json", dict(state="submit_failed", error=error,
+                         generation=generation, observed_at=time.time()))
+                else:
+                    save(folder / "backend.json", dict(state="queued", job_id=submitted["id"],
+                         generation=generation, observed_at=time.time()))
 
 
 def serve(root, host=None):

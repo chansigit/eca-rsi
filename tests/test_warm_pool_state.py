@@ -292,3 +292,36 @@ def test_runtime_update_preserves_accepted_request_identity(tmp_path):
     with pytest.raises(ValueError):
         configure_runtime(tmp_path, {**new, "pythonpath": ["relative"]})
     assert read(tmp_path / "config.json")["runtime"] == new
+
+
+def test_dispatch_submits_concurrently_and_resubmits_a_failed_submission(tmp_path, monkeypatch):
+    from ecarsi.warm_pool.backend import HyperQueue
+    tmp_path.chmod(0o700)
+    (tmp_path / 'requests').mkdir()
+    save(tmp_path / 'config.json', {'hq': '/test/hq', 'executor': '/test/python', 'runtime': {'version': 'test'}})
+    for name in ('a', 'b'):
+        submit(tmp_path, dict(request_id=name, operation_id='compute', args=['-c', 'pass'],
+                             cpus=1, memory_mb=64, timeout_seconds=10, outputs=['result.json']))
+    backend, calls, broken, known = HyperQueue(tmp_path), [], {'a'}, []
+    def call(*args):
+        calls.append(args)
+        if args[:2] == ('job', 'list'):
+            return [dict(name=name, id=7, task_stats=dict(waiting=1, running=0)) for name in known]
+        if args[0] == 'submit':
+            name = args[args.index('--name') + 1]
+            if name.split('.')[1] in broken:
+                raise RuntimeError('hq client lost the server')
+            known.append(name)
+            return {'id': 7}
+        return None
+    monkeypatch.setattr(backend, 'call', call)
+    info = dict(server_uid='one', pid=1, start_date='one')
+    backend.dispatch(info)
+    assert calls.count(('journal', 'flush')) == 1  # one flush per tick, not per submission
+    assert read(tmp_path / 'requests/a/backend.json')['state'] == 'submit_failed'
+    assert read(tmp_path / 'requests/b/backend.json') == dict(state='queued', job_id=7, generation=read(tmp_path / 'requests/b/backend.json')['generation'], observed_at=read(tmp_path / 'requests/b/backend.json')['observed_at'])
+    broken.clear()
+    calls.clear()
+    backend.dispatch(info)
+    assert sum(args[0] == 'submit' for args in calls) == 1  # only the failed one is submitted again
+    assert read(tmp_path / 'requests/a/backend.json')['state'] == 'queued'
