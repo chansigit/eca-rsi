@@ -8,6 +8,95 @@ from ecarsi.warm_pool.worker import registered_worker_id
 from ecarsi.warm_pool.state import cancel, file_digest, read, save, status, submit, validate_trace
 
 
+def test_recovery_cache_skips_terminal_history_but_rechecks_retry_and_live_owner(tmp_path, monkeypatch):
+    import os
+    from ecarsi.warm_pool import worker
+    from ecarsi.warm_pool.state import retry
+    tmp_path.chmod(0o700)
+    (tmp_path / 'requests').mkdir()
+    save(tmp_path / 'config.json', dict(runtime=dict(version='test')))
+    cpu = min(os.sched_getaffinity(0))
+    requests = {}
+    for name in ('finished', 'live'):
+        submit(tmp_path, dict(request_id=name, operation_id='compute', args=['-c', 'pass'],
+                             cpus=1, memory_mb=64, timeout_seconds=10, outputs=['result.json']))
+        requests[name] = read(tmp_path / 'requests' / name / 'request.json')
+    old = requests['finished']
+    folder = tmp_path / 'requests/finished'
+    save(folder / old['attempt_id'] / 'receipt.json', dict(state='failed', finished_at=1,
+        attempt_id=old['attempt_id'], request_digest=old['digest'], runtime_digest=old['runtime_digest']))
+    live = tmp_path / 'requests/live' / requests['live']['attempt_id']
+    accepted = dict(host=socket.gethostname().split('.')[0], cpu_ids=[cpu],
+                    identity=worker.identity(os.getpid()), started_at=time.time())
+    save(live / 'accepted.json', accepted)
+    assert worker.reconcile_local(tmp_path, [cpu]) == ['live']
+    original = worker.read
+    touched = []
+    def track(path, *args):
+        touched.append(path)
+        return original(path, *args)
+    monkeypatch.setattr(worker, 'read', track)
+    assert worker.reconcile_local(tmp_path, [cpu]) == ['live']
+    assert not any(p.is_relative_to(folder) for p in touched)
+    retry(tmp_path, 'finished', reason='confirmed failure')
+    current = read(folder / 'request.json')
+    save(folder / current['attempt_id'] / 'accepted.json', accepted)
+    assert set(worker.reconcile_local(tmp_path, [cpu])) == {'live', 'finished'}
+
+
+def test_recovery_cache_keeps_live_orphan_resources_reserved(tmp_path):
+    import os
+    import subprocess
+    import sys
+    from ecarsi.warm_pool import worker
+    tmp_path.chmod(0o700)
+    (tmp_path / 'requests').mkdir()
+    runtime = dict(command=[sys.executable], version='Python ' + sys.version.split()[0], files={})
+    save(tmp_path / 'config.json', dict(runtime=runtime))
+    cpu = min(os.sched_getaffinity(0))
+    def launch(name, code):
+        submit(tmp_path, dict(request_id=name, operation_id='test', args=['-c', code],
+            cpus=1, memory_mb=128, timeout_seconds=30, outputs=['result.json']))
+        request = read(tmp_path / 'requests' / name / 'request.json')
+        proc = subprocess.Popen([sys.executable, '-m', 'ecarsi.warm_pool.worker', 'execute',
+            str(tmp_path), name, request['attempt_id']], stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            preexec_fn=lambda: os.sched_setaffinity(0, {cpu}))
+        return proc, tmp_path / 'requests' / name / request['attempt_id']
+    completed, folder = launch('completed', "from pathlib import Path;Path('result.json').write_text('{}')")
+    assert completed.wait(timeout=10) == 0
+    assert worker.reconcile_local(tmp_path, [cpu]) == []
+    phases = read(folder / 'receipt.json')['preflight_seconds']
+    assert set(phases) == {'local_recovery', 'runtime_validation', 'input_validation'}
+    assert all(seconds >= 0 for seconds in phases.values())
+    child = 'import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)'
+    code = ("import subprocess,sys,time;from pathlib import Path;"
+            f"subprocess.Popen([sys.executable,'-c',{child!r}]);"
+            "Path('ready').touch();time.sleep(60)")
+    proc, attempt = launch('orphan', code)
+    accepted = None
+    try:
+        deadline = time.monotonic() + 10
+        while not (attempt / 'outputs/ready').exists():
+            assert proc.poll() is None and time.monotonic() < deadline
+            time.sleep(.05)
+        accepted = read(attempt / 'accepted.json')
+        proc.kill()
+        proc.wait(timeout=5)
+        assert worker.reconcile_local(tmp_path, [cpu]) == ['orphan']
+        assert read(attempt / 'receipt.json') is None
+        worker.stop_group(accepted['pgid'])
+        assert worker.reconcile_local(tmp_path, [cpu]) == []
+        receipt = read(attempt / 'receipt.json')
+        assert receipt['state'] == 'failed' and receipt['retryable']
+    finally:
+        if accepted:
+            worker.stop_group(accepted['pgid'])
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait(timeout=5)
+
+
 def test_dispatch_cache_revisits_retries_cancellation_and_replayed_jobs(tmp_path, monkeypatch):
     from ecarsi.warm_pool.backend import HyperQueue
     from ecarsi.warm_pool.state import retry

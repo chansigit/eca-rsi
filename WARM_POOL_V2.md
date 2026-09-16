@@ -206,6 +206,19 @@ no-op; an accepted attempt without a receipt is never blindly rerun. New local
 commands also check for surviving process groups left by dead executors before
 using their CPUs. A confirmed lost executor produces a failed, retryable receipt.
 
+Each new command performs this local recovery check. Terminal attempts are cached
+under `cache/local-recovery/<host>-<boot-id>.json`; a changed `request.json`
+fingerprint invalidates its entry, so retries and unfinished attempts still get
+the full owner/process-group check. Input and runtime validation remain intact.
+Receipts expose `preflight_seconds` for `local_recovery`, `runtime_validation`,
+and `input_validation` to separate startup overhead from command execution.
+
+During the 2026-09-15 live batch, the first 13 completed commands on sh04-01n13
+after this change had a median recovery check of 3.83 seconds, compared with
+20.92 seconds for 61 preceding commands. This measures the recovery scan only,
+not end-to-end pipeline acceleration. Tests cover cache invalidation on retry
+and a real killed executor whose surviving child must keep its CPUs reserved.
+
 Completed-attempt scans are cached between scheduler ticks. Replacing
 `request.json` for a retry, creating a cancellation, or changing the HQ server
 generation invalidates the cache. Thus completed history does not repeatedly

@@ -71,17 +71,33 @@ def reconcile_local(root, cpu_ids, gpu_ids=()):
     host = socket.gethostname().split(".")[0]
     boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
     pending = []
-    # ponytail: scan persisted attempts on worker reconnection; index by host if
-    # this recovery-only scan becomes significant for a large retained history.
+    cache_path = root / 'cache' / 'local-recovery' / (host + '-' + boot + '.json')
+    cache = read(cache_path, {})
+    completed = cache.get('completed', {})
+    observed = {}
+    # Every new executor uses this guard, not just worker reconnections. Share
+    # terminal fingerprints across those processes; retries replace request.json.
+    # ponytail: retain one stat per request. An active-attempt journal can replace
+    # this scan if metadata checks, rather than historical JSON reads, dominate.
     for folder in (root / "requests").iterdir():
+        try:
+            info = (folder / 'request.json').stat()
+        except FileNotFoundError:
+            continue
+        stamp = [info.st_ino, info.st_mtime_ns, info.st_size]
+        if completed.get(folder.name) == stamp:
+            observed[folder.name] = stamp
+            continue
         request = read(folder / "request.json")
         if not request:
             continue
         attempt = folder / request["attempt_id"]
+        if read(attempt / 'receipt.json'):
+            observed[folder.name] = stamp
+            continue
         accepted = read(attempt / "accepted.json")
         if (not accepted or accepted["host"] != host or not (set(cpu_ids).intersection(accepted["cpu_ids"])
-                or set(gpu_ids).intersection(accepted.get("gpu_ids", [])))
-                or read(attempt / "receipt.json")):
+                or set(gpu_ids).intersection(accepted.get("gpu_ids", [])))):
             continue
         try:
             with lock(attempt / "execution.lock", blocking=False):
@@ -101,6 +117,17 @@ def reconcile_local(root, cpu_ids, gpu_ids=()):
                      started_at=accepted["started_at"], finished_at=time.time()))
         except BlockingIOError:
             pending.append(request["spec"]["request_id"])
+    if observed != completed:
+        cache_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            with lock(cache_path.with_suffix('.lock'), blocking=False):
+                # A racing writer may only omit newer terminal entries, causing
+                # an extra read next time. Never cache an unfinished execution.
+                latest = read(cache_path, {})
+                if time.time() - latest.get('updated_at', 0) >= 30:
+                    save(cache_path, dict(updated_at=time.time(), completed=observed))
+        except BlockingIOError:
+            pass
     return pending
 
 
@@ -184,7 +211,7 @@ def run(folder, request, ownership):
     deadline = time.monotonic() + spec["timeout_seconds"]
     receipt = dict(request_id=spec["request_id"], attempt_id=request["attempt_id"],
                    request_digest=request["digest"], runtime_digest=request["runtime_digest"],
-                   started_at=started, state="failed", outputs=[])
+                   started_at=started, state="failed", outputs=[], preflight_seconds={})
     try:
         if digest(spec) != request["digest"] or digest(runtime) != request["runtime_digest"]:
             raise ValueError("request or runtime identity changed")
@@ -194,6 +221,7 @@ def run(folder, request, ownership):
         gpu_id = assigned_gpu(spec, os.environ)
         # An HQ task wrapper can itself die while descendants still exist. HQ
         # may already have freed its grant; check locally before new compute.
+        phase_started = time.monotonic()
         while reconcile_local(folder.parent.parent, cpus, [gpu_id] if gpu_id else []):
             if read(folder / "cancel.json"):
                 receipt["state"] = "cancelled"
@@ -201,10 +229,15 @@ def run(folder, request, ownership):
             if stopping or time.monotonic() >= deadline:
                 raise InterruptedError("previous local execution has not released the requested CPUs")
             time.sleep(.5)
+        receipt['preflight_seconds']['local_recovery'] = time.monotonic() - phase_started
+        phase_started = time.monotonic()
         check_runtime(runtime)
+        receipt['preflight_seconds']['runtime_validation'] = time.monotonic() - phase_started
+        phase_started = time.monotonic()
         for item in spec["inputs"]:
             if file_digest(item["path"]) != item["sha256"]:
                 raise ValueError("input identity mismatch: " + item["path"])
+        receipt['preflight_seconds']['input_validation'] = time.monotonic() - phase_started
         with lock(folder / "request.lock"):
             if read(folder / "cancel.json") or stopping:
                 receipt["state"] = "cancelled"
