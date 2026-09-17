@@ -364,7 +364,10 @@ def tool(name,state_path,args_path,destination):
                 if missing:raise ValueError('Read each sample cluster UMAP before inclusion: '+str(missing))
             else:
                 data=_data(bundle);clusters=sorted(data.obs[BASE].astype(str).unique())
-                if not state['lookups'] or not any(p.endswith('.png') for p in state['read']):raise ValueError('Query DEG and read a figure before submission')
+                if not state['lookups']:raise ValueError('Query DEG with deg_lookup or deg_sql before submission')
+                if not any(p.endswith('.png') for p in state['read']):
+                    figures=[n for n in bundle['files'] if n.endswith('.png')]
+                    raise ValueError('Read a figure with read_evidence before submission; none of your '+str(len(state['read']))+' reads was a .png. Figures: '+', '.join(figures[:4]))
                 if phase=='type':
                     from msp.annotate import _validate_cluster,_validate_final,_guard_batch_annotation,_check_coarse_boundaries
                     from msp.evidence import load_paga_neighbors
