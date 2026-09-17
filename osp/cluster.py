@@ -287,9 +287,14 @@ def cluster_and_deg(
     make_plots=True,
     figdir=None,
     marker_genes=None,
+    compute_backend="cpu",
 ):
     """Normalize→HVG→PCA→neighbors→Leiden→UMAP→DEG on an already-QC'ed
     single-sample adata.
+
+    ``compute_backend="rapids"`` runs PCA (including the same QC covariates),
+    neighbors and UMAP on one visible GPU. QC, HVG selection, Leiden, DEG,
+    plotting and output contracts remain shared with the CPU implementation.
 
     Single sample only; no batch integration (no Harmony).
 
@@ -402,6 +407,15 @@ def cluster_and_deg(
         ad.layers[counts_layer] = counts.astype(np.int32)
 
     log.info("== normalize/log1p")
+    if compute_backend not in {"cpu", "rapids"}:
+        raise ValueError("compute_backend must be cpu or rapids")
+    rsc = None
+    if compute_backend == "rapids":
+        import cupy as cp
+        import rapids_singlecell as rsc
+        if cp.cuda.runtime.getDeviceCount() != 1:
+            raise ValueError("RAPIDS OSP requires exactly one visible, reserved GPU")
+    ad.uns["osp_compute_backend"] = compute_backend
     sc.pp.normalize_total(ad, target_sum=1e4)
     sc.pp.log1p(ad)
     # X stays the full log-normalized gene space from here on (HVG/scale work
@@ -440,11 +454,19 @@ def cluster_and_deg(
 
     n_comps = min(n_pcs, n_features - 1, ad.n_obs - 1)
     # float32: neighbours/leiden/plots never use more, and float64 doubles the embedding on disk
-    ad.obsm["X_pca"] = PCA(n_components=n_comps, svd_solver="arpack", random_state=0).fit_transform(X_pca_input).astype(np.float32)
+    if rsc is None:
+        ad.obsm["X_pca"] = PCA(n_components=n_comps, svd_solver="arpack", random_state=0).fit_transform(X_pca_input).astype(np.float32)
+    else:
+        from anndata import AnnData
+        gpu_input = AnnData(cp.asarray(X_pca_input, dtype=cp.float32))
+        rsc.pp.pca(gpu_input, n_comps=n_comps, random_state=0)
+        values = gpu_input.obsm["X_pca"]
+        ad.obsm["X_pca"] = cp.asnumpy(values).astype(np.float32)
+        del gpu_input
     del hvg
 
     log.info("== neighbors (use_rep=X_pca)")
-    sc.pp.neighbors(ad, use_rep="X_pca", n_neighbors=min(n_neighbors, ad.n_obs - 1))
+    (rsc.pp if rsc else sc.pp).neighbors(ad, use_rep="X_pca", n_neighbors=min(n_neighbors, ad.n_obs - 1))
 
     for res, key in zip(resolutions, leiden_keys, strict=True):
         log.info(f"== leiden {key}")
@@ -462,7 +484,7 @@ def cluster_and_deg(
     # umap-learn's spectral initialisation solves for n_components+1 = 3
     # eigenvectors and crashes when the graph has <= 3 nodes (k >= N); a
     # 3-cell survivor set is the smallest OSP accepts, so seed it randomly.
-    sc.tl.umap(ad, init_pos="random" if ad.n_obs <= 3 else "spectral")
+    (rsc.tl if rsc else sc.tl).umap(ad, init_pos="random" if ad.n_obs <= 3 else "spectral")
 
     de_columns = ["group", "names", "scores", "logfoldchanges", "pvals", "pvals_adj", "pct1", "pct2"]
     if single_cluster:

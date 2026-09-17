@@ -383,6 +383,8 @@ repositories help others discover them and guide their development.
 
 ### Documentation and examples
 
+- [CPU and GPU computation](docs/compute-backends.md): optional RAPIDS backend,
+  shared scientific contracts and hardware validation.
 - [Input and output reference](docs/input-output.md): matrix contents,
   output fields, Python return values, and completion rules.
 
