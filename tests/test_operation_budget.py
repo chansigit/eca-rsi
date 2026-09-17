@@ -21,6 +21,10 @@ def test_upstream_budget_is_conservative_pinned_and_keeps_existing_requests(tmp_
     assert from_compute(request, computed, policy, pool) == result
     with pytest.raises(ValueError, match='base request changed'):
         from_compute(dict(request, memory_mb=8192), computed, policy, pool)
+    # Once the pool holds the request, a stage rebuilt from newer code replays the saved plan.
+    (pool / 'requests/tool').mkdir()
+    save(pool / 'requests/tool/request.json', {'spec': result})
+    assert from_compute(dict(request, memory_mb=8192), computed, policy, pool) == result
     prior = pool / 'requests/old/request.json'
     prior.parent.mkdir()
     save(prior, {'spec': dict(request, request_id='old')})

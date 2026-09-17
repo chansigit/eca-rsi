@@ -40,15 +40,24 @@ def measured_ceiling(spec):
     return dict(spec, memory_mb=memory, cpus=cpus)
 
 
+def replayed(request, policy_path, pool_root, kind):
+    """A request the pool already holds is replayed as its saved plan; the base digest only guards a
+    plan that was never submitted (a resumed stage rebuilds requests from current code: Eye's DEG
+    requests differed only by the program hash after the 2026-09-17 cutover)."""
+    saved = read(policy_path)
+    submitted = (Path(pool_root) / 'requests' / request['request_id'] / 'request.json').exists()
+    if saved is not None:
+        if not submitted and saved['base_digest'] != digest(request):
+            raise ValueError(kind + ' request changed')
+        return saved['request']
+    return request if submitted else None
+
+
 def from_compute(request, computed, policy_path, pool_root):
     """Never change an existing request or use another pool's unaccepted estimate."""
-    saved = read(policy_path)
-    if saved is not None:
-        if saved['base_digest'] != digest(request):
-            raise ValueError('Resource plan base request changed')
-        return saved['request']
-    if (Path(pool_root) / 'requests' / request['request_id'] / 'request.json').exists():
-        return request
+    planned = replayed(request, policy_path, pool_root, 'Resource plan base')
+    if planned is not None:
+        return planned
     optimized = request
     source = Path(computed['path']).resolve()
     try:
@@ -79,13 +88,9 @@ def from_artifact(request, ref, policy_path, pool_root, *, copies=2, fixed_mb=10
     300 MiB. Measured peak was 1.1-1.2x the H5AD on disk; two copies plus a
     fixed allowance keeps headroom without reserving a whole node.
     """
-    saved = read(policy_path)
-    if saved is not None:
-        if saved['base_digest'] != digest(request):
-            raise ValueError('Artifact resource request changed')
-        return saved['request']
-    if (Path(pool_root) / 'requests' / request['request_id'] / 'request.json').exists():
-        return request
+    planned = replayed(request, policy_path, pool_root, 'Artifact resource')
+    if planned is not None:
+        return planned
     size = Path(ref['path']).stat().st_size / 2**20
     memory = max(request['memory_mb'], math.ceil((copies * size + fixed_mb) / 256) * 256)
     optimized = request if memory == request['memory_mb'] else dict(request, memory_mb=memory)
@@ -96,13 +101,9 @@ def from_artifact(request, ref, policy_path, pool_root, *, copies=2, fixed_mb=10
 
 def from_deg_buffers(request, prepared, policy_path, pool_root):
     """Budget the mapped DEG workspace, not the dataset's counts and graph layers."""
-    saved = read(policy_path)
-    if saved is not None:
-        if saved['base_digest'] != digest(request):
-            raise ValueError('DEG resource request changed')
-        return saved['request']
-    if (Path(pool_root) / 'requests' / request['request_id'] / 'request.json').exists():
-        return request
+    planned = replayed(request, policy_path, pool_root, 'DEG resource')
+    if planned is not None:
+        return planned
     source = Path(prepared['path']).resolve()
     try:
         source.relative_to(Path(pool_root).resolve() / 'requests')
