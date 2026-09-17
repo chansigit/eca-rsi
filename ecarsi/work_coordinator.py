@@ -15,7 +15,8 @@ from temporalio.exceptions import ApplicationError
 from temporalio.worker import Worker
 
 QUEUE = "ecarsi-organize-v2"
-SHORT = timedelta(seconds=30)
+# 120 s: a shared-filesystem hiccup of a minute (2026-09-17 saw ~90 s) must not time out a host step.
+SHORT = timedelta(seconds=120)
 RETRY = RetryPolicy(maximum_attempts=3)
 # Polls only read durable state, so a stalled shared filesystem must not end the session: on 2026-09-17
 # a ~90 s Lustre stall on the coordinator node timed out three 30 s check_bridge attempts in five agent

@@ -156,11 +156,13 @@ def submit(root, spec):
         existing = read(folder / "request.json")
         fingerprint = digest(spec)
         if existing:
-            # An audited retry may raise the memory budget; the caller's original
-            # request still identifies the same work. So does the uncapped budget
-            # of a request saved before measured ceilings existed.
+            # A request id names work already recorded: the id carries the payload digest
+            # (or the run's immutable spec), so a resubmission that differs only in packaging
+            # (budget ceilings, program version, operator floors) replays the saved request
+            # instead of failing the resume. The difference is kept for audit.
             if not {fingerprint, digest(requested)} & {existing["digest"], existing.get("original_digest")}:
-                raise ValueError("request ID already exists with different content")
+                save(folder / "resubmitted.json", dict(digest=fingerprint, requested_digest=digest(requested),
+                                                       spec=spec, at=time.time()))
         else:
             config = read(root / "config.json")
             existing = dict(spec=spec, digest=fingerprint, submitted_at=time.time(),

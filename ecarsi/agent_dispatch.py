@@ -336,14 +336,16 @@ def queue_order(root, queued, wait_seconds, cache, now=None, offset=0, served=No
             queues.append(items)
 
 
-def serve(root, *, once=False):
+def serve(root, *, once=False, finished=None):
     from .agent_bridge import root_path, status as bridge_status, reconcile
     from .model_web import normalized_models
     root = root_path(root)
     (root / "model-events").mkdir(mode=0o700, exist_ok=True)
     # Read immutable events once per service lifetime; no growing history scan per tick.
     events = {e["pool_request_id"]: e for p in (root / "model-events").glob("*.json") if (e := read(p))}
-    finished, ordering = {}, {}
+    # Settled requests are cached by (name, inode): a folder archived and re-created under the
+    # same name is new work (Eye turn-0 sat queued for 14 h behind a name-keyed cache, 2026-09-17).
+    finished, ordering = ({} if finished is None else finished), {}
     dispatch_count = len(events)
     served = Counter()
     with lock(root / "service.lock", blocking=False):
@@ -355,12 +357,13 @@ def serve(root, *, once=False):
                 raise ValueError("Bridge concurrency must be a positive integer")
             active, queued, legacy_active = Counter(), [], 0
             error = None
-            for folder in sorted((root / "requests").iterdir()):
+            for entry in sorted(os.scandir(root / "requests"), key=lambda e: e.name):
+                folder, key = Path(entry.path), (entry.name, entry.inode())
                 # Successful replies are immutable; failed requests can be
                 # explicitly reopened. Revisit only those few failures.
-                if finished.get(folder.name) == 'reply_saved' or not (folder / "request.json").is_file():
+                if finished.get(key) == 'reply_saved' or not (folder / "request.json").is_file():
                     continue
-                finished.pop(folder.name, None)
+                finished.pop(key, None)
                 state = bridge_status(root, folder.name)
                 if state["state"] == "running" and state.get("execution") == "pool":
                     try:
@@ -377,7 +380,7 @@ def serve(root, *, once=False):
                     reconcile(folder)
                     state = bridge_status(root, folder.name)
                 if state["state"] in {"reply_saved", "failed"}:
-                    finished[folder.name] = state["state"]
+                    finished[key] = state["state"]
                 elif state["state"] == "queued":
                     queued.append((state["submitted_at"], folder))
                 elif state.get("attempts"):
