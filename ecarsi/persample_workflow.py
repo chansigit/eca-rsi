@@ -4,7 +4,6 @@ from datetime import timedelta
 from pathlib import Path
 
 from temporalio import activity, workflow
-from temporalio.common import RetryPolicy
 from temporalio.exceptions import ApplicationError
 
 
@@ -182,8 +181,9 @@ def sample_step(action, args):
 
 
 async def call(fn, *args):
+    from .work_coordinator import activity_retry
     return await workflow.execute_activity(fn, args=args, start_to_close_timeout=timedelta(seconds=30),
-        retry_policy=RetryPolicy(maximum_attempts=3))
+        retry_policy=activity_retry(fn))
 
 
 async def await_pool(spec, request):

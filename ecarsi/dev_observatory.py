@@ -250,6 +250,15 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
     horizon = cache.get("horizon", INDEX_HORIZON)
     cache["indexed_since"] = now - horizon
     pool_stale, bridge_stale = cache.setdefault("pool_stale", {}), cache.setdefault("bridge_stale", {})
+    reads = 0
+
+    def pace():
+        # ponytail: crude rate cap. The warm-up and widening walks share the coordinators' Lustre client;
+        # an unpaced walk over tens of thousands of folders can stall their 30 s polls (2026-09-17).
+        nonlocal reads
+        reads += 1
+        if reads > 500:
+            time.sleep(0.01)
 
     def recent(entry, stale):
         """Folder mtime is the last state change; untouched folders beyond the horizon are remembered with
@@ -280,6 +289,7 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
             folder = Path(entry.path)
             if not (folder / "request.json").is_file():
                 continue
+            pace()
             item = pool_status(pool, folder.name)
             request = read(folder / "request.json", {})
             spec = request.get("spec", {})
@@ -313,6 +323,7 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
             folder = Path(entry.path)
             if not (folder / "request.json").is_file():
                 continue
+            pace()
             item = bridge_status(bridge, folder.name)
             request = read(folder / "request.json", {})
             response = item.get("response") or {}

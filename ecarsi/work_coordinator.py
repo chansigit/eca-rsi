@@ -17,6 +17,14 @@ from temporalio.worker import Worker
 QUEUE = "ecarsi-organize-v2"
 SHORT = timedelta(seconds=30)
 RETRY = RetryPolicy(maximum_attempts=3)
+# Polls only read durable state, so a stalled shared filesystem must not end the session: on 2026-09-17
+# a ~90 s Lustre stall on the coordinator node timed out three 30 s check_bridge attempts in five agent
+# workflows and failed three datasets. Forty attempts at the default backoff capped at 60 s ride out ~35 min.
+POLL_RETRY = RetryPolicy(maximum_attempts=40, maximum_interval=timedelta(seconds=60))
+
+
+def activity_retry(fn):
+    return POLL_RETRY if fn.__name__ in {"check_pool", "check_bridge"} else RETRY
 
 
 def task_trace(spec, unit_id):
@@ -162,7 +170,7 @@ class OrganizeWorkflow:
         async def call(fn, *args):
             try:
                 return await workflow.execute_activity(fn, args=args,
-                    start_to_close_timeout=SHORT, retry_policy=RETRY)
+                    start_to_close_timeout=SHORT, retry_policy=activity_retry(fn))
             except Exception as exc:
                 raise ApplicationError(f"{fn.__name__} failed: {exc}", non_retryable=True) from exc
 
@@ -272,7 +280,7 @@ class AgentWorkflow:
     async def run(self, spec: dict) -> str:
         async def call(fn, *args):
             return await workflow.execute_activity(fn, args=args,
-                start_to_close_timeout=SHORT, retry_policy=RETRY)
+                start_to_close_timeout=SHORT, retry_policy=activity_retry(fn))
 
         session = await call(agent_step, "create", [spec])
         if workflow.patched("agent-reuse-completed-submission-v1"):
