@@ -248,7 +248,7 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
     bridge_done = cache.setdefault("bridge_done", {})
     now = time.time()
     horizon = cache.get("horizon", INDEX_HORIZON)
-    cache["indexed_since"] = now - horizon
+    cache["indexed_since"] = now - horizon if horizon != float("inf") else 0  # 0, not -inf: JSON cannot carry -inf
     pool_stale, bridge_stale = cache.setdefault("pool_stale", {}), cache.setdefault("bridge_stale", {})
 
     def recent(entry, stale):
