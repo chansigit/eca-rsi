@@ -17,3 +17,14 @@ def test_render_status_without_records():
               'temporal': {'error': 'ConnectionError()'}}
     text = render_status(report)
     assert 'CONTROL PLANE' in text and 'no server' in text and 'ConnectionError' in text
+
+
+def test_render_status_worker_gpu_columns():
+    worker = {'id': 1, 'host': 'gpu-node', 'slurm_job_id': 7, 'cpus': 8, 'memory_gb': 64.0, 'gpus': 1, 'running_tasks': 2,
+              'cpu_cores_used': 3.0, 'node_memory_used_gb': 20.0, 'node_memory_gb': 128.0, 'seen_seconds_ago': 5.0, 'hours_left': 3.0,
+              'gpu_percent': 42.0, 'gpu_memory_used_gb': 12.5, 'gpu_memory_gb': 79.6}
+    silent = dict(worker, id=2, host='gpu-quiet', gpu_percent=None, gpu_memory_used_gb=None, gpu_memory_gb=None)
+    report = {'generated_at': time.time(), 'host': 'h', 'root': '/r', 'scheduler': {}, 'bridge': {}, 'hq_error': None,
+              'workers': [worker, silent], 'jobs': {}, 'temporal': None}
+    text = render_status(report)
+    assert ' 42 %   12.5/79.6' in text and 'no telemetry' in text

@@ -630,6 +630,7 @@ async function refresh() {
       const {resources,...taskData}=timeline;
       const signature=JSON.stringify(taskData);
       if (signature!==timelineSignature) { renderTimeline(timeline); timelineSignature=signature; }
+      if (timeline.indexing) { $('timeline-state').textContent='Indexing older history…'; $('timeline-state').className='status off'; }
       const resourceKey=JSON.stringify([timeline.since,timeline.until,resources]);
       if (resourceKey!==resourceSignature) { renderResourceHistory(timeline); resourceSignature=resourceKey; }
     }

@@ -98,9 +98,9 @@ def zoomin_step(action,args):
     program=Path(__file__).with_name('zoomin_v2.py')
     programs=('zoomin_v2.py','crosssample_v2.py','persample_v2.py')
     module='ecarsi.zoomin_v2'
-    # New sessions get the v3 model-facing contract; an agent request already saved on
-    # disk keeps its v2 identity (submit rejects a changed spec for the same id).
-    if action=='agent' and not (Path(spec['pool_root'])/'requests'/request_id/'request.json').exists():
+    # New sessions get the v3 model-facing contract; a saved agent request keeps its program.
+    from .persample_workflow import saved_module
+    if action=='agent' and saved_module(spec['pool_root'],request_id) in (None,'ecarsi.zoomin_v3'):
         module,programs='ecarsi.zoomin_v3',('zoomin_v3.py',*programs)
     request=dict(request_id=request_id,operation_id=unit,
         args=['-m',module,action,packet['path']],**spec[budget],**gpu,

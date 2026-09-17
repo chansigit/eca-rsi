@@ -248,17 +248,27 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
     bridge_done = cache.setdefault("bridge_done", {})
     now = time.time()
     horizon = cache.get("horizon", INDEX_HORIZON)
-    cache["indexed_since"] = now - horizon if horizon != float("inf") else 0  # 0, not -inf: JSON cannot carry -inf
+    cache["indexed_since"] = now - horizon
     pool_stale, bridge_stale = cache.setdefault("pool_stale", {}), cache.setdefault("bridge_stale", {})
+    reads = 0
+
+    def pace():
+        # ponytail: crude rate cap. The warm-up and widening walks share the coordinators' Lustre client;
+        # an unpaced walk over tens of thousands of folders can stall their 30 s polls (2026-09-17).
+        nonlocal reads
+        reads += 1
+        if reads > 500:
+            time.sleep(0.01)
 
     def recent(entry, stale):
-        """Folder mtime is the last state change; untouched folders beyond the horizon are remembered, not re-read."""
-        if entry.name in stale and horizon != float("inf"):
-            return False
-        try:
-            mtime = entry.stat().st_mtime
-        except OSError:
-            return False
+        """Folder mtime is the last state change; untouched folders beyond the horizon are remembered with
+        that mtime and not stat'ed again, and are read once a wider horizon reaches them."""
+        mtime = stale.get(entry.name)
+        if mtime is None:
+            try:
+                mtime = entry.stat().st_mtime
+            except OSError:
+                return False
         if now - mtime > horizon:
             stale[entry.name] = mtime
             return False
@@ -279,6 +289,7 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
             folder = Path(entry.path)
             if not (folder / "request.json").is_file():
                 continue
+            pace()
             item = pool_status(pool, folder.name)
             request = read(folder / "request.json", {})
             spec = request.get("spec", {})
@@ -312,6 +323,7 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
             folder = Path(entry.path)
             if not (folder / "request.json").is_file():
                 continue
+            pace()
             item = bridge_status(bridge, folder.name)
             request = read(folder / "request.json", {})
             response = item.get("response") or {}
@@ -382,6 +394,20 @@ def serve(root: Path, port: int, temporal_port: int, bind: str,
             print(f"observatory warm-up skipped: {exc}", flush=True)
     threading.Thread(target=warm, daemon=True).start()
 
+    def widen():
+        # Refreshes pause while this runs (the handler checks cache["walk"]), so the index caches
+        # have a single writer; readers only ever take the finished snapshot under the guard.
+        try:
+            built = snapshot(root, temporal_port, bind, cache, pool_root, bridge_root, temporal_service_root)
+        except Exception as exc:  # noqa: BLE001 - the page keeps its last records
+            print(f"observatory widening skipped: {exc}", flush=True)
+            built = None
+        with guard:
+            if built is not None:
+                cache["snapshot"] = built
+                cache["snapshot_at"] = time.monotonic()
+            cache.pop("walk", None)
+
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             url = urlsplit(self.path)
@@ -399,11 +425,13 @@ def serve(root: Path, port: int, temporal_port: int, bind: str,
                     if timeline and (not 0 < until - since <= 7 * 86400 or not 1 <= limit <= 2000 or len(dataset) > 256):
                         raise ValueError("choose a time window of at most 7 days and limit up to 2000")
                     with guard:
-                        if timeline and since < cache.get("indexed_since", 0):
-                            # A window older than the index: one comprehensive walk; from then on everything stays indexed.
-                            cache["horizon"] = float("inf")
-                            cache["snapshot_at"] = 0
-                        if time.monotonic() - cache.get("snapshot_at", 0) >= 2:
+                        if timeline and since < cache.get("indexed_since", 0) and not cache.get("walk"):
+                            # A window older than the index widens the horizon to reach it; the folders it
+                            # uncovers are read in the background while the page keeps its current records.
+                            cache["horizon"] = max(cache.get("horizon", INDEX_HORIZON), time.time() - since + 3600)
+                            cache["walk"] = threading.Thread(target=widen, daemon=True)
+                            cache["walk"].start()
+                        if not cache.get("walk") and time.monotonic() - cache.get("snapshot_at", 0) >= 2:
                             cache["snapshot"] = snapshot(root, temporal_port, bind, cache,
                                                          pool_root, bridge_root, temporal_service_root)
                             cache["snapshot_at"] = time.monotonic()
@@ -415,6 +443,7 @@ def serve(root: Path, port: int, temporal_port: int, bind: str,
                                 Path(pool_root) if pool_root else Path(root) / "organize-v2-pool", since, until,
                                 cache.setdefault("resource_files", {})), since, until)
                             result["indexed_since"] = cache.get("indexed_since")
+                            result["indexing"] = bool(cache.get("walk"))
                         else:
                             data = dict(data)
                             data["pool_total"] = len(data["pool_requests"])
@@ -516,6 +545,8 @@ def worker_rows(pool, hq, now):
         allocation = identity.get('allocation') or {}
         sample = latest.get(host)
         cpus = len(resources.get('cpus', {}).get('values', []))
+        gpus = (sample or {}).get('gpus') or []
+        busy = [g['utilization_percent'] for g in gpus if g.get('utilization_percent') is not None]
         rows.append({
             'id': worker['id'], 'host': host, 'slurm_job_id': identity.get('slurm_job_id') or allocation.get('job_id'),
             'cpus': cpus, 'memory_gb': resources.get('mem', {}).get('size', 0) / 10000 / 1024,
@@ -525,6 +556,9 @@ def worker_rows(pool, hq, now):
             'node_memory_used_gb': sample['memory_used_bytes'] / 2**30 if sample else None,
             'node_memory_gb': sample['memory_total_bytes'] / 2**30 if sample else None,
             'seen_seconds_ago': now - sample['observed_at'] if sample else None,
+            'gpu_percent': sum(busy) / len(busy) if busy else None,
+            'gpu_memory_used_gb': sum(g.get('memory_used_mb') or 0 for g in gpus) / 1024 if gpus else None,
+            'gpu_memory_gb': sum(g.get('memory_total_mb') or 0 for g in gpus) / 1024 if gpus else None,
             'hours_left': (allocation['end_time'] - now) / 3600 if allocation.get('end_time') else None,
         })
     return rows
@@ -644,13 +678,16 @@ def render_status(report):
             lines.append('  temporal   datasets ' + ', '.join(f"{k} {v}" for k, v in temporal['dataset_counts'].items())
                          + f"; failed workflows in 6 h: {len(temporal['failures_6h'])}")
     lines += ['', f"WORKERS ({len(report['workers'])} in HQ)" + (f"  HQ error: {report['hq_error']}" if report['hq_error'] else '')]
-    lines.append('  id   host          job        cpus   used   mem GiB   node mem GiB   tasks  time left  seen')
+    lines.append('  id   host          job        cpus   used   mem GiB   node mem GiB   tasks  time left  seen          gpu  util  gpu mem GiB')
     for w in report['workers']:
         used = f"{w['cpu_cores_used']:5.1f}" if w['cpu_cores_used'] is not None else '    ?'
         mem = f"{w['memory_gb']:6.0f}   " + (f"{w['node_memory_used_gb']:5.0f}/{w['node_memory_gb']:<5.0f}" if w['node_memory_used_gb'] is not None else '     ?     ')
         left = f"{w['hours_left']:6.1f} h" if w['hours_left'] is not None else '       ?'
         seen = f"{w['seen_seconds_ago']:.0f} s" if w['seen_seconds_ago'] is not None else 'no telemetry'
-        gpu = f" gpu {w['gpus']}" if w['gpus'] else ''
+        gpu = ''
+        if w['gpus']:
+            gpu = f"  {w['gpus']:3d}  " + (f"{w['gpu_percent']:3.0f} %  {w['gpu_memory_used_gb']:5.1f}/{w['gpu_memory_gb']:<5.1f}"
+                                          if w.get('gpu_percent') is not None else 'no telemetry')
         lines.append(f"  {w['id']:<4} {w['host']:13s} {str(w['slurm_job_id'] or '?'):10s} {w['cpus']:3d}   {used}   {mem}    {str(w['running_tasks'] if w['running_tasks'] is not None else '?'):>5s}  {left}  {seen}{gpu}")
     for state in ('running', 'waiting'):
         jobs = report['jobs'].get(state, {'total': 0, 'by_class': {}, 'by_dataset': {}})
