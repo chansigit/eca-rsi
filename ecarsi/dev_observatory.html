@@ -167,14 +167,7 @@
 <body>
 <main>
   <header><div class="brand">RSI <small>v2 / development observatory</small></div><div class="meta"><span><i class="live-dot"></i> Read-only</span><span id="updated">Connecting…</span></div></header>
-  <div class="hero"><div><div class="eyebrow">Isolated development branch</div><h1>Where the workflow stands.</h1><p>Live execution and saved history for compute tasks, model decisions and published results.</p></div><aside><div class="eyebrow">Current boundary</div><strong>Organize → Zoom-in</strong><span>Two real datasets completed two rounds and final release. Large-scale throughput and GPU acceptance remain separate checks.</span></aside></div>
-  <div class="path">
-    <div class="node"><span class="n">01 / COMPUTE</span><span class="title">Warm Pool</span><span class="detail" id="pool-node">Checking scheduler record…</span></div>
-    <div class="node"><span class="n">02 / DECISIONS</span><span class="title">Agent Bridge</span><span class="detail" id="bridge-node">Checking model receipts…</span></div>
-    <div class="node"><span class="n">03 / DEPENDENCIES</span><span class="title">Temporal</span><span class="detail" id="temporal-node">Checking history viewer…</span></div>
-    <div class="node"><span class="n">04 / OUTPUT</span><span class="title">Organize</span><span class="detail" id="organize-node">Checking publications…</span></div>
-  </div>
-  <section class="panel" style="margin-bottom:20px"><div class="panel-head"><div><h2>Workflow timeline</h2><div class="sub">Browse datasets and stage runs. Expand a run to see its steps; select a step for individual calls and worker tasks.</div></div><span class="status off" id="timeline-state">Loading</span></div><div class="timeline-controls"><select id="timeline-view" aria-label="Timeline view"><option value="datasets">Datasets</option><option value="workers">Workers</option></select><select id="timeline-range" aria-label="Time range"><option value="auto" selected>Latest activity</option><option value="3600">Last hour</option><option value="14400">Last 4 hours</option><option value="86400">Last 24 hours</option><option value="custom">Custom</option></select><input id="timeline-from" type="datetime-local" aria-label="From" hidden><input id="timeline-to" type="datetime-local" aria-label="To" hidden><input id="timeline-dataset" type="search" placeholder="Filter dataset…" aria-label="Filter dataset"><button id="timeline-apply" type="button">Apply</button></div><div class="timeline-legend"><span>One color per dataset</span><span><i class="model-key"></i>Model call</span><span><i class="compute-key"></i>Worker task</span><span><i style="background:transparent;border:2px solid #a4514e"></i>Failed task</span><span>Wheel to zoom · Double-click to reset</span></div><div class="flow-layout" id="flow-layout"><div class="timeline-wrap" id="flow-scroll"><div class="timeline" id="timeline"></div></div><aside id="flow-detail" class="flow-detail" aria-label="Selected step details" hidden></aside></div><div id="flow-pages" class="flow-pages"></div><div class="note" id="timeline-note"></div></section>
+  <section class="panel" style="margin-bottom:20px"><div class="panel-head"><div><h2>Workflow timeline</h2><div class="sub">Browse datasets and stage runs. Expand a run to see its steps; select a step for individual calls and worker tasks.</div></div><span class="status off" id="timeline-state">Loading</span></div><div class="timeline-controls"><select id="timeline-view" aria-label="Timeline view"><option value="datasets">Datasets</option><option value="workers">Workers</option></select><select id="timeline-range" aria-label="Time range"><option value="auto">Latest activity</option><option value="3600" selected>Last hour</option><option value="14400">Last 4 hours</option><option value="86400">Last 24 hours</option><option value="custom">Custom</option></select><input id="timeline-from" type="datetime-local" aria-label="From" hidden><input id="timeline-to" type="datetime-local" aria-label="To" hidden><input id="timeline-dataset" type="search" placeholder="Filter dataset…" aria-label="Filter dataset"><button id="timeline-apply" type="button">Apply</button></div><div class="timeline-legend"><span>One color per dataset</span><span><i class="model-key"></i>Model call</span><span><i class="compute-key"></i>Worker task</span><span><i style="background:transparent;border:2px solid #a4514e"></i>Failed task</span><span>Wheel to zoom · Double-click to reset</span></div><div class="flow-layout" id="flow-layout"><div class="timeline-wrap" id="flow-scroll"><div class="timeline" id="timeline"></div></div><aside id="flow-detail" class="flow-detail" aria-label="Selected step details" hidden></aside></div><div id="flow-pages" class="flow-pages"></div><div class="note" id="timeline-note"></div></section>
   <section class="panel" id="compute-pool" style="margin-bottom:20px">
     <div class="panel-head"><div><h2>Compute Warm Pool</h2></div><span id="compute-pool-state" class="status off">Checking</span></div>
     <p id="compute-pool-summary" class="sub"></p>
@@ -182,20 +175,8 @@
     <details class="sub" style="margin:18px 0 0"><summary>30s samples · 10s refresh · Measurement details</summary><p>Brown ticks mark the 5-minute average. CPU covers assigned cores; RAM and visible GPUs cover the host. Worker budgets may be smaller than Slurm allocations. Registered GPUs can receive GPU tasks. In-use counts are task grants; utilization is sampled hardware activity. Recent telemetry does not confirm scheduler membership.</p></details>
     <div class="pool-history"><strong>History</strong><div id="pool-history"></div></div>
   </section>
-  <details class="panel" style="margin-bottom:20px"><summary style="cursor:pointer;font-weight:650">Worker resource history</summary><p class="sub">CPU, RAM and GPU measurements, separate from task placement. Uses the selected timeline window. CPU covers allocated cores; RAM and accessible GPUs are host-wide.</p><div class="timeline-wrap"><div id="resource-history" class="timeline"></div></div></details>
-  <div class="layout">
-    <div class="stack">
-      <section class="panel"><div class="panel-head"><div><div class="eyebrow">HyperQueue + RSI receipts</div><h2>Warm Pool</h2><div class="sub">Recorded requests and resource budgets; no compute is started by this page.</div></div><span class="status off" id="pool-state">Checking</span></div><div class="metrics"><div class="metric"><b id="pool-count">—</b><span>Requests</span></div><div class="metric"><b id="pool-done">—</b><span>Succeeded</span></div><div class="metric"><b id="worker-count">—</b><span>Reporting workers</span></div></div><div class="table-wrap"><table><thead><tr><th>Request</th><th>Operation</th><th>State</th><th>CPU / RAM</th><th>Finished</th></tr></thead><tbody id="pool-table"></tbody></table></div><div class="note" id="pool-note"></div></section>
-      <section class="panel"><div class="panel-head"><div><div class="eyebrow">Model decision records</div><h2>Agent Bridge</h2><div class="sub">Saved replies, selected models and reported token use.</div></div><span class="status off" id="bridge-state">Checking</span></div><div class="metrics"><div class="metric"><b id="bridge-count">—</b><span>Requests</span></div><div class="metric"><b id="bridge-done">—</b><span>Replies saved</span></div><div class="metric"><b id="tokens">—</b><span>Reported tokens</span></div></div><div class="table-wrap"><table><thead><tr><th>Model</th><th>Health</th><th>In flight</th><th>Last response</th><th>Latency</th><th>Timeouts</th></tr></thead><tbody id="model-health"></tbody></table></div><div class="table-wrap"><table><thead><tr><th>Request</th><th>State</th><th>Model</th><th>Tokens in / out</th></tr></thead><tbody id="bridge-table"></tbody></table></div><div class="note">Usage is reported by the model harness; missing values are not treated as zero.</div></section>
-    </div>
-    <div class="stack">
-      <section class="panel"><div class="eyebrow">Native workflow viewer</div><h2>Temporal</h2><p class="sub">Workflow execution history and activity transitions in the connected development service.</p><a class="link disabled" id="temporal-link" href="http://127.0.0.1:8233/" target="_blank" rel="noopener">Open Temporal UI ↗</a><div class="note" id="temporal-note">Checking history service…</div></section>
-      <section class="panel"><div class="eyebrow">Accepted artifacts</div><h2>Organize output</h2><p class="sub">Published after source identity, experiment mapping and cell conservation checks.</p><div id="outputs"></div></section>
-      <section class="panel"><div class="eyebrow">Recorded infrastructure trial</div><h2>Two-host recovery</h2><p class="sub">Actual Slurm allocations were used for the isolated HyperQueue trial.</p><div id="acceptance"></div></section>
-      <section class="panel"><div class="eyebrow">What is connected</div><h2>Migration progress</h2><p class="sub">Organize, per-sample, cross-sample and Zoom-in run through Temporal, Agent Bridge and Warm Pool.</p><div class="code">Organize ✓ &nbsp;→&nbsp; Per-sample ✓ &nbsp;→&nbsp; Cross-sample ✓ &nbsp;→&nbsp; Zoom-in ✓</div><div class="note">This observatory reads the isolated v2 state. The existing Periscope installation is a separate service.</div></section>
-    </div>
-  </div>
-  <footer><span id="host">RSI v2 isolated state</span><span>Refreshes every 10 seconds · no scheduler or model actions</span></footer>
+  <details open class="panel" style="margin-bottom:20px"><summary style="cursor:pointer;font-weight:650">Worker resource history</summary><p class="sub">CPU, RAM and GPU measurements, separate from task placement. Uses the selected timeline window. CPU covers allocated cores; RAM and accessible GPUs are host-wide.</p><div class="timeline-wrap"><div id="resource-history" class="timeline"></div></div></details>
+  <footer><span id="host">RSI v2</span><span>Refreshes every 10 seconds · read-only · windows beyond the index trigger one full scan</span></footer>
 </main>
 <div id="timeline-popover" role="tooltip" hidden><strong id="timeline-popover-title"></strong><b id="timeline-popover-step" hidden></b><span id="timeline-popover-body"></span></div>
 <script>
@@ -615,7 +596,7 @@ function renderComputePool(data) {
       poolMeter('Host RAM',current.memory_percent,mean.memory_percent,`${gib(current.memory_used_gb)} / ${gib(current.memory_total_gb)} GiB`)+
       (gpuDescription?`<div class="sub">${esc(gpuDescription)} · ${registered.size?registered.size+' registered':'Not registered'}</div>`:'')+
       (Number.isFinite(gpuCurrent.gpu_percent)||Number.isFinite(gpuCurrent.gpu_memory_percent)?poolMeter('GPU',gpuCurrent.gpu_percent,gpuMean.gpu_percent)+poolMeter('GPU memory',gpuCurrent.gpu_memory_percent,gpuMean.gpu_memory_percent,`${gib(gpuCurrent.gpu_memory_used_gb)} / ${gib(gpuCurrent.gpu_memory_total_gb)} GiB`):'<div class="sub" title="GPU telemetry unavailable">GPU —</div>')+
-      group.map(w=>`<div class="pool-worker" data-pool-worker="${esc(w.worker_id)}"><div class="sub" title="${esc(w.worker_id)} · Slurm job ${esc(w.slurm_job_id||'not recorded')}">${w.cpus} CPU / ${gib(w.memory_mb/1024)} GiB${w.slurm_job_id?' · Job '+esc(w.slurm_job_id):''}</div>`+
+      group.map(w=>`<div class="pool-worker" data-pool-worker="${esc(w.worker_id)}"><div class="sub" title="${esc(w.worker_id)} · Slurm job ${esc(w.slurm_job_id||'not recorded')}">${w.cpus} CPU / ${gib(w.memory_mb/1024)} GiB${w.slurm_job_id?' · Job '+esc(w.slurm_job_id):''}${w.allocation?.end_time?' · '+((w.allocation.end_time-Date.now()/1000)/3600).toFixed(1)+' h left':''}</div>`+
         ((w.gpu_ids||[]).length?`<div class="sub">${w.gpu_ids.length} GPU · ${w.reserved_gpus||0} in use</div>`:'')+poolMeter('CPU',w.current?.cpu_percent,w.mean_5m?.cpu_percent)+
         (w.tasks.length?`<div class="sub">Reserved ${w.reserved_cpus} CPU / ${gib(w.reserved_memory_mb/1024)} GiB</div>`:'')+
         `<details ${expanded.has(w.worker_id)?'open':''}><summary>${w.tasks.length?w.tasks.length+' tasks':'Idle'}</summary><small>${esc(w.worker_id)}</small>${w.tasks.map(t=>`<p><strong>${esc(t.trace?.dataset_id||t.id)}</strong><br>${esc(t.operation)} · ${esc(t.state)}</p>`).join('')}</details></div>`).join('')+'</article>';
@@ -632,27 +613,7 @@ async function refresh() {
     if (seq!==refreshSeq) return;
     $('updated').textContent = `Updated ${when(d.generated_at)}`;
     $('host').textContent = `${d.host} · isolated v2 state`;
-    const s=d.scheduler || {}, b=d.bridge_summary || {};
-    const poolLive=s.state==='running' && Date.now()/1000-(s.observed_at||0)<20;
-    $('pool-state').textContent=poolLive?'Online':s.state==='stopped'?'Stopped':'No recent heartbeat';
-    $('pool-state').className=`status ${poolLive?'ok':'off'}`;
-    $('pool-node').textContent=`${poolLive?'Scheduler online':'Scheduler stopped'} · ${d.pool_total} recorded requests`;
-    $('bridge-node').textContent=`${d.bridge_saved} saved model replies`;
-    $('temporal-node').textContent=d.temporal_ui?'Web UI online · persistence unverified':'Web UI offline';
-    $('organize-node').textContent=`${d.outputs_total} published outputs`;
-    $('pool-count').textContent=d.pool_total;
-    $('pool-done').textContent=d.pool_succeeded;
-    $('worker-count').textContent=d.worker_live_count;
     renderComputePool(d);
-    $('pool-note').textContent=`Scheduler last recorded ${when(s.observed_at)}. HyperQueue's native dashboard is terminal-only; this table reads RSI's durable requests and receipts.`;
-    $('pool-table').innerHTML=d.pool_requests.length?d.pool_requests.map(x=>`<tr><td class="mono">${esc(x.id)}</td><td>${esc(x.operation)}</td><td>${badge(x.state)}</td><td>${esc(x.cpus)} / ${esc(x.memory_mb)} MiB</td><td>${esc(when(x.finished_at))}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No requests recorded</td></tr>';
-    const tokenTotal=d.bridge_tokens_total;
-    $('bridge-count').textContent=d.bridge_total;
-    $('bridge-done').textContent=d.bridge_saved;
-    $('tokens').textContent=tokenTotal?tokenTotal.toLocaleString():'—';
-    $('bridge-state').textContent=Date.now()/1000-(b.updated_at||0)<20?'Online':'No recent heartbeat';
-    $('model-health').innerHTML=(b.models||[]).map(m=>`<tr><td>${esc(m.model.model)}</td><td>${esc(m.state.replaceAll('_',' '))}${m.cooldown_until?'<br><span class="sub">Until '+esc(when(m.cooldown_until))+'</span>':''}</td><td>${esc(m.in_flight)}</td><td>${esc(when(m.last_response_at))}</td><td>${m.last_latency_seconds==null?'—':esc(duration(m.last_latency_seconds))}</td><td>${esc(m.timeouts)}</td></tr>`).join('')||'<tr><td colspan="6" class="empty">No model health records</td></tr>';
-    $('bridge-table').innerHTML=d.bridge_requests.length?d.bridge_requests.map(x=>`<tr><td class="mono">${esc(x.id)}</td><td>${badge(x.state)}</td><td>${esc(x.model?.model||'—')}<br><span class="sub">${esc(x.model?.harness||'')}</span></td><td>${esc(x.usage?.tokens_in)} / ${esc(x.usage?.tokens_out)}</td></tr>`).join(''):'<tr><td colspan="4" class="empty">No model requests recorded</td></tr>';
     const now=Date.now()/1000, range=$('timeline-range').value;
     const dataset=$('timeline-dataset').value.trim();
     const recent=[...d.pool_requests,...d.bridge_requests].filter(t=>!dataset||t.trace?.dataset_id?.toLowerCase().includes(dataset.toLowerCase()));
@@ -672,12 +633,6 @@ async function refresh() {
       const resourceKey=JSON.stringify([timeline.since,timeline.until,resources]);
       if (resourceKey!==resourceSignature) { renderResourceHistory(timeline); resourceSignature=resourceKey; }
     }
-    $('temporal-link').classList.toggle('disabled',!d.temporal_ui);
-    $('temporal-link').href=`http://127.0.0.1:${d.temporal_port}/`;
-    $('temporal-note').textContent=d.temporal_ui?'Development UI is online. Cross-host persistence recovery has not been validated. Pool and Bridge receipts remain visible independently of Temporal.':'Temporal UI is offline; saved Pool and Bridge history remains available here.';
-    $('outputs').innerHTML=d.outputs.length?d.outputs.map(x=>`<div class="output"><strong>${esc(x.name)} · ${esc(x.run)}</strong><span class="status ok">Published</span><div class="sub">${esc(x.cells.toLocaleString())} cells · ${esc(x.samples)} experiments</div><small class="mono">${esc(x.path)}</small></div>`).join(''):'<div class="empty">No accepted outputs found</div>';
-    const a=d.acceptance || {};
-    $('acceptance').innerHTML=a.passed?`<span class="status ok">Passed</span><p class="sub" style="margin:13px 0 8px">${(a.nodes||[]).map(n=>`${esc(n.host)} · CPU ${esc(n.worker_cpu)}`).join('<br>')}</p><div class="note">${(a.tests||[]).map(x=>esc(x.replaceAll('_',' '))).join(' · ')}</div>`:'<div class="empty">No accepted two-host report found</div>';
   } catch(e) { if (seq===refreshSeq) $('updated').textContent=`Unavailable: ${e.message}`; }
 }
 $('timeline-range').addEventListener('change',()=>{ const custom=$('timeline-range').value==='custom'; $('timeline-from').hidden=!custom; $('timeline-to').hidden=!custom; viewWindow=null; if (custom) { const now=Date.now()/1000, window=currentTimelineWindow||{since:now-3600,until:now}; $('timeline-from').value=localTime(window.since); $('timeline-to').value=localTime(window.until); } refresh(); });

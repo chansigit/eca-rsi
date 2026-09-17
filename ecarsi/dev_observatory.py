@@ -17,6 +17,7 @@ from .agent_bridge import status as bridge_status
 from .warm_pool.state import lock, read, status as pool_status
 
 PAGE = Path(__file__).with_name("dev_observatory.html")
+INDEX_HORIZON = 6 * 3600  # request folders untouched for longer are not read until a wider window asks
 
 
 def resource_history(pool: Path, since: float, until: float, cache: dict | None = None) -> list[dict]:
@@ -245,16 +246,38 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
     cache = cache if cache is not None else {}
     pool_done = cache.setdefault("pool_done", {})
     bridge_done = cache.setdefault("bridge_done", {})
+    now = time.time()
+    horizon = cache.get("horizon", INDEX_HORIZON)
+    cache["indexed_since"] = now - horizon if horizon != float("inf") else 0  # 0, not -inf: JSON cannot carry -inf
+    pool_stale, bridge_stale = cache.setdefault("pool_stale", {}), cache.setdefault("bridge_stale", {})
+
+    def recent(entry, stale):
+        """Folder mtime is the last state change; untouched folders beyond the horizon are remembered, not re-read."""
+        if entry.name in stale and horizon != float("inf"):
+            return False
+        try:
+            mtime = entry.stat().st_mtime
+        except OSError:
+            return False
+        if now - mtime > horizon:
+            stale[entry.name] = mtime
+            return False
+        stale.pop(entry.name, None)
+        return True
     scheduler = read(pool / "scheduler.json", {})
     worker = read(root / "organize-v2-pool-worker/worker.json", {})
     bridge_summary = read(bridge / "summary.json", {})
     pool_rows = []
     if (pool / "config.json").is_file():
-        for folder in (pool / "requests").iterdir():
-            if not (folder / "request.json").is_file():
+        # One directory listing per refresh; a settled request is never stat'ed again.
+        for entry in os.scandir(pool / "requests"):
+            if entry.name in pool_done:
+                pool_rows.append(pool_done[entry.name])
                 continue
-            if pool_done.get(folder.name, {}).get('state') == 'succeeded' and not (folder / "cancel.json").is_file():
-                pool_rows.append(pool_done[folder.name])
+            if not recent(entry, pool_stale):
+                continue
+            folder = Path(entry.path)
+            if not (folder / "request.json").is_file():
                 continue
             item = pool_status(pool, folder.name)
             request = read(folder / "request.json", {})
@@ -280,11 +303,14 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
                 pool_done[folder.name] = row
     bridge_rows = []
     if (bridge / "config.json").is_file():
-        for folder in sorted((bridge / "requests").iterdir()):
-            if not (folder / "request.json").is_file():
+        for entry in os.scandir(bridge / "requests"):
+            if entry.name in bridge_done:
+                bridge_rows.append(bridge_done[entry.name])
                 continue
-            if bridge_done.get(folder.name, {}).get('state') == 'reply_saved':
-                bridge_rows.append(bridge_done[folder.name])
+            if not recent(entry, bridge_stale):
+                continue
+            folder = Path(entry.path)
+            if not (folder / "request.json").is_file():
                 continue
             item = bridge_status(bridge, folder.name)
             request = read(folder / "request.json", {})
@@ -308,26 +334,6 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
         for pool_id in row.get("pool_attempts", []):
             if pool_id in pool_by_id:
                 pool_by_id[pool_id]["model"] = row["model"]
-    outputs = []
-    for publication in sorted(root.glob("organize-v2-*/*-output/publication.json")):
-        output = publication.parent
-        manifest = read(output / "organize/manifest.json", {})
-        if manifest.get("state") != "complete":
-            continue
-        audit = manifest.get("experiment_audit", {})
-        outputs.append({
-            "name": output.parent.name.removeprefix("organize-v2-").replace("-20260914", ""),
-            "run": output.name, "cells": sum(u.get("n_cells", 0) for u in manifest.get("units_written", [])),
-            "samples": sum(v.get("experiments", 0) for v in audit.values()),
-            "published_at": publication.stat().st_mtime,
-            "path": str(output),
-        })
-    reports = sorted(root.glob("multinode-*/run-*/acceptance.json"),
-                     key=lambda path: path.stat().st_mtime, reverse=True)
-    report = read(reports[0], {}) if reports else {}
-    acceptance = {"passed": report.get("passed"), "tests": report.get("tests", []),
-                  "nodes": [{"host": n.get("host"), "worker_cpu": n.get("worker_cpu")}
-                            for n in report.get("nodes", [])]}
     temporal_source = 'unvalidated development SQLite'
     service = None
     if temporal_service_root:
@@ -353,10 +359,8 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
         "scheduler": scheduler, "worker": worker, "bridge_summary": bridge_summary,
         "worker_live_count": sum(w["reporting"] for w in workers), "workers": workers,
         "pool_waiting": sum(t["state"] == "queued" for t in pool_rows),
-        "acceptance": acceptance,
         "pool_requests": sorted(pool_rows, key=lambda x: x["submitted_at"], reverse=True),
         "bridge_requests": sorted(bridge_rows, key=lambda x: x["submitted_at"], reverse=True),
-        "outputs": sorted(outputs, key=lambda x: x["published_at"], reverse=True),
     }
 
 
@@ -385,40 +389,39 @@ def serve(root: Path, port: int, temporal_port: int, bind: str,
                 body, kind = PAGE.read_bytes(), "text/html; charset=utf-8"
             elif url.path in {"/api/status", "/api/timeline"}:
                 try:
+                    query = parse_qs(url.query)
+                    until = float(query.get("until", [time.time()])[0])
+                    since = float(query.get("since", [until - 3600])[0])
+                    limit = int(query.get("limit", [2000])[0])
+                    dataset_page = int(query["dataset_page"][0]) if "dataset_page" in query else None
+                    dataset = query.get("dataset", [""])[0]
+                    timeline = url.path == "/api/timeline"
+                    if timeline and (not 0 < until - since <= 7 * 86400 or not 1 <= limit <= 2000 or len(dataset) > 256):
+                        raise ValueError("choose a time window of at most 7 days and limit up to 2000")
                     with guard:
+                        if timeline and since < cache.get("indexed_since", 0):
+                            # A window older than the index: one comprehensive walk; from then on everything stays indexed.
+                            cache["horizon"] = float("inf")
+                            cache["snapshot_at"] = 0
                         if time.monotonic() - cache.get("snapshot_at", 0) >= 2:
                             cache["snapshot"] = snapshot(root, temporal_port, bind, cache,
                                                          pool_root, bridge_root, temporal_service_root)
                             cache["snapshot_at"] = time.monotonic()
                         data = cache["snapshot"]
-                        if url.path == "/api/timeline":
-                            query = parse_qs(url.query)
-                            until = float(query.get("until", [time.time()])[0])
-                            since = float(query.get("since", [until - 4 * 3600])[0])
-                            limit = int(query.get("limit", [2000])[0])
-                            dataset_page = int(query["dataset_page"][0]) if "dataset_page" in query else None
-                            dataset = query.get("dataset", [""])[0]
-                            if not 0 < until - since <= 86400 or not 1 <= limit <= 2000 or len(dataset) > 256:
-                                raise ValueError("choose a time window of at most 24 hours and limit up to 2000")
+                        if timeline:
                             result = task_timeline(data["pool_requests"], data["bridge_requests"],
                                                    since, until, dataset, limit, dataset_page)
                             result["resources"] = summarize_resources(resource_history(
                                 Path(pool_root) if pool_root else Path(root) / "organize-v2-pool", since, until,
                                 cache.setdefault("resource_files", {})), since, until)
+                            result["indexed_since"] = cache.get("indexed_since")
                         else:
                             data = dict(data)
                             data["pool_total"] = len(data["pool_requests"])
                             data["pool_succeeded"] = sum(r["state"] == "succeeded" for r in data["pool_requests"])
-                            data["bridge_total"] = len(data["bridge_requests"])
-                            data["bridge_saved"] = sum(r["state"] == "reply_saved" for r in data["bridge_requests"])
-                            data["bridge_tokens_total"] = sum(
-                                (r.get("usage") or {}).get("tokens_in") or 0 for r in data["bridge_requests"])
-                            data["bridge_tokens_total"] += sum(
-                                (r.get("usage") or {}).get("tokens_out") or 0 for r in data["bridge_requests"])
-                            data["outputs_total"] = len(data["outputs"])
+                            data["indexed_since"] = cache.get("indexed_since")
                             data["pool_requests"] = data["pool_requests"][:20]
                             data["bridge_requests"] = data["bridge_requests"][:20]
-                            data["outputs"] = data["outputs"][:20]
                             result = data
                     body = json.dumps(result, allow_nan=False).encode()
                 except (ValueError, OverflowError) as exc:
@@ -460,6 +463,223 @@ async def temporal_ui(database: Path, port: int, ui_port: int, bind: str) -> Non
             await environment.shutdown()
 
 
+# ---------------------------------------------------------------------------
+# Command-line status: the same records as the page, read from the cheap
+# sources only (HQ server, summary files, worker telemetry tails, Temporal
+# visibility). It never walks the request folders unless --sessions asks.
+
+def classify_job(name):
+    """HQ job names are 'rsi.<request id>.<attempt>': operation class and dataset run."""
+    request = name.removeprefix('rsi.').rsplit('.', 1)[0] if name.startswith('rsi.') else name
+    if request.startswith('agent-'):
+        return 'agent', 'model calls'
+    if '.tool-' in request:
+        return 'tool', request.split('.tool-', 1)[0].split('-', 1)[0] + ' sessions'
+    run, _, operation = request.rpartition('.')
+    return re.sub(r'-[0-9a-f]{8,}$', '', operation) or operation, re.sub(r'-[0-9a-f]{16,}$', '', run) or run
+
+
+def hq_view(pool):
+    """Workers and jobs as the HQ server sees them; an unreachable server yields empty lists."""
+    from .warm_pool.backend import HyperQueue
+    try:
+        hq = HyperQueue(pool)
+        workers = hq.call('worker', 'list') or []
+        jobs = {state: hq.call('job', 'list', '--filter', state) or [] for state in ('running', 'waiting')}
+    except (RuntimeError, OSError, ValueError) as exc:
+        return {'error': str(exc)[:200], 'workers': [], 'jobs': {'running': [], 'waiting': []}}
+    for worker in workers:
+        try:
+            info = (hq.call('worker', 'info', str(worker['id'])) or [{}])[0]
+            worker['running_tasks'] = next(iter((info.get('runtime_info') or {}).values()), {}).get('running_tasks')
+        except (RuntimeError, OSError, ValueError, StopIteration):
+            worker['running_tasks'] = None
+    return {'workers': workers, 'jobs': jobs}
+
+
+def worker_rows(pool, hq, now):
+    identities = {}
+    for path in (pool / 'workers').glob('*/identity.json'):
+        identity = read(path, {})
+        job = str((identity.get('allocation') or {}).get('job_id') or identity.get('slurm_job_id') or '')
+        identities[(identity.get('host'), job)] = identity
+    latest = {}
+    for row in resource_history(pool, now - 120, now):
+        latest[row['host']] = row
+    rows = []
+    for worker in hq['workers']:
+        host = worker['configuration']['hostname'].split('.')[0]
+        resources = {r['name']: r for r in worker['configuration']['resources']['resources']}
+        # One host can carry several Slurm grants over time; the work directory names the current one.
+        job = Path(worker['configuration'].get('work_dir', '')).name.rpartition('-')[2]
+        identity = identities.get((host, job), {})
+        allocation = identity.get('allocation') or {}
+        sample = latest.get(host)
+        cpus = len(resources.get('cpus', {}).get('values', []))
+        rows.append({
+            'id': worker['id'], 'host': host, 'slurm_job_id': identity.get('slurm_job_id') or allocation.get('job_id'),
+            'cpus': cpus, 'memory_gb': resources.get('mem', {}).get('size', 0) / 10000 / 1024,
+            'gpus': sum(1 for name in resources if name.startswith('gpuSlot')),
+            'running_tasks': worker.get('running_tasks'),
+            'cpu_cores_used': sample['cpu_percent'] * cpus / 100 if sample and sample.get('cpu_percent') is not None else None,
+            'node_memory_used_gb': sample['memory_used_bytes'] / 2**30 if sample else None,
+            'node_memory_gb': sample['memory_total_bytes'] / 2**30 if sample else None,
+            'seen_seconds_ago': now - sample['observed_at'] if sample else None,
+            'hours_left': (allocation['end_time'] - now) / 3600 if allocation.get('end_time') else None,
+        })
+    return rows
+
+
+async def temporal_view(service_root, now):
+    from datetime import datetime, timedelta, timezone
+    from temporalio.client import Client
+    from .temporal_service import endpoint
+    client = await Client.connect(endpoint(service_root)['endpoint'])
+    counts = {}
+    for state in ('Running', 'Completed', 'Failed', 'Terminated'):
+        counts[state.lower()] = sum([1 async for _ in client.list_workflows(
+            f"WorkflowType = 'DatasetWorkflow' AND ExecutionStatus = '{state}'")])
+    datasets = {}
+    async for w in client.list_workflows("ExecutionStatus = 'Running' AND WorkflowType != 'DatasetWorkflow' "
+                                         "AND WorkflowType != 'AnalysisUnitWorkflow'"):
+        stage, _, rest = w.id.partition('/')
+        run = rest.split('/')[0]
+        entry = datasets.setdefault(re.sub(r'-[0-9a-f]{16,}$', '', run), {'stage': stage, 'workflows': []})
+        entry['workflows'].append({'type': w.workflow_type, 'id': w.id.split('/')[-1],
+                                   'age_minutes': (now - w.start_time.timestamp()) / 60})
+    since = datetime.fromtimestamp(now - 6 * 3600, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    failures = [{'type': w.workflow_type, 'id': w.id, 'closed_at': w.close_time.timestamp()}
+                async for w in client.list_workflows(f"ExecutionStatus = 'Failed' AND CloseTime > '{since}'")]
+    return {'dataset_counts': counts, 'running': datasets, 'failures_6h': failures}
+
+
+def session_stats(bridge, pool, hours, now):
+    """Opt-in scan of recent request folders: turns per session and submission rejections."""
+    cutoff = now - hours * 3600
+    turns, started = {}, set()
+    for entry in os.scandir(bridge / 'requests'):
+        if '.turn-' not in entry.name or entry.stat().st_mtime < cutoff:
+            continue
+        session, number = entry.name.rsplit('.turn-', 1)
+        turns[session] = max(turns.get(session, 0), int(number) + 1)
+        if number == '0':
+            started.add(session)
+    kinds = {}
+    for session in started:
+        # A session counts once complete_tool saved result.json beside its session.json:
+        # turns of a session still running would understate the real length.
+        first = read(bridge / 'requests' / f'{session}.turn-0' / 'request.json', {})
+        session_file = ((first.get('spec') or {}).get('session') or {}).get('path')
+        kind = kinds.setdefault(session.split('-', 1)[0], {'started': 0, 'finished': []})
+        kind['started'] += 1
+        if session_file and (Path(session_file).parent / 'result.json').is_file():
+            kind['finished'].append(turns[session])
+    submissions = {}
+    for entry in os.scandir(pool / 'requests'):
+        if '.tool-' not in entry.name or entry.stat().st_mtime < cutoff:
+            continue
+        request = read(Path(entry.path) / 'request.json', {})
+        operation = request.get('spec', {}).get('operation_id', '')
+        if not operation.startswith('submit_'):
+            continue
+        result = read(Path(entry.path) / request.get('attempt_id', '') / 'outputs' / 'result.json')
+        if result is None:
+            continue
+        bucket = submissions.setdefault(operation, {'accepted': 0, 'rejected': 0})
+        bucket['rejected' if result.get('is_error') else 'accepted'] += 1
+    return {'hours': hours,
+            'sessions': {kind: {'started': v['started'], 'finished': len(v['finished']),
+                                'turns_p50': sorted(v['finished'])[len(v['finished']) // 2] if v['finished'] else None,
+                                'turns_max': max(v['finished']) if v['finished'] else None}
+                         for kind, v in kinds.items()},
+            'submissions': submissions}
+
+
+def status_report(root, pool_root=None, bridge_root=None, temporal_service_root=None, sessions_hours=None):
+    root = Path(root)
+    pool = Path(pool_root) if pool_root else root / 'organize-v2-pool'
+    bridge = Path(bridge_root) if bridge_root else root / 'organize-v2-bridge'
+    now = time.time()
+    hq = hq_view(pool)
+    jobs = {}
+    for state, items in hq['jobs'].items():
+        by_class, by_dataset = {}, {}
+        for job in items:
+            kind, dataset = classify_job(job['name'])
+            by_class[kind] = by_class.get(kind, 0) + 1
+            by_dataset[dataset] = by_dataset.get(dataset, 0) + 1
+        jobs[state] = {'total': len(items), 'by_class': by_class, 'by_dataset': by_dataset}
+    report = {'generated_at': now, 'host': socket.gethostname(), 'root': str(root),
+              'scheduler': read(pool / 'scheduler.json', {}), 'bridge': read(bridge / 'summary.json', {}),
+              'hq_error': hq.get('error'), 'workers': worker_rows(pool, hq, now), 'jobs': jobs}
+    if temporal_service_root:
+        try:
+            report['temporal'] = asyncio.run(temporal_view(temporal_service_root, now))
+        except Exception as exc:  # noqa: BLE001 - the report must still print the rest
+            report['temporal'] = {'error': repr(exc)[:200]}
+    if sessions_hours:
+        report['sessions'] = session_stats(bridge, pool, sessions_hours, now)
+    return report
+
+
+def render_status(report):
+    now = report['generated_at']
+    ago = lambda t: f"{now - t:.0f} s ago" if t else 'never'
+    lines = [f"RSI v2 status  {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now))}  {report['host']}  {report['root']}",
+             '', 'CONTROL PLANE']
+    scheduler = report['scheduler']
+    lines.append(f"  scheduler  {scheduler.get('state', 'unknown'):8s} {scheduler.get('host', '?'):16s} scan {scheduler.get('dispatch_scan_seconds', 0):.1f} s  seen {ago(scheduler.get('observed_at'))}")
+    bridge = report['bridge']
+    counts = bridge.get('counts', {})
+    lines.append(f"  bridge     in flight {bridge.get('running', 0)}/{bridge.get('concurrency', '?')}  queued {counts.get('queued', 0)}  "
+                 f"replies {counts.get('reply_saved', 0)}  failed {counts.get('failed', 0)}  scan {bridge.get('dispatch_scan_seconds', 0):.1f} s  seen {ago(bridge.get('updated_at'))}")
+    for model in bridge.get('models', []):
+        lines.append(f"    {model['model'].get('model', '?'):32s} {model.get('state', '?'):9s} in flight {model.get('in_flight', 0):3d}  "
+                     f"last {model.get('last_latency_seconds') or 0:6.1f} s  ok {model.get('successes', 0)}  fail {model.get('failures', 0)}  timeout {model.get('timeouts', 0)}")
+    temporal = report.get('temporal')
+    if temporal:
+        if 'error' in temporal:
+            lines.append('  temporal   ' + temporal['error'])
+        else:
+            lines.append('  temporal   datasets ' + ', '.join(f"{k} {v}" for k, v in temporal['dataset_counts'].items())
+                         + f"; failed workflows in 6 h: {len(temporal['failures_6h'])}")
+    lines += ['', f"WORKERS ({len(report['workers'])} in HQ)" + (f"  HQ error: {report['hq_error']}" if report['hq_error'] else '')]
+    lines.append('  id   host          job        cpus   used   mem GiB   node mem GiB   tasks  time left  seen')
+    for w in report['workers']:
+        used = f"{w['cpu_cores_used']:5.1f}" if w['cpu_cores_used'] is not None else '    ?'
+        mem = f"{w['memory_gb']:6.0f}   " + (f"{w['node_memory_used_gb']:5.0f}/{w['node_memory_gb']:<5.0f}" if w['node_memory_used_gb'] is not None else '     ?     ')
+        left = f"{w['hours_left']:6.1f} h" if w['hours_left'] is not None else '       ?'
+        seen = f"{w['seen_seconds_ago']:.0f} s" if w['seen_seconds_ago'] is not None else 'no telemetry'
+        gpu = f" gpu {w['gpus']}" if w['gpus'] else ''
+        lines.append(f"  {w['id']:<4} {w['host']:13s} {str(w['slurm_job_id'] or '?'):10s} {w['cpus']:3d}   {used}   {mem}    {str(w['running_tasks'] if w['running_tasks'] is not None else '?'):>5s}  {left}  {seen}{gpu}")
+    for state in ('running', 'waiting'):
+        jobs = report['jobs'].get(state, {'total': 0, 'by_class': {}, 'by_dataset': {}})
+        lines += ['', f"POOL {state.upper()} {jobs['total']}  " + ', '.join(f"{k} {v}" for k, v in sorted(jobs['by_class'].items(), key=lambda kv: -kv[1]))]
+        if jobs['by_dataset']:
+            lines.append('  ' + ', '.join(f"{k} {v}" for k, v in sorted(jobs['by_dataset'].items(), key=lambda kv: -kv[1])[:12]))
+    if temporal and 'running' in temporal:
+        lines += ['', f"DATASETS RUNNING ({len(temporal['running'])})"]
+        for name, entry in sorted(temporal['running'].items()):
+            parts = []
+            for kind in ('CrosssampleWorkflow', 'ZoominWorkflow', 'AgentWorkflow'):
+                ages = sorted(w['age_minutes'] for w in entry['workflows'] if w['type'] == kind)
+                if ages:
+                    parts.append(f"{kind.removesuffix('Workflow')} x{len(ages)} {ages[0]:.0f}-{ages[-1]:.0f} min" if len(ages) > 1
+                                 else f"{kind.removesuffix('Workflow')} {ages[0]:.0f} min")
+            lines.append(f"  {name:28s} {entry['stage']:13s} " + '; '.join(parts))
+        for failure in temporal['failures_6h'][-5:]:
+            lines.append(f"  FAILED {time.strftime('%H:%M', time.localtime(failure['closed_at']))} {failure['type']} {failure['id'][:80]}")
+    sessions = report.get('sessions')
+    if sessions:
+        lines += ['', f"SESSIONS (last {sessions['hours']:g} h)"]
+        for kind, v in sorted(sessions['sessions'].items()):
+            lines.append(f"  {kind:6s} started {v['started']:4d}  finished {v['finished']:4d}  turns p50 {v['turns_p50'] if v['turns_p50'] is not None else '-':>3}  max {v['turns_max'] if v['turns_max'] is not None else '-':>3}")
+        for op, v in sorted(sessions['submissions'].items()):
+            total = v['accepted'] + v['rejected']
+            lines.append(f"  {op:18s} accepted {v['accepted']:4d}  rejected {v['rejected']:4d}  ({100 * v['rejected'] / max(1, total):.0f} %)")
+    return '\n'.join(lines)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -476,8 +696,18 @@ def main() -> None:
     history.add_argument("--port", type=int, default=7233)
     history.add_argument("--ui-port", type=int, default=8233)
     history.add_argument("--bind", default="127.0.0.1")
+    text = commands.add_parser("status", help="print the same records as the page, from the cheap sources only")
+    text.add_argument("--root", type=Path, required=True)
+    text.add_argument("--pool-root", type=Path)
+    text.add_argument("--bridge-root", type=Path)
+    text.add_argument("--temporal-service-root", type=Path)
+    text.add_argument("--sessions", type=float, metavar="HOURS", help="also scan recent sessions: turns and rejected submissions")
+    text.add_argument("--json", action="store_true")
     args = parser.parse_args()
-    if args.command == "serve":
+    if args.command == "status":
+        report = status_report(args.root, args.pool_root, args.bridge_root, args.temporal_service_root, args.sessions)
+        print(json.dumps(report, indent=2, default=str) if args.json else render_status(report))
+    elif args.command == "serve":
         serve(args.root, args.port, args.temporal_ui_port, args.bind,
               args.pool_root, args.bridge_root, args.temporal_service_root)
     else:
