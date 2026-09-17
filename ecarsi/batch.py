@@ -1517,6 +1517,8 @@ def _monitor(sources, tick):
                 reconcile(state, path.parent)
             for row in state.get("datasets", []):
                 row = dict(row)
+                if persistent and row["state"] == "queued" and row.get("queue_reason") == "Dataset dispatch is paused":
+                    row.update(state="paused", dispatch_paused=True)
                 if row["state"] in ACTIVE:
                     row.update(activity(row))
                 row.setdefault("submitted_at", state.get("submitted_at"))

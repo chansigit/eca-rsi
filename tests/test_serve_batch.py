@@ -4,6 +4,37 @@ from pathlib import Path
 from ecarsi import index, serve
 
 
+def test_paused_admission_is_consistent_and_preserves_queue_and_cell_counts(tmp_path, monkeypatch):
+    from ecarsi import batch, workflow_web
+    rows = [dict(id=str(i), name=str(i), attempt=1, output=str(tmp_path/str(i)),
+                 mirror=str(tmp_path/str(i)/'rsi'), n_cells=100,
+                 state='running' if i == 0 else 'queued',
+                 queue_reason='Dataset dispatch is paused') for i in range(3)]
+    path = tmp_path/'status.json'
+    original = json.dumps(dict(datasets=rows, nodes={}))
+    path.write_text(original)
+    monkeypatch.delenv('ECA_PERISCOPE_BATCH_STATUS', raising=False)
+    monkeypatch.setenv('ECA_DATASET_QUEUE', str(tmp_path))
+    monkeypatch.setattr(batch, '_monitor_background', None)
+    items = {r['name']: Path(r['mirror']) for r in rows}
+    states = {name: (serve._dataset_state(p), p) for name, p in items.items()}
+    assert [s['cls'] for s, _ in states.values()] == ['running', 'paused', 'paused']
+    assert not any(r['waiting'] for r in batch.monitor()['datasets'])
+    assert '2 Paused</span>' in serve._navigator_html(items, tmp_path/'registry.json')
+    overview = serve._home_html(items)
+    assert '>2</span><span class="k">Paused</span>' in overview
+    assert '>0</span><span class="k">Queued</span>' in overview
+    assert '1 running' in workflow_web.render() and '2 paused' in workflow_web.render()
+    totals = serve.fleet_totals(serve.fleet_history(states))
+    assert totals['cells_queued'] == 200 and totals['undated_input'] == 100
+    assert path.read_text() == original  # presentation must never mutate admission
+    for row in rows:
+        row['queue_reason'] = 'Waiting for driver CPU/memory capacity'
+    path.write_text(json.dumps(dict(datasets=rows, nodes={})))
+    assert serve._dataset_state(items['1'])['cls'] == 'queued'
+    assert batch.monitor()['datasets'][1]['waiting'] is True
+
+
 def test_workflow_activity_shows_latest_fifteen_with_full_totals(monkeypatch):
     from ecarsi import workflow_web
     rows = [dict(name=f'dataset-{i:02}', output=f'/runs/{i}', state='running',

@@ -35,7 +35,7 @@ def render():
                     f'<td>{str(age) + "s ago" if age is not None else "No log yet"}</td></tr>')
     counts = data["states"]
     facts = " · ".join(f'{counts.get(k,0)} {v}' for k,v in
-                       (("running","running"),("assigned","starting"),("queued","queued"),("retry_wait","retry backoff"))
+                       (("running","running"),("assigned","starting"),("queued","queued"),("paused","paused"),("retry_wait","retry backoff"))
                        if counts.get(k)) or "No active or queued workflows"
     return (f'<p>{e(facts)}</p><p class="muted">Workflows call models and submit individual compute tasks to Warm Pool. '
             'Latest activity comes from logs; a running driver does not mean a busy compute worker.</p>'
