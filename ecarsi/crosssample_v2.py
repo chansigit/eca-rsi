@@ -422,7 +422,10 @@ def finalize(evidence_ref,types_ref,quality_ref,destination):
     origin=pd.read_csv(artifact(bundle,'input_cells.csv.gz'),dtype=str,keep_default_na=False).set_index('cell_id')
     reasons={c:[] for c in archive.cell}
     # Preserve distinct numerical and inherited sources instead of a generic "filtered" reason.
-    fragments=pd.read_csv(artifact(bundle,'minor_sibling_qc.csv'),keep_default_na=False)
+    try:
+        fragments=pd.read_csv(artifact(bundle,'minor_sibling_qc.csv'),keep_default_na=False)
+    except pd.errors.EmptyDataError:  # msp writes a bare newline when no minor sibling fragment exists
+        fragments=pd.DataFrame(columns=['subcluster','recommend_removal'])
     bad_frag=set(fragments.loc[fragments.recommend_removal.astype(str).str.lower().eq('true'),'subcluster']) if 'recommend_removal' in fragments else set()
     outliers=(pd.read_csv(artifact(bundle,'cell_outliers.csv'),dtype={'cell':str},keep_default_na=False).set_index('cell')
               if 'cell_outliers.csv' in bundle['files'] else pd.DataFrame())
