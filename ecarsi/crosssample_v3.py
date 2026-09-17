@@ -67,9 +67,26 @@ def agent_spec(spec, evidence_ref, phase, parent, types_ref=None):
     return session
 
 
+def lenient_json(text):
+    """The first complete JSON value; trailing quotes, fences or whitespace are dropped (Eye 2026-09-17:
+    a proposal ending in }]}" was rejected 25 times in a row, 167k tokens each, for one stray quote)."""
+    try:
+        return json.loads(text)
+    except ValueError:
+        value, end = json.JSONDecoder().raw_decode(text.lstrip())
+        if text.lstrip()[end:].strip(' \t\r\n"`\''):
+            raise
+        return value
+
+
 def canonical_arguments(name, args):
     if name == 'submit_decision' and isinstance(args.get('proposal_json'), (dict, list)):
         return dict(args, proposal_json=json.dumps(args['proposal_json']))
+    if name == 'submit_decision' and isinstance(args.get('proposal_json'), str):
+        try:
+            return dict(args, proposal_json=json.dumps(lenient_json(args['proposal_json'])))
+        except ValueError:
+            return args  # v2 reports the parse error and the hint explains the object form
     if name == 'deg_lookup':
         filled = {k: v for k, v in args.items() if v is not None}
         for field in ('cluster', 'gene'):

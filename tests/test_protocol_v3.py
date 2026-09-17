@@ -115,3 +115,12 @@ def test_accepted_quality_completes_the_session(tmp_path, monkeypatch):
     zoomin_v3.tool('submit_quality', 'state.json', str(tmp_path / 'args.json'), tmp_path)
     result = read(tmp_path / 'result.json')
     assert result['accepted'] is True and result['removal_fraction'] == 0.02 and result['quality'] == {'clusters': []}
+
+
+def test_a_proposal_with_a_trailing_quote_is_accepted():
+    proposal = '{"clusters": [{"cluster_id": "0"}]}'
+    for module, name in ((zoomin_v3, 'submit_quality'), (crosssample_v3, 'submit_decision')):
+        fixed = module.canonical_arguments(name, {'proposal_json': proposal + '"'})
+        assert json.loads(fixed['proposal_json']) == {'clusters': [{'cluster_id': '0'}]}
+        broken = module.canonical_arguments(name, {'proposal_json': proposal + ', "more": 1}'})
+        assert broken['proposal_json'] == proposal + ', "more": 1}'  # real trailing data still reaches v2's error path
