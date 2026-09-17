@@ -51,12 +51,12 @@ after validation. Launch against an explicit RSI checkout and shared run directo
 apptainer exec --cleanenv --bind /path/to/rsi,/shared/rsi \
   --env PYTHONPATH=/path/to/rsi:/opt/rsi-control \
   --env PYTHONNOUSERSITE=1 --env PYTHONSAFEPATH=1 \
-  "$CONTROL_SIF" python3 -m ecarsi.work_coordinator \
+  "$CONTROL_SIF" python3 -m ecarsi.control \
   --service-root /shared/rsi/control --task-queue ecarsi-durable-v2 worker
 ```
 
-Use the same interpreter prefix for `ecarsi.agent_bridge` and `ecarsi.warm_pool`.
-Bind the recorded native binaries when launching `ecarsi.temporal_service`.
+Use the same interpreter prefix for `ecarsi.bridge` and `ecarsi.warm_pool`.
+Bind the recorded native binaries when launching `ecarsi.control.temporal`.
 With `--cleanenv`, forward each configured provider credential through an
 `APPTAINERENV_` environment variable (for example `APPTAINERENV_OPENROUTER_API_KEY`);
 do not put credentials in command arguments or manifests. Preserve the chosen
@@ -143,3 +143,11 @@ done
 
 Reference run 2026-09-07 on Sherlock: eca-rsi 47 + 68/2 skipped, osp 40, msp 136, zmip 78,
 agent-harness-bridge 88 (its one node-dependent test fails in a slim image).
+
+## Branch `v2` layout (2026-09-17)
+
+The second-generation modules live in subpackages: `ecarsi.control` (Temporal workflows, `python -m ecarsi.control … worker`),
+`ecarsi.bridge` (`python -m ecarsi.bridge serve`), `ecarsi.stages` (the programs the pool runs), `ecarsi.warm_pool` and
+`ecarsi.observatory`. [agent-worker-runtime-20260917.json](agent-worker-runtime-20260917.json) is the science runtime for that
+layout (the import list names the new modules); [control-plane.sh](control-plane.sh) is the launcher template the run
+directory copies and configures. See `docs-gen2/ARCHITECTURE.md`.

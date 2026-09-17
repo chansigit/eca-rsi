@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-const html = fs.readFileSync(require('node:path').join(__dirname, '../ecarsi/dev_observatory.html'), 'utf8');
+const html = fs.readFileSync(require('node:path').join(__dirname, '../ecarsi/observatory.html'), 'utf8');
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1].replace(/refresh\(\); setInterval\(refresh,10000\);/, '');
 const elements = new Map();
 const element = id => {

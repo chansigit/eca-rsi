@@ -1,5 +1,5 @@
 """Poll activities outlive a shared-filesystem stall; host steps keep the short retry."""
-from ecarsi.work_coordinator import activity_retry, agent_step, check_bridge, check_pool
+from ecarsi.control import activity_retry, agent_step, check_bridge, check_pool
 
 
 def test_polls_retry_longer_than_host_steps():

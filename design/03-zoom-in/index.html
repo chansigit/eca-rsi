@@ -13,7 +13,7 @@ small { color: #555; } li { margin: 6px 0; }
 <p><a href="../02-cross-sample/index.html">← cross-sample</a></p>
 <h1>zoom-in：按谱系并行细化</h1>
 <p><strong>准备证据 → 规划谱系 → 各谱系独立计算和注释 → 合并结果。</strong>lineage 指一个或多个相关粗类型组成的细胞谱系。谱系 A 等模型时，谱系 B 和其他数据集继续计算。</p>
-<p><small>新版谱系计算、Agent 工具和 Temporal 调度已接入开发分支，正在进行真实数据与 GPU 验收。类型使用 1.0、质控使用 2.0；旧生产运行器尚未替换。运行接口见 <a href="../../ZOOMIN_V2.md">ZOOMIN_V2.md</a>。</small></p>
+<p><small>新版谱系计算、Agent 工具和 Temporal 调度已接入开发分支，正在进行真实数据与 GPU 验收。类型使用 1.0、质控使用 2.0；旧生产运行器尚未替换。运行接口见 <a href="../../docs-gen2/ZOOMIN_V2.md">ZOOMIN_V2.md</a>。</small></p>
 <table><thead><tr><th>步骤</th><th>类型</th><th>工作与并行单位</th></tr></thead><tbody>
 <tr><td>准备规划证据</td><td>程序执行</td><td>从 cross-sample 完成的结果读取粗类型、细胞数、样本组成、邻居连接与 UMAP 岛等证据，保存紧凑摘要和图。复用已有表示，不重做整合；需要扫描大矩阵或图时进 pool。</td></tr>
 <tr><td>规划谱系</td><td>模型推理</td><td>决定哪些粗类型归为一个谱系、哪些谱系需要 zoom-in。Coordinator 校验类型覆盖、唯一归属、最小细胞数和共享 UMAP 岛的解释。有效计划保存后才派计算；等待模型不占计算资源。</td></tr>

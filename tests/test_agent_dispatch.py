@@ -10,7 +10,10 @@ import threading
 import time
 import pytest
 
-from ecarsi import agent_bridge as bridge, agent_dispatch as dispatch, agent_session as session
+import ecarsi.bridge as bridge
+import ecarsi.bridge.dispatch as dispatch
+import ecarsi.bridge.session as session
+from ecarsi.warm_pool.state import immutable, reference, verified
 from ecarsi.warm_pool.state import save, read, status
 
 
@@ -25,11 +28,11 @@ def test_portable_upgrade_pins_execution_without_rewriting_session(tmp_path, mon
     archived = session.archive_adapter(root, old)
     saved = read(ref['path'])
     save(ref['path'], dict(saved, protocol=2, adapter_sha256=archived['sha256']))
-    ref = session.reference(ref['path']); before = Path(ref['path']).read_bytes()
+    ref = reference(ref['path']); before = Path(ref['path']).read_bytes()
     turn = session.submit_turn(ref, 0)
     bridge.serve(root, once=True)
     plan = bridge.status(root, turn)['attempts'][0]['plan']
-    upgraded = session.verified(plan)['portable_adapter']
+    upgraded = verified(plan)['portable_adapter']
     assert upgraded['sha256'] != archived['sha256']
     monkeypatch.setattr(_harness_openai, '_client', lambda *a: Client())
     monkeypatch.setattr(_harness_openai, '_model', lambda *a: ScriptedModel())
@@ -38,7 +41,7 @@ def test_portable_upgrade_pins_execution_without_rewriting_session(tmp_path, mon
     dispatch.execute(plan['path'])
     assert read(tmp_path/'result.json')['outcome'] == 'success'
     assert Path(ref['path']).read_bytes() == before
-    assert session.verified(plan)['portable_adapter'] == upgraded
+    assert verified(plan)['portable_adapter'] == upgraded
     Path(upgraded['path']).chmod(0o600)
     Path(upgraded['path']).write_text('raise AssertionError("unverified code")')
     monkeypatch.setattr(dispatch, 'load_worker_key', lambda *a: pytest.fail('No provider access'))
@@ -49,7 +52,7 @@ def test_portable_upgrade_pins_execution_without_rewriting_session(tmp_path, mon
 def test_recovery_ignores_only_terminal_model_attempts_with_an_accepted_replacement(tmp_path):
     from tests.test_agent_session import setup, completed_tool
     from ecarsi.warm_pool.state import cancel
-    from ecarsi.persample_workflow import sample_step
+    from ecarsi.control.persample import sample_step
     spec, _ = setup(tmp_path)
     root = Path(spec['bridge_root'])
     config = read(root / 'config.json')
@@ -94,7 +97,7 @@ def test_audited_retry_survives_dispatch_restart_and_preserves_failed_attempt(tm
     config.update(pool_root=spec['pool_root'], routing=dict(max_attempts=1))
     save(root / 'config.json', config)
     saved = read(ref['path']); saved['protocol'] = 2
-    save(ref['path'], saved); ref = session.reference(ref['path'])
+    save(ref['path'], saved); ref = reference(ref['path'])
     request_id = session.submit_turn(ref, 0)
     bridge.serve(root, once=True)
     attempt = bridge.status(root, request_id)['attempts'][0]
@@ -111,7 +114,7 @@ def test_audited_retry_survives_dispatch_restart_and_preserves_failed_attempt(tm
     assert recovered['state'] == 'running' and recovered['attempt_limit'] == 2
     assert len(recovered['attempts']) == 2 and recovered['attempts'][0] == attempt
     assert list(folder.glob('failed-result-*.json'))
-    assert session.verified(recovered['recovery'])['result'] == failure
+    assert verified(recovered['recovery'])['result'] == failure
     with pytest.raises(ValueError, match='Only failed'):
         bridge.retry_turn(root, request_id, reason='do not duplicate a running attempt')
 
@@ -212,7 +215,7 @@ def test_retry_waits_for_untried_backup_before_reusing_failed_primary(tmp_path):
     from tests.test_agent_session import setup
     spec, ref = setup(tmp_path)
     root=Path(spec['bridge_root']); saved=read(ref['path'])
-    saved['protocol']=2; save(ref['path'],saved); ref=session.reference(ref['path'])
+    saved['protocol']=2; save(ref['path'],saved); ref=reference(ref['path'])
     primary=saved['model']; backup=dict(primary,model='backup')
     config=read(root/'config.json'); config['pool_root']=spec['pool_root']
     save(config['catalog'],dict(models=[primary,backup])); save(root/'config.json',config)
@@ -278,7 +281,7 @@ def test_worker_timeout_fallback_continuation_and_dispatcher_recovery(tmp_path):
                     cpus=1, memory_mb=64, timeout_seconds=30, inputs=[], outputs=['result.json'], result_file='result.json')])
         ref = session.create_session(spec)
         # Select Chat in the durable session, without changing any real deployment config.
-        saved = read(ref['path']); saved['api_mode']='chat_completions'; save(ref['path'], saved); ref=session.reference(ref['path'])
+        saved = read(ref['path']); saved['api_mode']='chat_completions'; save(ref['path'], saved); ref=reference(ref['path'])
         request_id = session.submit_turn(ref, 0)
         bridge.serve(root, once=True)
         first = bridge.status(root, request_id)['attempts'][0]
@@ -300,12 +303,12 @@ def test_worker_timeout_fallback_continuation_and_dispatcher_recovery(tmp_path):
             folder = pool/'requests'/attempt['pool_request_id']/request['attempt_id']
             output = folder/'outputs'
             env = dict(os.environ, VLLM_API_KEY='local-test-placeholder')
-            subprocess.run([sys.executable, '-m', 'ecarsi.agent_dispatch', 'execute', attempt['plan']['path']],
+            subprocess.run([sys.executable, '-m', 'ecarsi.bridge.dispatch', 'execute', attempt['plan']['path']],
                            cwd=output, env=env, check=True, timeout=20)
             result = read(output/'result.json')
             assert result['worker']['pid'] != os.getpid()
             save(folder/'receipt.json', dict(state='succeeded', started_at=1, finished_at=time.time(),
-                outputs=[dict(**session.reference(output/'result.json'), size=(output/'result.json').stat().st_size)]))
+                outputs=[dict(**reference(output/'result.json'), size=(output/'result.json').stat().st_size)]))
             return result
 
         request = read(pool/'requests'/first['pool_request_id']/'request.json')
@@ -336,7 +339,7 @@ def test_worker_timeout_fallback_continuation_and_dispatcher_recovery(tmp_path):
         folder = pool/'requests'/item['request_id']/request['attempt_id']
         save(folder/'outputs/result.json', {'value': 'worker-result'})
         save(folder/'receipt.json', dict(state='succeeded', started_at=1, finished_at=time.time(),
-             outputs=[dict(**session.reference(folder/'outputs/result.json'), size=24)]))
+             outputs=[dict(**reference(folder/'outputs/result.json'), size=24)]))
         context = session.continuation(ref, reply, [dict(item, path=str(folder/'outputs/result.json'))])
         # Remove the previous provider model; continuation must carry accepted tool output to another model.
         save(catalog, dict(models=[models[2]]))
@@ -410,7 +413,7 @@ def test_health_cache_keeps_per_model_admission_limits(tmp_path):
 
 
 def test_timeline_uses_worker_attempt_and_preserves_dependencies():
-    from ecarsi.dev_observatory import task_timeline
+    from ecarsi.observatory import task_timeline
     trace = dict(dataset_id='data', workflow_id='workflow', unit_id='organize.plan')
     model = dict(id='model-worker', submitted_at=1, trace=trace, state='succeeded')
     tool = dict(id='tool', submitted_at=2, trace=dict(trace, depends_on=['bridge-turn']), state='succeeded')
@@ -434,7 +437,7 @@ def test_invalid_unused_dispatch_snapshot_recovers_without_relaxing_session_pin(
     sha = hashlib.sha256(bad).hexdigest()
     snapshot = root/'adapters'/(sha+'.py');snapshot.write_bytes(bad)
     with monkeypatch.context() as m:
-        m.setattr(session, 'archive_adapter', lambda *a: session.reference(snapshot))
+        m.setattr(session, 'archive_adapter', lambda *a: reference(snapshot))
         m.setattr(dispatch, 'enqueue', lambda *a: None)
         bridge.serve(root, once=True)
     state = bridge.status(root, turn); attempt = state['attempts'][0]
@@ -442,7 +445,7 @@ def test_invalid_unused_dispatch_snapshot_recovers_without_relaxing_session_pin(
     # Recreate the historical plan, before explicit portable upgrades existed.
     historical = read(plan_path); historical.pop('portable_adapter', None)
     save(plan_path, historical)
-    state['attempts'][0]['plan'] = session.reference(plan_path)
+    state['attempts'][0]['plan'] = reference(plan_path)
     save(root/'requests'/turn/'state.json', state)
     dispatch.enqueue(root/'requests'/turn, read(root/'config.json'), state['attempts'][0])
     completed_tool(spec, dict(request_id=attempt['pool_request_id']),

@@ -1,8 +1,8 @@
 import pytest
 
-from ecarsi.agent_session import immutable, reference, verified
-from ecarsi.agent_tool_execution import execute, plan
-from ecarsi.persample_v2 import sealed, evidence_files
+from ecarsi.bridge.session import immutable, reference, verified
+from ecarsi.bridge.tool_execution import execute, plan
+from ecarsi.stages.persample import sealed, evidence_files
 from ecarsi.warm_pool.state import read, save
 
 
@@ -16,7 +16,7 @@ def test_pagination_preserves_all_text_and_seen_state_with_bounded_budget(tmp_pa
         data=reference(folder / 'clustered.h5ad'), key='r1', version=0,
         seen=dict(figures=[], tables=[], genes=False, qc=False)))
     arguments = immutable(tmp_path / 'arguments.json', dict(kind='tables', offset=0))
-    request = dict(request_id='test', args=['-m', 'ecarsi.persample_v2', 'tool', 'read_evidence',
+    request = dict(request_id='test', args=['-m', 'ecarsi.stages.persample', 'tool', 'read_evidence',
         state['path'], arguments['path']], memory_mb=12288, inputs=[state, arguments])
     output = tmp_path / 'output'
     output.mkdir()
@@ -40,7 +40,7 @@ def test_prior_request_keeps_original_budget_and_command(tmp_path):
     root = tmp_path / 'pool'
     previous = root / 'requests/test'
     previous.mkdir(parents=True)
-    request = dict(request_id='test', args=['-m', 'ecarsi.persample_v2', 'tool',
+    request = dict(request_id='test', args=['-m', 'ecarsi.stages.persample', 'tool',
         'read_evidence', 'state.json', 'arguments.json'], memory_mb=12288, inputs=[])
     save(previous / 'request.json', dict(spec=request))
     assert plan(request, directory, root) == request

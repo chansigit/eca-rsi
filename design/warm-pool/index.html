@@ -98,6 +98,6 @@ small { color: #555; } li { margin: 6px 0; }
 <p>每个排队任务给出具体原因：no_workers、cpu_capacity、memory_capacity、gpu_capacity、vram_capacity、remaining_time、runtime_mismatch、storage_unavailable 或 worker_draining。记录选择 CPU/GPU 的理由及排队、搬运、计算、结果保存耗时；“低利用率”才能定位到缺活、等资源还是 I/O。</p>
 <h2>10. 与现有实现及后端候选的关系</h2>
 <p>隔离分支中的 <code>ecarsi/pool/scheduler.py</code> 已有资源匹配和任务名额，但任务表驻内存、client 断连会停止任务；<code>executor.py</code> 在结束时同步通知 Scheduler。新设计需改为独立任务生命周期、持久请求/收据及断连后继续执行。这些是已读到的分支代码现状，不代表刚检查了线上运行实例。</p>
-<p>原有 <code>slurm.py</code> 的资源探查和 <code>observe.py</code> 的监控可以作为基础。Dask 或 HyperQueue 只能有一个负责同一份实际资源授予。HQ 是优先复用候选，先用接口适配；已有 <a href="../../HYPERQUEUE_REVIEW.zh-CN.md">HQ 评估</a>记录较早源码快照，本页开头另补本次官方文档核对。两者都未完成运行验证，其默认断连策略不能覆盖本页要求。</p>
+<p>原有 <code>slurm.py</code> 的资源探查和 <code>observe.py</code> 的监控可以作为基础。Dask 或 HyperQueue 只能有一个负责同一份实际资源授予。HQ 是优先复用候选，先用接口适配；已有 <a href="../../docs-gen2/HYPERQUEUE_REVIEW.zh-CN.md">HQ 评估</a>记录较早源码快照，本页开头另补本次官方文档核对。两者都未完成运行验证，其默认断连策略不能覆盖本页要求。</p>
 <p>与 <a href="../work-coordinator/temporal.html">Temporal 结合</a>时，Activity 的提交重试只查原请求；Scheduler 才管理数值尝试。产物、账本与科学决定仍遵守 RSI 契约。模型分支详见 <a href="../agent-bridge/index.html">Agent Bridge：共享队列、持久会话与工具交接 →</a>。</p>
 </body></html>

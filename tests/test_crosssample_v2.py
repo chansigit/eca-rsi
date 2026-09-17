@@ -6,14 +6,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ecarsi.agent_session import immutable,reference,validate_spec,verified
-from ecarsi.crosssample_v2 import BASE,agent_spec,finalize
-from ecarsi.persample_v2 import sealed
+from ecarsi.bridge.session import immutable,reference,validate_spec,verified
+from ecarsi.stages.crosssample import BASE,agent_spec,finalize
+from ecarsi.stages.persample import sealed
 from ecarsi.warm_pool.state import save,read
 
 
 def test_later_round_keeps_source_ids_and_archives_labels(tmp_path, monkeypatch):
-    import ecarsi.crosssample_v2 as module
+    import ecarsi.stages.crosssample as module
     data = an.AnnData(np.ones((3, 4)), obs=pd.DataFrame({
         'source_unit': ['input'] * 3, 'eca_source_cell_id': ['01', '02', '03'],
         'sample_id': ['A'] * 3, 'msp_ann_coarse': ['old'] * 3,
@@ -47,7 +47,7 @@ def test_agent_tools_have_valid_worker_contracts(tmp_path):
     for phase in ('inclusion','type','quality'):
         session=agent_spec(spec,bundle,phase,'parent',types if phase=='quality' else None)
         validate_spec(session)
-        assert all(t['args'][1]=='ecarsi.crosssample_v2' for t in session['tools'])
+        assert all(t['args'][1]=='ecarsi.stages.crosssample' for t in session['tools'])
         assert ('deg_sql' in [t['name'] for t in session['tools']])==(phase!='inclusion')
 
 
@@ -89,7 +89,7 @@ def test_overlapping_removals_count_once_and_mismatched_decisions_fail(tmp_path,
 
 
 def test_compute_comparisons_and_sql_handoff(tmp_path):
-    from ecarsi.crosssample_v2 import inspect_input,compute,deg,assemble,tool,refine
+    from ecarsi.stages.crosssample import inspect_input,compute,deg,assemble,tool,refine
     rng=np.random.default_rng(2024);samples=[]
     for name in ('a','b'):
         folder=tmp_path/name;folder.mkdir()

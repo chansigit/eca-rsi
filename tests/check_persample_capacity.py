@@ -6,7 +6,7 @@ from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowUpdateFailedError
 from temporalio.runtime import Runtime, TelemetryConfig
 from temporalio.worker import Worker, Replayer, UnsandboxedWorkflowRunner
-from ecarsi.persample_workflow import PersampleWorkflow
+from ecarsi.control.persample import PersampleWorkflow
 
 
 @activity.defn(name="sample_step")

@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from ecarsi.crosssample_workflow import CrosssampleWorkflow, crosssample_step, validate_spec
-from ecarsi.agent_session import reference
+from ecarsi.control.crosssample import CrosssampleWorkflow, crosssample_step, validate_spec
+from ecarsi.bridge.session import reference
 from ecarsi.warm_pool.state import save, read, validate_trace
 
 
@@ -30,7 +30,7 @@ def test_gpu_selection_and_large_fanin(tmp_path):
 
 @pytest.mark.parametrize('change_limit', [False, True])
 def test_workflow_fanout_and_annotation_order(monkeypatch, change_limit):
-    import ecarsi.crosssample_workflow as module
+    import ecarsi.control.crosssample as module
     async def scenario():
         active=peak=0;events=[];requests={}
         async def call(fn,action,args):
@@ -73,7 +73,7 @@ def test_workflow_fanout_and_annotation_order(monkeypatch, change_limit):
 
 
 def test_confirmed_worker_interruption_recovers_with_a_finite_attempt_budget(tmp_path):
-    from ecarsi.work_coordinator import check_pool
+    from ecarsi.control import check_pool
     from ecarsi.warm_pool.state import submit
     tmp_path.chmod(0o700);(tmp_path/'requests').mkdir();save(tmp_path/'config.json',{'runtime':{}})
     submit(tmp_path,dict(request_id='r',operation_id='compute',args=['-c','pass'],cpus=1,memory_mb=64,timeout_seconds=30,outputs=['result.json']))
@@ -87,9 +87,9 @@ def test_confirmed_worker_interruption_recovers_with_a_finite_attempt_budget(tmp
 
 
 def test_uncertain_observation_waits_for_same_attempt_receipt(tmp_path):
-    from ecarsi.work_coordinator import check_pool, check_bridge
+    from ecarsi.control import check_pool, check_bridge
     from ecarsi.warm_pool.state import submit
-    from ecarsi.agent_session import reference
+    from ecarsi.bridge.session import reference
     tmp_path.chmod(0o700); (tmp_path/'requests').mkdir(); save(tmp_path/'config.json', {'runtime':{}})
     submit(tmp_path, dict(request_id='r', operation_id='compute', args=['-c','pass'], cpus=1,
         memory_mb=64, timeout_seconds=30, outputs=['result.json']))

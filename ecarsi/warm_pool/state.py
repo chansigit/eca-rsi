@@ -146,7 +146,7 @@ def validate(spec):
 
 
 def submit(root, spec):
-    from ..operation_budget import measured_ceiling
+    from .budget import measured_ceiling
     root, requested = pool_root(root), validate(spec)
     spec = measured_ceiling(requested)
     folder = root / "requests" / spec["request_id"]
@@ -262,3 +262,26 @@ def status(root, request_id=None):
                 attempt_id=request["attempt_id"], state=state, receipt=receipt,
                 accepted=accepted, backend=backend, cancellation=cancellation,
                 usage=usage, submitted_at=request["submitted_at"])
+
+def reference(path):
+    path = Path(path).resolve(strict=True)
+    return {"path": str(path), "sha256": file_digest(path)}
+
+
+def verified(ref):
+    if set(ref) != {"path", "sha256"} or not Path(ref["path"]).is_absolute():
+        raise ValueError("Expected absolute artifact reference")
+    if file_digest(ref["path"]) != ref["sha256"]:
+        raise ValueError("Artifact changed: " + ref["path"])
+    return read(ref["path"])
+
+
+def immutable(path, value):
+    path = Path(path)
+    with lock(path.with_suffix(path.suffix + ".lock")):
+        old = read(path)
+        if old is not None and digest(old) != digest(value):
+            raise ValueError("Conflicting durable content: " + str(path))
+        if old is None:
+            save(path, value)
+    return reference(path)

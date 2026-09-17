@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from ecarsi.agent_session import reference, verified
-from ecarsi.crosssample_v2 import artifact
-from ecarsi.persample_v2 import check_bundle
+from ecarsi.bridge.session import reference, verified
+from ecarsi.stages.crosssample import artifact
+from ecarsi.stages.persample import check_bundle
 from ecarsi.run_state import file_identity
 from ecarsi.design import _obs
 

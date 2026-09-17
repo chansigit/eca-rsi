@@ -6,9 +6,9 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
-from ecarsi.agent_session import immutable, reference, verified
-from ecarsi.persample_v2 import sealed
-from ecarsi.zoomin_v2 import prepare, markers, subset, compute, deg, assemble, apply_lineage, merge, tool
+from ecarsi.bridge.session import immutable, reference, verified
+from ecarsi.stages.persample import sealed
+from ecarsi.stages.zoomin import prepare, markers, subset, compute, deg, assemble, apply_lineage, merge, tool
 from ecarsi.warm_pool.state import save
 
 
@@ -87,7 +87,7 @@ def test_zoom_handoffs_and_exact_global_conservation(tmp_path):
     confirmed=json.loads((second/'result.json').read_text());assert not confirmed.get('is_error')
     assert verified(confirmed['state'])['quality']['removal_review']==removal['removal_review']
 
-    from ecarsi.zoomin_v2 import refine_evidence
+    from ecarsi.stages.zoomin import refine_evidence
     refinement_state=dict(evidence=evidence,types=types,types_complete=True,quality=quality,read=[],lookups=[{'key':QUALITY_KEY}],qc=True)
     destination=folder('refinement')
     target=str(ad.obs[QUALITY_KEY].value_counts().idxmax())
@@ -98,8 +98,8 @@ def test_zoom_handoffs_and_exact_global_conservation(tmp_path):
     refined=an.read_h5ad(refined_bundle['files']['integrated.h5ad']['path'])
     pd.testing.assert_series_equal(refined.obs[TYPE_KEY],ad.obs[TYPE_KEY])
     assert target not in set(refined.obs[QUALITY_KEY])
-    from ecarsi.zoomin_v2 import agent_spec
-    from ecarsi.agent_session import validate_spec
+    from ecarsi.stages.zoomin import agent_spec
+    from ecarsi.bridge.session import validate_spec
     pool=tmp_path/'pool';pool.mkdir(mode=0o700);save(pool/'config.json',{})
     bridge=tmp_path/'bridge';bridge.mkdir(mode=0o700);save(bridge/'config.json',{})
     budget=dict(cpus=1,memory_mb=4096,timeout_seconds=600)

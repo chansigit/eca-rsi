@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased — branch `gen2` (2026-09-17)
+
+The second generation (Temporal control plane, HyperQueue warm pool, durable model-turn bridge, stage programs),
+developed as feature/warmpool-v2 since 2026-09-14, integrated on one branch and given a package structure. The first
+generation (`eca-rsi run`, Slurm pool, batch admission) keeps its modules where 0.3.0 left them.
+
+- Move the flat gen-2 modules into `ecarsi.control` (work_coordinator, temporal_service, *_workflow), `ecarsi.bridge`
+  (agent_*), `ecarsi.stages` (organize/persample/crosssample/zoomin `_v2`, `_v3`, dataset_release), `ecarsi.warm_pool.budget`
+  (operation_budget) and `ecarsi.observatory` (dev_observatory); `python -m ecarsi.control|bridge|observatory` entry points.
+- `reference` / `verified` / `immutable` belong to `warm_pool.state`; pinned program files come from `stages.program()`,
+  the pinned adapter from `bridge.adapter_path()`.
+- Absorbed from the batch: replay of already-saved pool/bridge requests, inode-keyed settled caches, poll tolerance and
+  120 s host steps, saved-program resume, repeat-rejection stop, protocol v4 (inline evidence, single-call paged tools,
+  lenient JSON, no finalize step), GPU columns in the status report.
+- Protocol v4 tools without arguments tolerate an ignored `offset`, and the type-context hint no longer asks for pages.
+- Gen-2 documents move to `docs-gen2/` (plus ARCHITECTURE.md); `container/control-plane.sh` is the launcher template and
+  `container/agent-worker-runtime-20260917.json` the science runtime for the new import names.
+
 ## 0.3.0 — 2026-09-12
 
 - Add an optional Slurm warm pool with a shared FIFO/resource-fit queue, manually started workers and CPU/memory/GPU/time inventory. No automatic allocation or job cancellation.

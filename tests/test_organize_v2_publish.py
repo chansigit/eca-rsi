@@ -1,7 +1,8 @@
 """Publication relocates paths while retaining the immutable worker receipt."""
 import pytest
 
-from ecarsi import layout as L, organize_v2 as organize
+import ecarsi.stages.organize as organize
+from ecarsi import layout as L
 from ecarsi.run_state import digest, file_identity, read_json, write_json
 from ecarsi.warm_pool.state import read, save
 

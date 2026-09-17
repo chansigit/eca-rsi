@@ -48,7 +48,7 @@ def test_unknown_source_mapping_is_rejected():
 
 def test_worker_plan_returns_correctable_error_then_accepts_complete_experiments(tmp_path, monkeypatch):
     import json
-    from ecarsi.organize_v2 import plan_tool
+    from ecarsi.stages.organize import plan_tool
     from ecarsi.run_state import digest
     from ecarsi.warm_pool.state import save
     from ecarsi import upstream

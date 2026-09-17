@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from ecarsi.dataset_workflow import same_stage_spec, stage_limit_floors, with_limit_floors
+from ecarsi.control.dataset import same_stage_spec, stage_limit_floors, with_limit_floors
 
 
 def test_floors_default_to_nothing_and_come_from_the_environment(monkeypatch):
@@ -32,7 +32,7 @@ def test_resume_comparison_ignores_the_floored_keys_only():
 def test_completed_stage_check_tolerates_floored_keys(tmp_path, monkeypatch):
     # Resume re-validates every completed stage; with floors set, a spec saved before the floors
     # differs only in the floored key and must still be accepted (Eye, 2026-09-17 00:00 PDT).
-    from ecarsi.dataset_workflow import dataset_step
+    from ecarsi.control.dataset import dataset_step
     from ecarsi.warm_pool.state import save
     monkeypatch.setenv('ECA_RSI_STAGE_LIMIT_FLOORS', json.dumps({'max_in_flight_deg': 12}))
     root = tmp_path / 'stage'
@@ -47,7 +47,7 @@ def test_completed_stage_check_tolerates_floored_keys(tmp_path, monkeypatch):
 
 
 def test_resumed_stage_keeps_the_saved_spec(tmp_path, monkeypatch):
-    from ecarsi.dataset_workflow import stage_spec_on_disk
+    from ecarsi.control.dataset import stage_spec_on_disk
     from ecarsi.warm_pool.state import save
     monkeypatch.setenv('ECA_RSI_STAGE_LIMIT_FLOORS', json.dumps({'max_in_flight_deg': 12}))
     root = tmp_path / 'stage'

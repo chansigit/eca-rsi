@@ -1,6 +1,6 @@
 import pytest
 
-from ecarsi.persample_workflow import validate_spec
+from ecarsi.control.persample import validate_spec
 from ecarsi.run_state import file_identity
 from ecarsi.warm_pool.state import save
 
@@ -34,8 +34,8 @@ def test_only_published_organize_units_can_start(tmp_path):
 
 
 def test_sample_size_selects_gpu_alternative_before_submission(tmp_path):
-    from ecarsi.agent_session import reference
-    from ecarsi.persample_workflow import sample_step
+    from ecarsi.bridge.session import reference
+    from ecarsi.control.persample import sample_step
     from ecarsi.warm_pool.state import read
     pool = tmp_path / "pool"
     pool.mkdir(mode=0o700)
@@ -53,7 +53,7 @@ def test_sample_size_selects_gpu_alternative_before_submission(tmp_path):
 
 
 def test_recovery_requires_resolved_receipts(tmp_path):
-    from ecarsi.persample_workflow import sample_step
+    from ecarsi.control.persample import sample_step
     from ecarsi.warm_pool.state import submit
     for name in ("pool", "bridge"):
         root = tmp_path / name
@@ -77,8 +77,8 @@ def test_recovery_requires_resolved_receipts(tmp_path):
 
 
 def test_resume_retains_incomplete_publication_and_cannot_replace_complete(tmp_path):
-    from ecarsi.agent_session import reference
-    from ecarsi.persample_workflow import sample_step
+    from ecarsi.bridge.session import reference
+    from ecarsi.control.persample import sample_step
     from ecarsi.warm_pool.state import read
     save(tmp_path / "input.json", {})
     spec = {"output_root": str(tmp_path), "input_manifest": reference(tmp_path / "input.json")}
@@ -94,7 +94,7 @@ def test_resume_retains_incomplete_publication_and_cannot_replace_complete(tmp_p
 
 
 def test_admission_update_cannot_deadlock_an_uninitialized_or_larger_batch():
-    from ecarsi.persample_workflow import PersampleWorkflow
+    from ecarsi.control.persample import PersampleWorkflow
     workflow = PersampleWorkflow()
     with pytest.raises(ValueError, match="not initialized"):
         workflow.set_in_flight_limit(1)

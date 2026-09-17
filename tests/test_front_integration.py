@@ -497,7 +497,7 @@ def test_separate_osp_dispatch_preserves_identity_and_finalizes(tmp_path, monkey
 
 
 def test_organize_prepare_reads_counts_in_chunks_without_eager_layers(tmp_path, monkeypatch):
-    from ecarsi.organize_v2 import prepare
+    from ecarsi.stages.organize import prepare
     from ecarsi.design import _obs
     step = source(tmp_path / "inputs", n=5000)
     def no_eager_read(*args, **kwargs):

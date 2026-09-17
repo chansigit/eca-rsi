@@ -8,7 +8,9 @@ import pytest
 from agents import Model, ModelResponse, Usage
 from openai.types.responses import ResponseFunctionToolCall, ResponseOutputMessage, ResponseOutputText
 
-from ecarsi import agent_bridge as bridge, agent_session as session
+import ecarsi.bridge as bridge
+import ecarsi.bridge.session as session
+from ecarsi.warm_pool.state import immutable, reference, verified
 from ecarsi.warm_pool.state import read, save, submit, file_digest
 
 
@@ -90,7 +92,7 @@ def test_pinned_adapter_survives_upgrade_and_rejects_tampering(tmp_path):
     saved = read(ref["path"])
     saved["adapter_sha256"] = archived["sha256"]
     save(ref["path"], saved)
-    ref = session.reference(ref["path"])
+    ref = reference(ref["path"])
     before = Path(ref["path"]).read_bytes()
     request_id = session.submit_turn(ref, 0)
     request = read(Path(spec["bridge_root"]) / "requests" / request_id / "request.json")
@@ -115,7 +117,7 @@ def test_recovery_keeps_original_tool_policy_when_batching_is_introduced(tmp_pat
     spec, ref = setup(tmp_path)
     upgraded = {**spec, "tools": [dict(t, read_only=True) for t in spec["tools"]]}
     assert session.create_session(upgraded) == ref
-    assert session.verified(ref)["spec"] == spec
+    assert verified(ref)["spec"] == spec
     changed = {**upgraded, "tools": [dict(t, memory_mb=t["memory_mb"]+1) for t in upgraded["tools"]]}
     with pytest.raises(ValueError, match="another specification"):
         session.create_session(changed)
@@ -125,19 +127,19 @@ def test_missing_submission_repair_is_bounded_and_preserves_original_evidence(tm
     spec, _ = setup(tmp_path)
     root = Path(spec['bridge_root'])
     save(root/'config.json', dict(read(root/'config.json'), pool_root=spec['pool_root']))
-    state = session.immutable(tmp_path/'original-state.json', {'read': []})
+    state = immutable(tmp_path/'original-state.json', {'read': []})
     spec = dict(spec, session_id='missing-submit', output_root=str(tmp_path/'missing-submit'),
                 completion_tool='compute', tool_state=state)
     original = session.create_session(spec)
-    reply = session.immutable(tmp_path/'final-reply.json', {'response': {'kind': 'final'}})
-    result = session.immutable(Path(spec['output_root'])/'result.json', {'session': original, 'reply': reply})
+    reply = immutable(tmp_path/'final-reply.json', {'response': {'kind': 'final'}})
+    result = immutable(Path(spec['output_root'])/'result.json', {'session': original, 'reply': reply})
     repaired = session.create_session(spec)
-    assert repaired != original and session.verified(result)['session'] == original
-    replacement = session.verified(repaired)['spec']
+    assert repaired != original and verified(result)['session'] == original
+    replacement = verified(repaired)['spec']
     assert replacement['tool_state'] == state and replacement['completion_tool'] == 'compute'
     assert session.create_session(spec) == repaired
     # A second failure stays visible for review; no recursive retry chain.
-    session.immutable(Path(replacement['output_root'])/'result.json', {'session': repaired, 'reply': reply})
+    immutable(Path(replacement['output_root'])/'result.json', {'session': repaired, 'reply': reply})
     assert session.create_session(spec) == repaired
     assert not (Path(replacement['output_root'])/'submission-recovery').exists()
 
@@ -149,7 +151,7 @@ def completed_tool(spec, item, value=None):
     output = attempt / "outputs/result.json"
     save(output, value if value is not None else {"worker": "worker-node", "value": 49})
     save(attempt / "receipt.json", {"state": "succeeded", "started_at": 1, "finished_at": 2,
-         "outputs": [{**session.reference(output), "size": output.stat().st_size}]})
+         "outputs": [{**reference(output), "size": output.stat().st_size}]})
     return {**item, "path": str(output)}
 
 
@@ -275,9 +277,9 @@ def test_completion_tool_and_business_trace(tmp_path):
     accepted = completed_tool(spec, item, {"accepted": True, "response": {"plan": "validated"}})
     context = session.continuation(ref, reply, [accepted])
     final = session.complete_tool(ref, context)
-    assert session.verified(read(final)["output"])["accepted"] is True
+    assert verified(read(final)["output"])["accepted"] is True
     assert session.complete_tool(ref, context) == final
-    from ecarsi.work_coordinator import agent_step
+    from ecarsi.control import agent_step
     assert agent_step("cached_completion", [ref]) == final
     save(Path(spec["pool_root"]) / "requests" / item["request_id"] / "cancel.json", {"requested_at": 1})
     with pytest.raises(ValueError, match="uncancelled"):
@@ -302,8 +304,8 @@ def test_worker_images_and_state_survive_sdk_continuation(tmp_path, portable):
     if portable:
         config_path = Path(spec["bridge_root"]) / "config.json"
         save(config_path, {**read(config_path), "pool_root": spec["pool_root"]})
-    initial = session.immutable(tmp_path / "initial.json", {"version": 0})
-    later = session.immutable(tmp_path / "later.json", {"version": 1})
+    initial = immutable(tmp_path / "initial.json", {"version": 0})
+    later = immutable(tmp_path / "later.json", {"version": 1})
     spec = {**spec, "session_id": "vision", "output_root": str(tmp_path / "vision"), "tool_state": initial,
             "tools": [{**spec["tools"][0], "multimodal": True, "args": spec["tools"][0]["args"] + ["{state}"]}]}
     ref = session.create_session(spec)
@@ -323,8 +325,8 @@ def test_worker_images_and_state_survive_sdk_continuation(tmp_path, portable):
 
 def test_invalid_arguments_return_to_model_without_executing_tool(tmp_path,monkeypatch):
     from harness_bridge import _harness_openai as adapter
-    from ecarsi.work_coordinator import agent_step
-    from ecarsi.agent_tool_errors import write_rejection
+    from ecarsi.control import agent_step
+    from ecarsi.bridge.tool_errors import write_rejection
     class CorrectingModel(ScriptedModel):
         async def get_response(self,**kwargs):
             self.inputs.append(kwargs['input'])
@@ -340,7 +342,7 @@ def test_invalid_arguments_return_to_model_without_executing_tool(tmp_path,monke
                     content=[ResponseOutputText(type='output_text',text='done',annotations=[])])]
             return ModelResponse(output=output,usage=Usage(requests=1,input_tokens=10,output_tokens=4),response_id='r'+str(turn))
     spec,_=setup(tmp_path)
-    state=session.immutable(tmp_path/'state.json',{'preserved':17})
+    state=immutable(tmp_path/'state.json',{'preserved':17})
     spec={**spec,'session_id':'correcting','output_root':str(tmp_path/'correcting'),'tool_state':state,
           'tools':[{**spec['tools'][0],'args':spec['tools'][0]['args']+['{state}']}]}
     ref=session.create_session(spec);root=Path(spec['bridge_root']);model=CorrectingModel()
@@ -348,7 +350,7 @@ def test_invalid_arguments_return_to_model_without_executing_tool(tmp_path,monke
         reply=execute_turn(root,session.submit_turn(ref,0))
         item=agent_step('tool',[ref,str(reply),0,None])
         request=read(Path(spec['pool_root'])/'requests'/item['request_id']/'request.json')
-        assert request['spec']['args'][:2]==['-m','ecarsi.agent_tool_errors']
+        assert request['spec']['args'][:2]==['-m','ecarsi.bridge.tool_errors']
         assert 'must never run' not in str(request['spec']['args'])
         output=tmp_path/'error-output';output.mkdir();monkeypatch.chdir(output)
         write_rejection(request['spec']['args'][2])
@@ -381,14 +383,14 @@ def test_batched_calls_keep_ordered_worker_state_and_require_every_result(tmp_pa
     spec, _ = setup(tmp_path)
     root = Path(spec['bridge_root'])
     save(root/'config.json', dict(read(root/'config.json'), pool_root=spec['pool_root']))
-    initial = session.immutable(tmp_path/'initial.json', {'version': 0})
-    later = session.immutable(tmp_path/'later.json', {'version': 1})
+    initial = immutable(tmp_path/'initial.json', {'version': 0})
+    later = immutable(tmp_path/'later.json', {'version': 1})
     spec = dict(spec, session_id='batched', output_root=str(tmp_path/'batched'), tool_state=initial,
                 tools=[dict(spec['tools'][0], read_only=True, args=spec['tools'][0]['args'] + ['{state}'])])
     ref = session.create_session(spec)
     with patch.object(adapter, '_client', return_value=Client()), patch.object(adapter, '_model', return_value=BatchModel()):
         reply = execute_turn(root, session.submit_turn(ref, 0))
-        with patch('ecarsi.agent_evidence.plan', side_effect=AssertionError('Do not prefetch a native batch')):
+        with patch('ecarsi.bridge.evidence.plan', side_effect=AssertionError('Do not prefetch a native batch')):
             first = session.tool_request(ref, reply, 0)
         accepted_first = completed_tool(spec, first, {'text': 'first-output', 'state': later})
         second = session.tool_request(ref, reply, 1, first['request_id'])

@@ -11,7 +11,8 @@ import pandas as pd
 import pytest
 from jsonschema import Draft202012Validator
 
-from ecarsi import crosssample_v3, zoomin_v3
+import ecarsi.stages.crosssample_v3 as crosssample_v3
+import ecarsi.stages.zoomin_v3 as zoomin_v3
 from ecarsi.warm_pool.state import read, save
 
 FAKE_BUNDLE = {'files': ['figures/umap_msp_leiden_r1.0.png', 'figures/qc_violin.png', 'per_sample_qc.csv',
@@ -47,19 +48,21 @@ def check_contract(session, program, paged):
         Draft202012Validator.check_schema(tool['parameters'])
         assert tool['parameters']['additionalProperties'] is False
         if tool['name'] != 'finalize_annotation':
-            assert (tool['parameters']['properties'] == {}) == (tool['name'] in paged)
+            assert (tool['parameters'] == zoomin_v3.NO_ARGUMENTS) == (tool['name'] in paged)
+            if tool['name'] in paged:   # a habitual offset is tolerated and ignored, never a wasted turn
+                Draft202012Validator(tool['parameters']).validate({'offset': 3})
     lookup = Draft202012Validator(next(t['parameters'] for t in session['tools'] if t['name'] == 'deg_lookup'))
     assert lookup.is_valid({'cluster': '3'}) and lookup.is_valid({'gene': 'CD3D', 'min_logfc': 1, 'max_padj': None})
     assert not lookup.is_valid({}) and not lookup.is_valid({'top_n': 5}) and not lookup.is_valid({'cluster': '3', 'bogus': 1})
 
 
 def test_zoomin_session_contract(monkeypatch):
-    monkeypatch.setattr(zoomin_v3.v2, 'agent_spec', lambda *a: fake_session('ecarsi.zoomin_v2'))
+    monkeypatch.setattr(zoomin_v3.v2, 'agent_spec', lambda *a: fake_session('ecarsi.stages.zoomin'))
     monkeypatch.setattr(zoomin_v3, 'verified', lambda ref: FAKE_BUNDLE)
     monkeypatch.setattr(zoomin_v3, 'intersections', lambda bundle: {'0': {'1': 120, '10': 4}, '5': {'2': 80}})
     for kind in ('plan', 'lineage'):
         session = zoomin_v3.agent_spec({}, {}, kind, 'parent')
-        check_contract(session, 'ecarsi.zoomin_v3', zoomin_v3.PAGED)
+        check_contract(session, 'ecarsi.stages.zoomin_v3', zoomin_v3.PAGED)
         names = [t['name'] for t in session['tools']]
         assert 'finalize_annotation' not in names
         assert session['completion_tool'] == ('submit_quality' if kind == 'lineage' else 'finalize_annotation')
@@ -72,11 +75,11 @@ def test_zoomin_session_contract(monkeypatch):
 
 
 def test_crosssample_session_contract(monkeypatch):
-    monkeypatch.setattr(crosssample_v3.v2, 'agent_spec', lambda *a: fake_session('ecarsi.crosssample_v2'))
+    monkeypatch.setattr(crosssample_v3.v2, 'agent_spec', lambda *a: fake_session('ecarsi.stages.crosssample'))
     monkeypatch.setattr(crosssample_v3, 'verified', lambda ref: FAKE_BUNDLE)
     for phase in ('inclusion', 'type', 'quality'):
         session = crosssample_v3.agent_spec({}, {}, phase, 'parent', None)
-        check_contract(session, 'ecarsi.crosssample_v3', crosssample_v3.PAGED)
+        check_contract(session, 'ecarsi.stages.crosssample_v3', crosssample_v3.PAGED)
         assert crosssample_v3.OBJECT_NOTE in next(t['description'] for t in session['tools'] if t['name'] == 'submit_decision')
         assert ('Evidence files' in session['prompt']) == (phase != 'inclusion')
 

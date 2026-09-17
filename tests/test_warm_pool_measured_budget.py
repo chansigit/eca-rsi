@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from ecarsi.operation_budget import MEASURED_CEILING_MB, measured_ceiling
+from ecarsi.warm_pool.budget import MEASURED_CEILING_MB, measured_ceiling
 from ecarsi.warm_pool.state import digest, read, save, status, submit, validate
 
 
@@ -23,7 +23,7 @@ def _pool(tmp_path):
 
 
 def test_cpu_counts_are_capped_from_measurements_too():
-    from ecarsi.operation_budget import MEASURED_CPUS
+    from ecarsi.warm_pool.budget import MEASURED_CPUS
     capped = measured_ceiling(dict(_spec("d", "zoom-in.deg", 2560), cpus=2))
     assert capped["cpus"] == MEASURED_CPUS["zoom-in.deg"] == 1 and capped["memory_mb"] == 2560
     assert measured_ceiling(dict(_spec("d", "zoom-in.deg", 2560), cpus=1))["cpus"] == 1
@@ -65,7 +65,7 @@ def test_rss_kill_is_retryable_and_check_pool_doubles_the_budget(tmp_path):
     receipt = read(root / "requests" / "big" / request["attempt_id"] / "receipt.json")
     assert receipt["state"] == "failed" and receipt["retryable"] is True
     assert receipt["error"].startswith("MemoryError") and "RSS" in receipt["error"]
-    from ecarsi.work_coordinator import check_pool
+    from ecarsi.control import check_pool
     assert check_pool(str(root), "big", "result.json") == {"state": "waiting"}
     retried = read(root / "requests" / "big" / "request.json")
     assert retried["spec"]["memory_mb"] == 128 and retried["retry_count"] == 1

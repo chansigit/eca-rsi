@@ -1,0 +1,45 @@
+{
+  "base_science_image": {
+    "path": "/scratch/users/chensj16/containers/rsi-science-20260915-7.sif",
+    "sha256": "ce3f6a70530ca9989f6f72f8227a490aa336db0017ca25889320eb45c9aca366"
+  },
+  "control_dependencies": {
+    "path": "/scratch/users/chensj16/containers/rsi-control-20260915-1.sif",
+    "sha256": "a1917b629890caccd5ab982f64143ea4cbb68e3fd487f9f1a3266c6455dd6183"
+  },
+  "runtime": {
+    "command": [
+      "/usr/local/bin/python3.12"
+    ],
+    "files": {
+      "/opt/rsi-runtime.json": "32518927beb066ccf3d83677425ad57ac627e95248ebd3125d7effcd19c828b8",
+      "/usr/local/bin/python3.12": "0e6475dfda68a9b2d93501449fc47593ca169010e8f4881577b97463fd0c1263"
+    },
+    "image": {
+      "path": "/scratch/users/chensj16/containers/rsi-science-20260915-8.sif",
+      "sha256": "ca76a6a1ab53e67ca7612ca7609457e78cb53281dd39d262959b94acc611025f"
+    },
+    "imports": [
+      "osp",
+      "osp.annotate",
+      "scanpy",
+      "igraph",
+      "leidenalg",
+      "ecarsi.stages.persample",
+      "msp",
+      "msp.integrate",
+      "msp.evidence",
+      "ecarsi.stages.crosssample",
+      "zmip.scheduled",
+      "ecarsi.stages.zoomin",
+      "agents",
+      "ecarsi.bridge.dispatch"
+    ],
+    "pythonpath": [
+      "/scratch/users/chensj16/worktrees/eca-rsi-gen2",
+      "/opt/rsi-control",
+      "/opt/rsi-python"
+    ],
+    "version": "Python 3.12.14"
+  }
+}

@@ -4,8 +4,9 @@ from unittest.mock import patch
 
 import pytest
 
-from ecarsi.agent_parallel import budget, choose, eligible, merge_states
-from ecarsi import agent_session as session
+from ecarsi.bridge.parallel import budget, choose, eligible, merge_states
+import ecarsi.bridge.session as session
+from ecarsi.warm_pool.state import immutable, reference, verified
 from ecarsi.warm_pool.state import read, save
 
 
@@ -41,9 +42,9 @@ def test_parallel_handoff_preserves_all_results_and_next_turn_state(tmp_path):
                 call_id=f'c{len(self.inputs)}-{i}', arguments='{"value":'+str(i)+'}', id=f'c{len(self.inputs)}-{i}', status='completed')
                 for i in range(18)], usage=Usage(requests=1, input_tokens=10, output_tokens=4), response_id='r')
     spec, _ = setup(tmp_path)
-    base = session.immutable(tmp_path/'initial.json', dict(phase='type', read=[], qc=False, lookups=[], evidence={}))
+    base = immutable(tmp_path/'initial.json', dict(phase='type', read=[], qc=False, lookups=[], evidence={}))
     tool = dict(spec['tools'][0], name='read_evidence', read_only=True, memory_mb=49152,
-                args=['-m','ecarsi.crosssample_v2','tool','read_evidence','{state}','{arguments}'])
+                args=['-m','ecarsi.stages.crosssample','tool','read_evidence','{state}','{arguments}'])
     spec = dict(spec, session_id='parallel', output_root=str(tmp_path/'parallel'), tools=[tool], tool_state=base)
     root = Path(spec['bridge_root'])
     save(root/'config.json', dict(read(root/'config.json'), pool_root=spec['pool_root']))
@@ -57,14 +58,14 @@ def test_parallel_handoff_preserves_all_results_and_next_turn_state(tmp_path):
             item = session.tool_request(ref, reply, i)
             request = read(Path(spec['pool_root'])/'requests'/item['request_id']/'request.json')['spec']
             assert base in request['inputs'] and request['memory_mb'] == 2048
-            state = session.immutable(tmp_path/f'fork-{i}.json', dict(session.verified(base), read=[str(i)]))
+            state = immutable(tmp_path/f'fork-{i}.json', dict(verified(base), read=[str(i)]))
             accepted.append(completed_tool(spec, item, {'text': str(i), 'state': state}))
         assert choose(ref, reply)  # Restart retains its original parallel policy.
         with pytest.raises(ValueError, match='Missing or reordered'):
             session.continuation(ref, reply, accepted[:-1], parallel=True)
         context = session.continuation(ref, reply, accepted, parallel=True)
-        merged = session.verified(context)['tool_state']
-        assert session.verified(merged)['read'] == list(map(str, range(18)))
+        merged = verified(context)['tool_state']
+        assert verified(merged)['read'] == list(map(str, range(18)))
         second = execute_turn(root, session.submit_turn(ref, 1, context))
         item = session.tool_request(ref, second, 0)
         request = read(Path(spec['pool_root'])/'requests'/item['request_id']/'request.json')['spec']
@@ -79,11 +80,11 @@ def test_matrix_budget_uses_compute_receipt_and_keeps_prior_request(tmp_path):
     pool = tmp_path/'pool'
     output = pool/'requests/compute/attempt/outputs/prepared.json'
     output.parent.mkdir(parents=True);save(output, {})
-    computed = session.reference(output)
+    computed = reference(output)
     save(output.parent.parent/'receipt.json', dict(state='succeeded', peak_rss_bytes=2**30, outputs=[computed]))
-    evidence = session.immutable(tmp_path/'evidence.json', dict(prepared=computed))
-    state = session.immutable(tmp_path/'state.json', dict(evidence=evidence, phase='type'))
-    tool = dict(name='check_genes', args=['-m','ecarsi.crosssample_v2','tool','check_genes','{state}','{arguments}'])
+    evidence = immutable(tmp_path/'evidence.json', dict(prepared=computed))
+    state = immutable(tmp_path/'state.json', dict(evidence=evidence, phase='type'))
+    tool = dict(name='check_genes', args=['-m','ecarsi.stages.crosssample','tool','check_genes','{state}','{arguments}'])
     req = dict(request_id='t', args=tool['args'], memory_mb=49152, inputs=[])
     (tmp_path/'new').mkdir()
     result = budget(req, tmp_path/'new', {'pool_root':str(pool)}, tool, state)

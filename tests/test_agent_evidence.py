@@ -6,9 +6,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ecarsi import agent_evidence as batch
-from ecarsi.agent_session import immutable, reference, verified
-from ecarsi.persample_v2 import sealed
+import ecarsi.bridge.evidence as batch
+from ecarsi.bridge.session import immutable, reference, verified
+from ecarsi.stages.persample import sealed
 from ecarsi.warm_pool.state import read, save
 
 PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aMZkAAAAASUVORK5CYII=')
@@ -35,14 +35,14 @@ def test_osp_returns_required_evidence_without_skipping_marker_judgment(tmp_path
     bundle = sealed(source, tmp_path / 'computed.json')
     state = immutable(tmp_path / 'before.json', dict(bundle=bundle, data=reference(source / 'clustered.h5ad'),
         key='cluster', version=0, seen=dict(figures=[], tables=[], genes=False, qc=False)))
-    result = run_batch(tmp_path / 'batch', monkeypatch, 'ecarsi.persample_v2', state,
+    result = run_batch(tmp_path / 'batch', monkeypatch, 'ecarsi.stages.persample', state,
         'read_evidence', dict(kind='figures', offset=0), ['read_evidence', 'check_qc_scores'])
     after = verified(result['state'])
     assert after['seen'] == dict(figures=['umap_clusters.png'], tables=[0, 60000], genes=False, qc=True)
     assert len(result['images']) == 1 and result['evidence_batch']['pending'] is None
     assert len(result['evidence_batch']['calls']) == 4
     assert verified(state)['seen']['qc'] is False
-    from ecarsi.persample_v2 import tool
+    from ecarsi.stages.persample import tool
     reject = tmp_path / 'reject'; reject.mkdir()
     args = immutable(reject / 'args.json', dict(proposal_json='{}', version=0))
     tool('submit_annotation', result['state']['path'], args['path'], reject)
@@ -64,7 +64,7 @@ def inclusion_state(tmp_path, count=3):
 def test_inclusion_batches_inventories_and_figures_but_requires_every_sample(tmp_path, monkeypatch):
     state = inclusion_state(tmp_path)
     allowed = ['sample_inventory', 'read_evidence']
-    result = run_batch(tmp_path / 'inventory', monkeypatch, 'ecarsi.crosssample_v2', state,
+    result = run_batch(tmp_path / 'inventory', monkeypatch, 'ecarsi.stages.crosssample', state,
         'sample_inventory', dict(offset=0), allowed, multimodal=False)
     assert verified(result['state'])['inventories'] == ['s0', 's1', 's2']
     assert result['next_offset'] is None and len(result['additional_evidence']) == 2
@@ -72,19 +72,19 @@ def test_inclusion_batches_inventories_and_figures_but_requires_every_sample(tmp
     # Limit the batch to one image. The computed-but-unreturned second image
     # must not appear in the state used by submission validation.
     monkeypatch.setattr(batch, 'IMAGE_BYTES', 150)
-    figure = run_batch(tmp_path / 'figure', monkeypatch, 'ecarsi.crosssample_v2', result['state'],
+    figure = run_batch(tmp_path / 'figure', monkeypatch, 'ecarsi.stages.crosssample', result['state'],
         'read_evidence', dict(path='s0/figures/umap_clusters.png', offset=0), allowed)
     assert verified(figure['state'])['read'] == ['s0/figures/umap_clusters.png']
     pending = figure['evidence_batch']['pending']
     assert pending == dict(tool='read_evidence', arguments=dict(path='s1/figures/umap_clusters.png', offset=0))
-    from ecarsi.crosssample_v2 import tool
+    from ecarsi.stages.crosssample import tool
     args = immutable(tmp_path / 'decision.json', dict(proposal_json=json.dumps({'notes': 'Reviewed all samples', 'samples': [
         dict(sample=f's{i}', include=True, reason='Reviewed evidence') for i in range(3)]})))
     reject = tmp_path / 'reject'; reject.mkdir()
     tool('submit_decision', figure['state']['path'], args['path'], reject)
     assert 'Read each sample cluster UMAP' in read(reject / 'result.json')['content']
     monkeypatch.setattr(batch, 'IMAGE_BYTES', 12 * 2**20)
-    rest = run_batch(tmp_path / 'rest', monkeypatch, 'ecarsi.crosssample_v2', figure['state'],
+    rest = run_batch(tmp_path / 'rest', monkeypatch, 'ecarsi.stages.crosssample', figure['state'],
         pending['tool'], pending['arguments'], allowed)
     assert len(rest['images']) == 2 and len(verified(rest['state'])['read']) == 3
     accept = tmp_path / 'accept'; accept.mkdir()
@@ -94,7 +94,7 @@ def test_inclusion_batches_inventories_and_figures_but_requires_every_sample(tmp
 
 def test_pagination_bound_and_frozen_execution_plan(tmp_path, monkeypatch):
     state = inclusion_state(tmp_path, count=12)
-    result = run_batch(tmp_path / 'inventory', monkeypatch, 'ecarsi.crosssample_v2', state,
+    result = run_batch(tmp_path / 'inventory', monkeypatch, 'ecarsi.stages.crosssample', state,
         'sample_inventory', dict(offset=0), ['sample_inventory'], multimodal=False)
     assert result['next_offset'] == 8 and len(result['evidence_batch']['calls']) == 8
     assert len(verified(result['state'])['inventories']) == 8
@@ -107,18 +107,18 @@ def test_pagination_bound_and_frozen_execution_plan(tmp_path, monkeypatch):
         cpus=1, memory_mb=1024, timeout_seconds=60)])
     directory = tmp_path / 'plan'; directory.mkdir()
     planned = batch.plan(request, directory, session)
-    assert planned['args'][:2] == ['-m', 'ecarsi.agent_evidence']
+    assert planned['args'][:2] == ['-m', 'ecarsi.bridge.evidence']
     assert batch.plan(request, directory, session) == planned
     with pytest.raises(ValueError, match='execution changed'):
         batch.plan(dict(request, memory_mb=2048), directory, session)
     # A previously registered original plan must not be upgraded in place.
     directory = tmp_path / 'old'; directory.mkdir()
-    from ecarsi.agent_tool_execution import plan
+    from ecarsi.bridge.tool_execution import plan
     original = plan(request, directory, session['pool_root'])
     assert batch.plan(request, directory, session) == original == request
 
 
-@pytest.mark.parametrize('module', ['ecarsi.crosssample_v2', 'ecarsi.zoomin_v2'])
+@pytest.mark.parametrize('module', ['ecarsi.stages.crosssample', 'ecarsi.stages.zoomin'])
 def test_text_pages_and_errors_keep_original_checks(tmp_path, monkeypatch, module):
     text = 'gene,score\nCD3D,1\n\u03b22M,2\n' * 4000
     path = tmp_path / 'table.csv'; path.write_text(text)

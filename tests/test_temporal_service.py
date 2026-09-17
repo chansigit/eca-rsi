@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from ecarsi.temporal_service import endpoint
+from ecarsi.control.temporal import endpoint
 from ecarsi.warm_pool.state import save
 
 
@@ -13,7 +13,7 @@ def test_only_client_commands_disable_sdk_worker_heartbeats(monkeypatch, command
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, Mock
     import temporalio.runtime
-    from ecarsi import work_coordinator as coordinator
+    import ecarsi.control as coordinator
     handle = SimpleNamespace(id='dataset/test',
         describe=AsyncMock(return_value=SimpleNamespace(status=SimpleNamespace(name='RUNNING'))),
         query=AsyncMock(return_value='testing'))
@@ -45,7 +45,8 @@ def test_discovery_rejects_stale_or_stopped_owner(tmp_path):
 
 
 def test_coordinator_reconnects_without_resubmitting_work(monkeypatch):
-    from ecarsi import temporal_service, work_coordinator as coordinator
+    import ecarsi.control.temporal as temporal_service
+    import ecarsi.control as coordinator
 
     async def scenario():
         generation = 'first'

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 from temporalio.exceptions import ApplicationError
 
-from ecarsi.zoomin_workflow import ZoominWorkflow, zoomin_step
+from ecarsi.control.zoomin import ZoominWorkflow, zoomin_step
 from ecarsi.warm_pool.state import save, read
 
 
@@ -12,7 +12,7 @@ def test_gpu_grant_is_selected_for_lineage_compute(tmp_path):
     save(pool/'config.json',{'runtime':{}})
     save(tmp_path/'subset.json',{'lineage':{'n_cells':900}})
     save(tmp_path/'markers.json',{})
-    from ecarsi.agent_session import reference
+    from ecarsi.bridge.session import reference
     budget=dict(cpus=2,memory_mb=4096,timeout_seconds=600)
     spec=dict(run_id='zoom-test',dataset_id='D',output_root=str(tmp_path/'out'),pool_root=str(pool),
         input=reference(tmp_path/'subset.json'),compute_budget=budget,
@@ -25,7 +25,7 @@ def test_gpu_grant_is_selected_for_lineage_compute(tmp_path):
 
 @pytest.mark.parametrize('fail_first', [False, True])
 def test_model_wait_releases_lineage_compute_admission(monkeypatch, fail_first):
-    import ecarsi.zoomin_workflow as module
+    import ecarsi.control.zoomin as module
     async def scenario():
         second_compute=asyncio.Event();requests={};prepared_count=0;events=[]
         async def call(fn,action,args):

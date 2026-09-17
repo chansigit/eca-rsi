@@ -1,5 +1,5 @@
 """Check activities wait inside the activity: one activity per wait, not one per poll."""
-from ecarsi import work_coordinator as wc
+import ecarsi.control as wc
 
 
 def test_long_poll_returns_on_first_non_waiting_answer(monkeypatch):

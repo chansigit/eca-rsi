@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from ecarsi.dev_observatory import resource_history, snapshot, summarize_resources, task_timeline, worker_inventory
+from ecarsi.observatory import resource_history, snapshot, summarize_resources, task_timeline, worker_inventory
 
 
 def put(path, value):

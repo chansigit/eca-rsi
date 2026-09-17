@@ -1,7 +1,7 @@
 """Command-line status: HQ job names classify into operation and dataset; the report renders without records."""
 import time
 
-from ecarsi.dev_observatory import classify_job, render_status
+from ecarsi.observatory import classify_job, render_status
 
 
 def test_classify_job_names():

@@ -6,7 +6,7 @@ import pytest
 from agents import Model, ModelResponse, Usage
 from openai.types.responses import ResponseFunctionToolCall
 
-from ecarsi import agent_session as session
+import ecarsi.bridge.session as session
 from tests.test_agent_session import Client, completed_tool, execute_turn, setup
 
 

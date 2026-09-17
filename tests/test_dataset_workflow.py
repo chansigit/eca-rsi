@@ -2,16 +2,16 @@ import asyncio
 
 import pytest
 
-from ecarsi.agent_session import reference
-from ecarsi.dataset_workflow import AnalysisUnitWorkflow, dataset_step
+from ecarsi.bridge.session import reference
+from ecarsi.control.dataset import AnalysisUnitWorkflow, dataset_step
 from ecarsi.warm_pool.state import save
 
 
 def test_organize_resume_accepts_relocated_publication_but_rejects_changed_data(tmp_path, monkeypatch):
     from tests.test_organize_v2_publish import outputs
-    from ecarsi.organize_v2 import publish
+    from ecarsi.stages.organize import publish
     from ecarsi import layout as L
-    import ecarsi.work_coordinator as coordinator
+    import ecarsi.control as coordinator
 
     output, destination = outputs(tmp_path)
     publish(output, destination)
@@ -43,7 +43,7 @@ def test_round_uses_legacy_convergence_and_conserves_cell_counts(tmp_path):
         updated = dataset_step('round', [spec, unit, progress, str(cross), str(zoom)])
         assert ('publication' in updated) == (number == 2)  # Round one never auto-releases.
         if number == 2:
-            from ecarsi.agent_session import verified
+            from ecarsi.bridge.session import verified
             publication = verified(reference(updated['publication']))
             assert publication['n_input'] == publication['n_survived'] + publication['n_removed'] == 2000
             assert publication['n_removed'] == 170 and not publication['forced_release']
@@ -55,7 +55,7 @@ def test_round_uses_legacy_convergence_and_conserves_cell_counts(tmp_path):
 
 
 def test_next_round_does_not_repeat_organize_or_per_sample(monkeypatch):
-    import ecarsi.dataset_workflow as module
+    import ecarsi.control.dataset as module
 
     async def scenario():
         stages = []
@@ -77,7 +77,7 @@ def test_next_round_does_not_repeat_organize_or_per_sample(monkeypatch):
 
 
 def test_resume_reuses_complete_stages_and_only_starts_unfinished_zoom(monkeypatch):
-    import ecarsi.dataset_workflow as module
+    import ecarsi.control.dataset as module
 
     async def scenario():
         started = []
@@ -112,7 +112,7 @@ def test_dataset_publication_preserves_incomplete_revision_and_seals_success(tmp
 
 
 def test_unit_waits_for_accepted_pool_release_before_completing(monkeypatch):
-    import ecarsi.dataset_workflow as module
+    import ecarsi.control.dataset as module
     actions = []
     async def call(fn, action, args):
         actions.append(action)
@@ -139,7 +139,7 @@ def test_unit_waits_for_accepted_pool_release_before_completing(monkeypatch):
 
 
 def test_completed_stage_requires_same_input_spec_and_accepted_result(tmp_path, monkeypatch):
-    import ecarsi.work_coordinator as coordinator
+    import ecarsi.control as coordinator
     pool = tmp_path / 'pool'
     output = pool / 'requests' / 'compute' / 'attempt' / 'final.json'
     output.parent.mkdir(parents=True)
@@ -164,7 +164,7 @@ def test_completed_stage_requires_same_input_spec_and_accepted_result(tmp_path, 
 def test_resume_rejects_unreconciled_requests_and_audits_new_run(tmp_path, monkeypatch):
     from types import SimpleNamespace as NS
     import ecarsi.warm_pool.state as pool
-    import ecarsi.dataset_workflow as module
+    import ecarsi.control.dataset as module
     from temporalio.common import WorkflowIDReusePolicy
     spec = dict(output_root=str(tmp_path), pool_root=str(tmp_path / 'pool'),
                 bridge_root=str(tmp_path / 'bridge'), run_id='test')
@@ -204,7 +204,7 @@ def test_resume_rejects_unreconciled_requests_and_audits_new_run(tmp_path, monke
     assert client.started == [dict(args=[spec, True], id='dataset/test', task_queue='queue',
         id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY)]
     assert len(list((tmp_path / 'recoveries').glob('*.started.json'))) == 1
-    from ecarsi.agent_session import verified
+    from ecarsi.bridge.session import verified
     audit = pool.read(next((tmp_path / 'recoveries').glob('*.started.json')))
     intent = verified(audit['intent'])
     save(tmp_path / 'publication.json', {'state': 'complete'})
@@ -212,7 +212,7 @@ def test_resume_rejects_unreconciled_requests_and_audits_new_run(tmp_path, monke
 
 
 def test_failed_unit_does_not_cancel_its_running_sibling(monkeypatch):
-    import ecarsi.dataset_workflow as module
+    import ecarsi.control.dataset as module
     from types import SimpleNamespace
     from temporalio.exceptions import ApplicationError
 
