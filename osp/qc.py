@@ -332,7 +332,7 @@ def qc_one_sample(
     mt_soft_pct=8.0,
     hard_min_genes=200,
     hard_min_counts=500,
-    hard_max_mt_pct=15.0,
+    hard_max_mt_pct=25.0,
     run_scrublet=True,
     run_decontx=True,
     decontx_kwargs=None,

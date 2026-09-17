@@ -122,7 +122,7 @@ OSP measures several aspects of cell quality together:
 
 **Filtering combines fixed thresholds with sample-adaptive thresholds.**
 By default, fixed checks flag cells with fewer than 200 detected genes,
-fewer than 500 counts, or more than 15% mitochondrial counts. Adaptive
+fewer than 500 counts, or more than 25% mitochondrial counts. Adaptive
 checks flag observations more than five median absolute deviations (MADs)
 from the sample median for log1p counts, log1p gene counts, and the
 top-20-gene fraction. The additional mitochondrial flag requires a deviation

@@ -3,6 +3,16 @@
 Release notes for OSP. Newest first. Install a specific version with
 `pip install "osp-sc[agent]==<version>"`.
 
+## 0.1.7 (2026-09-17)
+
+### Changes
+
+- The fixed mitochondrial cutoff `hard_max_mt_pct` defaults to 25 % instead of 15 %.
+  At 15 % it removed most cells of high-mitochondrial tissues (Tabula Sapiens kidney: 5204 of
+  6116 cells failed this rule alone, median 26.5 %; liver and intestine lost about two thirds).
+  The MAD-based mitochondrial outlier rule (`mt_nmads`, `mt_soft_pct`) is unchanged and still
+  catches sample-relative outliers below the fixed cutoff.
+
 ## 0.1.2 (2026-09-05)
 
 Fixes and clean-ups from a full project review; no output file names or
