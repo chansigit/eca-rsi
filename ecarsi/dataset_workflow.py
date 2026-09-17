@@ -51,8 +51,14 @@ def validate_spec(spec):
     return spec
 
 
+UNFINISHED = frozenset({'FAILED', 'TERMINATED', 'CANCELED', 'TIMED_OUT'})
+
+
 async def resume_dataset(client, identity, task_queue, reason):
-    """New Temporal run, same immutable dataset and accepted external request IDs."""
+    """New Temporal run, same immutable dataset and accepted external request IDs.
+
+    task_queue None means the queue the previous run was started on: a run started on a queue
+    no coordinator polls sits at its first workflow task forever (2026-09-16, Eye)."""
     from temporalio.common import WorkflowIDReusePolicy
     from .agent_session import immutable, reference
     from .warm_pool.state import read, status, digest
@@ -61,10 +67,12 @@ async def resume_dataset(client, identity, task_queue, reason):
         raise ValueError('A recovery reason is required')
     previous = client.get_workflow_handle(identity)
     info = await previous.describe()
-    if info.status.name != 'FAILED':
-        raise ValueError('Dataset resume requires a failed workflow')
+    if info.status.name not in UNFINISHED:
+        raise ValueError('Dataset resume requires a failed, terminated, cancelled or timed-out workflow')
     history = await client.get_workflow_handle(identity, run_id=info.run_id).fetch_history()
-    inputs = await client.data_converter.decode(history.events[0].workflow_execution_started_event_attributes.input.payloads)
+    started = history.events[0].workflow_execution_started_event_attributes
+    task_queue = task_queue or started.task_queue.name
+    inputs = await client.data_converter.decode(started.input.payloads)
     spec = inputs[0]
     root = Path(spec['output_root'])
     if read(root / 'spec.json') != spec:

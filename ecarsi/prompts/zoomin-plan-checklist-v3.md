@@ -1,4 +1,5 @@
 ## Required order (the host checks each step; a submission made earlier is rejected and costs a turn)
-1. list_evidence, then in one batched turn: read_evidence on the lineage UMAP png it lists and on lineage_counts.csv.
+1. list_evidence, then in one batched turn: read_evidence on the lineage UMAP png it lists, on lineage_counts.csv and on lineage_islands.csv.
 2. submit_plan: every coarse label exactly once across lineages; shared_island_reviews only for island names that your plan splits across lineages.
+Island rule (host-enforced from lineage_islands.csv: rows are coarse labels, columns are islands, values are the percent of the label's cells on that island): an island holding 30 % or more of a label's cells is a home island of the label. A lineage may pool two labels only when their home islands are linked through the lineage's own labels; a lineage whose labels sit on separate home islands is rejected, so give each separate island group its own lineage. When one island carries labels you place in different lineages, add shared_island_reviews[island] with the reason.
 proposal_json may be passed as the JSON object itself. A rejection names the exact missing items: fix only those and resubmit.

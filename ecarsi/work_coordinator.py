@@ -437,7 +437,7 @@ async def main():
     connection = parser.add_mutually_exclusive_group(required=True)
     connection.add_argument("--temporal", help="explicit Temporal Service host:port")
     connection.add_argument("--service-root", type=Path, help="shared Temporal service discovery directory")
-    parser.add_argument("--task-queue", default=QUEUE)
+    parser.add_argument("--task-queue", help="default %s; resume commands default to the queue of the run they resume" % QUEUE)
     commands = parser.add_subparsers(dest="command", required=True)
     p = commands.add_parser("worker")
     p.add_argument("--workflow-slots", type=int, help="concurrent workflow activations; default 2 to keep polling responsive and bound Python history replay; activities and Pool tasks remain concurrent")
@@ -468,6 +468,8 @@ async def main():
         p = commands.add_parser(name)
         p.add_argument("run_id")
     args = parser.parse_args()
+    if args.task_queue is None and not args.command.startswith("resume-"):
+        args.task_queue = QUEUE
     if args.command == 'worker' and args.service_root:
         await follow_service(args.service_root, args.task_queue, args.workflow_slots, args.activity_slots)
         return
@@ -542,8 +544,9 @@ async def main():
                        "resume-zoomin": ("zoom-in/", ZoominWorkflow.run)}[args.command]
         identity = prefix + identifier(args.run_id)
         previous = client.get_workflow_handle(identity)
-        if (await previous.describe()).status.name != "FAILED":
-            raise ValueError("Resume requires a failed workflow")
+        from .dataset_workflow import UNFINISHED
+        if (await previous.describe()).status.name not in UNFINISHED:
+            raise ValueError("Resume requires a failed, terminated, cancelled or timed-out workflow")
         history = await previous.fetch_history()
         spec, = await client.data_converter.decode(history.events[0].workflow_execution_started_event_attributes.input.payloads)
         if read(Path(spec["output_root"]) / "spec.json") != spec:
@@ -557,7 +560,8 @@ async def main():
                     if state not in allowed:
                         raise ValueError(f"Reconcile {path.parent.name} ({state}) before resume")
         handle = await client.start_workflow(run, spec, id=identity,
-            task_queue=args.task_queue, id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY)
+            task_queue=args.task_queue or history.events[0].workflow_execution_started_event_attributes.task_queue.name,
+            id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY)
         print(handle.id)
     else:
         from .warm_pool.state import identifier
