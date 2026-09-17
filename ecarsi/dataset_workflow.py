@@ -124,6 +124,24 @@ async def resume_dataset(client, identity, task_queue, reason):
     return handle
 
 
+# ponytail: operator floor for stage concurrency, in code because the dataset spec is a Temporal
+# workflow input and cannot change mid-run. Measured 2026-09-16: with 6 DEG tasks in flight the
+# numerical phase of a zoom-in stage took 10-25 min (130-300 DEG tasks of ~20 s) and two lineages
+# at a time serialised the rest, while the pool sat at 20-36 % CPU. The update handlers raise it
+# on running stages; this raises it for every new stage. Resume ignores these keys.
+STAGE_LIMIT_FLOORS = {'max_in_flight_deg': 12, 'max_in_flight_lineages': 6}
+
+
+def with_limit_floors(settings):
+    return {**settings, **{k: max(settings[k], v) for k, v in STAGE_LIMIT_FLOORS.items() if k in settings}}
+
+
+def same_stage_spec(saved, result):
+    def strip(value):
+        return {k: v for k, v in (value or {}).items() if k not in STAGE_LIMIT_FLOORS}
+    return strip(saved) == strip(result)
+
+
 @activity.defn
 def dataset_step(action, args):
     from .agent_session import immutable, reference, verified
@@ -222,9 +240,9 @@ def dataset_step(action, args):
         spec, unit, stage, source, round_number = args
         resume = action == 'resume_stage'
         def validated(settings, validate):
-            result = validate(settings, resume=resume)
+            result = validate(with_limit_floors(settings), resume=resume)
             root = Path(result['output_root'])
-            if resume and root.exists() and read(root / 'spec.json') != result:
+            if resume and root.exists() and not same_stage_spec(read(root / 'spec.json'), result):
                 raise ValueError('Saved stage specification changed; resume cannot change inputs or settings')
             return result
         verified(unit['organize'])

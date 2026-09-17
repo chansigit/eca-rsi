@@ -106,7 +106,8 @@ def check_bridge(root: str, request_id: str) -> dict:
         return {"state": "waiting", "detail": "unknown_external_result"}
     if result["state"] == "failed":
         return {"state": result["state"], "detail": result.get("reason")}
-    return {"state": "waiting", "poll_seconds": 15 if result['state'] == 'queued' else 3}
+    # 13 % of model replies arrive within 15 s; the queued state lasts only until the bridge dispatches.
+    return {"state": "waiting", "poll_seconds": 5 if result['state'] == 'queued' else 3}
 
 
 @activity.defn
