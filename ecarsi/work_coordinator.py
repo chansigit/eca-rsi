@@ -252,9 +252,13 @@ def agent_step(action: str, args: list):
             # never let a malformed model call fail the whole dataset.
             return reject_arguments(*args, message=getattr(exc, "message", None) or str(exc))
     operations = {"create": session.create_session, "model": session.submit_turn,
-                  "resume": session.continuation,
+                  "resume": session.continuation, "reset": session.reset_session,
                   "complete_tool": session.complete_tool}
     return operations[action](*args)
+
+
+MAX_CONTEXT_RESETS = 2  # fresh conversations per session after the provider rejects the transcript
+RESETTABLE = {"provider_error", "timeout"}
 
 
 @workflow.defn
@@ -276,19 +280,31 @@ class AgentWorkflow:
             if completed:
                 self._stage = "complete"
                 return completed
-        context = None
-        parents = []
+        context, parents, number, resets = None, [], 0, 0
+        resettable = workflow.patched("agent-context-reset-v1")
         for turn in range(spec["max_turns"]):
             self._stage = "model"
-            request = await call(agent_step, "model", [session, turn, context, parents])
+            request = await call(agent_step, "model", [session, number, context, parents])
             while True:
                 result = await call(check_bridge, spec["bridge_root"], request)
                 if result["state"] == "ready":
                     break
                 if result["state"] != "waiting":
+                    if (resettable and context is not None and resets < MAX_CONTEXT_RESETS
+                            and result.get("detail") in RESETTABLE):
+                        request = None
+                        break
                     raise ApplicationError(f"{request}: {result['state']}", non_retryable=True)
                 await workflow.sleep(result.get('poll_seconds', 2)
                     if workflow.patched('agent-queued-poll-backoff-v1') else 2)
+            if request is None:
+                # The provider kept rejecting the grown transcript: the same judgement continues
+                # in a fresh conversation, with the host state carried over.
+                resets += 1
+                session = await call(agent_step, "reset", [session, context, resets + 1, result["detail"]])
+                context, parents, number = None, [], 0
+                continue
+            number += 1
             reply = result["path"]
             decision = await call(agent_step, "decision", [reply])
             if decision["kind"] == "final":

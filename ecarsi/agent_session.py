@@ -204,6 +204,36 @@ def create_session(spec, *, recover_missing_submission=True):
     return reference(path)
 
 
+RESET_NOTE = ('\n\nContext reset: this is a fresh conversation because the previous transcript grew past what '
+              'the model provider accepts. The host kept every tool state: accepted submissions, read markers '
+              'and the pending scope all still stand. Use list_evidence and the status tools to see where you '
+              'are, then continue from the next required step; do not repeat submissions the host already accepted.')
+
+
+def reset_spec(spec, context, generation):
+    """The same judgement in a fresh conversation: a new session id and directory, the prompt told why,
+    and the host state the old transcript had reached as the initial tool_state."""
+    base = re.sub(r'-g\d+$', '', spec['session_id'])
+    root = Path(spec['output_root'])
+    while root.name.startswith('generation-'):
+        root = root.parent
+    fresh = dict(spec, session_id=f'{base}-g{generation}', output_root=str(root / f'generation-{generation}'),
+                 prompt=spec['prompt'] + RESET_NOTE)
+    if 'tool_state' in spec:
+        fresh['tool_state'] = context.get('tool_state') or verified(context['results'][-1]['output'])['state']
+    return fresh
+
+
+def reset_session(session_ref, context_ref, generation, reason):
+    """Eye round 5, 2026-09-16: 37 turns, 4.5 M input tokens, then HTTP 400 on every attempt; the
+    dataset died. Now the session restarts here, bounded by the workflow's reset count."""
+    session = verified(session_ref)
+    spec = reset_spec(session['spec'], verified(context_ref), generation)
+    intent = immutable(Path(session['spec']['output_root']) / f'context-reset-{generation}.json',
+                       dict(reason=reason, session=session_ref, context=context_ref, spec=spec))
+    return create_session(verified(intent)['spec'], recover_missing_submission=False)
+
+
 def validate_turn(spec):
     if set(spec) != {"request_id", "operation_id", "session", "context", "trace"}:
         raise ValueError("Agent turn requires session/context references and trace")
