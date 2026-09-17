@@ -563,7 +563,13 @@ def session_stats(bridge, pool, hours, now):
             started.add(session)
     kinds = {}
     for session in started:
-        kinds.setdefault(session.split('-', 1)[0], []).append(turns[session])
+        # A session counts once its last saved turn carried no tool calls: turns of a
+        # session still running would understate the real length.
+        last = read(bridge / 'requests' / f'{session}.turn-{turns[session] - 1}' / 'result.json')
+        kind = kinds.setdefault(session.split('-', 1)[0], {'started': 0, 'finished': []})
+        kind['started'] += 1
+        if last is not None and not (last.get('response') or {}).get('calls'):
+            kind['finished'].append(turns[session])
     submissions = {}
     for entry in os.scandir(pool / 'requests'):
         if '.tool-' not in entry.name or entry.stat().st_mtime < cutoff:
@@ -578,7 +584,9 @@ def session_stats(bridge, pool, hours, now):
         bucket = submissions.setdefault(operation, {'accepted': 0, 'rejected': 0})
         bucket['rejected' if result.get('is_error') else 'accepted'] += 1
     return {'hours': hours,
-            'sessions': {kind: {'started': len(v), 'turns_p50': sorted(v)[len(v) // 2], 'turns_max': max(v)}
+            'sessions': {kind: {'started': v['started'], 'finished': len(v['finished']),
+                                'turns_p50': sorted(v['finished'])[len(v['finished']) // 2] if v['finished'] else None,
+                                'turns_max': max(v['finished']) if v['finished'] else None}
                          for kind, v in kinds.items()},
             'submissions': submissions}
 
@@ -661,7 +669,7 @@ def render_status(report):
     if sessions:
         lines += ['', f"SESSIONS (last {sessions['hours']:g} h)"]
         for kind, v in sorted(sessions['sessions'].items()):
-            lines.append(f"  {kind:6s} started {v['started']:4d}  turns p50 {v['turns_p50']:3d}  max {v['turns_max']:3d}")
+            lines.append(f"  {kind:6s} started {v['started']:4d}  finished {v['finished']:4d}  turns p50 {v['turns_p50'] if v['turns_p50'] is not None else '-':>3}  max {v['turns_max'] if v['turns_max'] is not None else '-':>3}")
         for op, v in sorted(sessions['submissions'].items()):
             total = v['accepted'] + v['rejected']
             lines.append(f"  {op:18s} accepted {v['accepted']:4d}  rejected {v['rejected']:4d}  ({100 * v['rejected'] / max(1, total):.0f} %)")
