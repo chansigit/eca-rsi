@@ -12,7 +12,7 @@ import logging
 from harness_bridge import ensure_logging
 from ecarsi import __main__ as cli, osp_worker
 
-def work(*args):
+def work(*args, **kwargs):
     ensure_logging('ecarsi', 'osp')
     logging.getLogger('harness_bridge.smoke').info('bridge-marker')
     logging.getLogger('ecarsi.smoke').info('rsi-marker')
