@@ -27,3 +27,20 @@ def test_resume_comparison_ignores_the_floored_keys_only():
     assert not same_stage_spec(saved, dict(input='b', max_in_flight_deg=12, max_in_flight_lineages=6), floors)
     assert not same_stage_spec(saved, dict(input='a', max_in_flight_deg=12, max_in_flight_lineages=6), {})  # no floors: exact
     assert not same_stage_spec(None, dict(input='a'), floors)
+
+
+def test_completed_stage_check_tolerates_floored_keys(tmp_path, monkeypatch):
+    # Resume re-validates every completed stage; with floors set, a spec saved before the floors
+    # differs only in the floored key and must still be accepted (Eye, 2026-09-17 00:00 PDT).
+    from ecarsi.dataset_workflow import dataset_step
+    from ecarsi.warm_pool.state import save
+    monkeypatch.setenv('ECA_RSI_STAGE_LIMIT_FLOORS', json.dumps({'max_in_flight_deg': 12}))
+    root = tmp_path / 'stage'
+    root.mkdir()
+    saved = dict(output_root=str(root), pool_root=str(tmp_path), input='in', max_in_flight_deg=6)
+    save(root / 'spec.json', saved)
+    save(root / 'publication.json', dict(state='complete', input='other'))
+    with pytest.raises(ValueError, match='Cached stage input changed'):
+        dataset_step('completed', ['cross_sample', dict(saved, max_in_flight_deg=12)])
+    with pytest.raises(ValueError, match='Saved stage specification changed'):
+        dataset_step('completed', ['cross_sample', dict(saved, input='changed')])

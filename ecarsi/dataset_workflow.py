@@ -213,7 +213,7 @@ def dataset_step(action, args):
             # than comparing the intentionally different worker/published records.
             from .organize_v2 import publish
             return publish(Path(result['path']).parent, root)
-        if read(root / 'spec.json') != spec:
+        if not same_stage_spec(read(root / 'spec.json'), spec):
             raise ValueError('Saved stage specification changed')
         if publication.get('state') != 'complete' or publication['input'] != spec.get('input', spec.get('input_manifest')):
             raise ValueError('Cached stage input changed or is incomplete')
