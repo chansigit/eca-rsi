@@ -17,6 +17,7 @@ from .agent_bridge import status as bridge_status
 from .warm_pool.state import lock, read, status as pool_status
 
 PAGE = Path(__file__).with_name("dev_observatory.html")
+INDEX_HORIZON = 6 * 3600  # request folders untouched for longer are not read until a wider window asks
 
 
 def resource_history(pool: Path, since: float, until: float, cache: dict | None = None) -> list[dict]:
@@ -245,16 +246,38 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
     cache = cache if cache is not None else {}
     pool_done = cache.setdefault("pool_done", {})
     bridge_done = cache.setdefault("bridge_done", {})
+    now = time.time()
+    horizon = cache.get("horizon", INDEX_HORIZON)
+    cache["indexed_since"] = now - horizon
+    pool_stale, bridge_stale = cache.setdefault("pool_stale", {}), cache.setdefault("bridge_stale", {})
+
+    def recent(entry, stale):
+        """Folder mtime is the last state change; untouched folders beyond the horizon are remembered, not re-read."""
+        if entry.name in stale and horizon != float("inf"):
+            return False
+        try:
+            mtime = entry.stat().st_mtime
+        except OSError:
+            return False
+        if now - mtime > horizon:
+            stale[entry.name] = mtime
+            return False
+        stale.pop(entry.name, None)
+        return True
     scheduler = read(pool / "scheduler.json", {})
     worker = read(root / "organize-v2-pool-worker/worker.json", {})
     bridge_summary = read(bridge / "summary.json", {})
     pool_rows = []
     if (pool / "config.json").is_file():
-        for folder in (pool / "requests").iterdir():
-            if not (folder / "request.json").is_file():
+        # One directory listing per refresh; a settled request is never stat'ed again.
+        for entry in os.scandir(pool / "requests"):
+            if entry.name in pool_done:
+                pool_rows.append(pool_done[entry.name])
                 continue
-            if pool_done.get(folder.name, {}).get('state') == 'succeeded' and not (folder / "cancel.json").is_file():
-                pool_rows.append(pool_done[folder.name])
+            if not recent(entry, pool_stale):
+                continue
+            folder = Path(entry.path)
+            if not (folder / "request.json").is_file():
                 continue
             item = pool_status(pool, folder.name)
             request = read(folder / "request.json", {})
@@ -280,11 +303,14 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
                 pool_done[folder.name] = row
     bridge_rows = []
     if (bridge / "config.json").is_file():
-        for folder in sorted((bridge / "requests").iterdir()):
-            if not (folder / "request.json").is_file():
+        for entry in os.scandir(bridge / "requests"):
+            if entry.name in bridge_done:
+                bridge_rows.append(bridge_done[entry.name])
                 continue
-            if bridge_done.get(folder.name, {}).get('state') == 'reply_saved':
-                bridge_rows.append(bridge_done[folder.name])
+            if not recent(entry, bridge_stale):
+                continue
+            folder = Path(entry.path)
+            if not (folder / "request.json").is_file():
                 continue
             item = bridge_status(bridge, folder.name)
             request = read(folder / "request.json", {})
@@ -308,26 +334,6 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
         for pool_id in row.get("pool_attempts", []):
             if pool_id in pool_by_id:
                 pool_by_id[pool_id]["model"] = row["model"]
-    outputs = []
-    for publication in sorted(root.glob("organize-v2-*/*-output/publication.json")):
-        output = publication.parent
-        manifest = read(output / "organize/manifest.json", {})
-        if manifest.get("state") != "complete":
-            continue
-        audit = manifest.get("experiment_audit", {})
-        outputs.append({
-            "name": output.parent.name.removeprefix("organize-v2-").replace("-20260914", ""),
-            "run": output.name, "cells": sum(u.get("n_cells", 0) for u in manifest.get("units_written", [])),
-            "samples": sum(v.get("experiments", 0) for v in audit.values()),
-            "published_at": publication.stat().st_mtime,
-            "path": str(output),
-        })
-    reports = sorted(root.glob("multinode-*/run-*/acceptance.json"),
-                     key=lambda path: path.stat().st_mtime, reverse=True)
-    report = read(reports[0], {}) if reports else {}
-    acceptance = {"passed": report.get("passed"), "tests": report.get("tests", []),
-                  "nodes": [{"host": n.get("host"), "worker_cpu": n.get("worker_cpu")}
-                            for n in report.get("nodes", [])]}
     temporal_source = 'unvalidated development SQLite'
     service = None
     if temporal_service_root:
@@ -353,10 +359,8 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
         "scheduler": scheduler, "worker": worker, "bridge_summary": bridge_summary,
         "worker_live_count": sum(w["reporting"] for w in workers), "workers": workers,
         "pool_waiting": sum(t["state"] == "queued" for t in pool_rows),
-        "acceptance": acceptance,
         "pool_requests": sorted(pool_rows, key=lambda x: x["submitted_at"], reverse=True),
         "bridge_requests": sorted(bridge_rows, key=lambda x: x["submitted_at"], reverse=True),
-        "outputs": sorted(outputs, key=lambda x: x["published_at"], reverse=True),
     }
 
 
@@ -385,40 +389,39 @@ def serve(root: Path, port: int, temporal_port: int, bind: str,
                 body, kind = PAGE.read_bytes(), "text/html; charset=utf-8"
             elif url.path in {"/api/status", "/api/timeline"}:
                 try:
+                    query = parse_qs(url.query)
+                    until = float(query.get("until", [time.time()])[0])
+                    since = float(query.get("since", [until - 3600])[0])
+                    limit = int(query.get("limit", [2000])[0])
+                    dataset_page = int(query["dataset_page"][0]) if "dataset_page" in query else None
+                    dataset = query.get("dataset", [""])[0]
+                    timeline = url.path == "/api/timeline"
+                    if timeline and (not 0 < until - since <= 7 * 86400 or not 1 <= limit <= 2000 or len(dataset) > 256):
+                        raise ValueError("choose a time window of at most 7 days and limit up to 2000")
                     with guard:
+                        if timeline and since < cache.get("indexed_since", 0):
+                            # A window older than the index: one comprehensive walk; from then on everything stays indexed.
+                            cache["horizon"] = float("inf")
+                            cache["snapshot_at"] = 0
                         if time.monotonic() - cache.get("snapshot_at", 0) >= 2:
                             cache["snapshot"] = snapshot(root, temporal_port, bind, cache,
                                                          pool_root, bridge_root, temporal_service_root)
                             cache["snapshot_at"] = time.monotonic()
                         data = cache["snapshot"]
-                        if url.path == "/api/timeline":
-                            query = parse_qs(url.query)
-                            until = float(query.get("until", [time.time()])[0])
-                            since = float(query.get("since", [until - 4 * 3600])[0])
-                            limit = int(query.get("limit", [2000])[0])
-                            dataset_page = int(query["dataset_page"][0]) if "dataset_page" in query else None
-                            dataset = query.get("dataset", [""])[0]
-                            if not 0 < until - since <= 86400 or not 1 <= limit <= 2000 or len(dataset) > 256:
-                                raise ValueError("choose a time window of at most 24 hours and limit up to 2000")
+                        if timeline:
                             result = task_timeline(data["pool_requests"], data["bridge_requests"],
                                                    since, until, dataset, limit, dataset_page)
                             result["resources"] = summarize_resources(resource_history(
                                 Path(pool_root) if pool_root else Path(root) / "organize-v2-pool", since, until,
                                 cache.setdefault("resource_files", {})), since, until)
+                            result["indexed_since"] = cache.get("indexed_since")
                         else:
                             data = dict(data)
                             data["pool_total"] = len(data["pool_requests"])
                             data["pool_succeeded"] = sum(r["state"] == "succeeded" for r in data["pool_requests"])
-                            data["bridge_total"] = len(data["bridge_requests"])
-                            data["bridge_saved"] = sum(r["state"] == "reply_saved" for r in data["bridge_requests"])
-                            data["bridge_tokens_total"] = sum(
-                                (r.get("usage") or {}).get("tokens_in") or 0 for r in data["bridge_requests"])
-                            data["bridge_tokens_total"] += sum(
-                                (r.get("usage") or {}).get("tokens_out") or 0 for r in data["bridge_requests"])
-                            data["outputs_total"] = len(data["outputs"])
+                            data["indexed_since"] = cache.get("indexed_since")
                             data["pool_requests"] = data["pool_requests"][:20]
                             data["bridge_requests"] = data["bridge_requests"][:20]
-                            data["outputs"] = data["outputs"][:20]
                             result = data
                     body = json.dumps(result, allow_nan=False).encode()
                 except (ValueError, OverflowError) as exc:
