@@ -539,6 +539,30 @@ def tool_request(session_ref, reply_path, index, previous=None):
     return {"request_id": request_id, "result_file": tool["result_file"], "index": index}
 
 
+REPEAT_LIMIT = 3
+
+
+def repeated_rejections(reply_path, results):
+    """How many consecutive turns, ending with this one, made the same single call and had it rejected.
+    Eye 2026-09-17: 25 identical rejected proposals in two minutes, 167k input tokens each, for one
+    stray quote; the session would have burnt its 80 turns without a chance of converging."""
+    from .warm_pool.state import digest
+    if len(results) != 1 or not verified(results[0]["output"]).get("is_error"):
+        return 0
+    key = digest([results[0]["name"], results[0]["arguments"]])
+    count = 1
+    earlier = read(Path(reply_path).parent / "request.json")["spec"].get("context")
+    while earlier and count < REPEAT_LIMIT:
+        previous = verified(earlier)
+        last = (previous.get("results") or [None])[-1]
+        if (not last or len(previous["results"]) != 1 or digest([last["name"], last["arguments"]]) != key
+                or not verified(last["output"]).get("is_error")):
+            break
+        count += 1
+        earlier = read(Path(previous["reply"]["path"]).parent / "request.json")["spec"].get("context")
+    return count
+
+
 def continuation(session_ref, reply_path, accepted, parallel=False):
     s = verified(session_ref)["spec"]
     reply = turn_reply(session_ref, reply_path)
@@ -561,6 +585,10 @@ def continuation(session_ref, reply_path, accepted, parallel=False):
         results.append({**reply["calls"][item["index"]], "output": ref, "pool_request_id": item["request_id"]})
     context = {"reply": reference(reply_path), "sdk_state": reply["sdk_state"],
                "usage_total": reply["usage_total"], "results": results}
+    repeats = repeated_rejections(reply_path, results)
+    if repeats >= REPEAT_LIMIT:
+        raise ValueError(f"Model repeated an identical rejected {results[0]['name']} call {repeats} times; "
+                         "the session cannot converge and is stopped")
     if parallel:
         from .agent_parallel import eligible, merge_states
         if not eligible(s, reply['calls']):
