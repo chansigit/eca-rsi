@@ -22,6 +22,14 @@ def _pool(tmp_path):
     return tmp_path
 
 
+def test_cpu_counts_are_capped_from_measurements_too():
+    from ecarsi.operation_budget import MEASURED_CPUS
+    capped = measured_ceiling(dict(_spec("d", "zoom-in.deg", 2560), cpus=2))
+    assert capped["cpus"] == MEASURED_CPUS["zoom-in.deg"] == 1 and capped["memory_mb"] == 2560
+    assert measured_ceiling(dict(_spec("d", "zoom-in.deg", 2560), cpus=1))["cpus"] == 1
+    assert measured_ceiling(dict(_spec("c", "cross-sample.compute", 12288), cpus=8))["cpus"] == 8
+
+
 def test_ceiling_caps_listed_operations_only_and_never_raises():
     assert measured_ceiling(_spec("a", "submit_quality", 24576))["memory_mb"] == MEASURED_CEILING_MB["submit_quality"]
     assert measured_ceiling(_spec("a", "submit_quality", 1024))["memory_mb"] == 1024

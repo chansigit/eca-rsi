@@ -171,6 +171,7 @@ class HyperQueue:
         self.config = read(self.root / "config.json")
         self.command = [self.config["hq"], "--server-dir", str(self.root / "hq"), "--output-mode", "json"]
         self.finished = {}
+        self.settled = set()  # succeeded/cancelled folders: nothing can change them, not even a retry
 
     def call(self, *args):
         result = subprocess.run(self.command + list(args), stdin=subprocess.DEVNULL,
@@ -186,6 +187,8 @@ class HyperQueue:
         live_hosts = None  # HQ worker hostnames, fetched once per tick and only when needed
         submissions = []
         for folder in sorted((self.root / "requests").iterdir()):
+            if folder.name in self.settled:
+                continue  # 74k saved requests: two stats each per tick was most of a 20 s tick
             try:
                 stat = (folder / 'request.json').stat()
             except FileNotFoundError:
@@ -217,12 +220,15 @@ class HyperQueue:
                         save(folder / "backend.json", dict(previous, state="cancelled", observed_at=time.time()))
                     if receipt:
                         self.finished[folder.name] = stamp
+                        self.settled.add(folder.name)
                     continue
                 if receipt:
                     # A persisted result wins over a replayed HQ journal entry.
                     if job and job["task_stats"]["waiting"]:
                         self.call("job", "cancel", str(job["id"]))
                     self.finished[folder.name] = stamp
+                    if receipt.get("state") == "succeeded":
+                        self.settled.add(folder.name)  # a failed one may be retried: keep watching its stamp
                     continue
                 accepted = read(attempt / "accepted.json")
                 if accepted and not (job and (job["task_stats"]["running"] or job["task_stats"]["waiting"])):
@@ -238,8 +244,11 @@ class HyperQueue:
                     counts = job["task_stats"]
                     state = ("running" if counts["running"] else "queued" if counts["waiting"]
                              else "unknown_external_result")
-                    save(folder / "backend.json", dict(state=state, job_id=job["id"],
-                         generation=generation, observed_at=time.time(), task_stats=counts))
+                    record = dict(state=state, job_id=job["id"], generation=generation, task_stats=counts)
+                    if any(previous.get(k) != v for k, v in record.items()):
+                        # Each save is an fsync'd write on Lustre; refreshing observed_at
+                        # for 150 live jobs every tick cost more than the whole scan.
+                        save(folder / "backend.json", dict(record, observed_at=time.time()))
                     continue
                 if read(attempt / "accepted.json"):
                     # A lost backend record is not evidence that computation stopped.

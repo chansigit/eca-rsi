@@ -325,3 +325,17 @@ def test_dispatch_submits_concurrently_and_resubmits_a_failed_submission(tmp_pat
     backend.dispatch(info)
     assert sum(args[0] == 'submit' for args in calls) == 1  # only the failed one is submitted again
     assert read(tmp_path / 'requests/a/backend.json')['state'] == 'queued'
+    # An unchanged live job is not rewritten every tick (each save is an fsync on shared storage).
+    before = (tmp_path / 'requests/b/backend.json').stat().st_mtime_ns
+    backend.dispatch(info)
+    assert (tmp_path / 'requests/b/backend.json').stat().st_mtime_ns == before
+    # A succeeded request is settled: later ticks do not even stat it.
+    for name in ('a', 'b'):
+        request = read(tmp_path / f'requests/{name}/request.json')
+        save(tmp_path / f'requests/{name}' / request['attempt_id'] / 'receipt.json', dict(state='succeeded', finished_at=1,
+             attempt_id=request['attempt_id'], request_digest=request['digest'], runtime_digest=request['runtime_digest']))
+    backend.dispatch(info)
+    assert backend.settled == {'a', 'b'}
+    with monkeypatch.context() as check:
+        check.setattr(module_path := __import__('pathlib').Path, 'stat', lambda self, *a, **k: pytest.fail(f'settled folder stat: {self}'))
+        backend.dispatch(info)

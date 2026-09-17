@@ -25,12 +25,19 @@ MEASURED_CEILING_MB = {
 }
 
 
+# cpu_seconds / wall over 11.6k DEG and 280 compute receipts (2026-09-16, 15:53-20:40): DEG runs
+# exactly one core on its 2-CPU grant; zoom-in compute/markers peak at 1.0-1.4 cores of 4. The
+# thread caps (OMP/OPENBLAS/NUMBA) follow spec["cpus"], so a smaller grant changes nothing they did.
+MEASURED_CPUS = {'zoom-in.deg': 1, 'cross-sample.deg': 1, 'zoom-in.compute': 2, 'zoom-in.markers': 2}
+
+
 def measured_ceiling(spec):
-    """Cap a fixed stage budget at the measured ceiling; never raise, never touch unknown operations."""
-    ceiling = MEASURED_CEILING_MB.get(spec.get('operation_id'))
-    if ceiling is None or spec['memory_mb'] <= ceiling:
+    """Cap a fixed stage budget at the measured ceilings; never raise, never touch unknown operations."""
+    memory = min(spec['memory_mb'], MEASURED_CEILING_MB.get(spec.get('operation_id'), spec['memory_mb']))
+    cpus = min(spec['cpus'], MEASURED_CPUS.get(spec.get('operation_id'), spec['cpus']))
+    if (memory, cpus) == (spec['memory_mb'], spec['cpus']):
         return spec
-    return dict(spec, memory_mb=ceiling)
+    return dict(spec, memory_mb=memory, cpus=cpus)
 
 
 def from_compute(request, computed, policy_path, pool_root):
