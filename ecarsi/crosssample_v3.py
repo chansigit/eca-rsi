@@ -8,6 +8,11 @@ register this module, which delegates everything to v2 and changes only what the
     with what was missing: the samples to cover, the assigned type clusters, the unread type
     entries, the valid coarse boundaries.
 Measured 2026-09-16 over 6 h: 64 % of submit_decision calls were rejected.
+
+Contract v4 (2026-09-17): the annotation prompts already list the evidence paths, and
+list_evidence and type_context take no arguments and return everything in one call (an
+annotation bundle has 52 paths; type entries number a few dozen). sample_inventory keeps one
+sample per call: an inventory is 6-9 KB and a tissue has up to 30 of them.
 """
 import json
 from pathlib import Path
@@ -19,6 +24,11 @@ from .warm_pool.state import read, save
 PROGRAM = 'ecarsi.crosssample_v3'
 THRESHOLDS = {name: {'type': ['number', 'null']} for name in ('min_logfc', 'max_padj', 'min_pct1', 'max_pct2')}
 OBJECT_NOTE = ' proposal_json may be the JSON object itself rather than an escaped string.'
+# v2 pages these reads; here they take no arguments and the pages are merged on these list keys.
+PAGED = {'list_evidence': ('content',), 'type_context': ('content',)}
+PAGED_DESCRIPTIONS = {'list_evidence': 'List every evidence path (the annotation prompt already lists them).',
+                      'type_context': 'Every accepted or preserved type entry in one call.'}
+NO_ARGUMENTS = {'type': 'object', 'properties': {}, 'required': [], 'additionalProperties': False}
 
 
 def deg_lookup_schema(fields):
@@ -26,14 +36,30 @@ def deg_lookup_schema(fields):
             'anyOf': [{'required': ['cluster']}, {'required': ['gene']}], 'additionalProperties': False}
 
 
+def evidence_paths(bundle):
+    return [n for n in bundle['files'] if not n.startswith('deg_input/') and not n.endswith('.h5ad')]
+
+
+def inline_context(bundle):
+    """What list_evidence answers at turn 0 (52 paths), so the first turn reads evidence."""
+    paths = evidence_paths(bundle)
+    return ('Evidence files (read_evidence paths): ' + json.dumps(paths) + '\nFigures: '
+            + json.dumps([p for p in paths if p.endswith('.png')]))
+
+
 def agent_spec(spec, evidence_ref, phase, parent, types_ref=None):
     session = v2.agent_spec(spec, evidence_ref, phase, parent, types_ref)
-    checklist = Path(__file__).with_name('prompts') / ('crosssample-%s-checklist-v3.md' % ('inclusion' if phase == 'inclusion' else 'annotation'))
+    if phase != 'inclusion':
+        session['prompt'] += '\n\n' + inline_context(verified(evidence_ref))
+    checklist = Path(__file__).with_name('prompts') / ('crosssample-%s-checklist-v4.md' % ('inclusion' if phase == 'inclusion' else 'annotation'))
     session['prompt'] += '\n\n' + checklist.read_text()
     for tool in session['tools']:
         tool['args'] = ['-m', PROGRAM, 'tool', tool['name'], '{state}', '{arguments}']
         tool['inputs'] = [reference(Path(__file__)), *tool['inputs']]
-        if tool['name'] == 'deg_lookup':
+        if tool['name'] in PAGED:
+            tool['parameters'] = dict(NO_ARGUMENTS)
+            tool['description'] = PAGED_DESCRIPTIONS[tool['name']]
+        elif tool['name'] == 'deg_lookup':
             tool['parameters'] = deg_lookup_schema(tool['parameters']['properties'])
             tool['description'] += ' Give cluster or gene; key defaults to the base key, view/top_n/thresholds are optional.'
         elif tool['name'] == 'submit_decision':
@@ -101,8 +127,32 @@ def error_hint(name, content, state, args):
     return 'Quality proposal must decide every cluster of ' + v2.BASE + ': ' + json.dumps(clusters) + '.'
 
 
+def paged(name, state_path, destination):
+    """Every v2 page in one result; the last page's state carries what the pages recorded."""
+    merged, offset, number = None, 0, 0
+    while True:
+        arguments = immutable(destination / ('arguments-v3-%d.json' % number), {'offset': offset})['path']
+        v2.tool(name, state_path, arguments, destination)
+        page = read(destination / 'result.json')
+        if page.get('is_error'):
+            return
+        if merged is None:
+            merged = page
+        else:
+            for key in PAGED[name]:
+                merged[key] = merged[key] + page[key]
+            merged['state'] = page['state']
+        if page.get('next_offset') is None:
+            merged['next_offset'] = None
+            save(destination / 'result.json', merged)
+            return
+        offset, number = page['next_offset'], number + 1
+
+
 def tool(name, state_path, args_path, destination):
     destination = Path(destination)
+    if name in PAGED:
+        return paged(name, state_path, destination)
     args = read(args_path)
     fixed = canonical_arguments(name, args)
     if fixed != args:

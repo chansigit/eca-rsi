@@ -1,6 +1,8 @@
-"""Protocol v3: the same numerics as v2 behind a contract the model can satisfy first time.
+"""Protocol v3/v4: the same numerics as v2 behind a contract the model can satisfy first time, in few turns.
 
 Measured 2026-09-16: 13.9 % of all model turns were decision submissions the host rejected.
+Measured 2026-09-17: finalize_annotation never changed a decision in 247 sessions; paged reads
+cost a turn per page and skipped the 61st path in 62 sessions.
 """
 import json
 from pathlib import Path
@@ -12,15 +14,21 @@ from jsonschema import Draft202012Validator
 from ecarsi import crosssample_v3, zoomin_v3
 from ecarsi.warm_pool.state import read, save
 
+FAKE_BUNDLE = {'files': ['figures/umap_msp_leiden_r1.0.png', 'figures/qc_violin.png', 'per_sample_qc.csv',
+                         'deg_input/x.csv', 'integrated.h5ad', 'type_quality_intersections.csv']}
+
 
 def fake_session(program):
     tools = []
-    for name in ('list_evidence', 'read_evidence', 'deg_lookup', 'submit_quality', 'submit_types', 'submit_plan', 'submit_decision'):
+    for name in ('list_evidence', 'read_evidence', 'annotation_status', 'type_context', 'deg_lookup',
+                 'submit_quality', 'submit_types', 'submit_plan', 'submit_decision', 'finalize_annotation'):
         if name == 'deg_lookup':
             fields = {'key': {'type': 'string'}, 'cluster': {'type': 'string'}, 'gene': {'type': 'string'},
                       'view': {'type': 'string', 'enum': ['global', 'local', 'both']}, 'top_n': {'type': 'integer', 'minimum': 1, 'maximum': 200}}
         elif name.startswith('submit'):
             fields = {'proposal_json': {'type': 'string'}}
+        elif name == 'finalize_annotation':
+            fields = {}
         else:
             fields = {'offset': {'type': 'integer', 'minimum': 0}}
         tools.append(dict(name=name, description='d', read_only=False, multimodal=False,
@@ -28,95 +36,82 @@ def fake_session(program):
                           args=['-m', program, 'tool', name, '{state}', '{arguments}'],
                           inputs=[{'path': '/x/' + program + '.py', 'sha256': '0' * 64}], outputs=['result.json'], result_file='result.json',
                           cpus=1, memory_mb=64, timeout_seconds=30))
-    return dict(session_id='s', prompt='base prompt', tools=tools)
+    return dict(session_id='s', prompt='base prompt', tools=tools, completion_tool='finalize_annotation')
 
 
-def check_contract(session, program):
+def check_contract(session, program, paged):
     assert 'Required order' in session['prompt'] and session['prompt'].startswith('base prompt')
     for tool in session['tools']:
         assert tool['args'][:2] == ['-m', program]
         assert tool['inputs'][0]['path'].endswith(program.split('.')[-1] + '.py') and len(tool['inputs']) == 2
         Draft202012Validator.check_schema(tool['parameters'])
         assert tool['parameters']['additionalProperties'] is False
+        if tool['name'] != 'finalize_annotation':
+            assert (tool['parameters']['properties'] == {}) == (tool['name'] in paged)
     lookup = Draft202012Validator(next(t['parameters'] for t in session['tools'] if t['name'] == 'deg_lookup'))
     assert lookup.is_valid({'cluster': '3'}) and lookup.is_valid({'gene': 'CD3D', 'min_logfc': 1, 'max_padj': None})
     assert not lookup.is_valid({}) and not lookup.is_valid({'top_n': 5}) and not lookup.is_valid({'cluster': '3', 'bogus': 1})
 
 
-def test_zoomin_v3_session_contract(monkeypatch):
+def test_zoomin_session_contract(monkeypatch):
     monkeypatch.setattr(zoomin_v3.v2, 'agent_spec', lambda *a: fake_session('ecarsi.zoomin_v2'))
+    monkeypatch.setattr(zoomin_v3, 'verified', lambda ref: FAKE_BUNDLE)
+    monkeypatch.setattr(zoomin_v3, 'intersections', lambda bundle: {'0': {'1': 120, '10': 4}, '5': {'2': 80}})
     for kind in ('plan', 'lineage'):
         session = zoomin_v3.agent_spec({}, {}, kind, 'parent')
-        check_contract(session, 'ecarsi.zoomin_v3')
+        check_contract(session, 'ecarsi.zoomin_v3', zoomin_v3.PAGED)
+        names = [t['name'] for t in session['tools']]
+        assert 'finalize_annotation' not in names
+        assert session['completion_tool'] == ('submit_quality' if kind == 'lineage' else 'finalize_annotation')
+        assert '"figures/umap_msp_leiden_r1.0.png"' in session['prompt'] and 'deg_input' not in session['prompt']
+        assert ('Pending type clusters' in session['prompt']) == (kind == 'lineage')
+        if kind == 'lineage':
+            assert '["1", "2", "10"]' in session['prompt']
         for tool in session['tools']:
             assert (zoomin_v3.OBJECT_NOTE in tool['description']) == (tool['name'] in zoomin_v3.SUBMISSIONS)
 
 
-def test_crosssample_v3_session_contract(monkeypatch):
+def test_crosssample_session_contract(monkeypatch):
     monkeypatch.setattr(crosssample_v3.v2, 'agent_spec', lambda *a: fake_session('ecarsi.crosssample_v2'))
+    monkeypatch.setattr(crosssample_v3, 'verified', lambda ref: FAKE_BUNDLE)
     for phase in ('inclusion', 'type', 'quality'):
         session = crosssample_v3.agent_spec({}, {}, phase, 'parent', None)
-        check_contract(session, 'ecarsi.crosssample_v3')
+        check_contract(session, 'ecarsi.crosssample_v3', crosssample_v3.PAGED)
         assert crosssample_v3.OBJECT_NOTE in next(t['description'] for t in session['tools'] if t['name'] == 'submit_decision')
+        assert ('Evidence files' in session['prompt']) == (phase != 'inclusion')
 
 
-def test_canonical_arguments_give_v2_what_it_expects():
-    proposal = {'clusters': [{'cluster_id': '1'}]}
-    assert zoomin_v3.canonical_arguments('submit_quality', {'proposal_json': proposal}) == {'proposal_json': json.dumps(proposal)}
-    assert crosssample_v3.canonical_arguments('submit_decision', {'proposal_json': proposal}) == {'proposal_json': json.dumps(proposal)}
-    assert zoomin_v3.canonical_arguments('submit_quality', {'proposal_json': '{}'}) == {'proposal_json': '{}'}
-    assert crosssample_v3.canonical_arguments('deg_lookup', {'gene': 'CD3D', 'min_logfc': None, 'max_padj': 1e-3}) == {'gene': 'CD3D', 'cluster': '', 'max_padj': 1e-3}
-    scheduled = pytest.importorskip('zmip.scheduled')
-    filled = zoomin_v3.canonical_arguments('deg_lookup', {'cluster': '2', 'view': 'local'})
-    assert filled == {'cluster': '2', 'view': 'local', 'gene': '', 'key': scheduled.TYPE_KEY}
+def paging_v2(pages):
+    """A v2 tool that answers one page per call and records nothing in the state."""
+    def fake_tool(name, state_path, args_path, destination):
+        offset = read(args_path)['offset']
+        page = dict(pages[offset], state=save(Path(destination) / 'state.json', {'offset': offset}) or {'path': str(Path(destination) / 'state.json')})
+        save(Path(destination) / 'result.json', page)
+    return fake_tool
 
 
-def test_coverage_hint_lists_scope_intersections_and_labels():
-    scheduled = pytest.importorskip('zmip.scheduled')
-    obs = pd.DataFrame({scheduled.TYPE_KEY: pd.Categorical(['0', '0', '1', '1', '1']),
-                        scheduled.QUALITY_KEY: pd.Categorical(['0', '1', '1', '1', '2'])}, index=[f'c{i}' for i in range(5)])
-    hint = zoomin_v3.coverage_hint(obs, {'type_scope': ['1']}, ['Fibroblast'], ['Endothelial'])
-    assert '["1"]' in hint and '"Fibroblast"' in hint and '"Endothelial"' in hint
-    assert json.dumps({'0': {'0': 1}, '1': {'0': 1, '1': 2}, '2': {'1': 1}}) in hint
+def test_paged_reads_merge_every_page(tmp_path, monkeypatch):
+    pages = {0: {'content': ['a', 'b'], 'next_offset': 30}, 30: {'content': ['c'], 'next_offset': 60}, 60: {'content': ['d'], 'next_offset': None}}
+    monkeypatch.setattr(zoomin_v3.v2, 'tool', paging_v2(pages))
+    zoomin_v3.tool('list_evidence', 'state.json', 'unused.json', tmp_path)
+    result = read(tmp_path / 'result.json')
+    assert result['content'] == ['a', 'b', 'c', 'd'] and result['next_offset'] is None
+    status = {0: {'types': [1], 'quality': [], 'intersections': {'0': {'1': 3}}, 'next_offset': 10},
+              10: {'types': [2], 'quality': [9], 'intersections': {'10': {'2': 4}}, 'next_offset': None}}
+    monkeypatch.setattr(zoomin_v3.v2, 'tool', paging_v2(status))
+    (tmp_path / 'second').mkdir()  # every tool call has its own destination directory
+    zoomin_v3.tool('annotation_status', 'state.json', 'unused.json', tmp_path / 'second')
+    result = read(tmp_path / 'second' / 'result.json')
+    assert result['types'] == [1, 2] and result['quality'] == [9] and result['intersections'] == {'0': {'1': 3}, '10': {'2': 4}}
 
 
-def _wrapped_tool(module, tmp_path, monkeypatch, content):
-    seen = {}
-
-    def v2_tool(name, state_path, args_path, destination):
-        seen['args'] = read(args_path)
-        save(Path(destination) / 'state.json', {})
-        save(Path(destination) / 'result.json', {'is_error': True, 'content': content, 'state': {'path': str(Path(destination) / 'state.json'), 'sha256': '0' * 64}})
-    monkeypatch.setattr(module.v2, 'tool', v2_tool)
-    state = tmp_path / 'state.json'
-    save(state, {'evidence': {'path': str(tmp_path / 'none.json'), 'sha256': '0' * 64}, 'phase': 'type'})
-    args = tmp_path / 'arguments.json'
-    save(args, {'proposal_json': {'clusters': []}})
-    out = tmp_path / 'out'
-    out.mkdir()
-    module.tool('submit_quality' if module is zoomin_v3 else 'submit_decision', str(state), str(args), out)
-    return seen['args'], read(out / 'result.json')
-
-
-@pytest.mark.parametrize('module', [zoomin_v3, crosssample_v3])
-def test_tool_wrapper_stringifies_object_proposals_and_explains_bad_json(tmp_path, monkeypatch, module):
-    args, result = _wrapped_tool(module, tmp_path, monkeypatch, 'Expecting property name enclosed in double quotes: line 1 column 2 (char 1)')
-    assert args == {'proposal_json': json.dumps({'clusters': []})}  # v2 saw a string
-    assert result['is_error'] and 'pass the proposal as a JSON object' in result['content']
-
-
-def test_tool_wrapper_never_turns_a_hint_failure_into_a_crash(tmp_path, monkeypatch):
-    # The evidence reference does not exist, so the coverage hint cannot be built; the v2 error still comes back.
-    _, result = _wrapped_tool(zoomin_v3, tmp_path, monkeypatch, 'Quality decisions must cover every 2.0 cluster')
-    assert result['is_error'] and result['content'] == 'Quality decisions must cover every 2.0 cluster'
-
-
-def test_boundary_hint_derives_the_adjacent_kept_pairs(monkeypatch):
-    evidence = pytest.importorskip('msp.evidence')
-    monkeypatch.setattr(evidence, 'load_paga_neighbors', lambda folder, key: {'0': ['1', '2'], '1': ['0'], '2': ['0']})
-    monkeypatch.setattr(crosssample_v3.v2, 'artifact', lambda bundle, name: Path('/nowhere/deg.sqlite'))
-    proposal = {'clusters': [{'cluster_id': '0', 'action': 'keep', 'coarse_label': 'T cell'},
-                             {'cluster_id': '1', 'action': 'keep', 'coarse_label': 'B cell'},
-                             {'cluster_id': '2', 'action': 'remove', 'coarse_label': 'doublet'}]}
-    hint = crosssample_v3.boundary_hint({}, proposal)
-    assert json.dumps([['B cell', 'T cell']]) in hint
+def test_accepted_quality_completes_the_session(tmp_path, monkeypatch):
+    state = save(tmp_path / 'state-after.json', dict(evidence={'path': 'e', 'sha256': '1' * 64}, types={'clusters': []},
+                                                     quality={'clusters': []}, removal_fraction=0.02))
+    def accept(name, state_path, args_path, destination):
+        save(Path(destination) / 'result.json', {'content': 'Quality coverage accepted', 'state': {'path': str(tmp_path / 'state-after.json')}})
+    monkeypatch.setattr(zoomin_v3.v2, 'tool', accept)
+    save(tmp_path / 'args.json', {'proposal_json': {'clusters': []}})
+    zoomin_v3.tool('submit_quality', 'state.json', str(tmp_path / 'args.json'), tmp_path)
+    result = read(tmp_path / 'result.json')
+    assert result['accepted'] is True and result['removal_fraction'] == 0.02 and result['quality'] == {'clusters': []}

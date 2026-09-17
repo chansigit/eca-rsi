@@ -12,6 +12,16 @@ v2 and changes only what the model sees:
     lineage labels, the valid island names.
 Measured 2026-09-16 over 6 h: 56 % of submit_quality, 32 % of submit_types and 64 % of
 submit_plan calls were rejected; 13.9 % of all model turns were such retries.
+
+Contract v4 (2026-09-17), same numerics, fewer turns:
+  * the prompt already holds what list_evidence and annotation_status would answer at turn 0
+    (evidence paths, UMAP figures, pending type clusters, every 2.0 cluster with its type
+    intersections), so the first turn can read evidence; both tools remain, take no arguments
+    and return everything in one call (a bundle has about 60 paths; paging cost a turn per page
+    and a fixed page count in the checklist skipped the 61st path in 62 sessions);
+  * an accepted submit_quality completes the session. finalize_annotation only copied the
+    accepted state into its result; in 247 finished sessions no model revised after acceptance,
+    so the step was one model turn (34 s and a full prompt) for nothing.
 """
 import json
 from pathlib import Path
@@ -24,6 +34,11 @@ PROGRAM = 'ecarsi.zoomin_v3'
 SUBMISSIONS = {'submit_plan', 'submit_types', 'submit_quality'}
 THRESHOLDS = {name: {'type': ['number', 'null']} for name in ('min_logfc', 'max_padj', 'min_pct1', 'max_pct2')}
 OBJECT_NOTE = ' proposal_json may be the JSON object itself rather than an escaped string.'
+# v2 pages these reads; here they take no arguments and the pages are merged on these list keys.
+PAGED = {'list_evidence': ('content',), 'annotation_status': ('types', 'quality')}
+PAGED_DESCRIPTIONS = {'list_evidence': 'List every evidence path (the prompt already lists them).',
+                      'annotation_status': 'Accepted type and quality entries, the pending type clusters and every 2.0 cluster with its type intersections (the prompt already lists them).'}
+NO_ARGUMENTS = {'type': 'object', 'properties': {}, 'required': [], 'additionalProperties': False}
 
 
 def deg_lookup_schema(fields):
@@ -32,18 +47,59 @@ def deg_lookup_schema(fields):
             'anyOf': [{'required': ['cluster']}, {'required': ['gene']}], 'additionalProperties': False}
 
 
+def evidence_paths(bundle):
+    return [n for n in bundle['files'] if not n.startswith('deg_input/') and not n.endswith('.h5ad')]
+
+
+def intersections(bundle):
+    """2.0 cluster -> {1.0 cluster: cells}, from the table the assemble step writes."""
+    import pandas as pd
+    table = pd.read_csv(v2.artifact(bundle, 'type_quality_intersections.csv'), index_col=0)
+    return {str(q): {str(t): int(n) for t, n in row.items() if n} for q, row in table.iterrows()}
+
+
+def cluster_order(name):
+    return (0, int(name)) if name.isdigit() else (1, name)
+
+
+def inline_context(bundle, kind):
+    """What list_evidence and annotation_status answer at turn 0, so the first turn reads evidence."""
+    from zmip.scheduled import TYPE_KEY, QUALITY_KEY
+    paths = evidence_paths(bundle)
+    lines = ['Evidence files (read_evidence paths): ' + json.dumps(paths),
+             'UMAP figures: ' + json.dumps([p for p in paths if p.endswith('.png') and 'umap' in p])]
+    if kind != 'plan' and 'type_quality_intersections.csv' in bundle['files']:
+        table = intersections(bundle)
+        types = sorted({t for row in table.values() for t in row}, key=cluster_order)
+        lines.append('Pending type clusters for submit_types (cluster_key %s): %s' % (TYPE_KEY, json.dumps(types)))
+        lines.append('Quality clusters (cluster_key %s) with their type intersections and cell counts; submit_quality decides '
+                     'each intersection exactly once: %s' % (QUALITY_KEY, json.dumps(table)))
+    return '\n'.join(lines)
+
+
 def agent_spec(spec, evidence, kind, parent):
     session = v2.agent_spec(spec, evidence, kind, parent)
-    checklist = Path(__file__).with_name('prompts') / ('zoomin-%s-checklist-v3.md' % ('plan' if kind == 'plan' else 'annotation'))
+    session['prompt'] += '\n\n' + inline_context(verified(evidence), kind)
+    checklist = Path(__file__).with_name('prompts') / ('zoomin-%s-checklist-v4.md' % ('plan' if kind == 'plan' else 'annotation'))
     session['prompt'] += '\n\n' + checklist.read_text()
+    tools = []
     for tool in session['tools']:
+        if tool['name'] == 'finalize_annotation':
+            continue  # an accepted submit_quality completes the session
         tool['args'] = ['-m', PROGRAM, 'tool', tool['name'], '{state}', '{arguments}']
         tool['inputs'] = [reference(Path(__file__)), *tool['inputs']]
-        if tool['name'] == 'deg_lookup':
+        if tool['name'] in PAGED:
+            tool['parameters'] = dict(NO_ARGUMENTS)
+            tool['description'] = PAGED_DESCRIPTIONS[tool['name']]
+        elif tool['name'] == 'deg_lookup':
             tool['parameters'] = deg_lookup_schema(tool['parameters']['properties'])
             tool['description'] += ' Give cluster or gene; key defaults to the type key, view/top_n/thresholds are optional.'
         elif tool['name'] in SUBMISSIONS:
             tool['description'] += OBJECT_NOTE
+        tools.append(tool)
+    session['tools'] = tools
+    if kind != 'plan':
+        session['completion_tool'] = 'submit_quality'
     return session
 
 
@@ -59,6 +115,38 @@ def canonical_arguments(name, args):
             filled.setdefault(field, '')
         return filled
     return args
+
+
+def paged(name, state_path, destination):
+    """Every v2 page in one result. These reads leave the state unchanged, so the last page's state stands."""
+    merged, offset, number = None, 0, 0
+    while True:
+        arguments = immutable(destination / ('arguments-v3-%d.json' % number), {'offset': offset})['path']
+        v2.tool(name, state_path, arguments, destination)
+        page = read(destination / 'result.json')
+        if page.get('is_error'):
+            return
+        if merged is None:
+            merged = page
+        else:
+            for key in PAGED[name]:
+                merged[key] = merged[key] + page[key]
+            if 'intersections' in page:
+                merged['intersections'].update(page['intersections'])
+            merged['state'] = page['state']
+        if page.get('next_offset') is None:
+            merged['next_offset'] = None
+            save(destination / 'result.json', merged)
+            return
+        offset, number = page['next_offset'], number + 1
+
+
+def complete(result, destination):
+    """An accepted quality proposal completes the session: what finalize_annotation returned, without the turn."""
+    state = read(result['state']['path'])
+    result.update(accepted=True, evidence=state['evidence'], types=state['types'], quality=state['quality'],
+                  removal_fraction=state['removal_fraction'])
+    save(destination / 'result.json', result)
 
 
 def coverage_hint(obs, state, own, other):
@@ -102,6 +190,8 @@ def error_hint(name, content, state):
 
 def tool(name, state_path, args_path, destination):
     destination = Path(destination)
+    if name in PAGED:
+        return paged(name, state_path, destination)
     args = read(args_path)
     fixed = canonical_arguments(name, args)
     if fixed != args:
@@ -116,6 +206,8 @@ def tool(name, state_path, args_path, destination):
         if hint:
             result['content'] = (result['content'] + '\n' + hint)[:16000]
             save(destination / 'result.json', result)
+    elif name == 'submit_quality':
+        complete(result, destination)
 
 
 def main():
