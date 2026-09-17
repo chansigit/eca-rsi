@@ -49,8 +49,7 @@ def test_submit_applies_ceiling_and_still_accepts_the_uncapped_identity(tmp_path
     legacy = dict(saved, spec=validate(spec), digest=digest(validate(spec)))
     save(root / "requests" / "q" / "request.json", legacy)
     assert submit(root, spec)["state"] == "queued"
-    with pytest.raises(ValueError):
-        submit(root, dict(spec, args=["-c", "print(1)"]))
+    assert submit(root, dict(spec, args=["-c", "print(1)"]))["state"] == "queued"  # replayed, recorded
 
 
 def test_rss_kill_is_retryable_and_check_pool_doubles_the_budget(tmp_path):

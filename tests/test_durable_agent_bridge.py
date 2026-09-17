@@ -139,8 +139,9 @@ else:
                             profiles=[{'name': 'test', 'h5ad': '/test-only/input.h5ad'}])
                 self.assertEqual(bridge.submit(root, spec)['state'], 'queued')
                 self.assertEqual(bridge.submit(root, spec)['state'], 'queued')
-                with self.assertRaises(ValueError):
-                    bridge.submit(root, dict(spec, operation_id='changed'))
+                # A saved id is replayed; the differing spec is recorded, not fatal.
+                self.assertEqual(bridge.submit(root, dict(spec, operation_id='changed'))['state'], 'queued')
+                self.assertTrue((root / 'requests' / spec['request_id'] / 'resubmitted.json').is_file())
             ctx = multiprocessing.get_context('spawn')
             service = ctx.Process(target=fake_service, args=(root,))
             service.start()

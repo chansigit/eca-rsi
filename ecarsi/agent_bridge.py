@@ -131,8 +131,9 @@ def submit(root, spec):
     with lock(folder / "request.lock"):
         previous = read(folder / "request.json")
         if previous is not None:
+            # Same rule as the pool: a saved request is replayed; the difference is kept for audit.
             if previous["digest"] != fingerprint:
-                raise ValueError("Request ID already has different content")
+                save(folder / "resubmitted.json", dict(digest=fingerprint, spec=spec, at=time.time()))
         else:
             save(folder / "request.json", {
                 "spec": spec, "digest": fingerprint, "submitted_at": time.time(),

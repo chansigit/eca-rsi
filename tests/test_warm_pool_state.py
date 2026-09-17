@@ -209,8 +209,9 @@ def test_durable_idempotent_submission_and_read_only_status(tmp_path):
     assert submit(tmp_path, spec)["attempt_id"] == first["attempt_id"]
     assert status(tmp_path, "sample-a")["state"] == "queued"
     assert path.read_bytes() == before
-    with pytest.raises(ValueError, match="different content"):
-        submit(tmp_path, dict(spec, memory_mb=256))
+    # Different packaging for a saved id replays the saved request; the request file is untouched.
+    assert submit(tmp_path, dict(spec, memory_mb=256))["attempt_id"] == first["attempt_id"]
+    assert path.read_bytes() == before
     assert cancel(tmp_path, "sample-a")["state"] == "cancel_requested"
     assert submit(tmp_path, spec)["state"] == "cancel_requested"
     assert path.read_bytes() == before
@@ -345,3 +346,17 @@ def test_dispatch_submits_concurrently_and_resubmits_a_failed_submission(tmp_pat
     with monkeypatch.context() as check:
         check.setattr(module_path := __import__('pathlib').Path, 'stat', lambda self, *a, **k: pytest.fail(f'settled folder stat: {self}'))
         backend.dispatch(info)
+
+
+def test_resubmission_that_differs_only_in_packaging_replays_the_saved_request(tmp_path):
+    tmp_path.chmod(0o700)
+    (tmp_path / 'requests').mkdir()
+    save(tmp_path / 'config.json', dict(runtime=dict(version='test')))
+    spec = dict(request_id='run.step-1', operation_id='compute', args=['-c', 'pass'],
+                cpus=1, memory_mb=64, timeout_seconds=10, outputs=['result.json'])
+    first = submit(tmp_path, spec)
+    again = submit(tmp_path, dict(spec, memory_mb=4096, args=['-c', 'pass  # v3']))
+    assert again['attempt_id'] == first['attempt_id']
+    saved = read(tmp_path / 'requests' / 'run.step-1' / 'request.json')
+    assert saved['spec']['memory_mb'] == 64
+    assert read(tmp_path / 'requests' / 'run.step-1' / 'resubmitted.json')['spec']['memory_mb'] == 4096
