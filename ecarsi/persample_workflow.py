@@ -1,6 +1,5 @@
 """Temporal per-sample fan-out with bounded preparation and durable agent children."""
 import asyncio
-from datetime import timedelta
 from pathlib import Path
 
 from temporalio import activity, workflow
@@ -190,9 +189,8 @@ def saved_module(pool_root, request_id):
 
 
 async def call(fn, *args):
-    from .work_coordinator import activity_retry
-    return await workflow.execute_activity(fn, args=args, start_to_close_timeout=timedelta(seconds=30),
-        retry_policy=activity_retry(fn))
+    from .work_coordinator import SHORT, activity_retry
+    return await workflow.execute_activity(fn, args=args, start_to_close_timeout=SHORT, retry_policy=activity_retry(fn))
 
 
 async def await_pool(spec, request):
