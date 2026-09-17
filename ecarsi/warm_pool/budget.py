@@ -17,7 +17,7 @@ MEASURED_CEILING_MB = {
     'deg_lookup': 1792, 'list_evidence': 5376, 'annotation_status': 5632, 'type_context': 6400,
     'sample_inventory': 1536, 'submit_quality': 5632, 'submit_decision': 9984,
     'submit_annotation': 4096, 'submit_types': 5632, 'submit_plan': 5632,
-    'finalize_annotation': 1536, 'subcluster': 6144, 'zoom-in.assemble': 2560,
+    'subcluster': 6144, 'zoom-in.assemble': 2560,
     'cross-sample.assemble': 2560, 'zoom-in.apply': 11008, 'persample.partition': 7424,
     'zoom-in.lineage.prepare': 1536, 'zoom-in.plan.prepare': 1536,
     'cross-sample.type.prepare': 1536, 'cross-sample.quality.prepare': 1536,

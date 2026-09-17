@@ -180,13 +180,6 @@ def sample_step(action, args):
     return {"id": request_id, "output": output}
 
 
-def saved_module(pool_root, request_id):
-    """A request already saved keeps the program it was saved with: submit rejects a changed
-    spec for the same id, and a resumed stage rebuilding a v3 agent request as v2 failed
-    bladder and lymph-node on 2026-09-17."""
-    from ..warm_pool.state import read
-    saved = read(Path(pool_root) / 'requests' / request_id / 'request.json')
-    return saved['spec']['args'][1] if saved else None
 
 
 async def call(fn, *args):

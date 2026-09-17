@@ -8,6 +8,8 @@ import shutil
 
 from ..warm_pool.state import immutable, reference, verified
 from . import PROMPTS
+from .contract import (LOOKUP_NOTE, NO_ARGUMENTS, checklist, deg_lookup_schema, evidence_paths, json_hint,
+                       lookup_arguments, proposal as parse_proposal, schema)
 from .persample import check_bundle, sealed
 from ..warm_pool.state import digest, read, save
 
@@ -267,50 +269,104 @@ def _proposal_schema(phase):
         'Do not claim a split was performed by submitting this request.')
 
 
+def inline_context(bundle):
+    """What list_evidence answers at turn 0 (52 paths), so the first turn reads evidence."""
+    paths=evidence_paths(bundle)
+    return 'Evidence files (read_evidence paths): '+json.dumps(paths)+'\nFigures: '+json.dumps([p for p in paths if p.endswith('.png')])
+
+
 def agent_spec(spec, evidence_ref, phase, parent, types_ref=None):
     from msp.evidence import DEG_TOOL_DOC,DEG_SQL_DOC
     bundle=verified(evidence_ref)
     props={
-      'read_evidence':({'path':{'type':'string'},'offset':{'type':'integer','minimum':0}},'Read an assigned figure or up to 16000 characters of a table; use only listed paths.',True),
-      'submit_decision':({'proposal_json':{'type':'string'}},'Submit a validated '+phase+' decision. '+_proposal_schema(phase),False)}
+      'read_evidence':(schema({'path':{'type':'string'},'offset':{'type':'integer','minimum':0}}),'Read an assigned figure or up to 16000 characters of a table; use only listed paths.',True),
+      'submit_decision':(schema({'proposal_json':{'type':'string'}}),'Submit a validated '+phase+' decision. '+_proposal_schema(phase),False)}
     if phase=='inclusion':
         prompt=PROMPTS.joinpath('sample_inclusion.md').read_text()
         prompt+='\nRead every sample inventory and cluster UMAP before deciding. Sample count: '+str(len(bundle['samples']))
-        props['sample_inventory']=({'offset':{'type':'integer','minimum':0}},'Read the next sample inventory and its figure paths. Follow next_offset until null.',False)
+        props['sample_inventory']=(schema({'offset':{'type':'integer','minimum':0}}),'Read the next sample inventory and its figure paths. Follow next_offset until null.',False)
     else:
-        prompts=PROMPTS
-        prompt=(prompts/'crosssample-deg.md').read_text()
-        prompt+='\n'+(prompts/('crosssample-'+phase+'.md')).read_text()
+        prompt=(PROMPTS/'crosssample-deg.md').read_text()
+        prompt+='\n'+(PROMPTS/('crosssample-'+phase+'.md')).read_text()
         props.update({
-          'deg_lookup':({'key':{'type':'string'},'cluster':{'type':'string'},'gene':{'type':'string'},'view':{'type':'string','enum':['global','local','both']},'top_n':{'type':'integer','minimum':1,'maximum':200}},DEG_TOOL_DOC,False),
-          'deg_sql':({'query':{'type':'string'}},DEG_SQL_DOC,False),
-          'check_genes':({'genes':{'type':'array','items':{'type':'string'},'minItems':1,'maxItems':80},'cluster':{'type':'string'}},'Expression evidence on the assigned clustering; does not run DEG.',False),
-          'check_deg':({'cluster':{'type':'string'},'reference':{'type':'string'},'reason':{'type':'string'}},'Request uncovered comparison only. Explain what the immutable database lacks. Results are saved on the worker.',False),
-          'check_qc_scores':({},'Per-cluster QC, composition and accepted type labels.',False)})
+          'deg_lookup':(deg_lookup_schema(),DEG_TOOL_DOC+LOOKUP_NOTE%'the base key',False),
+          'deg_sql':(schema({'query':{'type':'string'}}),DEG_SQL_DOC,False),
+          'check_genes':(schema({'genes':{'type':'array','items':{'type':'string'},'minItems':1,'maxItems':80},'cluster':{'type':'string'}}),'Expression evidence on the assigned clustering; does not run DEG.',False),
+          'check_deg':(schema({'cluster':{'type':'string'},'reference':{'type':'string'},'reason':{'type':'string'}}),'Request uncovered comparison only. Explain what the immutable database lacks. Results are saved on the worker.',False),
+          'check_qc_scores':(schema({}),'Per-cluster QC, composition and accepted type labels.',False),
+          'type_context':(NO_ARGUMENTS,'Every accepted or preserved type entry in one call.',False)})
         prompt+='\nContext: '+json.dumps(spec['config'])+'\nEvidence version: '+evidence_ref['sha256']
         prompt+='\nAssigned type clusters: '+json.dumps(bundle['type_scope'])+'\nBase key: '+BASE
         if bundle.get('type_entries'):
             prompt+='\nUse type_context for preserved type entries outside your assignment; do not resubmit them.'
         if types_ref:prompt+='\nRead the accepted type labels with type_context before assessing quality.'
-        props['type_context']=({'offset':{'type':'integer','minimum':0}},'Read up to 10 accepted or preserved type entries. Follow next_offset until null.',False)
-    props['list_evidence']=({'offset':{'type':'integer','minimum':0}},'List up to 30 assigned evidence paths. Follow next_offset to see remaining paths.',False)
+        prompt+='\n\n'+inline_context(bundle)
+    props['list_evidence']=(NO_ARGUMENTS,'List every evidence path (the prompt already lists them).',False)
     prompt+='\nUse worker tools for all evidence. Read figures and use the database before submission. Finish by calling submit_decision; no local execution is available.'
+    prompt+='\n\n'+checklist('crosssample-inclusion' if phase=='inclusion' else 'crosssample-annotation')
     state=immutable(Path(spec['output_root'])/f'{phase}-{evidence_ref["sha256"][:12]}-state.json',dict(evidence=evidence_ref,phase=phase,types=types_ref,read=[],lookups=[],qc=False))
     tools=[]
-    for name,(fields,description,multimodal) in props.items():
+    for name,(parameters,description,multimodal) in props.items():
         tools.append(dict(name=name,description=description,
-          read_only=name in {'read_evidence','list_evidence','sample_inventory','deg_lookup','deg_sql','check_genes','check_qc_scores','type_context'},parameters={'type':'object','properties':fields,'required':list(fields),'additionalProperties':False},
+          read_only=name in {'read_evidence','list_evidence','sample_inventory','deg_lookup','deg_sql','check_genes','check_qc_scores','type_context'},parameters=parameters,
           args=['-m','ecarsi.stages.crosssample','tool',name,'{state}','{arguments}'],**spec['tool_budget'],
-          inputs=[reference(Path(__file__))],outputs=['result.json'],result_file='result.json',multimodal=multimodal))
+          inputs=[reference(Path(__file__)),reference(Path(__file__).with_name('contract.py'))],outputs=['result.json'],result_file='result.json',multimodal=multimodal))
     return dict(session_id='cross-'+digest([spec['run_id'],phase,evidence_ref,types_ref])[:24],dataset_id=spec['dataset_id'],prompt=prompt,tools=tools,
       max_turns=80,pool_root=spec['pool_root'],bridge_root=spec['bridge_root'],output_root=str(Path(spec['output_root'])/(phase+'-'+evidence_ref['sha256'][:12])),
       completion_tool='submit_decision',tool_state=state,
       trace=dict(workflow_id='cross-sample/'+spec['run_id'],dataset_id=spec['dataset_id'],unit_id='cross-sample.'+phase,depends_on=[parent]))
 
 
+def boundary_hint(bundle, proposal):
+    """The adjacent coarse-label pairs the type proposal must review, as _check_coarse_boundaries derives them."""
+    from msp.evidence import load_paga_neighbors
+    entries = {str(e.get('cluster_id')): e for e in proposal.get('clusters', []) if isinstance(e, dict)}
+    paga = load_paga_neighbors(artifact(bundle, 'deg.sqlite').parent, BASE)
+    pairs = set()
+    for cluster, neighbours in paga.items():
+        entry = entries.get(str(cluster))
+        if not entry or entry.get('action') != 'keep':
+            continue
+        for other in neighbours:
+            neighbour = entries.get(str(other))
+            if neighbour and neighbour.get('action') == 'keep':
+                labels = tuple(sorted({str(entry.get('coarse_label', '')).strip(), str(neighbour.get('coarse_label', '')).strip()}))
+                if len(labels) == 2:
+                    pairs.add(labels)
+    return ('boundary_reviews must contain exactly one review for each of these adjacent coarse-label pairs of your '
+            'kept clusters, and no others: ' + json.dumps(sorted(pairs)))
+
+
+def error_hint(name, content, state, args, bundle):
+    """What a rejected submission was missing, so the next turn can be the corrected one."""
+    if name != 'submit_decision':
+        return ''
+    if json_hint(content):
+        return json_hint(content)
+    if state['phase'] == 'inclusion':
+        return 'Samples to cover exactly once: ' + json.dumps([s['sample'] for s in bundle['samples']]) + '.'
+    if content.startswith(('Query DEG', 'Read a figure')):
+        return ''  # already names the missing call
+    if content.startswith('Read accepted type context'):
+        clusters = sorted(_data(bundle).obs[BASE].astype(str).unique())
+        unread = sorted(set(clusters) - set(state.get('type_read', [])))
+        return ('type_context has not been read for clusters ' + json.dumps(unread)
+                + '; call type_context once (it takes no arguments and returns every cluster), then resubmit.')
+    if 'coarse boundary' in content:
+        try:
+            return boundary_hint(bundle, parse_proposal(args))
+        except ValueError:
+            return ''
+    if state['phase'] == 'type':
+        return 'Assigned type clusters to cover exactly once: ' + json.dumps(bundle.get('type_scope', [])) + '.'
+    clusters = sorted(_data(bundle).obs[BASE].astype(str).unique())
+    return 'Quality proposal must decide every cluster of ' + BASE + ': ' + json.dumps(clusters) + '.'
+
+
 def tool(name,state_path,args_path,destination):
     from msp.evidence import DegTables,gene_table,qc_table,DegCache,load_removal_mask
     state=read(state_path);args=read(args_path);bundle=verified(state['evidence']);phase=state['phase'];response={}
+    if name=='deg_lookup':args=lookup_arguments(args)
     try:
         if name=='read_evidence':
             path=artifact(bundle,args['path'])
@@ -323,17 +379,15 @@ def tool(name,state_path,args_path,destination):
                 response['content']=text;response['next_offset']=nxt
             else:raise ValueError('Use registered matrix/database tools for this artifact')
             state['read']=sorted(set(state['read'])|{args['path']})
-        elif name=='list_evidence':
-            names=[n for n in bundle['files'] if not n.startswith('deg_input/') and not n.endswith('.h5ad')]
-            offset=args['offset'];response.update(content=names[offset:offset+30],next_offset=offset+30 if offset+30<len(names) else None)
+        elif name=='list_evidence':response.update(content=evidence_paths(bundle),next_offset=None)
         elif name=='sample_inventory':
             offset=args['offset'];sample=bundle['samples'][offset]
             response.update(content=sample,figures=[n for n in bundle['files'] if n.startswith(sample['sample']+'/')],next_offset=offset+1 if offset+1<len(bundle['samples']) else None)
             state['inventories']=sorted(set(state.get('inventories',[]))|{sample['sample']})
         elif name=='type_context':
             entries=verified(state['types'])['proposal']['clusters'] if state['types'] else list(bundle['type_entries'].values())
-            offset=args['offset'];response.update(content=entries[offset:offset+10],next_offset=offset+10 if offset+10<len(entries) else None)
-            state['type_read']=sorted(set(state.get('type_read',[]))|{str(e['cluster_id']) for e in entries[offset:offset+10]})
+            response.update(content=entries,next_offset=None)
+            state['type_read']=sorted(set(state.get('type_read',[]))|{str(e['cluster_id']) for e in entries})
         elif name in {'deg_lookup','deg_sql'}:
             with DegTables(database=artifact(bundle,'deg.sqlite'),base_key=BASE) as tables:
                 response['content']=tables.lookup(**args) if name=='deg_lookup' else tables.sql(**args)
@@ -355,7 +409,7 @@ def tool(name,state_path,args_path,destination):
                 response['source']='computed' if cache.n_computed else 'precomputed'
                 state['additional_deg'][key]=immutable(destination/'additional_deg.json',response)
         elif name=='submit_decision':
-            proposal=json.loads(args['proposal_json'])
+            proposal=parse_proposal(args)
             if phase=='inclusion':
                 from ..crosssample import validate_inclusion
                 validate_inclusion(proposal,[s['sample'] for s in bundle['samples']])
@@ -401,7 +455,10 @@ def tool(name,state_path,args_path,destination):
             response.update(accepted=True,proposal=proposal,evidence=state['evidence'],types=state['types'])
         else:raise ValueError('Unknown worker tool')
     except (ValueError,KeyError,TypeError,IndexError) as exc:
-        response={'is_error':True,'content':str(exc)[:8000]}
+        content=str(exc)[:8000]
+        try:hint=error_hint(name,content,state,args,bundle)
+        except Exception:hint=''  # noqa: BLE001 - a hint must never turn a correctable error into a crash
+        response={'is_error':True,'content':(content+'\n'+hint)[:16000] if hint else content}
     response['state']=immutable(destination/'state.json',state);save(destination/'result.json',response)
 
 

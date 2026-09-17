@@ -96,12 +96,8 @@ def zoomin_step(action,args):
     packet=immutable(root/(request_id+'.json'),dict(spec=spec,refs=refs,request_id=request_id,**{k:v for k,v in payload.items() if k!='paths'}))
     unit='zoom-in.'+(payload['kind']+'.prepare' if action=='agent' else action)
     from .. import stages
-    programs=(stages.program('zoomin'),stages.program('crosssample'),stages.program('persample'))
+    programs=(stages.program('zoomin'),stages.program('crosssample'),stages.program('persample'),stages.program('contract'))
     module='ecarsi.stages.zoomin'
-    # New sessions get the v3 model-facing contract; a saved agent request keeps its program.
-    from .persample import saved_module
-    if action=='agent' and saved_module(spec['pool_root'],request_id) in (None,'ecarsi.stages.zoomin_v3'):
-        module,programs='ecarsi.stages.zoomin_v3',(stages.program('zoomin_v3'),*programs)
     request=dict(request_id=request_id,operation_id=unit,
         args=['-m',module,action,packet['path']],**spec[budget],**gpu,
         inputs=[packet,*[reference(path) for path in programs],spec['input'],*refs],outputs=[output],

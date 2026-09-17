@@ -7,6 +7,8 @@ from pathlib import Path
 
 from ..warm_pool.state import immutable, reference, verified
 from . import PROMPTS
+from .contract import (LOOKUP_NOTE, NO_ARGUMENTS, checklist, deg_lookup_schema, evidence_paths, json_hint,
+                       lookup_arguments, proposal as parse_proposal, schema)
 from .crosssample import artifact, publish_bundle, deg, assemble
 from .persample import check_bundle, sealed
 from ..warm_pool.state import digest, read, save
@@ -179,19 +181,46 @@ def merge(prepared, decision, results, destination):
         planning=prepared, decision=decision, lineages=results, n_input=len(data), n_survived=len(kept), n_removed=len(ledger))
 
 
+def intersections(bundle):
+    """2.0 cluster -> {1.0 cluster: cells}, from the table the assemble step writes."""
+    import pandas as pd
+    table = pd.read_csv(artifact(bundle, 'type_quality_intersections.csv'), index_col=0)
+    return {str(q): {str(t): int(n) for t, n in row.items() if n} for q, row in table.iterrows()}
+
+
+def cluster_order(name):
+    return (0, int(name)) if name.isdigit() else (1, name)
+
+
+def inline_context(bundle, kind):
+    """What list_evidence and annotation_status answer at turn 0, so the first turn reads evidence."""
+    from zmip.scheduled import TYPE_KEY, QUALITY_KEY
+    paths = evidence_paths(bundle)
+    lines = ['Evidence files (read_evidence paths): ' + json.dumps(paths),
+             'UMAP figures: ' + json.dumps([p for p in paths if p.endswith('.png') and 'umap' in p])]
+    if kind != 'plan' and 'type_quality_intersections.csv' in bundle['files']:
+        table = intersections(bundle)
+        types = sorted({t for row in table.values() for t in row}, key=cluster_order)
+        lines.append('Pending type clusters for submit_types (cluster_key %s): %s' % (TYPE_KEY, json.dumps(types)))
+        lines.append('Quality clusters (cluster_key %s) with their type intersections and cell counts; submit_quality decides '
+                     'each intersection exactly once: %s' % (QUALITY_KEY, json.dumps(table)))
+    return '\n'.join(lines)
+
+
 def agent_spec(spec, evidence, kind, parent):
     from zmip.plan import _PLAN_SCHEMA_DOC
     from zmip.annotate import _CLUSTER_SCHEMA_DOC
+    from zmip.scheduled import TYPE_KEY
     from msp.evidence import DEG_TOOL_DOC, DEG_SQL_DOC
     bundle = verified(evidence)
     props = {
-        'list_evidence': ({'offset': {'type':'integer','minimum':0}}, 'List 30 evidence paths per page.', False),
-        'read_evidence': ({'path': {'type':'string'}, 'offset': {'type':'integer','minimum':0}}, 'Read an assigned figure or 16000 characters of text.', True)}
+        'list_evidence': (NO_ARGUMENTS, 'List every evidence path (the prompt already lists them).', False),
+        'read_evidence': (schema({'path': {'type':'string'}, 'offset': {'type':'integer','minimum':0}}), 'Read an assigned figure or 16000 characters of text.', True)}
     if kind == 'plan':
         prompt = PROMPTS.joinpath('zoomin-plan.md').read_text()
         prompt += '\nConfirmed counts: ' + json.dumps(bundle['counts'])
         prompt += '\nMinimum lineage size: ' + str(spec['config']['min_cells'])
-        props['submit_plan'] = ({'proposal_json': {'type':'string'}}, 'Submit the lineage plan: '+_PLAN_SCHEMA_DOC, False)
+        props['submit_plan'] = (schema({'proposal_json': {'type':'string'}}), 'Submit the lineage plan: '+_PLAN_SCHEMA_DOC, False)
         completion = 'submit_plan'
     else:
         prompt = PROMPTS.joinpath('zoomin-annotation.md').read_text()
@@ -199,33 +228,74 @@ def agent_spec(spec, evidence, kind, parent):
         prompt += '\nLineage labels: '+json.dumps(own)+'\nOther permitted labels: '+json.dumps(other)
         prompt += '\nEvidence version: '+evidence['sha256']
         props.update({
-            'subcluster': ({'target':{'type':'string','enum':['type','quality']},'cluster':{'type':'string'},'resolution':{'type':'number','exclusiveMinimum':0},'reason':{'type':'string'}}, 'Refine the selected partition only when evidence is inadequate; compute matching DEG and return a new evidence version. Quality refinement preserves accepted types.', False),
-            'annotation_status': ({'offset':{'type':'integer','minimum':0}}, 'Read up to 10 accepted type/quality entries and exact QC intersections per page; follow next_offset.', False),
-            'deg_lookup': ({'key':{'type':'string'},'cluster':{'type':'string'},'gene':{'type':'string'},'view':{'type':'string','enum':['global','local','both']},'top_n':{'type':'integer','minimum':1,'maximum':200}}, DEG_TOOL_DOC, False),
-            'deg_sql': ({'query':{'type':'string'}}, DEG_SQL_DOC, False),
-            'check_genes': ({'key':{'type':'string'},'cluster':{'type':'string'},'genes':{'type':'array','items':{'type':'string'},'minItems':1,'maxItems':80}}, 'Read expression by the explicitly selected clustering.', False),
-            'check_qc_scores': ({}, 'Read QC for resolution 2.0.', False),
-            'submit_types': ({'proposal_json':{'type':'string'}}, 'Save {"cluster_key":"msp_leiden_r1.0","clusters":[entries]}. Use action=keep for identity; quality controls removals/reassignments. Each entry: '+_CLUSTER_SCHEMA_DOC, False),
-            'submit_quality': ({'proposal_json':{'type':'string'}}, 'Save {"cluster_key":"msp_leiden_r2.0","clusters":[{"cluster_id":"QC id","decisions":[{"type_clusters":["type ids"],"action":"keep|remove|reassign","confidence":"high|medium|low","evidence":"specific evidence","rationale":"reason"}]}]}. Each QC group must cover its present 1.0 intersections exactly once. remove needs remove_reason (doublet|low-quality|ambient|stress|dissociation|dying|batch|other). reassign needs reassign_to and fine_label. After a budget warning add removal_review explaining evidence and scope.', False),
-            'finalize_annotation': ({}, 'Finish only after accepted type and quality coverage. Decisions are applied by the host.', False)})
-        completion = 'finalize_annotation'
+            'subcluster': (schema({'target':{'type':'string','enum':['type','quality']},'cluster':{'type':'string'},'resolution':{'type':'number','exclusiveMinimum':0},'reason':{'type':'string'}}), 'Refine the selected partition only when evidence is inadequate; compute matching DEG and return a new evidence version. Quality refinement preserves accepted types.', False),
+            'annotation_status': (NO_ARGUMENTS, 'Accepted type and quality entries, the pending type clusters and every 2.0 cluster with its type intersections (the prompt already lists them).', False),
+            'deg_lookup': (deg_lookup_schema(), DEG_TOOL_DOC + LOOKUP_NOTE % ('the type key ' + TYPE_KEY), False),
+            'deg_sql': (schema({'query':{'type':'string'}}), DEG_SQL_DOC, False),
+            'check_genes': (schema({'key':{'type':'string'},'cluster':{'type':'string'},'genes':{'type':'array','items':{'type':'string'},'minItems':1,'maxItems':80}}), 'Read expression by the explicitly selected clustering.', False),
+            'check_qc_scores': (schema({}), 'Read QC for resolution 2.0.', False),
+            'submit_types': (schema({'proposal_json':{'type':'string'}}), 'Save {"cluster_key":"msp_leiden_r1.0","clusters":[entries]}. Use action=keep for identity; quality controls removals/reassignments. Each entry: '+_CLUSTER_SCHEMA_DOC, False),
+            'submit_quality': (schema({'proposal_json':{'type':'string'}}), 'Save {"cluster_key":"msp_leiden_r2.0","clusters":[{"cluster_id":"QC id","decisions":[{"type_clusters":["type ids"],"action":"keep|remove|reassign","confidence":"high|medium|low","evidence":"specific evidence","rationale":"reason"}]}]}. Each QC group must cover its present 1.0 intersections exactly once. remove needs remove_reason (doublet|low-quality|ambient|stress|dissociation|dying|batch|other). reassign needs reassign_to and fine_label. After a budget warning add removal_review explaining evidence and scope. An accepted quality proposal completes the session.', False)})
+        completion = 'submit_quality'
     prompt += '\nTissue/species and integration context: '+json.dumps(spec['config'])
     prompt += '\nUse the registered tools; no local execution or direct file editing is available.'
+    prompt += '\n\n' + inline_context(bundle, kind) + '\n\n' + checklist('zoomin-plan' if kind == 'plan' else 'zoomin-annotation')
     session = 'zoom-'+digest([spec['run_id'], kind, evidence])[:24]
     root = Path(spec['output_root'])/session
     root.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
     state = immutable(root.with_suffix('.state.json'), dict(evidence=evidence, kind=kind, read=[], lookups=[], qc=False, types=None, quality=None, types_complete=False))
     tools = []
-    for name, (fields, description, multimodal) in props.items():
+    for name, (parameters, description, multimodal) in props.items():
         tools.append(dict(name=name, description=description,
-            read_only=name in {'read_evidence','list_evidence','deg_lookup','deg_sql','check_genes','check_qc_scores','type_context'},
-            parameters={'type':'object','properties':fields,'required':list(fields),'additionalProperties':False},
+            read_only=name in {'read_evidence','list_evidence','annotation_status','deg_lookup','deg_sql','check_genes','check_qc_scores'},
+            parameters=parameters,
             args=['-m','ecarsi.stages.zoomin','tool',name,'{state}','{arguments}'], **spec['compute_budget' if name=='subcluster' else 'tool_budget'],
-            inputs=[reference(Path(__file__).with_name(n)) for n in ('zoomin.py','crosssample.py','persample.py')], outputs=['result.json'], result_file='result.json', multimodal=multimodal))
+            inputs=[reference(Path(__file__).with_name(n)) for n in ('zoomin.py','crosssample.py','persample.py','contract.py')], outputs=['result.json'], result_file='result.json', multimodal=multimodal))
     return dict(session_id=session, dataset_id=spec['dataset_id'], prompt=prompt, tools=tools,
         max_turns=100, pool_root=spec['pool_root'], bridge_root=spec['bridge_root'], output_root=str(root),
         completion_tool=completion, tool_state=state,
         trace=dict(workflow_id='zoom-in/'+spec['run_id'],dataset_id=spec['dataset_id'],unit_id='zoom-in.'+kind,depends_on=[parent]))
+
+
+def coverage_hint(obs, state, own, other):
+    from zmip.scheduled import TYPE_KEY, QUALITY_KEY, partitions
+    table = partitions(obs)
+    intersections = {str(q): {str(t): int(n) for t, n in row.items() if n} for q, row in table.iterrows()}
+    if state.get('types_complete'):
+        types = 'Type coverage is already accepted; do not resubmit types.'
+    else:
+        scope = state.get('type_scope') or sorted(obs[TYPE_KEY].astype(str).unique())
+        types = 'submit_types: cluster_key ' + TYPE_KEY + ', exactly these pending clusters: ' + json.dumps(scope) + '.'
+    return ('Required coverage. ' + types + ' submit_quality: cluster_key ' + QUALITY_KEY + ', one entry per 2.0 cluster whose '
+            'decisions name each of its type intersections exactly once; intersections with cell counts: '
+            + json.dumps(intersections) + '. coarse_label for keep must be one of ' + json.dumps(own)
+            + '; reassign_to must be one of ' + json.dumps(other) + '.')
+
+
+def island_hint(bundle):
+    import pandas as pd
+    if 'lineage_islands.csv' not in bundle['files']:
+        return ''
+    islands = pd.read_csv(artifact(bundle, 'lineage_islands.csv'), index_col=0)
+    names = [c for c in islands.columns if c != 'noise']
+    return ('Island names in this evidence: ' + json.dumps(names) + '. shared_island_reviews keys must be island '
+            'names whose coarse labels your plan splits across lineages; omit the key when nothing is split.')
+
+
+def error_hint(name, content, state, bundle):
+    """What a rejected submission was missing, so the next turn can be the corrected one."""
+    if content.startswith('Complete required checks'):
+        return 'Do the listed reads first (they can be batched in one turn), then resubmit the same proposal.'
+    if content.startswith('Read the lineage UMAP'):
+        return 'Figures: ' + json.dumps([p for p in evidence_paths(bundle) if p.endswith('.png')])
+    if json_hint(content):
+        return json_hint(content)
+    if name in {'submit_types', 'submit_quality'}:
+        own, other = lineage_labels(bundle)
+        return coverage_hint(data_from(bundle).obs, state, own, other)
+    if name == 'submit_plan' and 'island' in content:
+        return island_hint(bundle)
+    return ''
 
 
 def refine_evidence(state, args, destination):
@@ -293,12 +363,13 @@ def tool(name, state_path, args_path, destination):
     from zmip.scheduled import TYPE_KEY, QUALITY_KEY, partitions, validate_types, validate_quality, apply_decisions
     from msp.evidence import DegTables, gene_table, qc_table
     state, args = read(state_path), read(args_path)
+    if name == 'deg_lookup':
+        args = lookup_arguments(args, TYPE_KEY)
     bundle = verified(state['evidence'])
     response = {}
     try:
         if name == 'list_evidence':
-            paths = [n for n in bundle['files'] if not n.startswith('deg_input/') and not n.endswith('.h5ad')]
-            offset = args['offset'];response.update(content=paths[offset:offset+30],next_offset=offset+30 if offset+30<len(paths) else None)
+            response.update(content=evidence_paths(bundle), next_offset=None)
         elif name == 'read_evidence':
             path = artifact(bundle, args['path'])
             if path.suffix == '.png':
@@ -320,7 +391,7 @@ def tool(name, state_path, args_path, destination):
             def frame(name):
                 return pd.read_csv(artifact(bundle,name),index_col=0) if name in bundle['files'] else None
             counts = frame('lineage_counts.csv')
-            problems, plan = validate_plan(json.loads(args['proposal_json']),list(counts.index),counts,
+            problems, plan = validate_plan(parse_proposal(args),list(counts.index),counts,
                 bundle['spec']['config']['min_cells'],frame('lineage_islands.csv'),frame('lineage_knn.csv'))
             if problems:
                 raise ValueError('; '.join(problems))
@@ -341,21 +412,18 @@ def tool(name, state_path, args_path, destination):
         elif name == 'subcluster':
             response['content'] = refine_evidence(state,args,destination)
         elif name == 'annotation_status':
-            data = data_from(bundle)
-            offset=args.get('offset',0);table=partitions(data.obs)
-            types=(state['types'] or {}).get('clusters',[]);quality=(state['quality'] or {}).get('clusters',[])
-            length=max(len(types),len(quality),len(table))
-            response.update(types=types[offset:offset+10],quality=quality[offset:offset+10],
+            data = data_from(bundle);table=partitions(data.obs)
+            response.update(types=(state['types'] or {}).get('clusters',[]),quality=(state['quality'] or {}).get('clusters',[]),
                 type_scope=state.get('type_scope',sorted(data.obs[TYPE_KEY].astype(str).unique())),
-                intersections={str(q):{str(t):int(n) for t,n in row.items() if n} for q,row in table.iloc[offset:offset+10].iterrows()},
-                next_offset=offset+10 if offset+10<length else None,version=bundle['version'])
+                intersections={str(q):{str(t):int(n) for t,n in row.items() if n} for q,row in table.iterrows()},
+                next_offset=None,version=bundle['version'])
         elif name == 'submit_types':
             data = data_from(bundle);own, _ = lineage_labels(bundle)
             missing = [name for name, done in [('deg_lookup or deg_sql', bool(state['lookups'])),
                 ('read_evidence on a lineage PNG figure', any(p.endswith('.png') for p in state['read']))] if not done]
             if missing:
                 raise ValueError('Complete required checks: ' + ', '.join(missing))
-            proposal = json.loads(args['proposal_json'])
+            proposal = parse_proposal(args)
             if not isinstance(proposal,dict):raise ValueError('Type proposal must be an object')
             submitted=proposal.get('clusters',[])
             scope=([str(e['cluster_id']) for e in submitted] if state.get('types_complete')
@@ -375,7 +443,7 @@ def tool(name, state_path, args_path, destination):
             if missing:
                 raise ValueError('Complete required checks: ' + ', '.join(missing))
             data = data_from(bundle);own, other = lineage_labels(bundle)
-            proposal = json.loads(args['proposal_json'])
+            proposal = parse_proposal(args)
             proposal['clusters'] = validate_quality(proposal,data.obs,other)
             pre = numerical_reasons(bundle,data)
             _, removed, _, _ = apply_decisions(data.obs,state['types'],proposal,own,other,bundle['lineage']['name'],pre)
@@ -388,15 +456,18 @@ def tool(name, state_path, args_path, destination):
                 if not isinstance(proposal.get('removal_review'),str) or not proposal['removal_review'].strip():
                     raise ValueError('Explain the reviewed removal evidence and scope in removal_review')
             state['quality'] = proposal;state['removal_fraction'] = fraction
-            response['content'] = 'Quality coverage accepted; finalize or revise the proposals.'
-        elif name == 'finalize_annotation':
-            if not state.get('types_complete') or state['quality'] is None:
-                raise ValueError('Both type and quality coverage must be accepted')
-            response.update(accepted=True,evidence=state['evidence'],types=state['types'],quality=state['quality'],removal_fraction=state['removal_fraction'])
+            # An accepted quality proposal completes the session (in 247 finished sessions no model revised after acceptance).
+            response.update(accepted=True,evidence=state['evidence'],types=state['types'],quality=proposal,removal_fraction=fraction,
+                            content='Quality coverage accepted; the session is complete.')
         else:
             raise ValueError('Unknown zoom-in tool')
     except (ValueError,KeyError,TypeError,IndexError) as exc:
-        response = {'is_error':True,'content':str(exc)[:8000]}
+        content = str(exc)[:8000]
+        try:
+            hint = error_hint(name, content, state, bundle)
+        except Exception:  # noqa: BLE001 - a hint must never turn a correctable error into a crash
+            hint = ''
+        response = {'is_error':True,'content':(content+'\n'+hint)[:16000] if hint else content}
     response['state'] = immutable(destination/'state.json',state)
     save(destination/'result.json',response)
 

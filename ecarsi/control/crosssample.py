@@ -132,11 +132,7 @@ def crosssample_step(action, args):
         raise ValueError('Unknown cross-sample operation')
     unit = 'cross-sample.' + (payload['phase'] + '.prepare' if action == 'agent' else action)
     from .. import stages
-    module, programs = 'ecarsi.stages.crosssample', (stages.program('crosssample'), stages.PACKAGE / 'round_policy.py')
-    # New sessions get the v3 model-facing contract; a saved agent request keeps its program.
-    from .persample import saved_module
-    if action == 'agent' and saved_module(spec['pool_root'], request_id) in (None, 'ecarsi.stages.crosssample_v3'):
-        module, programs = 'ecarsi.stages.crosssample_v3', (stages.program('crosssample_v3'), *programs)
+    module, programs = 'ecarsi.stages.crosssample', (stages.program('crosssample'), stages.program('contract'), stages.PACKAGE / 'round_policy.py')
     request = dict(request_id=request_id, operation_id=unit,
            args=['-m', module, *command], **budget, **accelerator,
            inputs=refs + [reference(path) for path in programs], outputs=[output],

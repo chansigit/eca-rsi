@@ -76,7 +76,7 @@ def test_zoom_handoffs_and_exact_global_conservation(tmp_path):
     missing_qc=immutable(tmp_path/'missing-qc-state.json',{**verified(review_state),'qc':False})
     missing=folder('missing-qc');tool('submit_quality',missing_qc['path'],str(args),missing)
     rejected=json.loads((missing/'result.json').read_text())
-    assert rejected['is_error'] and rejected['content']=='Complete required checks: check_qc_scores'
+    assert rejected['is_error'] and rejected['content'].startswith('Complete required checks: check_qc_scores\n')  # a hint follows
     assert verified(rejected['state'])['types_complete']
     first=folder('first-review');tool('submit_quality',review_state['path'],str(args),first)
     warning=json.loads((first/'result.json').read_text())
@@ -88,6 +88,7 @@ def test_zoom_handoffs_and_exact_global_conservation(tmp_path):
     assert verified(confirmed['state'])['quality']['removal_review']==removal['removal_review']
 
     from ecarsi.stages.zoomin import refine_evidence
+    from ecarsi.stages.contract import NO_ARGUMENTS
     refinement_state=dict(evidence=evidence,types=types,types_complete=True,quality=quality,read=[],lookups=[{'key':QUALITY_KEY}],qc=True)
     destination=folder('refinement')
     target=str(ad.obs[QUALITY_KEY].value_counts().idxmax())
@@ -107,4 +108,8 @@ def test_zoom_handoffs_and_exact_global_conservation(tmp_path):
               output_root=str(tmp_path/'agents'),tool_budget=budget,compute_budget=budget)
     for kind,ref in [('plan',prepared),('lineage',evidence)]:
         registered=validate_spec(agent_spec(spec,ref,kind,'parent'))
-        assert registered['completion_tool'] in {'submit_plan','finalize_annotation'}
+        assert registered['completion_tool']==('submit_plan' if kind=='plan' else 'submit_quality')
+        names=[t['name'] for t in registered['tools']]
+        assert 'finalize_annotation' not in names and 'Required order' in registered['prompt']
+        assert all(t['parameters']==NO_ARGUMENTS for t in registered['tools'] if t['name'] in {'list_evidence','annotation_status'})
+        assert ('Pending type clusters' in registered['prompt'])==(kind=='lineage')

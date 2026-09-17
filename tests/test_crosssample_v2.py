@@ -8,6 +8,7 @@ import pytest
 
 from ecarsi.bridge.session import immutable,reference,validate_spec,verified
 from ecarsi.stages.crosssample import BASE,agent_spec,finalize
+from ecarsi.stages.contract import NO_ARGUMENTS
 from ecarsi.stages.persample import sealed
 from ecarsi.warm_pool.state import save,read
 
@@ -49,6 +50,8 @@ def test_agent_tools_have_valid_worker_contracts(tmp_path):
         validate_spec(session)
         assert all(t['args'][1]=='ecarsi.stages.crosssample' for t in session['tools'])
         assert ('deg_sql' in [t['name'] for t in session['tools']])==(phase!='inclusion')
+        assert 'Required order' in session['prompt'] and ('Evidence files' in session['prompt'])==(phase!='inclusion')
+        assert all(t['parameters']==NO_ARGUMENTS for t in session['tools'] if t['name'] in {'list_evidence','type_context'})
 
 
 def test_overlapping_removals_count_once_and_mismatched_decisions_fail(tmp_path,monkeypatch):
