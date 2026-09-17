@@ -1,5 +1,7 @@
 """One submission: Organize, per-sample, then independent converging unit loops."""
 import asyncio
+import json
+import os
 from pathlib import Path
 
 from temporalio import activity, workflow
@@ -124,21 +126,28 @@ async def resume_dataset(client, identity, task_queue, reason):
     return handle
 
 
-# ponytail: operator floor for stage concurrency, in code because the dataset spec is a Temporal
-# workflow input and cannot change mid-run. Measured 2026-09-16: with 6 DEG tasks in flight the
-# numerical phase of a zoom-in stage took 10-25 min (130-300 DEG tasks of ~20 s) and two lineages
-# at a time serialised the rest, while the pool sat at 20-36 % CPU. The update handlers raise it
-# on running stages; this raises it for every new stage. Resume ignores these keys.
-STAGE_LIMIT_FLOORS = {'max_in_flight_deg': 12, 'max_in_flight_lineages': 6}
+def stage_limit_floors():
+    """Operator floors for stage concurrency: ECA_RSI_STAGE_LIMIT_FLOORS, a JSON object such as
+    {"max_in_flight_deg": 12, "max_in_flight_lineages": 6}. Empty by default: the dataset
+    spec's own values stand. The spec is a Temporal workflow input and cannot change mid-run,
+    so this is how an operator widens the windows for every stage started from now on (the
+    workflows' set_deg_limit update covers stages already running). Resume ignores these keys."""
+    raw = os.environ.get('ECA_RSI_STAGE_LIMIT_FLOORS', '').strip()
+    floors = json.loads(raw) if raw else {}
+    if not isinstance(floors, dict) or any(type(v) is not int or v < 1 for v in floors.values()):
+        raise ValueError('ECA_RSI_STAGE_LIMIT_FLOORS must be a JSON object of positive integers')
+    return floors
 
 
-def with_limit_floors(settings):
-    return {**settings, **{k: max(settings[k], v) for k, v in STAGE_LIMIT_FLOORS.items() if k in settings}}
+def with_limit_floors(settings, floors=None):
+    floors = stage_limit_floors() if floors is None else floors
+    return {**settings, **{k: max(settings[k], v) for k, v in floors.items() if k in settings}}
 
 
-def same_stage_spec(saved, result):
+def same_stage_spec(saved, result, floors=None):
+    floors = stage_limit_floors() if floors is None else floors
     def strip(value):
-        return {k: v for k, v in (value or {}).items() if k not in STAGE_LIMIT_FLOORS}
+        return {k: v for k, v in (value or {}).items() if k not in floors}
     return strip(saved) == strip(result)
 
 

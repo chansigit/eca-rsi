@@ -6,6 +6,7 @@ from datetime import timedelta
 import json
 import os
 from pathlib import Path
+import time
 
 from temporalio import activity, workflow
 from temporalio.client import Client
@@ -66,8 +67,32 @@ def submit_execute(spec: dict, prepared_path: str, reply_path: str, plan_parent:
     return request_id
 
 
+POLL_WAIT_SECONDS = 20  # below SHORT; a check activity waits this long before answering 'waiting'
+POLL_STEP_SECONDS = 2
+
+
+def long_poll(check):
+    """Wait inside the activity instead of one activity per poll: a 13-turn session recorded
+    ~6,500 history events, almost all poll activities and timers, and every poll was a Temporal
+    round trip. The workflow loop is unchanged; it just sees far fewer 'waiting' answers."""
+    deadline = time.monotonic() + POLL_WAIT_SECONDS
+    while True:
+        result = check()
+        if result["state"] != "waiting" or time.monotonic() >= deadline:
+            return result
+        try:
+            activity.heartbeat()
+        except RuntimeError:
+            pass  # not inside an activity (direct call in tests)
+        time.sleep(POLL_STEP_SECONDS)
+
+
 @activity.defn
 def check_pool(root: str, request_id: str, output: str) -> dict:
+    return long_poll(lambda: check_pool_once(root, request_id, output))
+
+
+def check_pool_once(root, request_id, output):
     from .warm_pool.state import file_digest, read, retry, status
     state = status(root, request_id)
     if state["state"] == "succeeded":
@@ -95,6 +120,10 @@ def check_pool(root: str, request_id: str, output: str) -> dict:
 
 @activity.defn
 def check_bridge(root: str, request_id: str) -> dict:
+    return long_poll(lambda: check_bridge_once(root, request_id))
+
+
+def check_bridge_once(root, request_id):
     from .agent_bridge import root_path, status
     result = status(root, request_id)
     if result["state"] == "reply_saved":
@@ -339,7 +368,10 @@ def validate_spec(spec):
     return spec
 
 
-async def run_worker(client, task_queue, workflow_slots=None):
+ACTIVITY_SLOTS = 256  # check activities hold a slot for up to POLL_WAIT_SECONDS; one per in-flight request/turn
+
+
+async def run_worker(client, task_queue, workflow_slots=None, activity_slots=None):
     from .persample_workflow import PersampleWorkflow, SampleWorkflow, sample_step
     from .crosssample_workflow import CrosssampleWorkflow, crosssample_step
     from .zoomin_workflow import ZoominWorkflow, zoomin_step
@@ -351,16 +383,21 @@ async def run_worker(client, task_queue, workflow_slots=None):
         workflow_slots = 2
     if workflow_slots < 1:
         raise ValueError("Workflow slots must be positive")
+    activity_slots = ACTIVITY_SLOTS if activity_slots is None else activity_slots
+    if activity_slots < 1:
+        raise ValueError("Activity slots must be positive")
     # The SDK default permits 500 concurrent replays; cold recovery must fit this host.
-    with ThreadPoolExecutor(max_workers=16) as executor:
+    # Check activities now wait up to POLL_WAIT_SECONDS each, so slots must cover every
+    # in-flight pool request and model turn of this coordinator's workflows, not just bursts.
+    with ThreadPoolExecutor(max_workers=activity_slots) as executor:
         async with Worker(client, task_queue=task_queue, max_concurrent_workflow_tasks=workflow_slots,
                 workflows=[OrganizeWorkflow, AgentWorkflow, PersampleWorkflow, SampleWorkflow, CrosssampleWorkflow, ZoominWorkflow, DatasetWorkflow, AnalysisUnitWorkflow],
                 activities=ACTIVITIES + [agent_step, sample_step, crosssample_step, zoomin_step, dataset_step],
-                activity_executor=executor, max_concurrent_activities=16):
+                activity_executor=executor, max_concurrent_activities=activity_slots):
             await asyncio.Future()
 
 
-async def follow_service(root, task_queue, workflow_slots=None):
+async def follow_service(root, task_queue, workflow_slots=None, activity_slots=None):
     """Reconnect after a service handoff without cancelling Pool or Bridge work."""
     from .temporal_service import endpoint
     last_state = None
@@ -377,7 +414,7 @@ async def follow_service(root, task_queue, workflow_slots=None):
             continue
         print('Connected to Temporal service generation ' + current['generation'], flush=True)
         last_state = None
-        running = asyncio.create_task(run_worker(client, task_queue, workflow_slots))
+        running = asyncio.create_task(run_worker(client, task_queue, workflow_slots, activity_slots))
         try:
             while True:
                 done, _ = await asyncio.wait([running], timeout=5)
@@ -404,6 +441,7 @@ async def main():
     commands = parser.add_subparsers(dest="command", required=True)
     p = commands.add_parser("worker")
     p.add_argument("--workflow-slots", type=int, help="concurrent workflow activations; default 2 to keep polling responsive and bound Python history replay; activities and Pool tasks remain concurrent")
+    p.add_argument("--activity-slots", type=int, help="concurrent activities; default %d, one per in-flight pool request or model turn because check activities long-poll" % ACTIVITY_SLOTS)
     p = commands.add_parser("start")
     p.add_argument("spec", type=Path)
     p = commands.add_parser("start-agent")
@@ -431,7 +469,7 @@ async def main():
         p.add_argument("run_id")
     args = parser.parse_args()
     if args.command == 'worker' and args.service_root:
-        await follow_service(args.service_root, args.task_queue, args.workflow_slots)
+        await follow_service(args.service_root, args.task_queue, args.workflow_slots, args.activity_slots)
         return
     if args.service_root:
         from .temporal_service import endpoint
@@ -444,7 +482,7 @@ async def main():
         runtime = Runtime(telemetry=TelemetryConfig(), worker_heartbeat_interval=None)
     client = await Client.connect(args.temporal, runtime=runtime)
     if args.command == "worker":
-        await run_worker(client, args.task_queue, args.workflow_slots)
+        await run_worker(client, args.task_queue, args.workflow_slots, args.activity_slots)
     elif args.command in {"start", "start-agent", "start-persample", "start-crosssample", "start-zoomin", "start-dataset"}:
         if args.command == "start-dataset":
             from .dataset_workflow import DatasetWorkflow, validate_spec as validate_dataset

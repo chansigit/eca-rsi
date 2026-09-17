@@ -306,7 +306,12 @@ def test_dispatch_submits_concurrently_and_resubmits_a_failed_submission(tmp_pat
     def call(*args):
         calls.append(args)
         if args[:2] == ('job', 'list'):
-            return [dict(name=name, id=7, task_stats=dict(waiting=1, running=0)) for name in known]
+            def stats(name):  # a job whose attempt has a receipt has finished
+                _, request_id, attempt = name.split('.')
+                import os as _os  # not Path.stat: the settled-folder guard below patches that
+                done = _os.path.exists(_os.path.join(str(tmp_path), 'requests', request_id, attempt, 'receipt.json'))
+                return dict(waiting=0 if done else 1, running=0, finished=1 if done else 0)
+            return [dict(name=name, id=7, task_stats=stats(name)) for name in known]
         if args[0] == 'submit':
             name = args[args.index('--name') + 1]
             if name.split('.')[1] in broken:
@@ -336,6 +341,7 @@ def test_dispatch_submits_concurrently_and_resubmits_a_failed_submission(tmp_pat
              attempt_id=request['attempt_id'], request_digest=request['digest'], runtime_digest=request['runtime_digest']))
     backend.dispatch(info)
     assert backend.settled == {'a', 'b'}
+    assert ('job', 'forget', '7,7') in calls or ('job', 'forget', '7') in calls  # HQ's copy of a settled job is dropped
     with monkeypatch.context() as check:
         check.setattr(module_path := __import__('pathlib').Path, 'stat', lambda self, *a, **k: pytest.fail(f'settled folder stat: {self}'))
         backend.dispatch(info)

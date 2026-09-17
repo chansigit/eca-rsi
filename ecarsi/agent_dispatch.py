@@ -425,7 +425,7 @@ def serve(root, *, once=False):
                  routing=settings))
             if once:
                 return
-            time.sleep(1)
+            time.sleep(.5)  # a turn waits half a tick on average before dispatch; the scan itself is ~1 s
 
 
 def load_worker_key(model):

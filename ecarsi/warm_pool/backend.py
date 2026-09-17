@@ -185,7 +185,7 @@ class HyperQueue:
         by_name = {j["name"]: j for j in jobs}
         generation = digest({k: info[k] for k in ("server_uid", "pid", "start_date")})
         live_hosts = None  # HQ worker hostnames, fetched once per tick and only when needed
-        submissions = []
+        submissions, forgettable = [], []
         for folder in sorted((self.root / "requests").iterdir()):
             if folder.name in self.settled:
                 continue  # 74k saved requests: two stats each per tick was most of a 20 s tick
@@ -229,6 +229,8 @@ class HyperQueue:
                     self.finished[folder.name] = stamp
                     if receipt.get("state") == "succeeded":
                         self.settled.add(folder.name)  # a failed one may be retried: keep watching its stamp
+                        if job and not (job["task_stats"]["running"] or job["task_stats"]["waiting"]):
+                            forgettable.append(str(job["id"]))
                     continue
                 accepted = read(attempt / "accepted.json")
                 if accepted and not (job and (job["task_stats"]["running"] or job["task_stats"]["waiting"])):
@@ -279,6 +281,12 @@ class HyperQueue:
                     submissions.append((folder, ("job", "submit-file", str(path))))
                 else:
                     submissions.append((folder, tuple(args)))
+        if forgettable:
+            # The receipt is the record; HQ's copy only makes `job list --all` grow with history.
+            try:
+                self.call("job", "forget", ",".join(forgettable))
+            except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+                pass  # forgotten next tick, or never: harmless
         if not submissions:
             return
         # Every hq client call costs ~0.25 s. Submitting inline, one flush each, made a
@@ -342,7 +350,7 @@ def serve(root, host=None):
                     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as exc:
                         save(backend.root / "scheduler.json", dict(pid=os.getpid(), host=socket.gethostname(),
                              observed_at=time.time(), state="reconciling", error=str(exc)))
-                    time.sleep(.5)
+                    time.sleep(.2)  # a new request waits half a tick on average before HQ sees it
         finally:
             if server is not None and server.poll() is None:
                 # `hq server stop` cancels worker computations. Dropping this
