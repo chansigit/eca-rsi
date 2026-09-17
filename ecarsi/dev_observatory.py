@@ -534,6 +534,8 @@ def worker_rows(pool, hq, now):
         allocation = identity.get('allocation') or {}
         sample = latest.get(host)
         cpus = len(resources.get('cpus', {}).get('values', []))
+        gpus = (sample or {}).get('gpus') or []
+        busy = [g['utilization_percent'] for g in gpus if g.get('utilization_percent') is not None]
         rows.append({
             'id': worker['id'], 'host': host, 'slurm_job_id': identity.get('slurm_job_id') or allocation.get('job_id'),
             'cpus': cpus, 'memory_gb': resources.get('mem', {}).get('size', 0) / 10000 / 1024,
@@ -543,6 +545,9 @@ def worker_rows(pool, hq, now):
             'node_memory_used_gb': sample['memory_used_bytes'] / 2**30 if sample else None,
             'node_memory_gb': sample['memory_total_bytes'] / 2**30 if sample else None,
             'seen_seconds_ago': now - sample['observed_at'] if sample else None,
+            'gpu_percent': sum(busy) / len(busy) if busy else None,
+            'gpu_memory_used_gb': sum(g.get('memory_used_mb') or 0 for g in gpus) / 1024 if gpus else None,
+            'gpu_memory_gb': sum(g.get('memory_total_mb') or 0 for g in gpus) / 1024 if gpus else None,
             'hours_left': (allocation['end_time'] - now) / 3600 if allocation.get('end_time') else None,
         })
     return rows
@@ -662,13 +667,16 @@ def render_status(report):
             lines.append('  temporal   datasets ' + ', '.join(f"{k} {v}" for k, v in temporal['dataset_counts'].items())
                          + f"; failed workflows in 6 h: {len(temporal['failures_6h'])}")
     lines += ['', f"WORKERS ({len(report['workers'])} in HQ)" + (f"  HQ error: {report['hq_error']}" if report['hq_error'] else '')]
-    lines.append('  id   host          job        cpus   used   mem GiB   node mem GiB   tasks  time left  seen')
+    lines.append('  id   host          job        cpus   used   mem GiB   node mem GiB   tasks  time left  seen          gpu  util  gpu mem GiB')
     for w in report['workers']:
         used = f"{w['cpu_cores_used']:5.1f}" if w['cpu_cores_used'] is not None else '    ?'
         mem = f"{w['memory_gb']:6.0f}   " + (f"{w['node_memory_used_gb']:5.0f}/{w['node_memory_gb']:<5.0f}" if w['node_memory_used_gb'] is not None else '     ?     ')
         left = f"{w['hours_left']:6.1f} h" if w['hours_left'] is not None else '       ?'
         seen = f"{w['seen_seconds_ago']:.0f} s" if w['seen_seconds_ago'] is not None else 'no telemetry'
-        gpu = f" gpu {w['gpus']}" if w['gpus'] else ''
+        gpu = ''
+        if w['gpus']:
+            gpu = f"  {w['gpus']:3d}  " + (f"{w['gpu_percent']:3.0f} %  {w['gpu_memory_used_gb']:5.1f}/{w['gpu_memory_gb']:<5.1f}"
+                                          if w.get('gpu_percent') is not None else 'no telemetry')
         lines.append(f"  {w['id']:<4} {w['host']:13s} {str(w['slurm_job_id'] or '?'):10s} {w['cpus']:3d}   {used}   {mem}    {str(w['running_tasks'] if w['running_tasks'] is not None else '?'):>5s}  {left}  {seen}{gpu}")
     for state in ('running', 'waiting'):
         jobs = report['jobs'].get(state, {'total': 0, 'by_class': {}, 'by_dataset': {}})
