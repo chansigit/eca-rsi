@@ -131,9 +131,14 @@ def crosssample_step(action, args):
     else:
         raise ValueError('Unknown cross-sample operation')
     unit = 'cross-sample.' + (payload['phase'] + '.prepare' if action == 'agent' else action)
+    module, programs = 'ecarsi.crosssample_v2', ('crosssample_v2.py', 'round_policy.py')
+    # New sessions get the v3 model-facing contract; an agent request already saved on
+    # disk keeps its v2 identity (submit rejects a changed spec for the same id).
+    if action == 'agent' and not (Path(spec['pool_root']) / 'requests' / request_id / 'request.json').exists():
+        module, programs = 'ecarsi.crosssample_v3', ('crosssample_v3.py', *programs)
     request = dict(request_id=request_id, operation_id=unit,
-           args=['-m', 'ecarsi.crosssample_v2', *command], **budget, **accelerator,
-           inputs=refs + [reference(Path(__file__).with_name(name)) for name in ('crosssample_v2.py', 'round_policy.py')], outputs=[output],
+           args=['-m', module, *command], **budget, **accelerator,
+           inputs=refs + [reference(Path(__file__).with_name(name)) for name in programs], outputs=[output],
            trace=dict(workflow_id='cross-sample/' + spec['run_id'], dataset_id=spec['dataset_id'],
                       unit_id=unit, depends_on=parents))
     if action == 'deg':

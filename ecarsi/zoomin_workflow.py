@@ -96,9 +96,15 @@ def zoomin_step(action,args):
     packet=immutable(root/(request_id+'.json'),dict(spec=spec,refs=refs,request_id=request_id,**{k:v for k,v in payload.items() if k!='paths'}))
     unit='zoom-in.'+(payload['kind']+'.prepare' if action=='agent' else action)
     program=Path(__file__).with_name('zoomin_v2.py')
+    programs=('zoomin_v2.py','crosssample_v2.py','persample_v2.py')
+    module='ecarsi.zoomin_v2'
+    # New sessions get the v3 model-facing contract; an agent request already saved on
+    # disk keeps its v2 identity (submit rejects a changed spec for the same id).
+    if action=='agent' and not (Path(spec['pool_root'])/'requests'/request_id/'request.json').exists():
+        module,programs='ecarsi.zoomin_v3',('zoomin_v3.py',*programs)
     request=dict(request_id=request_id,operation_id=unit,
-        args=['-m','ecarsi.zoomin_v2',action,packet['path']],**spec[budget],**gpu,
-        inputs=[packet,*[reference(program.with_name(n)) for n in ('zoomin_v2.py','crosssample_v2.py','persample_v2.py')],spec['input'],*refs],outputs=[output],
+        args=['-m',module,action,packet['path']],**spec[budget],**gpu,
+        inputs=[packet,*[reference(program.with_name(n)) for n in programs],spec['input'],*refs],outputs=[output],
         trace=dict(workflow_id='zoom-in/'+spec['run_id'],dataset_id=spec['dataset_id'],unit_id=unit,depends_on=parents))
     if action=='deg':
         from .operation_budget import from_deg_buffers
