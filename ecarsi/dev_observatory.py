@@ -563,12 +563,13 @@ def session_stats(bridge, pool, hours, now):
             started.add(session)
     kinds = {}
     for session in started:
-        # A session counts once its last saved turn carried no tool calls: turns of a
-        # session still running would understate the real length.
-        last = read(bridge / 'requests' / f'{session}.turn-{turns[session] - 1}' / 'result.json')
+        # A session counts once complete_tool saved result.json beside its session.json:
+        # turns of a session still running would understate the real length.
+        first = read(bridge / 'requests' / f'{session}.turn-0' / 'request.json', {})
+        session_file = ((first.get('spec') or {}).get('session') or {}).get('path')
         kind = kinds.setdefault(session.split('-', 1)[0], {'started': 0, 'finished': []})
         kind['started'] += 1
-        if last is not None and not (last.get('response') or {}).get('calls'):
+        if session_file and (Path(session_file).parent / 'result.json').is_file():
             kind['finished'].append(turns[session])
     submissions = {}
     for entry in os.scandir(pool / 'requests'):
