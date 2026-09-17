@@ -159,6 +159,19 @@ def same_stage_spec(saved, result, floors=None):
     return strip(saved) == strip(result)
 
 
+def stage_spec_on_disk(root, result, resume):
+    """On resume a stage keeps the spec it was saved with: operator floors widen new stages only,
+    a running stage is widened through set_deg_limit, and the stage workflow re-writes spec.json
+    immutably (Eye, 2026-09-17: 'Conflicting durable content' with a floored resume spec)."""
+    from .warm_pool.state import read
+    if not resume or not root.exists():
+        return result
+    saved = read(root / 'spec.json')
+    if not same_stage_spec(saved, result):
+        raise ValueError('Saved stage specification changed; resume cannot change inputs or settings')
+    return saved
+
+
 @activity.defn
 def dataset_step(action, args):
     from .agent_session import immutable, reference, verified
@@ -258,10 +271,7 @@ def dataset_step(action, args):
         resume = action == 'resume_stage'
         def validated(settings, validate):
             result = validate(with_limit_floors(settings), resume=resume)
-            root = Path(result['output_root'])
-            if resume and root.exists() and not same_stage_spec(read(root / 'spec.json'), result):
-                raise ValueError('Saved stage specification changed; resume cannot change inputs or settings')
-            return result
+            return stage_spec_on_disk(Path(result['output_root']), result, resume)
         verified(unit['organize'])
         directory = Path(spec['output_root']) / 'units' / unit['name']
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)

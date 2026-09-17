@@ -44,3 +44,18 @@ def test_completed_stage_check_tolerates_floored_keys(tmp_path, monkeypatch):
         dataset_step('completed', ['cross_sample', dict(saved, max_in_flight_deg=12)])
     with pytest.raises(ValueError, match='Saved stage specification changed'):
         dataset_step('completed', ['cross_sample', dict(saved, input='changed')])
+
+
+def test_resumed_stage_keeps_the_saved_spec(tmp_path, monkeypatch):
+    from ecarsi.dataset_workflow import stage_spec_on_disk
+    from ecarsi.warm_pool.state import save
+    monkeypatch.setenv('ECA_RSI_STAGE_LIMIT_FLOORS', json.dumps({'max_in_flight_deg': 12}))
+    root = tmp_path / 'stage'
+    fresh = dict(input='a', max_in_flight_deg=12)
+    assert stage_spec_on_disk(root, fresh, True) == fresh  # nothing saved yet
+    root.mkdir()
+    save(root / 'spec.json', dict(input='a', max_in_flight_deg=6))
+    assert stage_spec_on_disk(root, fresh, True) == dict(input='a', max_in_flight_deg=6)
+    assert stage_spec_on_disk(root, fresh, False) == fresh
+    with pytest.raises(ValueError, match='Saved stage specification changed'):
+        stage_spec_on_disk(root, dict(input='b', max_in_flight_deg=12), True)
