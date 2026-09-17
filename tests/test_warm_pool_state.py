@@ -341,7 +341,7 @@ def test_dispatch_submits_concurrently_and_resubmits_a_failed_submission(tmp_pat
         save(tmp_path / f'requests/{name}' / request['attempt_id'] / 'receipt.json', dict(state='succeeded', finished_at=1,
              attempt_id=request['attempt_id'], request_digest=request['digest'], runtime_digest=request['runtime_digest']))
     backend.dispatch(info)
-    assert backend.settled == {'a', 'b'}
+    assert {name for name, _inode in backend.settled} == {'a', 'b'}
     assert ('job', 'forget', '7,7') in calls or ('job', 'forget', '7') in calls  # HQ's copy of a settled job is dropped
     with monkeypatch.context() as check:
         check.setattr(module_path := __import__('pathlib').Path, 'stat', lambda self, *a, **k: pytest.fail(f'settled folder stat: {self}'))

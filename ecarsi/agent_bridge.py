@@ -329,12 +329,12 @@ def launch(root, folder, catalog):
                                 stdout=log, stderr=log, start_new_session=True)
 
 
-def serve(root, *, once=False):
+def serve(root, *, once=False, finished=None):
     root = root_path(root)
     if read(root / "config.json").get("pool_root"):
         from .agent_dispatch import serve as serve_pool
-        return serve_pool(root, once=once)
-    children, finished = {}, {}
+        return serve_pool(root, once=once, finished=finished)
+    children, finished = {}, ({} if finished is None else finished)
     with lock(root / "service.lock", blocking=False):
         while True:
             scanning = time.monotonic()
@@ -344,13 +344,14 @@ def serve(root, *, once=False):
                 raise ValueError("concurrency must be a positive integer")
             # Terminal requests are immutable; rebuild this cache after restart.
             # ponytail: still list names per tick; index them if directory listing dominates.
-            folders = sorted((root / "requests").iterdir())
+            # Cached by (name, inode): a folder re-created under an archived name is new work.
+            folders = [(Path(e.path), (e.name, e.inode())) for e in sorted(os.scandir(root / "requests"), key=lambda e: e.name)]
             for name, child in list(children.items()):
                 if child.poll() is not None:
                     del children[name]
             queued, active = [], 0
-            for folder in folders:
-                if folder.name in finished or not (folder / "request.json").is_file():
+            for folder, key in folders:
+                if key in finished or not (folder / "request.json").is_file():
                     continue
                 record = status(root, folder.name)
                 if record["state"] == "running":
@@ -384,13 +385,13 @@ def serve(root, *, once=False):
                         reconcile(folder)
                     break
             counts = Counter(finished.values())
-            for folder in folders:
-                if folder.name in finished or not (folder / "request.json").is_file():
+            for folder, key in folders:
+                if key in finished or not (folder / "request.json").is_file():
                     continue
                 state = status(root, folder.name)['state']
                 counts[state] += 1
                 if state in {'reply_saved', 'failed'}:
-                    finished[folder.name] = state
+                    finished[key] = state
             save(root / "summary.json", {"updated_at": time.time(), "counts": dict(counts),
                                          "dispatch_scan_seconds": time.monotonic() - scanning,
                                          "concurrency": limit, "dispatch_error": error,

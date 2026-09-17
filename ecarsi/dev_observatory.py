@@ -263,16 +263,17 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
     def recent(entry, stale):
         """Folder mtime is the last state change; untouched folders beyond the horizon are remembered with
         that mtime and not stat'ed again, and are read once a wider horizon reaches them."""
-        mtime = stale.get(entry.name)
+        key = (entry.name, entry.inode())  # a folder re-created under an old name is new
+        mtime = stale.get(key)
         if mtime is None:
             try:
                 mtime = entry.stat().st_mtime
             except OSError:
                 return False
         if now - mtime > horizon:
-            stale[entry.name] = mtime
+            stale[key] = mtime
             return False
-        stale.pop(entry.name, None)
+        stale.pop(key, None)
         return True
     scheduler = read(pool / "scheduler.json", {})
     worker = read(root / "organize-v2-pool-worker/worker.json", {})
@@ -281,8 +282,8 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
     if (pool / "config.json").is_file():
         # One directory listing per refresh; a settled request is never stat'ed again.
         for entry in os.scandir(pool / "requests"):
-            if entry.name in pool_done:
-                pool_rows.append(pool_done[entry.name])
+            if (entry.name, entry.inode()) in pool_done:
+                pool_rows.append(pool_done[(entry.name, entry.inode())])
                 continue
             if not recent(entry, pool_stale):
                 continue
@@ -311,12 +312,12 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
             }
             pool_rows.append(row)
             if row["state"] in {"succeeded", "failed", "cancelled"}:
-                pool_done[folder.name] = row
+                pool_done[(entry.name, entry.inode())] = row
     bridge_rows = []
     if (bridge / "config.json").is_file():
         for entry in os.scandir(bridge / "requests"):
-            if entry.name in bridge_done:
-                bridge_rows.append(bridge_done[entry.name])
+            if (entry.name, entry.inode()) in bridge_done:
+                bridge_rows.append(bridge_done[(entry.name, entry.inode())])
                 continue
             if not recent(entry, bridge_stale):
                 continue
@@ -340,7 +341,7 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
             }
             bridge_rows.append(row)
             if row["state"] in {"reply_saved", "failed"}:
-                bridge_done[folder.name] = row
+                bridge_done[(entry.name, entry.inode())] = row
     pool_by_id = {row["id"]: row for row in pool_rows}
     for row in bridge_rows:
         for pool_id in row.get("pool_attempts", []):

@@ -460,3 +460,29 @@ def test_invalid_unused_dispatch_snapshot_recovers_without_relaxing_session_pin(
     save(ref['path'], saved)
     with pytest.raises(ValueError, match='Artifact changed'):
         dispatch.invalid_dispatch_snapshot(state)
+
+
+def test_a_turn_folder_recreated_under_an_archived_name_is_served_again(tmp_path):
+    """Eye 2026-09-17: recovery archived turn-0, the resume re-created it, and a name-keyed
+    settled cache in the long-running bridge hid it for 14 hours."""
+    import shutil
+    from tests.test_agent_session import setup, completed_tool
+    spec, _ = setup(tmp_path)
+    root = Path(spec['bridge_root'])
+    save(root / 'config.json', dict(read(root / 'config.json'), pool_root=spec['pool_root']))
+    ref = session.create_session(spec)
+    turn = session.submit_turn(ref, 0)
+    cache = {}
+    bridge.serve(root, once=True, finished=cache)
+    first = bridge.status(root, turn)['attempts'][0]['pool_request_id']
+    completed_tool(spec, dict(request_id=first), dict(outcome='success', response={'kind': 'final', 'text': 'done'}, worker={}))
+    bridge.serve(root, once=True, finished=cache)
+    assert bridge.status(root, turn)['state'] == 'reply_saved'
+    folder, archived = root / 'requests' / turn, root / 'archived-requests' / turn
+    archived.parent.mkdir()
+    folder.rename(archived)
+    folder.mkdir()
+    shutil.copy(archived / 'request.json', folder / 'request.json')
+    assert bridge.status(root, turn)['state'] == 'queued'
+    bridge.serve(root, once=True, finished=cache)
+    assert bridge.status(root, turn)['attempts'], 'the re-created turn was hidden by the settled cache'

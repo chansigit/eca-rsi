@@ -186,8 +186,9 @@ class HyperQueue:
         generation = digest({k: info[k] for k in ("server_uid", "pid", "start_date")})
         live_hosts = None  # HQ worker hostnames, fetched once per tick and only when needed
         submissions, forgettable = [], []
-        for folder in sorted((self.root / "requests").iterdir()):
-            if folder.name in self.settled:
+        for entry in sorted(os.scandir(self.root / "requests"), key=lambda e: e.name):
+            folder, key = Path(entry.path), (entry.name, entry.inode())
+            if key in self.settled:
                 continue  # 74k saved requests: two stats each per tick was most of a 20 s tick
             try:
                 stat = (folder / 'request.json').stat()
@@ -220,7 +221,7 @@ class HyperQueue:
                         save(folder / "backend.json", dict(previous, state="cancelled", observed_at=time.time()))
                     if receipt:
                         self.finished[folder.name] = stamp
-                        self.settled.add(folder.name)
+                        self.settled.add(key)
                     continue
                 if receipt:
                     # A persisted result wins over a replayed HQ journal entry.
@@ -228,7 +229,7 @@ class HyperQueue:
                         self.call("job", "cancel", str(job["id"]))
                     self.finished[folder.name] = stamp
                     if receipt.get("state") == "succeeded":
-                        self.settled.add(folder.name)  # a failed one may be retried: keep watching its stamp
+                        self.settled.add(key)  # a failed one may be retried: keep watching its stamp
                         if job and not (job["task_stats"]["running"] or job["task_stats"]["waiting"]):
                             forgettable.append(str(job["id"]))
                     continue
