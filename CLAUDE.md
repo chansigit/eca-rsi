@@ -143,7 +143,7 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
 - 本轮删除统计从 MSP integrated 到 ZMIP survivors，不含此前 OSP QC 和整样本排除；完整历史查 ledger。
   达到停止阈值不证明注释准确；轮数上限或固定轮数发布应按 reason 与收敛发布区分。
 - `ecarsi.cost` 只累计捕获到的费用事件；缺失记录不能解释成免费或完整账单。
-- 配套版本：ecarsi 0.3.1（分支 gen2；main 上是 0.3.0）、bridge 0.2.14、OSP 0.1.6、MSP 0.5.1、ZMIP 0.3.9。默认 Harmony 2 CPU；可选 RAPIDS GPU。
+- 配套版本（2026-09-18 起 main）：ecarsi 0.3.1、bridge 0.2.14、OSP 0.1.7（mt 上限 25 %）、MSP 0.5.2、ZMIP 0.3.9。默认 Harmony 2 CPU；可选 RAPIDS GPU。
 - `loop_control.json` 支持 `pause: true` 与 `pause_after_stage: crosssample|zoomin`；停止派发新任务，等待已启动任务到安全点，退出 3、不 release。恢复前清除对应控制项。
   SIGTERM 通过共享 `ECA_RSI_PAUSE_FILE` 请求同样的安全暂停；Slurm 模板提前 600 秒发 TERM，shell 等待子任务落盘后复制部分结果。
 - MSP `.msp-state/*-progress.json` 与 ZMIP `.annotation-progress.json` 原子保存 host 接受的提交及分簇；恢复必须核对输入、证据、代码，再过原校验器。
@@ -194,7 +194,7 @@ python -m pytest -q tests/test_downstream.py tests/test_downstream_state.py test
   `runtime_identity()` / `downstream.runtime()` 哈希包内全部 .py/.md/.json(含 serve.py 这类与计算无关的文件),主 checkout 上任何改动都会让
   正在 verify 的阶段失败(tome E9.5 round 3 zoomin 因此重算过)。改代码走 worktree + PYTHONPATH,批次结束再 `chmod -R u+w` 并合并。
 
-## 第二代：durable 控制面（分支 `gen2`，2026-09-17 起；细节见 [docs-gen2/ARCHITECTURE.md](docs-gen2/ARCHITECTURE.md)）
+## 第二代：durable 控制面（分支 `gen2` 2026-09-17 起，2026-09-18 合入 main；细节见 [docs-gen2/ARCHITECTURE.md](docs-gen2/ARCHITECTURE.md)）
 
 同一套内核，包装成 Temporal + HyperQueue + Bridge 的批量系统；第一代模块位置不动，第二代收进子包：
 
@@ -214,7 +214,7 @@ ecarsi/observatory.py   状态页 + `status` 报告（原 dev_observatory）
   在新布局下不能回放，切换只在没有会话在飞时做（或归档相关请求后 resume）。
 - 第二代的文档在 `docs-gen2/`（AGENT_BRIDGE_V2、WARM_POOL_V2、DURABLE_CONTROL、DATASET_V2 …），`design/` 是设计页。
 - 控制面节点上不要无节制扫描 pool / bridge 的 requests 目录（会拖垮协调器的 Lustre 客户端）。
-- 第一代的 batch 准入（`eca-rsi batch`、节点代理、OSP compute-ahead、driver 内存租借）只在 main 上；gen2 里数据集由控制面准入。
+- 第一代的 batch 准入（`eca-rsi batch`、节点代理、OSP compute-ahead、driver 内存租借）随 0.3.0 留在树里但不再维护；第二代数据集由控制面准入。
 
 ## 上一代:run.sh 六步循环(分支 primitive;2026-08-25 推倒重做后;总共 ~300 行)
 
