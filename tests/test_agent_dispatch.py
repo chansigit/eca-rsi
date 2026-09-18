@@ -489,3 +489,23 @@ def test_a_turn_folder_recreated_under_an_archived_name_is_served_again(tmp_path
     assert bridge.status(root, turn)['state'] == 'queued'
     bridge.serve(root, once=True, finished=cache)
     assert bridge.status(root, turn)['attempts'], 'the re-created turn was hidden by the settled cache'
+    assert bridge.status(root, turn)['attempts'][0]['pool_request_id'] == first  # same content, same reply
+
+
+def test_a_turn_recreated_with_different_content_gets_its_own_pool_request(tmp_path, monkeypatch):
+    """Eye 2026-09-17, second recovery: the session id derives from the phase inputs, so the re-created
+    session had the same turn folder names and the pool replayed 34 archived v2 replies."""
+    from tests.test_agent_session import setup
+    spec, _ = setup(tmp_path)
+    root = Path(spec['bridge_root'])
+    save(root / 'config.json', dict(read(root / 'config.json'), pool_root=spec['pool_root']))
+    ref = session.create_session(spec)
+    monkeypatch.setattr(dispatch, 'enqueue', lambda *a: None)
+    turn = session.submit_turn(ref, 0)
+    bridge.serve(root, once=True)
+    first = bridge.status(root, turn)['attempts'][0]['pool_request_id']
+    folder = root / 'requests' / turn
+    folder.rename(root / 'archived-turn-0')
+    assert session.submit_turn(ref, 0, parents=('elsewhere',)) == turn
+    bridge.serve(root, once=True)
+    assert bridge.status(root, turn)['attempts'][0]['pool_request_id'] != first

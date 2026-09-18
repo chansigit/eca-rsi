@@ -110,7 +110,10 @@ def _dispatch(root, folder, config, model):
     state = read(folder / "state.json", {})
     attempts = state.get("attempts", [])
     number = len(attempts)
-    pool_id = "agent-" + digest([str(root), folder.name, number])[:32]
+    # The turn's own digest is part of the id: a turn folder re-created under the same name with
+    # different content must not replay the earlier reply (eye 2026-09-17: a resumed session replayed
+    # 34 archived model replies because the pool replays saved ids).
+    pool_id = "agent-" + digest([str(root), folder.name, request["digest"], number])[:32]
     plan_path = folder / f"dispatch-{number}.json"
     plan = read(plan_path) or dict(request=request, model=model, timeout_seconds=settings["response_timeout_seconds"],
                 cpus=settings["worker_cpus"], memory_mb=settings["worker_memory_mb"],

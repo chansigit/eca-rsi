@@ -87,7 +87,5 @@ python -m ecarsi.control --service-root <control> --task-queue <q> start-dataset
 
 - `agent.parallel` 给并行只读批次定预算时仍按 stage 模块名匹配（persample 的读会加载矩阵），是 agent 里残留的一处
   stage 知识；下一步可由 stage 在 session 里声明。
-- 模型回合的 Pool 请求 id 只由 bridge 根、回合文件夹名和尝试次数派生（`agent-<digest>`），与回合内容无关；
-  同名会话重建后会回放旧回复（eye 2026-09-17）。见 CHANGELOG 0.3.1。
 - Periscope（`serve.py`，第一代）和 `observatory` 是两套观测；Periscope 现在只看数据集和 Slurm pool。
 - `ecarsi.pool`（第一代的 Slurm pool）仍被 `warm_pool` 用来读节点清单，两套 pool 并存。
