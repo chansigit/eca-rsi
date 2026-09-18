@@ -1,24 +1,21 @@
-"""Fan out registered evidence reads; merge only their monotone observation state."""
+"""Fan out registered evidence reads; merge only their monotone observation state.
+
+A stage declares a tool `read_only` when its state changes are monotone observations (paths read,
+lookups made, QC seen) that `merge_states` can combine; the model-turn service knows no stage."""
 from copy import deepcopy
 from pathlib import Path
 
 from ..warm_pool.state import immutable, reference, verified
 from ..warm_pool.state import digest, read
 
-MODULES = {'ecarsi.stages.persample', 'ecarsi.stages.crosssample', 'ecarsi.stages.zoomin'}
-READS = {'read_evidence', 'list_evidence', 'sample_inventory', 'type_context',
-         'deg_lookup', 'deg_sql', 'check_genes', 'check_qc_scores', 'annotation_status'}
 MAX_CALLS = 64
 
 
 def eligible(spec, calls):
-    """read_only alone is insufficient: arbitrary tool state cannot be merged."""
+    """read_only alone is insufficient: every call must start from the same registered state."""
     tools = {t['name']: t for t in spec['tools']}
     selected = [tools.get(c['name'], {}) for c in calls]
-    return (1 < len(calls) <= MAX_CALLS and all(t.get('read_only') and t.get('name') in READS
-        and len(t['args']) == 6 and t['args'][:1] == ['-m'] and t['args'][1] in MODULES
-        and t['args'][2:] == ['tool', t['name'], '{state}', '{arguments}'] for t in selected)
-        and len({t['args'][1] for t in selected}) == 1)
+    return 1 < len(calls) <= MAX_CALLS and all(t.get('read_only') and '{state}' in t.get('args', []) for t in selected)
 
 
 def choose(session_ref, reply_path):
@@ -76,33 +73,3 @@ def merge_states(base, states):
                 raise ValueError('Parallel evidence changed scientific state: ' + key)
     return merged
 
-
-def budget(request, directory, spec, tool, state_ref):
-    """Readers reserve reader memory; matrix tools reuse measured compute peaks."""
-    path = Path(directory) / 'tool-resources.json'
-    saved = read(path)
-    if saved:
-        if saved['base_digest'] != digest(request):
-            raise ValueError('Tool resource request changed')
-        return saved['request']
-    if (Path(spec['pool_root']) / 'requests' / request['request_id'] / 'request.json').exists():
-        return request
-    args = tool['args']
-    if len(args) != 6 or args[1] not in MODULES or state_ref is None:
-        return request
-    state = verified(state_ref)
-    optimized = request
-    light = tool['name'] in READS - {'check_genes', 'check_qc_scores', 'annotation_status'}
-    if request['args'][:2] == ['-m', 'ecarsi.stages.evidence']:
-        # Existing evidence batches may also execute QC, which loads the matrix.
-        light = light and args[1] != 'ecarsi.stages.persample' and state.get('phase') != 'quality' and state.get('kind') != 'lineage'
-    if light:
-        optimized = dict(request, memory_mb=min(request['memory_mb'], 2048))
-    elif args[1] != 'ecarsi.stages.persample' and tool['name'] in READS:
-        evidence = verified(state['evidence'])
-        computed = evidence.get('prepared')
-        if computed:
-            from ..warm_pool.budget import from_compute
-            optimized = from_compute(request, computed, Path(directory) / 'matrix-resources.json', spec['pool_root'])
-    immutable(path, dict(base_digest=digest(request), request=optimized))
-    return optimized

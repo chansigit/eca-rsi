@@ -76,10 +76,7 @@ def sample_step(action, args):
         return read(args[0])
     if action == "agent":
         spec, path, parent = args
-        session = annotation_spec(spec, reference(path), parent)
-        from ..agent.parallel import READS
-        session["tools"] = [dict(tool, read_only=tool["name"] in READS) for tool in session["tools"]]
-        return session
+        return annotation_spec(spec, reference(path), parent)
     if action == "accepted_annotation":
         result = read(args[0])
         if "output" not in result or verified(result["output"]).get("accepted") is not True:

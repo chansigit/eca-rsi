@@ -15,7 +15,6 @@ from openai.types.responses import ResponseFunctionToolCall
 import ecarsi.agent as bridge
 import ecarsi.agent.session as session
 import ecarsi.control as work_coordinator
-from ecarsi.agent.parallel import READS
 from ecarsi.warm_pool.budget import from_artifact
 from ecarsi.warm_pool.state import read, save
 
@@ -109,38 +108,6 @@ def test_batching_an_unbatchable_tool_returns_a_correction_not_a_failure(tmp_pat
     # No registered scientific program was launched by the rejected batch.
     assert not any(read(p)["spec"]["args"][0] == "-c"
                    for p in (Path(spec["pool_root"]) / "requests").glob("*/request.json"))
-
-
-def test_saved_session_batches_by_current_policy_not_its_stale_copy(tmp_path):
-    from harness_bridge import _harness_openai as adapter
-    spec, ref = build(tmp_path)
-    spec["tools"][1] = dict(spec["tools"][1], name="check_qc_scores", parameters={
-        "type": "object", "properties": {}, "required": [], "additionalProperties": False})
-    spec = dict(spec, session_id="stale-policy", output_root=str(tmp_path / "stale"))
-    ref = session.create_session(spec)
-    root = Path(spec["bridge_root"])
-    request = session.submit_turn(ref, 0)
-    save(root / "requests" / request / "state.json", {"state": "running", "started_at": 1})
-    with patch.object(adapter, "_client", return_value=Client()), \
-         patch.object(adapter, "_model", return_value=UndeclaredRead()):
-        bridge.execute(root, request)
-    reply = root / "requests" / request / "result.json"
-    # check_qc_scores is read-only under current policy, so the batch executes sequentially.
-    first = session.tool_request(ref, reply, 0)
-    submitted = read(Path(spec["pool_root"]) / "requests" / first["request_id"] / "request.json")
-    assert submitted["spec"]["operation_id"] == "read_evidence"
-    assert submitted["spec"]["args"][:2] != ["-m", "ecarsi.agent.tool_errors"]
-
-
-def test_registered_reads_share_one_batching_policy():
-    """Every stage's Coordinator applies READS; worker programs are hash-pinned and stay untouched."""
-    import inspect
-    import ecarsi.control.crosssample as crosssample_workflow
-    import ecarsi.control.persample as persample_workflow
-    import ecarsi.control.zoomin as zoomin_workflow
-    assert "annotation_status" in READS
-    for module in (crosssample_workflow, zoomin_workflow, persample_workflow):
-        assert "in READS" in inspect.getsource(module), module.__name__
 
 
 def test_artifact_budget_follows_its_input_size(tmp_path):

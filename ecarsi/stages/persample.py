@@ -168,21 +168,21 @@ def annotation_spec(spec, computed_ref, compute_request):
     programs = [
         ("read_evidence", {"kind": {"enum": ["figures", "tables"], "type": "string"},
                            "offset": {"type": "integer", "minimum": 0}},
-         "Read immutable evidence. Start offset=0; follow next_offset until null. Figures are returned as images. Read both kinds before conclusions.", True),
+         "Read immutable evidence. Start offset=0; follow next_offset until null. Figures are returned as images. Read both kinds before conclusions.", True, True),
         ("check_genes", {"genes": {"type": "array", "minItems": 1, "maxItems": 200,
-                                    "items": {"type": "string", "minLength": 1}}}, "Verify marker expression per current cluster.", False),
-        ("check_qc_scores", {}, "Read per-cluster QC scores for the current clustering.", False),
+                                    "items": {"type": "string", "minLength": 1}}}, "Verify marker expression per current cluster.", False, True),
+        ("check_qc_scores", {}, "Read per-cluster QC scores for the current clustering.", False, True),
         ("subcluster", {"cluster": {"type": "string"}, "resolution": {"type": "number", "exclusiveMinimum": 0}},
-         "Refine one heterogeneous cluster on a worker. The returned version replaces the previous clustering. Recheck markers and QC after refinement.", True),
+         "Refine one heterogeneous cluster on a worker. The returned version replaces the previous clustering. Recheck markers and QC after refinement.", True, False),
         ("submit_annotation", {"proposal_json": {"type": "string"}, "version": {"type": "integer", "minimum": 0}},
-         "Submit validated annotation for the current version. Errors must be corrected. Schema: " + bundle["proposal_schema"], False)]
+         "Submit validated annotation for the current version. Errors must be corrected. Schema: " + bundle["proposal_schema"], False, False)]
     tools = []
-    for name, props, description, multimodal in programs:
+    for name, props, description, multimodal, read_only in programs:
         tools.append({"name": name, "description": description,
             "parameters": {"type": "object", "properties": props, "required": list(props), "additionalProperties": False},
             "args": ["-m", "ecarsi.stages.persample", "tool", name, "{state}", "{arguments}"],
             **spec["tool_budget"], "inputs": [reference(Path(__file__))],
-            "outputs": ["result.json"], "result_file": "result.json", "multimodal": multimodal})
+            "outputs": ["result.json"], "result_file": "result.json", "multimodal": multimodal, "read_only": read_only})
     prompt = bundle["prompt"] + ("\n\nYou have no local Read or execution tools. Use read_evidence for figures and tables, "
         "following next_offset until null. All tools execute on a worker. The initial clustering version is 0. "
         "After subcluster, use the returned version and repeat marker/QC verification. Submit the current version "

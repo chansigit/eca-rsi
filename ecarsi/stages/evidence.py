@@ -17,25 +17,38 @@ TEXT_BYTES = 240000
 IMAGE_BYTES = 12 * 2**20  # Base64 representation of at most 9 MiB of PNGs.
 
 
+MATRIX = {'check_genes', 'check_qc_scores', 'annotation_status'}  # reads that load the expression matrix
+
+
 def plan(request, directory, session, batched=False):
-    """Apply only before first submission; existing execution plans stay exact. A batch the model
-    requested itself is never prefetched (its other calls would return the same evidence twice)."""
+    """The stage plans its own tool execution: prefetch the mandatory observations behind one evidence
+    read (never for a batch the model requested itself: its other calls would return the same evidence
+    twice), keep per-sample plans exact, then size the request by what the tool loads."""
     from .execution import plan as original_plan
     directory = Path(directory)
-    if batched:
-        return original_plan(request, directory, session['pool_root'])
+    args = request['args']
+    state_ref = reference(args[4]) if len(args) == 6 and args[:1] == ['-m'] and args[2] == 'tool' else None
+    tool = next((t for t in session['tools'] if t['name'] == request['operation_id']), {})
+    planned = None if batched else prefetch(request, directory, session)
+    if planned is None:
+        planned = original_plan(request, directory, session['pool_root'])
+    return budget(planned, directory, session, tool, state_ref)
+
+
+def prefetch(request, directory, session):
+    """Apply only before first submission; existing execution plans stay exact."""
     path = directory / 'execution.json'
     args = request['args']
     if (read(path) is not None or
             (Path(session['pool_root']) / 'requests' / request['request_id'] / 'request.json').exists() or
             len(args) != 6 or args[0] != '-m' or args[1] not in MODULES or args[2] != 'tool' or
             args[3] not in PAGES):
-        return original_plan(request, directory, session['pool_root'])
+        return None
     registered = {t['name']: t for t in session['tools'] if t['args'] ==
                   ['-m', args[1], 'tool', t['name'], '{state}', '{arguments}']}
     allowed = sorted(set(registered) & (PAGES | {'check_qc_scores'}))
     if args[3] not in allowed:
-        return original_plan(request, directory, session['pool_root'])
+        return None
     packet = immutable(directory / 'evidence-batch.json', dict(module=args[1], name=args[3],
         state=args[4], arguments=args[5], allowed=allowed,
         multimodal=registered[args[3]].get('multimodal', False)))
@@ -50,6 +63,38 @@ def plan(request, directory, session, batched=False):
                                directory / 'evidence-resources.json', session['pool_root'])
     immutable(path, dict(base_digest=digest(request), request=wrapped))
     return wrapped
+
+
+def budget(request, directory, session, tool, state_ref):
+    """Readers reserve reader memory; matrix reads reuse the measured compute peak. Per-sample tools are
+    sized by their execution plan (the matrix is theirs)."""
+    path = Path(directory) / 'tool-resources.json'
+    saved = read(path)
+    if saved:
+        if saved['base_digest'] != digest(request):
+            raise ValueError('Tool resource request changed')
+        return saved['request']
+    if (Path(session['pool_root']) / 'requests' / request['request_id'] / 'request.json').exists():
+        return request
+    args = tool.get('args', [])
+    if (len(args) != 6 or args[1] not in MODULES or args[1] == 'ecarsi.stages.persample'
+            or not tool.get('read_only') or state_ref is None):
+        return request
+    state = verified(state_ref)
+    optimized = request
+    light = tool['name'] not in MATRIX
+    if request['args'][:2] == ['-m', 'ecarsi.stages.evidence']:
+        # A prefetching batch may also run QC, which loads the matrix.
+        light = light and state.get('phase') != 'quality' and state.get('kind') != 'lineage'
+    if light:
+        optimized = dict(request, memory_mb=min(request['memory_mb'], 2048))
+    else:
+        computed = verified(state['evidence']).get('prepared')
+        if computed:
+            from ..warm_pool.budget import from_compute
+            optimized = from_compute(request, computed, Path(directory) / 'matrix-resources.json', session['pool_root'])
+    immutable(path, dict(base_digest=digest(request), request=optimized))
+    return optimized
 
 
 def next_required(module, state, allowed, multimodal):

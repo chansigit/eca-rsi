@@ -85,7 +85,5 @@ python -m ecarsi.control --service-root <control> --task-queue <q> start-dataset
 
 ## 接缝（还剩的）
 
-- `agent.parallel` 给并行只读批次定预算时仍按 stage 模块名匹配（persample 的读会加载矩阵），是 agent 里残留的一处
-  stage 知识；下一步可由 stage 在 session 里声明。
 - Periscope（`serve.py`，第一代）和 `observatory` 是两套观测；Periscope 现在只看数据集和 Slurm pool。
 - `ecarsi.pool`（第一代的 Slurm pool）仍被 `warm_pool` 用来读节点清单，两套 pool 并存。

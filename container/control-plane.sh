@@ -12,6 +12,7 @@ CONTROL=${CONTROL:-$BASE/durable-control}; POOL=${POOL:-$BASE/pool}; BRIDGE=${BR
 LOGS=$BASE/control-logs; mkdir -p "$LOGS"
 COORDINATORS=${COORDINATORS:-4}; TASK_QUEUE=${TASK_QUEUE:-ecarsi-durable-v2}
 STAGE_LIMIT_FLOORS=${STAGE_LIMIT_FLOORS:-}                # e.g. '{"max_in_flight_deg": 12, "max_in_flight_lineages": 6}'
+# TEMPORAL_PORT / DATABASE_PORT / UI_PORT / OBSERVATORY_PORT: set them when another control plane shares the host.
 BINDS=${BINDS:-/scratch,/oak,/home,/lscratch}
 HOST_IP=$(hostname -I | awk '{print $1}')
 HOSTPY=${HOSTPY:-python3}                                 # the observatory runs on a host interpreter
@@ -20,9 +21,10 @@ PY=(apptainer exec --cleanenv --bind "$BINDS" --env LC_ALL=C --env LANG=C
     --env PYTHONDONTWRITEBYTECODE=1 --env OPENBLAS_NUM_THREADS=1 --env OMP_NUM_THREADS=1
     "$IMG" /usr/local/bin/python3)
 
-pattern() { case $1 in temporal) echo "ecarsi.control.temporal";; scheduler) echo "ecarsi.warm_pool .*scheduler";;
-    bridge) echo "ecarsi.agent serve";; coordinators) echo "ecarsi.control .*worker";;
-    observatory) echo "ecarsi.observatory serve";; keeper) echo "worker-keeper.sh";; esac; }
+# Patterns name this run directory's roots, so two control planes on one host never count or kill each other.
+pattern() { case $1 in temporal) echo "ecarsi.control.temporal --root $CONTROL";; scheduler) echo "ecarsi.warm_pool --root $POOL scheduler";;
+    bridge) echo "ecarsi.agent serve $BRIDGE";; coordinators) echo "ecarsi.control --service-root $CONTROL .*worker";;
+    observatory) echo "ecarsi.observatory serve --root $BASE";; keeper) echo "$BASE/worker-keeper.sh";; esac; }
 # Skip container wrappers, interactive `bash -c` shells and this script's own subshells: a shell whose
 # command text merely mentions a component (an editor, a heredoc) must never count as, or be killed as, that component.
 pids() { pgrep -u "$USER" -f "$(pattern "$1")" | while read -r p; do tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -qE 'apptainer|bash -c|control-plane\.sh' || echo "$p"; done; }
@@ -32,7 +34,8 @@ start() {
   pids "$1" | grep -q . && return 0
   case $1 in
     temporal) launch temporal "${PY[@]}" -m ecarsi.control.temporal --root "$CONTROL" --postgres-bin "${POSTGRES_BIN:?}" \
-        --temporal-dir "${TEMPORAL_DIR:?}" --schema-dir "${SCHEMA_DIR:?}" --bind "$HOST_IP" ;;
+        --temporal-dir "${TEMPORAL_DIR:?}" --schema-dir "${SCHEMA_DIR:?}" --bind "$HOST_IP" \
+        ${TEMPORAL_PORT:+--port $TEMPORAL_PORT} ${DATABASE_PORT:+--database-port $DATABASE_PORT} ${UI_PORT:+--ui-port $UI_PORT} ;;
     scheduler) launch scheduler "${PY[@]}" -m ecarsi.warm_pool --root "$POOL" scheduler --host "$(hostname -s)" ;;
     bridge) launch bridge "${PY[@]}" -m ecarsi.agent serve "$BRIDGE" ;;
     coordinators) local n; n=$(pids coordinators | wc -l)

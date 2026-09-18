@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from ecarsi.agent.parallel import budget, choose, eligible, merge_states
+from ecarsi.agent.parallel import choose, eligible, merge_states
 import ecarsi.agent.session as session
 from ecarsi.warm_pool.state import immutable, reference, verified
 from ecarsi.warm_pool.state import read, save
@@ -45,7 +45,7 @@ def test_parallel_handoff_preserves_all_results_and_next_turn_state(tmp_path):
     base = immutable(tmp_path/'initial.json', dict(phase='type', read=[], qc=False, lookups=[], evidence={}))
     tool = dict(spec['tools'][0], name='read_evidence', read_only=True, memory_mb=49152,
                 args=['-m','ecarsi.stages.crosssample','tool','read_evidence','{state}','{arguments}'])
-    spec = dict(spec, session_id='parallel', output_root=str(tmp_path/'parallel'), tools=[tool], tool_state=base)
+    spec = dict(spec, session_id='parallel', output_root=str(tmp_path/'parallel'), tools=[tool], tool_state=base, planner='ecarsi.stages.evidence')
     root = Path(spec['bridge_root'])
     save(root/'config.json', dict(read(root/'config.json'), pool_root=spec['pool_root']))
     ref = session.create_session(spec)
@@ -75,21 +75,3 @@ def test_parallel_handoff_preserves_all_results_and_next_turn_state(tmp_path):
         assert not eligible(dict(spec, tools=[dict(tool, args=['arbitrary'])]), session.turn_reply(ref, reply)['calls'])
         assert not eligible(dict(spec, tools=[dict(tool, read_only=False)]), session.turn_reply(ref, reply)['calls'])
 
-
-def test_matrix_budget_uses_compute_receipt_and_keeps_prior_request(tmp_path):
-    pool = tmp_path/'pool'
-    output = pool/'requests/compute/attempt/outputs/prepared.json'
-    output.parent.mkdir(parents=True);save(output, {})
-    computed = reference(output)
-    save(output.parent.parent/'receipt.json', dict(state='succeeded', peak_rss_bytes=2**30, outputs=[computed]))
-    evidence = immutable(tmp_path/'evidence.json', dict(prepared=computed))
-    state = immutable(tmp_path/'state.json', dict(evidence=evidence, phase='type'))
-    tool = dict(name='check_genes', args=['-m','ecarsi.stages.crosssample','tool','check_genes','{state}','{arguments}'])
-    req = dict(request_id='t', args=tool['args'], memory_mb=49152, inputs=[])
-    (tmp_path/'new').mkdir()
-    result = budget(req, tmp_path/'new', {'pool_root':str(pool)}, tool, state)
-    assert result['memory_mb'] == 3072
-    assert budget(req, tmp_path/'new', {'pool_root':str(pool)}, tool, state) == result
-    path = pool/'requests/old/request.json';path.parent.mkdir();save(path, {})
-    old = dict(req, request_id='old')
-    assert budget(old, tmp_path/'old', {'pool_root':str(pool)}, tool, state) == old

@@ -26,6 +26,9 @@ generation (`eca-rsi run`, Slurm pool, batch admission) keeps its modules where 
   lenient JSON, no finalize step), GPU columns in the status report.
 - Protocol v4 tools without arguments tolerate an ignored `offset`, the type-context hint no longer asks for pages, and a
   rejected cross-sample submission names the missing DEG query or figure.
+- Stages declare their read-only tools (`read_only` in the session spec; per-sample, cross-sample and zoom-in each
+  register their own) and size their tool requests (`stages.evidence.budget`); the model-turn service keeps no list of
+  stage tool or module names, only the read-only flag and the `{state}` handoff decide what may run in parallel.
 - A model turn's pool request id includes the turn's content digest: a turn folder re-created under the same name with
   different content no longer replays the earlier reply (a resumed session had replayed 34 archived replies).
 - Gen-2 documents move to `docs-gen2/` (plus ARCHITECTURE.md); `container/control-plane.sh` is the launcher template and

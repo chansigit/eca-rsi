@@ -52,6 +52,8 @@ def test_agent_tools_have_valid_worker_contracts(tmp_path):
         assert ('deg_sql' in [t['name'] for t in session['tools']])==(phase!='inclusion')
         assert 'Required order' in session['prompt'] and ('Evidence files' in session['prompt'])==(phase!='inclusion')
         assert all(t['parameters']==NO_ARGUMENTS for t in session['tools'] if t['name'] in {'list_evidence','type_context'})
+        reads={t['name'] for t in session['tools'] if t.get('read_only')}
+        assert {'read_evidence','list_evidence'}<=reads and not any(n.startswith('submit') for n in reads)
 
 
 def test_overlapping_removals_count_once_and_mismatched_decisions_fail(tmp_path,monkeypatch):

@@ -136,3 +136,35 @@ def test_text_pages_and_errors_keep_original_checks(tmp_path, monkeypatch, modul
                     dict(path='table.csv', offset=0), ['read_evidence'])
     assert bad['is_error'] and verified(bad['state'])['read'] == []
     assert len(bad['evidence_batch']['calls']) == 1
+
+
+def test_matrix_budget_uses_compute_receipt_and_keeps_prior_request(tmp_path):
+    pool = tmp_path/'pool'
+    output = pool/'requests/compute/attempt/outputs/prepared.json'
+    output.parent.mkdir(parents=True);save(output, {})
+    computed = reference(output)
+    save(output.parent.parent/'receipt.json', dict(state='succeeded', peak_rss_bytes=2**30, outputs=[computed]))
+    evidence = immutable(tmp_path/'evidence.json', dict(prepared=computed))
+    state = immutable(tmp_path/'state.json', dict(evidence=evidence, phase='type'))
+    tool = dict(name='check_genes', read_only=True, args=['-m','ecarsi.stages.crosssample','tool','check_genes','{state}','{arguments}'])
+    req = dict(request_id='t', operation_id='check_genes', args=tool['args'], memory_mb=49152, inputs=[])
+    (tmp_path/'new').mkdir()
+    result = batch.budget(req, tmp_path/'new', {'pool_root':str(pool)}, tool, state)
+    assert result['memory_mb'] == 3072
+    assert batch.budget(req, tmp_path/'new', {'pool_root':str(pool)}, tool, state) == result
+    path = pool/'requests/old/request.json';path.parent.mkdir();save(path, {})
+    old = dict(req, request_id='old')
+    assert batch.budget(old, tmp_path/'old', {'pool_root':str(pool)}, tool, state) == old
+
+
+def test_stages_declare_their_read_only_tools(tmp_path):
+    """The model-turn service batches what the stage declared; no host-side list of tool names."""
+    from ecarsi.stages.persample import annotation_spec
+    computed = tmp_path/'computed.json'
+    save(computed, dict(prompt='p', proposal_schema='{}', sample='s1'))
+    save(tmp_path/'annotation-state.json', dict(version=0))
+    spec = dict(run_id='r', dataset_id='d', pool_root=str(tmp_path/'pool'), bridge_root=str(tmp_path/'bridge'),
+                output_root=str(tmp_path/'out'), tool_budget=dict(cpus=1, memory_mb=64, timeout_seconds=30))
+    session = annotation_spec(spec, reference(computed), 'compute')
+    assert {t['name'] for t in session['tools'] if t['read_only']} == {'read_evidence', 'check_genes', 'check_qc_scores'}
+    assert session['planner'] == 'ecarsi.stages.evidence'

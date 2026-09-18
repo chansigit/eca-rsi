@@ -435,11 +435,7 @@ def tool_request(session_ref, reply_path, index, previous=None):
     if reply["kind"] != "tools" or not 1 <= len(calls) <= 64 or len({c["call_id"] for c in calls}) != len(calls):
         raise ValueError("Expected distinct pending tool calls")
     if len(calls) > 1:
-        # Current host policy, not only the session's saved copy of it: sessions
-        # saved before a tool was declared read-only otherwise reject the same
-        # batch turn after turn. Parallel execution still needs the saved flag.
-        from .parallel import READS
-        readonly = {t["name"] for t in s["tools"] if t.get("read_only") or t["name"] in READS}
+        readonly = {t["name"] for t in s["tools"] if t.get("read_only")}
         if any(call["name"] not in readonly or call["name"] == s.get("completion_tool") for call in calls):
             raise ToolRejection("Batch only declared read-only tools; request decisions and changes individually")
     call = calls[index]
@@ -499,8 +495,6 @@ def tool_request(session_ref, reply_path, index, previous=None):
         # The stage that registered the session plans its own execution (evidence batching, measured budgets).
         import importlib
         request = importlib.import_module(s['planner']).plan(request, directory, s, batched=len(calls) > 1)
-    from .parallel import budget
-    request = budget(request, directory, s, tool, state_ref if state_inputs else None)
     submit(s["pool_root"], request)
     return {"request_id": request_id, "result_file": tool["result_file"], "index": index}
 

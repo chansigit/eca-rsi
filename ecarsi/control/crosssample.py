@@ -76,9 +76,7 @@ def crosssample_step(action, args):
     if action == 'read':
         return verified(reference(args[0]))
     if action == 'session':
-        from ..agent.parallel import READS
-        session = verified(reference(args[0]))
-        return dict(session, tools=[dict(t, read_only=t['name'] in READS) for t in session['tools']])
+        return verified(reference(args[0]))
     if action == 'accepted':
         from .persample import sample_step
         return sample_step('accepted_annotation', args)
