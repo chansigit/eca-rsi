@@ -24,7 +24,7 @@ PY=(apptainer exec --cleanenv --bind "$BINDS" --env LC_ALL=C --env LANG=C
 # Patterns name this run directory's roots, so two control planes on one host never count or kill each other.
 pattern() { case $1 in temporal) echo "ecarsi.control.temporal --root $CONTROL";; scheduler) echo "ecarsi.warm_pool --root $POOL scheduler";;
     bridge) echo "ecarsi.agent serve $BRIDGE";; coordinators) echo "ecarsi.control --service-root $CONTROL .*worker";;
-    observatory) echo "ecarsi.observatory serve --root $BASE";; keeper) echo "$BASE/worker-keeper.sh";; esac; }
+    observatory) echo "ecarsi.observatory serve --root $BASE";; keeper) echo "worker-keeper.sh $POOL";; esac; }
 # Skip container wrappers, interactive `bash -c` shells and this script's own subshells: a shell whose
 # command text merely mentions a component (an editor, a heredoc) must never count as, or be killed as, that component.
 pids() { pgrep -u "$USER" -f "$(pattern "$1")" | while read -r p; do tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -qE 'apptainer|bash -c|control-plane\.sh' || echo "$p"; done; }
@@ -42,7 +42,7 @@ start() {
         for ((i=n; i<COORDINATORS; i++)); do launch "coordinator-$i" env "APPTAINERENV_ECA_RSI_STAGE_LIMIT_FLOORS=$STAGE_LIMIT_FLOORS" \
             "${PY[@]}" -m ecarsi.control --service-root "$CONTROL" --task-queue "$TASK_QUEUE" worker --workflow-slots 2; done ;;
     observatory) launch observatory env PYTHONPATH="$CODE" "$HOSTPY" -m ecarsi.observatory serve --root "$BASE" --pool-root "$POOL" --bridge-root "$BRIDGE" --bind "$HOST_IP" --port "${OBSERVATORY_PORT:-8765}" --temporal-service-root "$CONTROL" ;;
-    keeper) launch worker-keeper "$BASE/worker-keeper.sh" ;;
+    keeper) launch worker-keeper env CODE="$CODE" HOSTPY="$HOSTPY" "$CODE/container/worker-keeper.sh" "$POOL" ;;
   esac
 }
 stop() {

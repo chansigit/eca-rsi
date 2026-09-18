@@ -167,3 +167,19 @@ class ObservatoryTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_release_rows_read_a_batch_directory(tmp_path):
+    from ecarsi.observatory import release_rows, render_releases
+    dataset = tmp_path / "Organ"
+    unit = dataset / "units" / "organ"
+    put(unit / "per-sample.json", {"n_input": 100, "n_removed": 30, "n_survived": 70})
+    put(unit / "rounds/round01/publication.json", {"stats": {"removed": 7, "n_in": 70, "frac": 0.1}})
+    put(unit / "release/needs_review.json", [{"kind": "removed"}, {"kind": "low_confidence"}, {"kind": "removed"}])
+    put(unit / "publication.json", {"n_input": 100, "n_survived": 63, "forced_release": False, "reason": "converged",
+                                     "per_sample": {"path": str(unit / "per-sample.json")},
+                                     "rounds": [{"path": str(unit / "rounds/round01/publication.json")}]})
+    put(dataset / "publication.json", {"dataset_id": "TS / Organ", "state": "complete", "units": [{"path": str(unit / "publication.json")}]})
+    rows = release_rows([tmp_path])
+    assert rows[0]["osp_removed"] == 30 and rows[0]["rounds"][0]["frac"] == 0.1 and rows[0]["review"] == {"removed": 2, "low_confidence": 1}
+    assert "TS / Organ" in render_releases(rows) and "30%" in render_releases(rows)

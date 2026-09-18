@@ -14,7 +14,7 @@ from temporalio.common import RetryPolicy, WorkflowIDReusePolicy
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import Worker
 
-QUEUE = "ecarsi-organize-v2"
+QUEUE = "ecarsi-durable-v2"
 # 120 s: a shared-filesystem hiccup of a minute (2026-09-17 saw ~90 s) must not time out a host step.
 SHORT = timedelta(seconds=120)
 RETRY = RetryPolicy(maximum_attempts=3)

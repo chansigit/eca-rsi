@@ -717,6 +717,44 @@ def render_status(report):
     return '\n'.join(lines)
 
 
+def release_rows(roots):
+    """One row per analysis unit under each dataset root (a root without publication.json is a batch
+    directory: its children are read): what went in, what OSP QC and each round removed, how it ended."""
+    import collections
+    rows = []
+    for root in roots:
+        root = Path(root)
+        candidates = [root] if (root / 'publication.json').is_file() else sorted(c for c in root.iterdir() if (c / 'publication.json').is_file())
+        for dataset in candidates:
+            pub = read(dataset / 'publication.json', {})
+            for ref in pub.get('units', []):
+                unit = read(ref['path'], {}) if isinstance(ref, dict) else {}
+                if not unit:
+                    continue
+                unit_dir = Path(ref['path']).parent
+                per_sample = read(unit['per_sample']['path'], {}) if isinstance(unit.get('per_sample'), dict) else {}
+                rounds = [read(r['path'], {}).get('stats', {}) for r in unit.get('rounds', []) if isinstance(r, dict)]
+                review = read(unit_dir / 'release' / 'needs_review.json', []) or []
+                rows.append(dict(dataset=pub.get('dataset_id') or dataset.name, unit=unit_dir.name, state=pub.get('state'),
+                    n_input=unit.get('n_input'), osp_removed=per_sample.get('n_removed'), osp_survived=per_sample.get('n_survived'),
+                    rounds=[dict(removed=s.get('removed'), n_in=s.get('n_in'), frac=s.get('frac')) for s in rounds],
+                    n_survived=unit.get('n_survived'), forced=bool(unit.get('forced_release')), reason=unit.get('reason'),
+                    review=dict(collections.Counter(e.get('kind') for e in review if isinstance(e, dict)))))
+    return rows
+
+
+def render_releases(rows):
+    lines = [f"{'dataset':<30} {'unit':<14} {'input':>7} {'osp qc':>6} {'rounds':>6}  {'removal % per round':<34} {'final':>7} {'kept':>5}  reason | review kinds"]
+    for r in rows:
+        n = r['n_input'] or 0
+        pct = lambda v: f"{100 * (v or 0) / n:.0f}%" if n else '-'
+        per = ' '.join(f"{100 * (s['frac'] or 0):.1f}" for s in r['rounds'])
+        review = ' '.join(f"{k}={v}" for k, v in sorted(r['review'].items(), key=lambda kv: -kv[1]))
+        lines.append(f"{(r['dataset'] or '')[:30]:<30} {r['unit'][:14]:<14} {n:>7} {pct(r['osp_removed']):>6} {len(r['rounds']):>6}  "
+                     f"{per[:34]:<34} {r['n_survived'] or 0:>7} {pct(r['n_survived']):>5}  {'FORCED ' if r['forced'] else ''}{(r['reason'] or '')[:48]} | {review}")
+    return '\n'.join(lines)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -740,8 +778,14 @@ def main() -> None:
     text.add_argument("--temporal-service-root", type=Path)
     text.add_argument("--sessions", type=float, metavar="HOURS", help="also scan recent sessions: turns and rejected submissions")
     text.add_argument("--json", action="store_true")
+    rel = commands.add_parser("releases", help="one row per released analysis unit: input, OSP QC, per-round removal, final, review kinds")
+    rel.add_argument("roots", nargs="+", type=Path, help="dataset output roots, or batch directories holding them")
+    rel.add_argument("--json", action="store_true")
     args = parser.parse_args()
-    if args.command == "status":
+    if args.command == "releases":
+        rows = release_rows(args.roots)
+        print(json.dumps(rows, indent=2) if args.json else render_releases(rows))
+    elif args.command == "status":
         report = status_report(args.root, args.pool_root, args.bridge_root, args.temporal_service_root, args.sessions)
         print(json.dumps(report, indent=2, default=str) if args.json else render_status(report))
     elif args.command == "serve":
