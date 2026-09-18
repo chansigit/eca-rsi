@@ -168,3 +168,24 @@ def test_stages_declare_their_read_only_tools(tmp_path):
     session = annotation_spec(spec, reference(computed), 'compute')
     assert {t['name'] for t in session['tools'] if t['read_only']} == {'read_evidence', 'check_genes', 'check_qc_scores'}
     assert session['planner'] == 'ecarsi.stages.evidence'
+
+
+def test_osp_table_pages_reach_the_model_compacted(tmp_path, monkeypatch):
+    """Fat TSP25: 185k characters of raw DE CSV over four pages overran the provider context (2026-09-18)."""
+    source = tmp_path / 'computed'; source.mkdir()
+    data = ad.AnnData(np.ones((6, 3)), obs=pd.DataFrame({'cluster': pd.Categorical(['0'] * 6), 'total_counts': [3] * 6},
+        index=[f'c{i}' for i in range(6)]), var=pd.DataFrame(index=['CD3D', 'LYZ', 'MS4A1']))
+    data.write_h5ad(source / 'clustered.h5ad')
+    (source / 'umap_clusters.png').write_bytes(PNG)
+    rows = ['group,names,scores,logfoldchanges,pvals,pvals_adj,pct1,pct2'] + [
+        f'{g},G{g}_{i},{30 - i},{2.5 + i / 100:.7f},1e-9,1e-8,0.9123456789,0.1234567890' for g in range(80) for i in range(25)]
+    (source / 'de_top_genes_r1.csv').write_text('\n'.join(rows) + '\n')  # > 60k characters: two pages
+    bundle = sealed(source, tmp_path / 'computed.json')
+    state = immutable(tmp_path / 'before.json', dict(bundle=bundle, data=reference(source / 'clustered.h5ad'),
+        key='cluster', version=0, seen=dict(figures=[], tables=[], genes=False, qc=False)))
+    result = run_batch(tmp_path / 'batch', monkeypatch, 'ecarsi.stages.persample', state,
+        'read_evidence', dict(kind='tables', offset=0), ['read_evidence', 'check_qc_scores'])
+    assert verified(result['state'])['seen']['tables'] == [0, 60000]
+    assert result['text'].startswith('de_top_genes_r1.csv  (top 15 markers per cluster')
+    assert result['text'].count('G79_') == 15 and ' G0_15 ' not in result['text'] and len(result['text']) < 40000  # raw text is 124k
+    assert all(e['result'].get('text') == '' for e in result['additional_evidence'] if e['tool'] == 'read_evidence' and e['arguments'].get('kind') == 'tables')

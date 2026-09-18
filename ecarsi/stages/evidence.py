@@ -147,6 +147,7 @@ def execute(packet_path):
     primary = None
     pending = None
     seen_calls = set()
+    table_pages = []
     # ponytail: at most eight existing tool calls per grant. No parallel state
     # merge; the next call always receives the previous accepted state.
     for index in range(MAX_CALLS):
@@ -171,8 +172,10 @@ def execute(packet_path):
                 stream.read(len(result['content']))
                 result['next_offset'] = stream.tell()
         if packet['module'] == 'ecarsi.stages.persample' and name == 'read_evidence' and arguments.get('kind') == 'tables' and isinstance(result.get('text'), str):
-            from .execution import compact_tables
-            result['text'] = compact_tables(result['text'])
+            # Pages are 60k-character slices of the raw CSV text; only the whole text can be compacted
+            # (a later page has no header line), so the pages are joined and rendered once, below.
+            table_pages.append(result['text'])
+            result['text'] = ''
         more_images = result.get('images', [])
         body = {k: v for k, v in result.items() if k not in {'state', 'images'}}
         entry = dict(tool=name, arguments=arguments, result=body,
@@ -208,6 +211,15 @@ def execute(packet_path):
         pending = selected
         if selected is None:
             break
+    if table_pages:
+        from .execution import compact_tables
+        text = compact_tables(''.join(table_pages))
+        for entry in results:
+            if entry['tool'] == 'read_evidence' and entry['arguments'].get('kind') == 'tables':
+                entry['result']['text'] = text
+                break
+        if first[0] == 'read_evidence' and first[1].get('kind') == 'tables':
+            primary['text'] = text
     primary.update(state=state_ref, additional_evidence=results[1:], evidence_batch=dict(
         calls=calls, pending=dict(tool=pending[0], arguments=pending[1]) if pending else None,
         instruction='Review all returned evidence, including additional_evidence and indexed images. '
