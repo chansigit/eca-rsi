@@ -187,11 +187,13 @@ def cancel(root, request_id):
     return status(root, request_id)
 
 
-def retry(root, request_id, *, reason, use_current_runtime=False, memory_mb=None):
+def retry(root, request_id, *, reason, use_current_runtime=False, memory_mb=None, timeout_seconds=None, without_gpu=False):
     """New attempt after a confirmed failure; retain the original inputs and audit.
 
-    memory_mb raises the budget of a request that died on its RSS watchdog; the
-    inputs, program and outputs are unchanged, so the work identity is retained.
+    memory_mb / timeout_seconds raise the budget of a request that died on its RSS
+    watchdog or its execution deadline; without_gpu drops a preferred GPU whose memory
+    budget the attempt exceeded. The inputs, program and outputs are unchanged, so the
+    work identity is retained.
     """
     root = pool_root(root)
     folder = root / "requests" / identifier(request_id)
@@ -217,6 +219,15 @@ def retry(root, request_id, *, reason, use_current_runtime=False, memory_mb=None
             if type(memory_mb) is not int or memory_mb <= spec["memory_mb"]:
                 raise ValueError("memory_mb override must exceed the failed attempt's budget")
             spec = dict(spec, memory_mb=memory_mb)
+        if timeout_seconds is not None:
+            if type(timeout_seconds) is not int or timeout_seconds <= spec["timeout_seconds"]:
+                raise ValueError("timeout_seconds override must exceed the failed attempt's limit")
+            spec = dict(spec, timeout_seconds=timeout_seconds,
+                        time_request_seconds=timeout_seconds + spec["time_request_seconds"] - spec["timeout_seconds"])
+        if without_gpu:
+            if spec.get("gpu", {}).get("mode") != "preferred":
+                raise ValueError("without_gpu applies to a preferred GPU only")
+            spec = {k: v for k, v in spec.items() if k != "gpu"}
         attempt_id = uuid.uuid4().hex
         attempt = folder / attempt_id
         attempt.mkdir(mode=0o700)
@@ -231,7 +242,8 @@ def retry(root, request_id, *, reason, use_current_runtime=False, memory_mb=None
             runtime=runtime, runtime_digest=digest(runtime),
             retry_count=request.get("retry_count", 0) + 1,
             retry=dict(previous_attempt_id=request["attempt_id"], reason=reason,
-                       use_current_runtime=use_current_runtime, memory_mb=memory_mb))
+                       use_current_runtime=use_current_runtime, memory_mb=memory_mb,
+                       timeout_seconds=timeout_seconds, without_gpu=without_gpu))
         # The old receipt remains authoritative until request.json switches atomically.
         save(folder / "backend.json", dict(state="queued", attempt_id=attempt_id))
         save(folder / "request.json", replacement)

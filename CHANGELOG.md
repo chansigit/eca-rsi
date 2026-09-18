@@ -11,6 +11,11 @@ generation (`eca-rsi run`, Slurm pool, batch admission) keeps its modules where 
   agent-harness-bridge package), `ecarsi.stages` (organize/persample/crosssample/zoomin `_v2`, dataset_release),
   `ecarsi.warm_pool.budget` (operation_budget) and `ecarsi.observatory` (dev_observatory); `python -m
   ecarsi.control|agent|observatory` entry points.
+- Pool failures of the budget class get one automatic retry from `control.coordinator.check_pool_once`: an execution
+  deadline at twice the time limit, a preferred GPU's memory budget on CPUs (`warm_pool.state.retry` grew
+  `timeout_seconds` / `without_gpu`, also on `warm_pool retry`). On 2026-09-18 a node whose Lustre client stalled
+  turned seven 5-second prepare steps into 180 s deadlines, and a 4 GiB GPU budget failed three 50k-cell
+  integrations; each failure ended its dataset.
 - `reference` / `verified` / `immutable` belong to `warm_pool.state`; pinned program files come from `stages.program()`,
   the pinned adapter from `agent.adapter_path()`.
 - Fold the v3 protocol wrappers into the stage programs: one program and one contract per stage, `stages/contract.py`

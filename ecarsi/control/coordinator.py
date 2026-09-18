@@ -111,14 +111,26 @@ def check_pool_once(root, request_id, output):
             raise ValueError("Pool receipt output changed or missing")
         return {"state": "ready", "path": selected["path"],
                 "attempt_id": state["attempt_id"]}
-    if state["state"] == "failed" and state["receipt"].get("retryable") is True:
+    if state["state"] == "failed":
         request = read(Path(root) / "requests" / request_id / "request.json")
+        spec, error, retryable = request["spec"], str(state["receipt"].get("error", "")), state["receipt"].get("retryable") is True
         if request.get("retry_count", 0) < 2:
-            if str(state["receipt"].get("error", "")).startswith("MemoryError"):
-                retry(root, request_id, memory_mb=2 * request["spec"]["memory_mb"],
+            # A budget kill gets one attempt at twice the budget (or on CPUs for a preferred GPU):
+            # a 180 s prepare step stalled by a node's Lustre client and a 4 GiB GPU budget blown by
+            # a 50k-cell PCA each failed whole datasets (2026-09-18). The worker's `retryable`
+            # covers interruptions whose budget was fine.
+            if error.startswith("MemoryError") and "GPU" in error and spec.get("gpu", {}).get("mode") == "preferred":
+                retry(root, request_id, without_gpu=True, reason="Automatic retry on CPUs after the GPU memory budget")
+            elif error.startswith("MemoryError") and retryable:
+                retry(root, request_id, memory_mb=2 * spec["memory_mb"],
                       reason="Automatic retry at twice the budget after the RSS watchdog")
-            else:
+            elif error.startswith("TimeoutError"):
+                retry(root, request_id, timeout_seconds=2 * spec["timeout_seconds"],
+                      reason="Automatic retry at twice the time limit after the execution deadline")
+            elif retryable:
                 retry(root, request_id, reason="Automatic recovery after a confirmed local interruption")
+            else:
+                return {"state": "failed", "detail": error}
             return {"state": "waiting"}
     if state["state"] == "unknown_external_result":
         return {"state": "waiting", "detail": "unknown_external_result"}
