@@ -1,20 +1,31 @@
 # Changelog
 
-## Unreleased — branch `gen2` (2026-09-17)
+## 0.3.1 — 2026-09-17 (branch `gen2`)
 
 The second generation (Temporal control plane, HyperQueue warm pool, durable model-turn bridge, stage programs),
 developed as feature/warmpool-v2 since 2026-09-14, integrated on one branch and given a package structure. The first
 generation (`eca-rsi run`, Slurm pool, batch admission) keeps its modules where 0.3.0 left them.
 
 - Move the flat gen-2 modules into `ecarsi.control` (work_coordinator, temporal_service, *_workflow), `ecarsi.agent`
-  (agent_*), `ecarsi.stages` (organize/persample/crosssample/zoomin `_v2`, `_v3`, dataset_release), `ecarsi.warm_pool.budget`
-  (operation_budget) and `ecarsi.observatory` (dev_observatory); `python -m ecarsi.control|bridge|observatory` entry points.
+  (agent_bridge, agent_session, agent_dispatch, …; named `agent` so that `bridge` means only the external
+  agent-harness-bridge package), `ecarsi.stages` (organize/persample/crosssample/zoomin `_v2`, dataset_release),
+  `ecarsi.warm_pool.budget` (operation_budget) and `ecarsi.observatory` (dev_observatory); `python -m
+  ecarsi.control|agent|observatory` entry points.
 - `reference` / `verified` / `immutable` belong to `warm_pool.state`; pinned program files come from `stages.program()`,
-  the pinned adapter from `bridge.adapter_path()`.
+  the pinned adapter from `agent.adapter_path()`.
+- Fold the v3 protocol wrappers into the stage programs: one program and one contract per stage, `stages/contract.py`
+  holds what they share (no-argument listings, deg_lookup thresholds, lenient proposal parsing, checklists).
+- Stages plan their own tool execution: `stages/evidence.py` and `stages/execution.py` (formerly agent_evidence /
+  agent_tool_execution) are registered by the session as its `planner`; the model-turn service imports nothing from stages.
+- Retire the first generation's batch admission on this branch: `eca-rsi batch`, the node agents, OSP compute-ahead,
+  the stage runtime builder and the driver memory leases (batch, preparation_offer, prepare_osp, build_stage_runtime,
+  stage_python, driver_python, runtime_logging, driver_budget, workflow_web). Datasets are admitted by the Temporal
+  control plane; Periscope keeps its dataset and pool views.
 - Absorbed from the batch: replay of already-saved pool/bridge requests, inode-keyed settled caches, poll tolerance and
   120 s host steps, saved-program resume, repeat-rejection stop, protocol v4 (inline evidence, single-call paged tools,
   lenient JSON, no finalize step), GPU columns in the status report.
-- Protocol v4 tools without arguments tolerate an ignored `offset`, and the type-context hint no longer asks for pages.
+- Protocol v4 tools without arguments tolerate an ignored `offset`, the type-context hint no longer asks for pages, and a
+  rejected cross-sample submission names the missing DEG query or figure.
 - Gen-2 documents move to `docs-gen2/` (plus ARCHITECTURE.md); `container/control-plane.sh` is the launcher template and
   `container/agent-worker-runtime-20260917.json` the science runtime for the new import names.
 

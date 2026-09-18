@@ -143,7 +143,7 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
 - 本轮删除统计从 MSP integrated 到 ZMIP survivors，不含此前 OSP QC 和整样本排除；完整历史查 ledger。
   达到停止阈值不证明注释准确；轮数上限或固定轮数发布应按 reason 与收敛发布区分。
 - `ecarsi.cost` 只累计捕获到的费用事件；缺失记录不能解释成免费或完整账单。
-- 配套版本：ecarsi 0.2.10、bridge 0.2.14、OSP 0.1.6、MSP 0.5.1、ZMIP 0.3.9。默认 Harmony 2 CPU；可选 RAPIDS GPU。
+- 配套版本：ecarsi 0.3.1（分支 gen2；main 上是 0.3.0）、bridge 0.2.14、OSP 0.1.6、MSP 0.5.1、ZMIP 0.3.9。默认 Harmony 2 CPU；可选 RAPIDS GPU。
 - `loop_control.json` 支持 `pause: true` 与 `pause_after_stage: crosssample|zoomin`；停止派发新任务，等待已启动任务到安全点，退出 3、不 release。恢复前清除对应控制项。
   SIGTERM 通过共享 `ECA_RSI_PAUSE_FILE` 请求同样的安全暂停；Slurm 模板提前 600 秒发 TERM，shell 等待子任务落盘后复制部分结果。
 - MSP `.msp-state/*-progress.json` 与 ZMIP `.annotation-progress.json` 原子保存 host 接受的提交及分簇；恢复必须核对输入、证据、代码，再过原校验器。
@@ -200,19 +200,21 @@ python -m pytest -q tests/test_downstream.py tests/test_downstream_state.py test
 
 ```
 ecarsi/control/     Temporal 工作流（__init__ 原 work_coordinator；temporal / dataset / persample / crosssample / zoomin）
-ecarsi/agent/      模型回合收件箱（__init__ 原 agent_bridge；dispatch / session / evidence / parallel / tool_*）
+ecarsi/agent/       模型回合服务（__init__ 原 agent_bridge；dispatch / session / parallel / tool_errors）；叫 agent 是为了让 bridge 只指外部包 agent-harness-bridge
 ecarsi/warm_pool/   有界计算请求 + HyperQueue 适配；budget（原 operation_budget）
-ecarsi/stages/      Pool 里跑的程序：organize / persample / crosssample / zoomin / release（原 *_v2、dataset_release），
-                    crosssample_v3 / zoomin_v3 只改模型契约（协议 v4）；stages.program() 给 control 拿被 pin 的文件
+ecarsi/stages/      Pool 里跑的程序：organize / persample / crosssample / zoomin / release（原 *_v2、dataset_release，v3 已折回），
+                    contract（协议 v4 的共享件）、evidence / execution（Pool 上的执行计划，session 按登记的 planner 名字调用）；
+                    stages.program() 给 control 拿被 pin 的文件
 ecarsi/observatory.py   状态页 + `status` 报告（原 dev_observatory）
 ```
 
 - 入口：`python -m ecarsi.control.temporal` / `ecarsi.warm_pool` / `ecarsi.agent serve` / `ecarsi.control … worker` /
   `ecarsi.observatory serve`；`container/control-plane.sh` 是启动模板，部署副本放运行目录并在那里配路径。
-- 请求按内容 pin 程序文件、按请求 id 回放已存内容：会话在飞时不改 stages / bridge/session.py；旧布局的已存请求
+- 请求按内容 pin 程序文件、按请求 id 回放已存内容：会话在飞时不改 stages / agent/session.py；旧布局的已存请求
   在新布局下不能回放，切换只在没有会话在飞时做（或归档相关请求后 resume）。
 - 第二代的文档在 `docs-gen2/`（AGENT_BRIDGE_V2、WARM_POOL_V2、DURABLE_CONTROL、DATASET_V2 …），`design/` 是设计页。
 - 控制面节点上不要无节制扫描 pool / bridge 的 requests 目录（会拖垮协调器的 Lustre 客户端）。
+- 第一代的 batch 准入（`eca-rsi batch`、节点代理、OSP compute-ahead、driver 内存租借）只在 main 上；gen2 里数据集由控制面准入。
 
 ## 上一代:run.sh 六步循环(分支 primitive;2026-08-25 推倒重做后;总共 ~300 行)
 
