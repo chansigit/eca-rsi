@@ -32,6 +32,10 @@ generation (`eca-rsi run`, Slurm pool, batch admission) keeps its modules where 
 - Stages declare their read-only tools (`read_only` in the session spec; per-sample, cross-sample and zoom-in each
   register their own) and size their tool requests (`stages.evidence.budget`); the model-turn service keeps no list of
   stage tool or module names, only the read-only flag and the `{state}` handoff decide what may run in parallel.
+- Accepted 2026-09-17 evening on a fresh run directory (Tabula Sapiens ear, testis, kidney; two pool nodes): organize →
+  per-sample → cross-sample → zoom-in → round 2 with no failed workflow, a coordinator restart in mid-session that
+  every dataset survived, a zoom-in lineage completed by an accepted submit_quality, and the observatory page and APIs
+  serving the run; 125 model replies, 0 failed, every rejected submission a host rule the model then satisfied.
 - A model turn's pool request id includes the turn's content digest: a turn folder re-created under the same name with
   different content no longer replays the earlier reply (a resumed session had replayed 34 archived replies).
 - Gen-2 documents move to `docs-gen2/` (plus ARCHITECTURE.md); `container/control-plane.sh` is the launcher template and
