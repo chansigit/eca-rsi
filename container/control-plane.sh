@@ -4,6 +4,7 @@
 # on shared storage, so run it again on a fresh node after an allocation expires.
 #   control-plane.sh start|stop|restart|status [temporal|scheduler|bridge|coordinators|observatory|keeper ...]
 #   control-plane.sh report [--sessions HOURS] [--json]     # text status of pool, bridge, workers, datasets
+#   control-plane.sh tokens [--json]                        # per-dataset model turns and tokens (after a batch)
 set -u
 : "${BASE:?run directory holding the pool, bridge and control state}"
 : "${IMG:?control image (.sif)}"
@@ -59,5 +60,6 @@ case $cmd in
   restart) for c in "${comps[@]}"; do stop "$c"; done; for c in "${comps[@]}"; do start "$c"; done; sleep 3; status ;;
   status) status ;;
   report) (cd /tmp && "${PY[@]}" -m ecarsi.observatory status --root "$BASE" --pool-root "$POOL" --bridge-root "$BRIDGE" --temporal-service-root "$CONTROL" "$@") ;;
-  *) echo "usage: $0 start|stop|restart|status [component...] | report [--sessions HOURS] [--json]"; exit 2 ;;
+  tokens) (cd /tmp && "${PY[@]}" -m ecarsi.observatory tokens --bridge-root "$BRIDGE" "$@") ;;   # per-dataset token totals; one paced walk of the bridge
+  *) echo "usage: $0 start|stop|restart|status [component...] | report [--sessions HOURS] [--json] | tokens [--json]"; exit 2 ;;
 esac

@@ -755,6 +755,50 @@ def render_releases(rows):
     return '\n'.join(lines)
 
 
+def token_rows(bridge_root):
+    """Per dataset: model turns and prompt / completion tokens, summed over every saved model reply under the
+    bridge (the reply's usage is what the provider billed for that turn). One paced walk; run it when a batch
+    is done, not every minute."""
+    import collections
+    totals = {}
+    for n, entry in enumerate(os.scandir(Path(bridge_root) / "requests")):
+        if not entry.is_dir():
+            continue
+        if n % 20 == 0:
+            time.sleep(0.01)  # shares the control node's Lustre client with the coordinators
+        result = read(Path(entry.path) / "result.json")
+        if not result or result.get("state") != "reply_saved":
+            continue
+        response = result.get("response") or {}
+        usage = response.get("usage") or {}
+        trace = ((read(Path(entry.path) / "request.json", {}).get("spec") or {}).get("trace") or {})
+        # persample/<run>-<hex20>, cross-sample/<run>-<hex20>, organize/<run>-organize: one row per dataset run
+        run = re.sub(r"^[a-z-]+/", "", trace.get("workflow_id") or "?")
+        run = re.sub(r"-(organize|[0-9a-f]{20})$", "", run)
+        row = totals.setdefault(run, dict(run=run, dataset=trace.get("dataset_id") or "?", turns=0, tokens_in=0, tokens_out=0,
+                                          kinds=collections.Counter(), models=collections.Counter()))
+        row["turns"] += 1
+        row["tokens_in"] += int(usage.get("tokens_in") or 0)
+        row["tokens_out"] += int(usage.get("tokens_out") or 0)
+        row["kinds"][entry.name.split("-", 1)[0]] += 1
+        row["models"][(response.get("model") or {}).get("model") or "?"] += 1
+    rows = sorted(totals.values(), key=lambda r: -r["tokens_in"])
+    return [dict(r, kinds=dict(r["kinds"]), models=dict(r["models"])) for r in rows]
+
+
+def render_tokens(rows):
+    kinds = ("org", "osp", "cross", "zoom")
+    lines = [f"{'run':<26} {'dataset':<26} {'turns':>6} {'tokens in':>12} {'tokens out':>11} {'in/turn':>8}  " + " ".join(f"{k:>5}" for k in kinds) + "  models"]
+    total = dict(turns=0, tokens_in=0, tokens_out=0)
+    for r in rows:
+        for k in total:
+            total[k] += r[k]
+        lines.append(f"{r['run'][:26]:<26} {r['dataset'][:26]:<26} {r['turns']:>6} {r['tokens_in']:>12,} {r['tokens_out']:>11,} {r['tokens_in'] // max(1, r['turns']):>8,}  "
+                     + " ".join(f"{r['kinds'].get(k, 0):>5}" for k in kinds) + "  " + ", ".join(f"{m} {n}" for m, n in sorted(r["models"].items(), key=lambda kv: -kv[1])))
+    lines.append(f"{'TOTAL':<53} {total['turns']:>6} {total['tokens_in']:>12,} {total['tokens_out']:>11,} {total['tokens_in'] // max(1, total['turns']):>8,}")
+    return "\n".join(lines)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -781,8 +825,14 @@ def main() -> None:
     rel = commands.add_parser("releases", help="one row per released analysis unit: input, OSP QC, per-round removal, final, review kinds")
     rel.add_argument("roots", nargs="+", type=Path, help="dataset output roots, or batch directories holding them")
     rel.add_argument("--json", action="store_true")
+    tok = commands.add_parser("tokens", help="per dataset: model turns and prompt / completion tokens summed over the saved replies")
+    tok.add_argument("--bridge-root", type=Path, required=True)
+    tok.add_argument("--json", action="store_true")
     args = parser.parse_args()
-    if args.command == "releases":
+    if args.command == "tokens":
+        rows = token_rows(args.bridge_root)
+        print(json.dumps(rows, indent=2) if args.json else render_tokens(rows))
+    elif args.command == "releases":
         rows = release_rows(args.roots)
         print(json.dumps(rows, indent=2) if args.json else render_releases(rows))
     elif args.command == "status":
