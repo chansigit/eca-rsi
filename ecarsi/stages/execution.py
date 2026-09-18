@@ -37,6 +37,65 @@ def plan(request, directory, pool_root):
     return optimized
 
 
+def compact_tables(text, genes=15, contaminants=8, min_connectivity=0.05):
+    """Render the per-sample evidence tables for a model, not a spreadsheet: top markers per cluster on one
+    line with two decimals, the contamination leaders, and the PAGA graph as a sparse neighbour list. Fat
+    sample TSP25 (43 clusters) shipped 187k characters of raw CSV this way and overran the provider's context
+    at the third turn, three generations in a row (2026-09-18). Blocks this function does not know stay as
+    they are; a block cut mid-row by paging loses that row only."""
+    import csv, io
+    blocks = []
+    for block in text.split("\n\n"):
+        block = block.strip("\n")  # each CSV ends with a newline, so the separator arrives as three
+        if not block:
+            continue
+        name, _, body = block.partition("\n")
+        try:
+            rows = list(csv.DictReader(io.StringIO(body)))
+        except csv.Error:
+            rows = []
+        if not rows or None in rows[-1].values():
+            rows = rows[:-1] if rows else rows
+        if name.startswith("de_top_genes_") and rows and {"group", "names", "logfoldchanges", "pct1", "pct2"} <= set(rows[0]):
+            lines = [name + "  (top %d markers per cluster: gene lfc pct_in/pct_out)" % genes]
+            per = {}
+            for r in rows:
+                per.setdefault(r["group"], []).append(r)
+            for group, items in per.items():
+                lines.append(group + ": " + ", ".join(f"{r['names']} {_num(r['logfoldchanges'])} {_num(r['pct1'])}/{_num(r['pct2'])}" for r in items[:genes]))
+            blocks.append("\n".join(lines))
+        elif name.startswith("decontx_top_genes_") and rows and {"cluster", "gene", "contam_fraction_of_gene_counts"} <= set(rows[0]):
+            lines = [name + "  (top %d ambient-contaminated genes per cluster: gene fraction_of_gene_counts)" % contaminants]
+            per = {}
+            for r in rows:
+                per.setdefault(r["cluster"], []).append(r)
+            for cluster, items in per.items():
+                lines.append(cluster + ": " + ", ".join(f"{r['gene']} {_num(r['contam_fraction_of_gene_counts'])}" for r in items[:contaminants]))
+            blocks.append("\n".join(lines))
+        elif name.startswith("paga_connectivities_") and rows:
+            key = next(iter(rows[0]))
+            lines = [name + "  (neighbours with connectivity >= %.2f)" % min_connectivity]
+            for r in rows:
+                near = [(c, float(v)) for c, v in r.items() if c != key and c != r[key] and _float(v) >= min_connectivity]
+                near.sort(key=lambda cv: -cv[1])
+                lines.append(r[key] + ": " + (", ".join(f"{c} {v:.2f}" for c, v in near) or "none"))
+            blocks.append("\n".join(lines))
+        else:
+            blocks.append(block)
+    return "\n\n".join(blocks)
+
+
+def _float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _num(value):
+    return f"{_float(value):.2f}"
+
+
 def execute(packet_path):
     from .persample import tool, evidence_files
     from ..warm_pool.state import verified
@@ -62,7 +121,7 @@ def execute(packet_path):
                 raise ValueError('Evidence pagination did not advance')
             state = result['state']['path']
             arguments = dict(arguments, offset=next_offset)
-        result['text'] = ''.join(chunks)
+        result['text'] = compact_tables(''.join(chunks))
         result['pages_returned'] = len(chunks)
         save('result.json', result)
     elif name == 'submit_annotation':

@@ -38,6 +38,9 @@ generation (`eca-rsi run`, Slurm pool, batch admission) keeps its modules where 
   serving the run; 125 model replies, 0 failed, every rejected submission a host rule the model then satisfied.
 - `ecarsi.observatory tokens --bridge-root …` (`control-plane.sh tokens`): per dataset run, model turns and prompt /
   completion tokens summed over the saved replies, by session kind and model; `releases` lists released units.
+- Per-sample evidence tables reach the model compacted (`stages.execution.compact_tables`: top 15 markers per cluster with
+  two-decimal lfc and pct, top 8 ambient genes, PAGA as a sparse neighbour list; 185k → 24k characters for a 43-cluster
+  sample): raw CSV pages overran the provider context at the third turn of a large sample, in every generation.
 - A model turn's pool request id includes the turn's content digest: a turn folder re-created under the same name with
   different content no longer replays the earlier reply (a resumed session had replayed 34 archived replies).
 - Gen-2 documents move to `docs-gen2/` (plus ARCHITECTURE.md); `container/control-plane.sh` is the launcher template and

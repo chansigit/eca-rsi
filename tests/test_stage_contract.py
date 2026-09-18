@@ -34,3 +34,17 @@ def test_a_proposal_with_a_trailing_quote_is_accepted():
 def test_checklists_exist_for_every_stage_session():
     for name in ('crosssample-inclusion', 'crosssample-annotation', 'zoomin-plan', 'zoomin-annotation'):
         assert 'Required order' in contract.checklist(name)
+
+
+def test_compact_tables_keeps_markers_graph_and_unknown_blocks():
+    from ecarsi.stages.execution import compact_tables
+    de = "group,names,scores,logfoldchanges,pvals,pvals_adj,pct1,pct2\n" + "\n".join(
+        f"{g},G{g}_{i},{30-i},{2.5+i/100:.7f},1e-9,1e-8,0.91234,0.12345" for g in ("0", "1") for i in range(20)) + "\n"
+    paga = "leiden_r1.0,0,1,2\n0,0.0,0.9316574,0.01\n1,0.9316574,0.0,0.0\n2,0.01,0.0,0.0\n"
+    qc = "metric,value\nmedian_doublet_score,0.0453\n"
+    text = "\n\n".join(("de_top_genes_leiden_r1.0.csv\n" + de, "paga_connectivities_leiden_r1.0.csv\n" + paga, "qc_summary.csv\n" + qc))
+    out = compact_tables(text)
+    assert out.count("G0_") == 15 and "G0_14 2.64 0.91/0.12" in out and "G0_19" not in out
+    assert "0: 1 0.93" in out and "\n2: none" in out and "qc_summary.csv\nmetric,value" in out
+    assert len(out) < len(text) / 2
+    assert compact_tables(text[: len(text) // 3]).startswith("de_top_genes_leiden_r1.0.csv")  # a page cut mid-row

@@ -170,6 +170,9 @@ def execute(packet_path):
                 stream.seek(arguments['offset'])
                 stream.read(len(result['content']))
                 result['next_offset'] = stream.tell()
+        if packet['module'] == 'ecarsi.stages.persample' and name == 'read_evidence' and arguments.get('kind') == 'tables' and isinstance(result.get('text'), str):
+            from .execution import compact_tables
+            result['text'] = compact_tables(result['text'])
         more_images = result.get('images', [])
         body = {k: v for k, v in result.items() if k not in {'state', 'images'}}
         entry = dict(tool=name, arguments=arguments, result=body,
