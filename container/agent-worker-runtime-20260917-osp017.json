@@ -1,0 +1,46 @@
+{
+  "base_science_image": {
+    "path": "/scratch/users/chensj16/containers/rsi-science-20260915-8.sif",
+    "sha256": "ca76a6a1ab53e67ca7612ca7609457e78cb53281dd39d262959b94acc611025f"
+  },
+  "control_dependencies": {
+    "path": "/scratch/users/chensj16/containers/rsi-control-20260915-1.sif",
+    "sha256": "a1917b629890caccd5ab982f64143ea4cbb68e3fd487f9f1a3266c6455dd6183"
+  },
+  "runtime": {
+    "command": [
+      "/usr/local/bin/python3.12"
+    ],
+    "files": {
+      "/opt/rsi-runtime.json": "5f11a0a3a992fb69fba642a9336b6bc6531e46021d7fa75474b9f1d1da23b56a",
+      "/usr/local/bin/python3.12": "0e6475dfda68a9b2d93501449fc47593ca169010e8f4881577b97463fd0c1263"
+    },
+    "image": {
+      "path": "/scratch/users/chensj16/containers/rsi-science-20260917-1.sif",
+      "sha256": "ff8a9e9b6c81bdf8e4524c6cd8b02ddddc931f8c4e2284562917737ad62cf1a5"
+    },
+    "imports": [
+      "osp",
+      "osp.annotate",
+      "scanpy",
+      "igraph",
+      "leidenalg",
+      "ecarsi.stages.persample",
+      "msp",
+      "msp.integrate",
+      "msp.evidence",
+      "ecarsi.stages.crosssample",
+      "zmip.scheduled",
+      "ecarsi.stages.zoomin",
+      "agents",
+      "ecarsi.agent.dispatch"
+    ],
+    "pythonpath": [
+      "/scratch/users/chensj16/worktrees/eca-rsi-gen2",
+      "/opt/rsi-control",
+      "/opt/rsi-python"
+    ],
+    "version": "Python 3.12.14"
+  },
+  "note": "rsi-science-20260917-1 = 20260915-8 with osp 0.1.7 (qc.py: hard_max_mt_pct 15 -> 25, osp branch qc-mt-25 @ eff7077); built by containers/build-20260917-1.sh. Not yet configured on any pool."
+}

@@ -151,3 +151,14 @@ The second-generation modules live in subpackages: `ecarsi.control` (Temporal wo
 `ecarsi.observatory`. [agent-worker-runtime-20260917.json](agent-worker-runtime-20260917.json) is the science runtime for that
 layout (the import list names the new modules); [control-plane.sh](control-plane.sh) is the launcher template the run
 directory copies and configures. See `docs-gen2/ARCHITECTURE.md`.
+
+## Science image 20260917-1 (OSP 0.1.7)
+
+`rsi-science-20260917-1.sif` is `rsi-science-20260915-8.sif` with osp 0.1.7 (`qc.py`: fixed mitochondrial cutoff
+15 → 25 %, osp branch `qc-mt-25`); every other file is identical. Built unprivileged on a compute node's local disk
+(`apptainer build --sandbox`, copy the file, rename the dist-info, refresh `/opt/rsi-runtime.json`, `apptainer build`)
+in three minutes; the script that did it is kept next to the images as `build-20260917-1.sh`.
+[agent-worker-runtime-20260917-osp017.json](agent-worker-runtime-20260917-osp017.json) is its runtime record; enable it
+on a pool with `configure-runtime` (the `runtime` sub-object of that file) run inside the image. Per-sample results of
+datasets already past their per-sample stage do not change.
+
