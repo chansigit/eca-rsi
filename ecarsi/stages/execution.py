@@ -45,9 +45,10 @@ def compact_tables(text, genes=15, contaminants=8, min_connectivity=0.05):
     they are; a block cut mid-row by paging loses that row only."""
     import csv, io
     blocks = []
-    for block in text.split("\n\n"):
-        block = block.strip("\n")  # each CSV ends with a newline, so the separator arrives as three
+    for raw in text.split("\n\n"):
+        block = raw.strip("\n")  # each CSV ends with a newline, so the separator arrives as three
         if not block:
+            blocks.append(raw)
             continue
         name, _, body = block.partition("\n")
         try:
@@ -81,7 +82,7 @@ def compact_tables(text, genes=15, contaminants=8, min_connectivity=0.05):
                 lines.append(r[key] + ": " + (", ".join(f"{c} {v:.2f}" for c, v in near) or "none"))
             blocks.append("\n".join(lines))
         else:
-            blocks.append(block)
+            blocks.append(raw)  # byte-identical: a text with no known table comes back unchanged
     return "\n\n".join(blocks)
 
 
