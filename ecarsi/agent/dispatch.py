@@ -135,7 +135,7 @@ def enqueue(folder, config, attempt):
     request = read(folder / "request.json")
     trace = request["spec"].get("trace", {})
     submit(config["pool_root"], dict(request_id=attempt["pool_request_id"], operation_id="agent.call",
-           args=["-m", "ecarsi.bridge.dispatch", "execute", attempt["plan"]["path"]],
+           args=["-m", "ecarsi.agent.dispatch", "execute", attempt["plan"]["path"]],
            cpus=plan["cpus"], memory_mb=plan["memory_mb"],
            timeout_seconds=plan["timeout_seconds"] + 60,
            inputs=[attempt["plan"]], outputs=["result.json"], **({"trace": trace} if trace else {})))
@@ -259,7 +259,7 @@ def completed_replacement(pool_root, request_id, bridge_root):
     spec = request.get('spec', {})
     args = spec.get('args', [])
     if (spec.get('operation_id') != 'agent.call' or len(args) != 4 or
-            args[:3] != ['-m', 'ecarsi.bridge.dispatch', 'execute']):
+            args[:3] != ['-m', 'ecarsi.agent.dispatch', 'execute']):
         return False
     current = status(pool_root, request_id)
     if current['state'] not in {'failed', 'cancelled'} or not current.get('receipt'):

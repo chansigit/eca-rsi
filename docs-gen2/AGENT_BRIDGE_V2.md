@@ -94,7 +94,7 @@ After correcting a transient failure, a terminal, tool-free protocol-2 turn can
 be explicitly reopened with a bounded new attempt allowance:
 
 ```bash
-python -m ecarsi.bridge retry-turn /absolute/development/bridge REQUEST_ID \
+python -m ecarsi.agent retry-turn /absolute/development/bridge REQUEST_ID \
   --reason 'Corrected timeout or provider availability; prior attempts are terminal'
 ```
 
@@ -120,10 +120,10 @@ worktree. Export provider keys in the user's bashrc. Model executors read the se
 on the Worker; credentials are not placed in task arguments, config or receipts.
 
 ```bash
-python -m ecarsi.bridge init /absolute/development/bridge \
+python -m ecarsi.agent init /absolute/development/bridge \
   --catalog /absolute/path/model-pool.json --concurrency 4 \
   --pool-root /absolute/development/pool
-python -m ecarsi.bridge serve /absolute/development/bridge
+python -m ecarsi.agent serve /absolute/development/bridge
 ```
 
 The catalog is the existing `ECA_MODEL_CATALOG` file (normally
@@ -137,8 +137,8 @@ Do not invent profiles or sample mappings for scientific acceptance. The client
 can submit and later query from any host sharing the trusted Bridge directory:
 
 ```bash
-python -m ecarsi.bridge submit /absolute/development/bridge request.json
-python -m ecarsi.bridge status /absolute/development/bridge REQUEST_ID
+python -m ecarsi.agent submit /absolute/development/bridge request.json
+python -m ecarsi.agent status /absolute/development/bridge REQUEST_ID
 ```
 
 Submission saves the request, current planning prompt and planning adapter hash
@@ -177,7 +177,7 @@ recoverable, an operator or provider-side reconciler must first confirm that
 the remote execution has stopped, then record that evidence:
 
 ```bash
-python -m ecarsi.bridge confirm-stopped /absolute/development/bridge REQUEST_ID \
+python -m ecarsi.agent confirm-stopped /absolute/development/bridge REQUEST_ID \
   --reason 'Provider-side confirmation and evidence reference'
 ```
 
@@ -350,7 +350,7 @@ portable tool and image continuation, model health and the existing Bridge tests
 
 ### Cancel a request
 
-`python -m ecarsi.bridge cancel BRIDGE_ROOT REQUEST_ID` cancels a queued or
+`python -m ecarsi.agent cancel BRIDGE_ROOT REQUEST_ID` cancels a queued or
 Pool-dispatched call and records a terminal cancellation. It also requests Pool
 cancellation for its attempts. Dispatch and result acceptance share the request
 lock, so a cancelled call cannot publish a late reply or start another attempt.

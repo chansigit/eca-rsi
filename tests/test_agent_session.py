@@ -8,8 +8,8 @@ import pytest
 from agents import Model, ModelResponse, Usage
 from openai.types.responses import ResponseFunctionToolCall, ResponseOutputMessage, ResponseOutputText
 
-import ecarsi.bridge as bridge
-import ecarsi.bridge.session as session
+import ecarsi.agent as bridge
+import ecarsi.agent.session as session
 from ecarsi.warm_pool.state import immutable, reference, verified
 from ecarsi.warm_pool.state import read, save, submit, file_digest
 
@@ -326,7 +326,7 @@ def test_worker_images_and_state_survive_sdk_continuation(tmp_path, portable):
 def test_invalid_arguments_return_to_model_without_executing_tool(tmp_path,monkeypatch):
     from harness_bridge import _harness_openai as adapter
     from ecarsi.control import agent_step
-    from ecarsi.bridge.tool_errors import write_rejection
+    from ecarsi.agent.tool_errors import write_rejection
     class CorrectingModel(ScriptedModel):
         async def get_response(self,**kwargs):
             self.inputs.append(kwargs['input'])
@@ -350,7 +350,7 @@ def test_invalid_arguments_return_to_model_without_executing_tool(tmp_path,monke
         reply=execute_turn(root,session.submit_turn(ref,0))
         item=agent_step('tool',[ref,str(reply),0,None])
         request=read(Path(spec['pool_root'])/'requests'/item['request_id']/'request.json')
-        assert request['spec']['args'][:2]==['-m','ecarsi.bridge.tool_errors']
+        assert request['spec']['args'][:2]==['-m','ecarsi.agent.tool_errors']
         assert 'must never run' not in str(request['spec']['args'])
         output=tmp_path/'error-output';output.mkdir();monkeypatch.chdir(output)
         write_rejection(request['spec']['args'][2])

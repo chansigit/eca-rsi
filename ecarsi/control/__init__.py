@@ -47,7 +47,7 @@ def submit_prepare(spec: dict) -> str:
 
 @activity.defn
 def submit_plan(spec: dict, prepared_path: str) -> str:
-    from ..bridge import submit
+    from ..agent import submit
     from ..warm_pool.state import read
     prepared = read(prepared_path)
     if prepared is None or Path(prepared["input_root"]).resolve() != Path(spec["input_root"]).resolve():
@@ -133,7 +133,7 @@ def check_bridge(root: str, request_id: str) -> dict:
 
 
 def check_bridge_once(root, request_id):
-    from ..bridge import root_path, status
+    from ..agent import root_path, status
     result = status(root, request_id)
     if result["state"] == "reply_saved":
         path = root_path(root) / "requests" / request_id / "result.json"
@@ -220,7 +220,7 @@ ACTIVITIES = [submit_prepare, submit_plan, submit_execute, check_pool, check_bri
 
 @activity.defn
 def agent_step(action: str, args: list):
-    from ..bridge import session
+    from ..agent import session
     from ..warm_pool.state import immutable, read, reference, verified
     if action == "cached_completion":
         session_ref = args[0]
@@ -243,7 +243,7 @@ def agent_step(action: str, args: list):
         reply = read(args[0])["response"]
         return {"kind": reply["kind"], "calls": len(reply["calls"])}
     if action == 'parallel':
-        from ..bridge.parallel import choose
+        from ..agent.parallel import choose
         return choose(*args)
     if action == "finish":
         spec = verified(args[0])["spec"]
@@ -253,7 +253,7 @@ def agent_step(action: str, args: list):
                                  {"session": args[0], "reply": reference(args[1])})["path"]
     if action == "tool":
         from jsonschema import ValidationError
-        from ..bridge.tool_errors import reject_arguments
+        from ..agent.tool_errors import reject_arguments
         try:
             return session.tool_request(*args)
         except (ValidationError, session.ToolRejection) as exc:
@@ -367,7 +367,7 @@ class AgentWorkflow:
 
 def validate_spec(spec):
     from ..warm_pool.state import identifier, pool_root
-    from ..bridge import root_path
+    from ..agent import root_path
     required = {
         "run_id", "input_root", "output_root", "pool_root", "bridge_root",
         "prepare_cpus", "prepare_memory_mb", "prepare_timeout_seconds",
@@ -516,7 +516,7 @@ async def main():
             spec = validate_dataset(json.loads(args.spec.read_text()))
             run, identity = DatasetWorkflow.run, 'dataset/' + spec['run_id']
         elif args.command == "start-agent":
-            from ..bridge.session import validate_spec as validate_agent
+            from ..agent.session import validate_spec as validate_agent
             spec = validate_agent(json.loads(args.spec.read_text()))
             run, identity = AgentWorkflow.run, "agent/" + spec["session_id"]
         elif args.command == "start-persample":
@@ -562,7 +562,7 @@ async def main():
         from .crosssample import CrosssampleWorkflow
         from ..warm_pool.state import verified
         from ..warm_pool.state import identifier, read, status
-        from ..bridge import status as bridge_status
+        from ..agent import status as bridge_status
         from .zoomin import ZoominWorkflow
         prefix, run = {"resume-persample": ("persample/", PersampleWorkflow.run),
                        "resume-crosssample": ("cross-sample/", CrosssampleWorkflow.run),

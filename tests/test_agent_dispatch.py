@@ -10,9 +10,9 @@ import threading
 import time
 import pytest
 
-import ecarsi.bridge as bridge
-import ecarsi.bridge.dispatch as dispatch
-import ecarsi.bridge.session as session
+import ecarsi.agent as bridge
+import ecarsi.agent.dispatch as dispatch
+import ecarsi.agent.session as session
 from ecarsi.warm_pool.state import immutable, reference, verified
 from ecarsi.warm_pool.state import save, read, status
 
@@ -303,7 +303,7 @@ def test_worker_timeout_fallback_continuation_and_dispatcher_recovery(tmp_path):
             folder = pool/'requests'/attempt['pool_request_id']/request['attempt_id']
             output = folder/'outputs'
             env = dict(os.environ, VLLM_API_KEY='local-test-placeholder')
-            subprocess.run([sys.executable, '-m', 'ecarsi.bridge.dispatch', 'execute', attempt['plan']['path']],
+            subprocess.run([sys.executable, '-m', 'ecarsi.agent.dispatch', 'execute', attempt['plan']['path']],
                            cwd=output, env=env, check=True, timeout=20)
             result = read(output/'result.json')
             assert result['worker']['pid'] != os.getpid()

@@ -6,7 +6,7 @@ The second generation (Temporal control plane, HyperQueue warm pool, durable mod
 developed as feature/warmpool-v2 since 2026-09-14, integrated on one branch and given a package structure. The first
 generation (`eca-rsi run`, Slurm pool, batch admission) keeps its modules where 0.3.0 left them.
 
-- Move the flat gen-2 modules into `ecarsi.control` (work_coordinator, temporal_service, *_workflow), `ecarsi.bridge`
+- Move the flat gen-2 modules into `ecarsi.control` (work_coordinator, temporal_service, *_workflow), `ecarsi.agent`
   (agent_*), `ecarsi.stages` (organize/persample/crosssample/zoomin `_v2`, `_v3`, dataset_release), `ecarsi.warm_pool.budget`
   (operation_budget) and `ecarsi.observatory` (dev_observatory); `python -m ecarsi.control|bridge|observatory` entry points.
 - `reference` / `verified` / `immutable` belong to `warm_pool.state`; pinned program files come from `stages.program()`,

@@ -62,7 +62,7 @@ def pinned_adapter(bridge_root, sha):
     if hashlib.sha256(content).hexdigest() != sha:
         raise ValueError("Archived agent adapter changed")
     module = ModuleType("ecarsi._agent_adapter_" + sha)
-    module.__file__, module.__package__ = str(path), "ecarsi.bridge"
+    module.__file__, module.__package__ = str(path), "ecarsi.agent"
     exec(compile(content, str(path), "exec"), module.__dict__)
     return module
 

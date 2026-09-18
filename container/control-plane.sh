@@ -21,7 +21,7 @@ PY=(apptainer exec --cleanenv --bind "$BINDS" --env LC_ALL=C --env LANG=C
     "$IMG" /usr/local/bin/python3)
 
 pattern() { case $1 in temporal) echo "ecarsi.control.temporal";; scheduler) echo "ecarsi.warm_pool .*scheduler";;
-    bridge) echo "ecarsi.bridge serve";; coordinators) echo "ecarsi.control .*worker";;
+    bridge) echo "ecarsi.agent serve";; coordinators) echo "ecarsi.control .*worker";;
     observatory) echo "ecarsi.observatory serve";; keeper) echo "worker-keeper.sh";; esac; }
 # Skip container wrappers, interactive `bash -c` shells and this script's own subshells: a shell whose
 # command text merely mentions a component (an editor, a heredoc) must never count as, or be killed as, that component.
@@ -34,7 +34,7 @@ start() {
     temporal) launch temporal "${PY[@]}" -m ecarsi.control.temporal --root "$CONTROL" --postgres-bin "${POSTGRES_BIN:?}" \
         --temporal-dir "${TEMPORAL_DIR:?}" --schema-dir "${SCHEMA_DIR:?}" --bind "$HOST_IP" ;;
     scheduler) launch scheduler "${PY[@]}" -m ecarsi.warm_pool --root "$POOL" scheduler --host "$(hostname -s)" ;;
-    bridge) launch bridge "${PY[@]}" -m ecarsi.bridge serve "$BRIDGE" ;;
+    bridge) launch bridge "${PY[@]}" -m ecarsi.agent serve "$BRIDGE" ;;
     coordinators) local n; n=$(pids coordinators | wc -l)
         for ((i=n; i<COORDINATORS; i++)); do launch "coordinator-$i" env "APPTAINERENV_ECA_RSI_STAGE_LIMIT_FLOORS=$STAGE_LIMIT_FLOORS" \
             "${PY[@]}" -m ecarsi.control --service-root "$CONTROL" --task-queue "$TASK_QUEUE" worker --workflow-slots 2; done ;;

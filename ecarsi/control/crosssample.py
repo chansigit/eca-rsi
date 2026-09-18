@@ -11,7 +11,7 @@ from .persample import await_pool, call
 def validate_spec(spec, *, resume=False):
     from ..warm_pool.state import verified
     from ..warm_pool.state import identifier, pool_root
-    from ..bridge import root_path
+    from ..agent import root_path
     required = {'run_id', 'dataset_id', 'input', 'output_root', 'pool_root', 'bridge_root',
                 'inspect_budget', 'compute_budget', 'deg_budget', 'tool_budget', 'finalize_budget',
                 'config', 'max_in_flight_deg', 'max_refinements'}
@@ -76,7 +76,7 @@ def crosssample_step(action, args):
     if action == 'read':
         return verified(reference(args[0]))
     if action == 'session':
-        from ..bridge.parallel import READS
+        from ..agent.parallel import READS
         session = verified(reference(args[0]))
         return dict(session, tools=[dict(t, read_only=t['name'] in READS) for t in session['tools']])
     if action == 'accepted':

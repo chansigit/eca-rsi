@@ -41,7 +41,7 @@ def reject_arguments(session_ref, reply_path, index, previous, message):
         response['state'] = state
     packet = immutable(directory/'argument-rejection.json',dict(response=response, output=tool['result_file']))
     submit(spec['pool_root'],dict(request_id=request_id,operation_id=tool['name'],
-        args=['-m','ecarsi.bridge.tool_errors',packet['path']],cpus=1,memory_mb=min(tool['memory_mb'],128),
+        args=['-m','ecarsi.agent.tool_errors',packet['path']],cpus=1,memory_mb=min(tool['memory_mb'],128),
         timeout_seconds=min(tool['timeout_seconds'],30),outputs=[tool['result_file']],
         inputs=[packet,reference(reply_path),reference(Path(__file__)),*([state] if state else [])],
         trace={'workflow_id':'agent/'+spec['session_id'],'dataset_id':spec['dataset_id'],

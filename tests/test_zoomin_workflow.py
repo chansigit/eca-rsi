@@ -12,7 +12,7 @@ def test_gpu_grant_is_selected_for_lineage_compute(tmp_path):
     save(pool/'config.json',{'runtime':{}})
     save(tmp_path/'subset.json',{'lineage':{'n_cells':900}})
     save(tmp_path/'markers.json',{})
-    from ecarsi.bridge.session import reference
+    from ecarsi.agent.session import reference
     budget=dict(cpus=2,memory_mb=4096,timeout_seconds=600)
     spec=dict(run_id='zoom-test',dataset_id='D',output_root=str(tmp_path/'out'),pool_root=str(pool),
         input=reference(tmp_path/'subset.json'),compute_budget=budget,

@@ -9,7 +9,7 @@ from temporalio.exceptions import ApplicationError
 def validate_spec(spec, *, resume=False):
     from ..warm_pool.state import reference
     from ..warm_pool.state import identifier, pool_root, read
-    from ..bridge import root_path
+    from ..agent import root_path
     required = {"run_id", "dataset_id", "unit", "output_root", "pool_root", "bridge_root",
                 "partition_budget", "compute_budget", "tool_budget", "finalize_budget", "config",
                 "batch_size", "max_in_flight_samples", "max_batch_bytes"}
@@ -77,7 +77,7 @@ def sample_step(action, args):
     if action == "agent":
         spec, path, parent = args
         session = annotation_spec(spec, reference(path), parent)
-        from ..bridge.parallel import READS
+        from ..agent.parallel import READS
         session["tools"] = [dict(tool, read_only=tool["name"] in READS) for tool in session["tools"]]
         return session
     if action == "accepted_annotation":
@@ -89,7 +89,7 @@ def sample_step(action, args):
             raise ValueError("Annotation validation worker is no longer accepted")
         return {"path": result["output"]["path"], "parent": result["pool_request_id"]}
     if action == "recoverable":
-        from ..bridge import status as bridge_status
+        from ..agent import status as bridge_status
         spec, sample = args
         found = False
         for root, inspect, allowed in (
@@ -101,7 +101,7 @@ def sample_step(action, args):
                 if trace.get("workflow_id") == "persample/" + spec["run_id"] and trace.get("sample_id") == sample:
                     found = True
                     if inspect(root, path.parent.name)["state"] not in allowed:
-                        from ..bridge.dispatch import completed_replacement
+                        from ..agent.dispatch import completed_replacement
                         if root != spec['pool_root'] or not completed_replacement(
                                 root, path.parent.name, spec['bridge_root']):
                             return False

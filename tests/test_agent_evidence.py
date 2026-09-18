@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 import ecarsi.stages.evidence as batch
-from ecarsi.bridge.session import immutable, reference, verified
+from ecarsi.agent.session import immutable, reference, verified
 from ecarsi.stages.persample import sealed
 from ecarsi.warm_pool.state import read, save
 

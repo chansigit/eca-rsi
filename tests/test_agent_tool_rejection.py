@@ -12,10 +12,10 @@ import pytest
 from agents import Model, ModelResponse, Usage
 from openai.types.responses import ResponseFunctionToolCall
 
-import ecarsi.bridge as bridge
-import ecarsi.bridge.session as session
+import ecarsi.agent as bridge
+import ecarsi.agent.session as session
 import ecarsi.control as work_coordinator
-from ecarsi.bridge.parallel import READS
+from ecarsi.agent.parallel import READS
 from ecarsi.warm_pool.budget import from_artifact
 from ecarsi.warm_pool.state import read, save
 
@@ -100,7 +100,7 @@ def test_batching_an_unbatchable_tool_returns_a_correction_not_a_failure(tmp_pat
     for index in (0, 1):
         item = work_coordinator.agent_step("tool", [ref, str(reply), index, None])
         submitted = read(Path(spec["pool_root"]) / "requests" / item["request_id"] / "request.json")
-        assert submitted["spec"]["args"][:2] == ["-m", "ecarsi.bridge.tool_errors"]
+        assert submitted["spec"]["args"][:2] == ["-m", "ecarsi.agent.tool_errors"]
         packet = next(i["path"] for i in submitted["spec"]["inputs"]
                       if i["path"].endswith("argument-rejection.json"))
         response = read(packet)["response"]
@@ -129,7 +129,7 @@ def test_saved_session_batches_by_current_policy_not_its_stale_copy(tmp_path):
     first = session.tool_request(ref, reply, 0)
     submitted = read(Path(spec["pool_root"]) / "requests" / first["request_id"] / "request.json")
     assert submitted["spec"]["operation_id"] == "read_evidence"
-    assert submitted["spec"]["args"][:2] != ["-m", "ecarsi.bridge.tool_errors"]
+    assert submitted["spec"]["args"][:2] != ["-m", "ecarsi.agent.tool_errors"]
 
 
 def test_registered_reads_share_one_batching_policy():

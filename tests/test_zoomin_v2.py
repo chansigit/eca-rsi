@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
-from ecarsi.bridge.session import immutable, reference, verified
+from ecarsi.agent.session import immutable, reference, verified
 from ecarsi.stages.persample import sealed
 from ecarsi.stages.zoomin import prepare, markers, subset, compute, deg, assemble, apply_lineage, merge, tool
 from ecarsi.warm_pool.state import save
@@ -100,7 +100,7 @@ def test_zoom_handoffs_and_exact_global_conservation(tmp_path):
     pd.testing.assert_series_equal(refined.obs[TYPE_KEY],ad.obs[TYPE_KEY])
     assert target not in set(refined.obs[QUALITY_KEY])
     from ecarsi.stages.zoomin import agent_spec
-    from ecarsi.bridge.session import validate_spec
+    from ecarsi.agent.session import validate_spec
     pool=tmp_path/'pool';pool.mkdir(mode=0o700);save(pool/'config.json',{})
     bridge=tmp_path/'bridge';bridge.mkdir(mode=0o700);save(bridge/'config.json',{})
     budget=dict(cpus=1,memory_mb=4096,timeout_seconds=600)

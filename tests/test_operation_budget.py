@@ -1,6 +1,6 @@
 import pytest
 
-from ecarsi.bridge.session import reference
+from ecarsi.agent.session import reference
 from ecarsi.warm_pool.budget import from_compute, from_deg_buffers
 from ecarsi.warm_pool.state import save
 

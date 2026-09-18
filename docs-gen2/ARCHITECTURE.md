@@ -11,7 +11,7 @@
 ────────────────────────────────────────────────────────────────────────────────
 控制面          ecarsi.control       Temporal 工作流树：dataset → unit → persample / crosssample / zoomin → agent
 ────────────────────────────────────────────────────────────────────────────────
-Bridge          ecarsi.bridge        模型回合的持久收件箱：session 契约、dispatch、evidence / parallel 批读
+Bridge          ecarsi.agent        模型回合的持久收件箱：session 契约、dispatch、evidence / parallel 批读
 Warm Pool       ecarsi.warm_pool     有界计算请求：state（文件协议）、backend（HyperQueue）、worker、budget
 ────────────────────────────────────────────────────────────────────────────────
 Stage 程序      ecarsi.stages        organize / persample / crosssample / zoomin / release：在科学镜像里跑，
@@ -32,7 +32,7 @@ Stage 程序      ecarsi.stages        organize / persample / crosssample / zoom
 | `ecarsi.control` | `__init__` | work_coordinator | 活动、AgentWorkflow、CLI（`worker` / `start-*` / `resume-*` / `status-*`）、POLL_RETRY / SHORT |
 | | `temporal` | temporal_service | 托管 Temporal server + PostgreSQL，`service.json` 端点 |
 | | `dataset` `persample` `crosssample` `zoomin` | *_workflow | 各阶段工作流；`persample.saved_module` 让已存请求保留原程序 |
-| `ecarsi.bridge` | `__init__` | agent_bridge | 回合请求的 submit / status / serve / reconcile；`adapter_path` 指向被 pin 的 host 代码 |
+| `ecarsi.agent` | `__init__` | agent_bridge | 回合请求的 submit / status / serve / reconcile；`adapter_path` 指向被 pin 的 host 代码 |
 | | `dispatch` | agent_dispatch | 把回合派到 Pool，inode 键的 finished 缓存 |
 | | `session` | agent_session | 会话契约：create / reset / validate_turn / continuation，重复拒绝停机（REPEAT_LIMIT） |
 | | `evidence` `parallel` `tool_execution` `tool_errors` | agent_* | 证据批读、并行工具、工具执行请求、参数拒绝 |
@@ -50,7 +50,7 @@ Stage 程序      ecarsi.stages        organize / persample / crosssample / zoom
 ```bash
 python -m ecarsi.control.temporal --root <control> --postgres-bin … --temporal-dir … --schema-dir … --bind <ip>
 python -m ecarsi.warm_pool --root <pool> scheduler --host <node>          # HyperQueue 调度器；add-worker 加节点
-python -m ecarsi.bridge serve <bridge>                                     # 回合收件箱
+python -m ecarsi.agent serve <bridge>                                     # 回合收件箱
 python -m ecarsi.control --service-root <control> --task-queue <q> worker  # 协调器（可多份）
 python -m ecarsi.observatory serve --root <base> --bind <ip> --port 8765 --temporal-service-root <control>
 python -m ecarsi.control --service-root <control> --task-queue <q> start-dataset|resume-dataset|status-dataset <run_id>
@@ -87,4 +87,4 @@ python -m ecarsi.control --service-root <control> --task-queue <q> start-dataset
   （用 stage 的工具实现来构造 Pool 请求），是 bridge → stages 的反向耦合。
 - 第一代的 `batch.py`（Slurm 节点上的数据集准入）和 Temporal 的 dataset 工作流职责重叠；Periscope 的
   `serve.py` 还读 `batch.py` 的队列。
-- `ecarsi.bridge`（回合收件箱）和外部包 `agent-harness-bridge`（SDK 适配）都叫 bridge。
+- `ecarsi.agent`（回合收件箱）和外部包 `agent-harness-bridge`（SDK 适配）都叫 bridge。

@@ -330,7 +330,7 @@ def launch(root, folder, catalog):
     save(folder / "state.json", {"state": "running", "started_at": time.time(),
                                  "models": models, "catalog_digest": digest(catalog)})
     with (folder / "execution.log").open("ab") as log:
-        return subprocess.Popen([sys.executable, "-m", "ecarsi.bridge", "_execute",
+        return subprocess.Popen([sys.executable, "-m", "ecarsi.agent", "_execute",
                                  str(root), folder.name], env=env, stdin=subprocess.DEVNULL,
                                 stdout=log, stderr=log, start_new_session=True)
 

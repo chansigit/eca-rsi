@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from scipy import sparse
 
-from ecarsi.bridge.session import reference, verified
+from ecarsi.agent.session import reference, verified
 from ecarsi.stages.persample import partition, sealed, tool
 from ecarsi.run_state import file_identity
 from ecarsi.sample_mapping import mapping_identity

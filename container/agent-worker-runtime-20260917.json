@@ -33,7 +33,7 @@
       "zmip.scheduled",
       "ecarsi.stages.zoomin",
       "agents",
-      "ecarsi.bridge.dispatch"
+      "ecarsi.agent.dispatch"
     ],
     "pythonpath": [
       "/scratch/users/chensj16/worktrees/eca-rsi-gen2",

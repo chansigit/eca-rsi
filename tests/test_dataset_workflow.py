@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from ecarsi.bridge.session import reference
+from ecarsi.agent.session import reference
 from ecarsi.control.dataset import AnalysisUnitWorkflow, dataset_step
 from ecarsi.warm_pool.state import save
 
@@ -43,7 +43,7 @@ def test_round_uses_legacy_convergence_and_conserves_cell_counts(tmp_path):
         updated = dataset_step('round', [spec, unit, progress, str(cross), str(zoom)])
         assert ('publication' in updated) == (number == 2)  # Round one never auto-releases.
         if number == 2:
-            from ecarsi.bridge.session import verified
+            from ecarsi.agent.session import verified
             publication = verified(reference(updated['publication']))
             assert publication['n_input'] == publication['n_survived'] + publication['n_removed'] == 2000
             assert publication['n_removed'] == 170 and not publication['forced_release']
@@ -204,7 +204,7 @@ def test_resume_rejects_unreconciled_requests_and_audits_new_run(tmp_path, monke
     assert client.started == [dict(args=[spec, True], id='dataset/test', task_queue='queue',
         id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY)]
     assert len(list((tmp_path / 'recoveries').glob('*.started.json'))) == 1
-    from ecarsi.bridge.session import verified
+    from ecarsi.agent.session import verified
     audit = pool.read(next((tmp_path / 'recoveries').glob('*.started.json')))
     intent = verified(audit['intent'])
     save(tmp_path / 'publication.json', {'state': 'complete'})

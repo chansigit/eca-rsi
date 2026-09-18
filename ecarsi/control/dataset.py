@@ -62,7 +62,7 @@ async def resume_dataset(client, identity, task_queue, reason):
     from temporalio.common import WorkflowIDReusePolicy
     from ..warm_pool.state import immutable, reference
     from ..warm_pool.state import read, status, digest
-    from ..bridge import status as bridge_status
+    from ..agent import status as bridge_status
     if not reason.strip():
         raise ValueError('A recovery reason is required')
     previous = client.get_workflow_handle(identity)
@@ -113,7 +113,7 @@ async def resume_dataset(client, identity, task_queue, reason):
             if read(path)['spec'].get('trace', {}).get('workflow_id') in identities:
                 state = inspect(spec[service], path.parent.name)['state']
                 if state not in allowed:
-                    from ..bridge.dispatch import completed_replacement
+                    from ..agent.dispatch import completed_replacement
                     if service != 'pool_root' or not completed_replacement(
                             spec['pool_root'], path.parent.name, spec['bridge_root']):
                         raise ValueError(f'Reconcile {path.parent.name} ({state}) before resume')

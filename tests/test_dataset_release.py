@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ecarsi.bridge.session import reference, verified
+from ecarsi.agent.session import reference, verified
 from ecarsi.stages.release import collect, publish
 from ecarsi.run_state import file_identity
 from ecarsi.warm_pool.state import save

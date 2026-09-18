@@ -1,6 +1,6 @@
 """A session whose transcript the provider rejects restarts as a fresh conversation with the
 host state carried over (Eye round 5, 2026-09-16: 37 turns, 4.5 M input tokens, HTTP 400 x3)."""
-from ecarsi.bridge.session import RESET_NOTE, reference, reset_spec
+from ecarsi.agent.session import RESET_NOTE, reference, reset_spec
 from ecarsi.warm_pool.state import save
 
 

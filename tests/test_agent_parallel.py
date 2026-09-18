@@ -4,8 +4,8 @@ from unittest.mock import patch
 
 import pytest
 
-from ecarsi.bridge.parallel import budget, choose, eligible, merge_states
-import ecarsi.bridge.session as session
+from ecarsi.agent.parallel import budget, choose, eligible, merge_states
+import ecarsi.agent.session as session
 from ecarsi.warm_pool.state import immutable, reference, verified
 from ecarsi.warm_pool.state import read, save
 

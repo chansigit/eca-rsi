@@ -13,7 +13,7 @@ import threading
 import time
 from urllib.parse import parse_qs, urlsplit
 
-from .bridge import status as bridge_status
+from .agent import status as bridge_status
 from .warm_pool.state import lock, read, status as pool_status
 
 PAGE = Path(__file__).with_name("observatory.html")

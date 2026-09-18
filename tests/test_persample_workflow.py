@@ -34,7 +34,7 @@ def test_only_published_organize_units_can_start(tmp_path):
 
 
 def test_sample_size_selects_gpu_alternative_before_submission(tmp_path):
-    from ecarsi.bridge.session import reference
+    from ecarsi.agent.session import reference
     from ecarsi.control.persample import sample_step
     from ecarsi.warm_pool.state import read
     pool = tmp_path / "pool"
@@ -77,7 +77,7 @@ def test_recovery_requires_resolved_receipts(tmp_path):
 
 
 def test_resume_retains_incomplete_publication_and_cannot_replace_complete(tmp_path):
-    from ecarsi.bridge.session import reference
+    from ecarsi.agent.session import reference
     from ecarsi.control.persample import sample_step
     from ecarsi.warm_pool.state import read
     save(tmp_path / "input.json", {})

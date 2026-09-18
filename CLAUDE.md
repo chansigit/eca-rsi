@@ -200,14 +200,14 @@ python -m pytest -q tests/test_downstream.py tests/test_downstream_state.py test
 
 ```
 ecarsi/control/     Temporal 工作流（__init__ 原 work_coordinator；temporal / dataset / persample / crosssample / zoomin）
-ecarsi/bridge/      模型回合收件箱（__init__ 原 agent_bridge；dispatch / session / evidence / parallel / tool_*）
+ecarsi/agent/      模型回合收件箱（__init__ 原 agent_bridge；dispatch / session / evidence / parallel / tool_*）
 ecarsi/warm_pool/   有界计算请求 + HyperQueue 适配；budget（原 operation_budget）
 ecarsi/stages/      Pool 里跑的程序：organize / persample / crosssample / zoomin / release（原 *_v2、dataset_release），
                     crosssample_v3 / zoomin_v3 只改模型契约（协议 v4）；stages.program() 给 control 拿被 pin 的文件
 ecarsi/observatory.py   状态页 + `status` 报告（原 dev_observatory）
 ```
 
-- 入口：`python -m ecarsi.control.temporal` / `ecarsi.warm_pool` / `ecarsi.bridge serve` / `ecarsi.control … worker` /
+- 入口：`python -m ecarsi.control.temporal` / `ecarsi.warm_pool` / `ecarsi.agent serve` / `ecarsi.control … worker` /
   `ecarsi.observatory serve`；`container/control-plane.sh` 是启动模板，部署副本放运行目录并在那里配路径。
 - 请求按内容 pin 程序文件、按请求 id 回放已存内容：会话在飞时不改 stages / bridge/session.py；旧布局的已存请求
   在新布局下不能回放，切换只在没有会话在飞时做（或归档相关请求后 resume）。

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from ecarsi.control.crosssample import CrosssampleWorkflow, crosssample_step, validate_spec
-from ecarsi.bridge.session import reference
+from ecarsi.agent.session import reference
 from ecarsi.warm_pool.state import save, read, validate_trace
 
 
@@ -89,7 +89,7 @@ def test_confirmed_worker_interruption_recovers_with_a_finite_attempt_budget(tmp
 def test_uncertain_observation_waits_for_same_attempt_receipt(tmp_path):
     from ecarsi.control import check_pool, check_bridge
     from ecarsi.warm_pool.state import submit
-    from ecarsi.bridge.session import reference
+    from ecarsi.agent.session import reference
     tmp_path.chmod(0o700); (tmp_path/'requests').mkdir(); save(tmp_path/'config.json', {'runtime':{}})
     submit(tmp_path, dict(request_id='r', operation_id='compute', args=['-c','pass'], cpus=1,
         memory_mb=64, timeout_seconds=30, outputs=['result.json']))

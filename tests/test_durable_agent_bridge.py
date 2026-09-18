@@ -11,13 +11,13 @@ import unittest
 from unittest.mock import AsyncMock, patch
 from types import SimpleNamespace
 
-import ecarsi.bridge as bridge
+import ecarsi.agent as bridge
 
 
 FAKE = '''
 import os, time
 from pathlib import Path
-import ecarsi.bridge as b
+import ecarsi.agent as b
 def provider(request, **kwargs):
     spec = request['spec']
     with (Path(spec['cwd']) / (spec['request_id'] + '.calls')).open('a') as f:

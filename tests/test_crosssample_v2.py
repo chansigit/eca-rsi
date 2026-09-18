@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ecarsi.bridge.session import immutable,reference,validate_spec,verified
+from ecarsi.agent.session import immutable,reference,validate_spec,verified
 from ecarsi.stages.crosssample import BASE,agent_spec,finalize
 from ecarsi.stages.contract import NO_ARGUMENTS
 from ecarsi.stages.persample import sealed
