@@ -390,7 +390,7 @@ def test_batched_calls_keep_ordered_worker_state_and_require_every_result(tmp_pa
     ref = session.create_session(spec)
     with patch.object(adapter, '_client', return_value=Client()), patch.object(adapter, '_model', return_value=BatchModel()):
         reply = execute_turn(root, session.submit_turn(ref, 0))
-        with patch('ecarsi.bridge.evidence.plan', side_effect=AssertionError('Do not prefetch a native batch')):
+        with patch('ecarsi.stages.evidence.next_required', side_effect=AssertionError('Do not prefetch a native batch')):
             first = session.tool_request(ref, reply, 0)
         accepted_first = completed_tool(spec, first, {'text': 'first-output', 'state': later})
         second = session.tool_request(ref, reply, 1, first['request_id'])

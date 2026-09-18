@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import ecarsi.bridge.evidence as batch
+import ecarsi.stages.evidence as batch
 from ecarsi.bridge.session import immutable, reference, verified
 from ecarsi.stages.persample import sealed
 from ecarsi.warm_pool.state import read, save
@@ -107,13 +107,13 @@ def test_pagination_bound_and_frozen_execution_plan(tmp_path, monkeypatch):
         cpus=1, memory_mb=1024, timeout_seconds=60)])
     directory = tmp_path / 'plan'; directory.mkdir()
     planned = batch.plan(request, directory, session)
-    assert planned['args'][:2] == ['-m', 'ecarsi.bridge.evidence']
+    assert planned['args'][:2] == ['-m', 'ecarsi.stages.evidence']
     assert batch.plan(request, directory, session) == planned
     with pytest.raises(ValueError, match='execution changed'):
         batch.plan(dict(request, memory_mb=2048), directory, session)
     # A previously registered original plan must not be upgraded in place.
     directory = tmp_path / 'old'; directory.mkdir()
-    from ecarsi.bridge.tool_execution import plan
+    from ecarsi.stages.execution import plan
     original = plan(request, directory, session['pool_root'])
     assert batch.plan(request, directory, session) == original == request
 

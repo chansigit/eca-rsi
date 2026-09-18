@@ -191,7 +191,7 @@ def annotation_spec(spec, computed_ref, compute_request):
         "dataset_id": spec["dataset_id"], "prompt": prompt, "tools": tools, "max_turns": 80,
         "pool_root": spec["pool_root"], "bridge_root": spec["bridge_root"],
         "output_root": str(Path(spec["output_root"]) / ("agent-" + digest(bundle["sample"])[:20])),
-        "completion_tool": "submit_annotation", "tool_state": state,
+        "completion_tool": "submit_annotation", "tool_state": state, "planner": "ecarsi.stages.evidence",
         "trace": {"workflow_id": "persample/" + spec["run_id"], "dataset_id": spec["dataset_id"],
                   "unit_id": "osp.annotate", "sample_id": bundle["sample"], "depends_on": [compute_request]}}
 

@@ -1,4 +1,8 @@
-"""Bounded evidence batches using the original registered Worker tools and checks."""
+"""Bounded evidence batches using the registered stage tools and checks.
+
+`plan` runs on the control side when a session registers this module as its planner and turns a
+single evidence read into one pool request that also pulls the mandatory observations; `execute`
+runs that request on a pool worker."""
 import importlib
 import json
 from pathlib import Path
@@ -13,10 +17,13 @@ TEXT_BYTES = 240000
 IMAGE_BYTES = 12 * 2**20  # Base64 representation of at most 9 MiB of PNGs.
 
 
-def plan(request, directory, session):
-    """Apply only before first submission; existing execution plans stay exact."""
-    from .tool_execution import plan as original_plan
+def plan(request, directory, session, batched=False):
+    """Apply only before first submission; existing execution plans stay exact. A batch the model
+    requested itself is never prefetched (its other calls would return the same evidence twice)."""
+    from .execution import plan as original_plan
     directory = Path(directory)
+    if batched:
+        return original_plan(request, directory, session['pool_root'])
     path = directory / 'execution.json'
     args = request['args']
     if (read(path) is not None or
@@ -34,7 +41,7 @@ def plan(request, directory, session):
         multimodal=registered[args[3]].get('multimodal', False)))
     # QC can load the matrix: reserve its registered budget before packing it.
     budget = [registered[n] for n in allowed]
-    wrapped = dict(request, args=['-m', 'ecarsi.bridge.evidence', packet['path']],
+    wrapped = dict(request, args=['-m', 'ecarsi.stages.evidence', packet['path']],
         cpus=max(t['cpus'] for t in budget), memory_mb=max(t['memory_mb'] for t in budget),
         inputs=[*request['inputs'], packet, reference(Path(__file__))])
     if args[1] == 'ecarsi.stages.persample' and read(args[4])['version'] == 0:
@@ -48,7 +55,7 @@ def plan(request, directory, session):
 def next_required(module, state, allowed, multimodal):
     """Only mandatory observations; never choose markers or scientific decisions."""
     if module == 'ecarsi.stages.persample':
-        from ..stages.persample import evidence_files
+        from .persample import evidence_files
         figures, tables = evidence_files(verified(state['bundle']))
         if not state['seen']['qc'] and 'check_qc_scores' in allowed:
             return 'check_qc_scores', {}
@@ -112,7 +119,7 @@ def execute(packet_path):
                 and result.get('next_offset') is not None and not result.get('is_error')):
             # The legacy reader peeks one character before tell(), skipping it
             # on the next page. Compute the text-stream cookie before that peek.
-            from ..stages.crosssample import artifact
+            from .crosssample import artifact
             bundle = verified(verified(reference(state_path))['evidence'])
             with artifact(bundle, arguments['path']).open() as stream:
                 stream.seek(arguments['offset'])

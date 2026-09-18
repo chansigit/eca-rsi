@@ -93,7 +93,7 @@ def budget(request, directory, spec, tool, state_ref):
     state = verified(state_ref)
     optimized = request
     light = tool['name'] in READS - {'check_genes', 'check_qc_scores', 'annotation_status'}
-    if request['args'][:2] == ['-m', 'ecarsi.bridge.evidence']:
+    if request['args'][:2] == ['-m', 'ecarsi.stages.evidence']:
         # Existing evidence batches may also execute QC, which loads the matrix.
         light = light and args[1] != 'ecarsi.stages.persample' and state.get('phase') != 'quality' and state.get('kind') != 'lineage'
     if light:

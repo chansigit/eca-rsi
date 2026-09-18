@@ -1,7 +1,7 @@
 import pytest
 
 from ecarsi.bridge.session import immutable, reference, verified
-from ecarsi.bridge.tool_execution import execute, plan
+from ecarsi.stages.execution import execute, plan
 from ecarsi.stages.persample import sealed, evidence_files
 from ecarsi.warm_pool.state import read, save
 

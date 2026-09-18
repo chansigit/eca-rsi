@@ -1,4 +1,4 @@
-"""Versioned execution plans for deterministic evidence work on Pool workers."""
+"""Versioned execution plans for deterministic evidence work on Pool workers (per-sample tools)."""
 import json
 from pathlib import Path
 
@@ -21,6 +21,9 @@ def plan(request, directory, pool_root):
     optimized = request
     if len(args) == 6 and args[:3] == ['-m', 'ecarsi.stages.persample', 'tool']:
         name = args[3]
+        if name in {'check_genes', 'check_qc_scores', 'submit_annotation'} and read(args[4])['version'] == 0:
+            from ..warm_pool.budget import from_compute
+            optimized = from_compute(optimized, read(args[4])['bundle'], Path(directory) / 'resources.json', pool_root)
         if name == 'read_evidence':
             # No expression matrix is loaded; even the image response is bounded
             # by the registered 9 MiB image budget and 16 MiB result contract.
@@ -28,14 +31,14 @@ def plan(request, directory, pool_root):
         if name == 'submit_annotation' or name == 'read_evidence' and read(args[5])['kind'] == 'tables':
             packet = immutable(Path(directory) / 'evidence-execution.json',
                                dict(name=name, state=args[4], arguments=args[5]))
-            optimized = dict(optimized, args=['-m', 'ecarsi.bridge.tool_execution', packet['path']],
+            optimized = dict(optimized, args=['-m', 'ecarsi.stages.execution', packet['path']],
                              inputs=[*request['inputs'], packet, reference(Path(__file__))])
     immutable(path, dict(base_digest=digest(request), request=optimized))
     return optimized
 
 
 def execute(packet_path):
-    from ..stages.persample import tool, evidence_files
+    from .persample import tool, evidence_files
     from ..warm_pool.state import verified
     packet = read(packet_path)
     name, state, arguments = packet['name'], packet['state'], read(packet['arguments'])

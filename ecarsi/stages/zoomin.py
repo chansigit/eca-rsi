@@ -253,7 +253,7 @@ def agent_spec(spec, evidence, kind, parent):
             inputs=[reference(Path(__file__).with_name(n)) for n in ('zoomin.py','crosssample.py','persample.py','contract.py')], outputs=['result.json'], result_file='result.json', multimodal=multimodal))
     return dict(session_id=session, dataset_id=spec['dataset_id'], prompt=prompt, tools=tools,
         max_turns=100, pool_root=spec['pool_root'], bridge_root=spec['bridge_root'], output_root=str(root),
-        completion_tool=completion, tool_state=state,
+        completion_tool=completion, tool_state=state, planner='ecarsi.stages.evidence',
         trace=dict(workflow_id='zoom-in/'+spec['run_id'],dataset_id=spec['dataset_id'],unit_id='zoom-in.'+kind,depends_on=[parent]))
 
 

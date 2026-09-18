@@ -73,7 +73,7 @@ def validate_spec(spec):
     from . import root_path
     required = {"session_id", "dataset_id", "prompt", "tools", "pool_root", "bridge_root",
                 "output_root", "max_turns"}
-    if not isinstance(spec, dict) or not required <= spec.keys() or spec.keys() - required - {"trace", "completion_tool", "tool_state"}:
+    if not isinstance(spec, dict) or not required <= spec.keys() or spec.keys() - required - {"trace", "completion_tool", "tool_state", "planner"}:
         raise ValueError("Agent session requires explicit identity, prompt, tools, services and max_turns")
     identifier(spec["session_id"])
     if len(spec["session_id"]) > 60:
@@ -495,20 +495,10 @@ def tool_request(session_ref, reply_path, index, previous=None):
            "inputs": [arguments, reference(reply_path), *state_inputs, *tool["inputs"]],
            "trace": {"workflow_id": "agent/" + s["session_id"], "dataset_id": s["dataset_id"],
                      "unit_id": tool["name"], **s.get("trace", {}), "depends_on": [previous or turn_id]}}
-    if len(calls) > 1:
-        # The model already requested this batch. Prefetching its other calls
-        # would return the same evidence twice in the continuation.
-        from .tool_execution import plan
-        request = plan(request, directory, s['pool_root'])
-    else:
-        from .evidence import plan
-        request = plan(request, directory, s)
-    if (state_inputs and len(args) == 6 and args[:3] == ['-m', 'ecarsi.stages.persample', 'tool']
-            and tool['name'] in {'check_genes', 'check_qc_scores', 'submit_annotation'}):
-        state = verified(state_ref)
-        if state['version'] == 0:
-            from ..warm_pool.budget import from_compute
-            request = from_compute(request, state['bundle'], directory / 'resources.json', s['pool_root'])
+    if s.get('planner'):
+        # The stage that registered the session plans its own execution (evidence batching, measured budgets).
+        import importlib
+        request = importlib.import_module(s['planner']).plan(request, directory, s, batched=len(calls) > 1)
     from .parallel import budget
     request = budget(request, directory, s, tool, state_ref if state_inputs else None)
     submit(s["pool_root"], request)

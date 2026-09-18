@@ -313,7 +313,7 @@ def agent_spec(spec, evidence_ref, phase, parent, types_ref=None):
           inputs=[reference(Path(__file__)),reference(Path(__file__).with_name('contract.py'))],outputs=['result.json'],result_file='result.json',multimodal=multimodal))
     return dict(session_id='cross-'+digest([spec['run_id'],phase,evidence_ref,types_ref])[:24],dataset_id=spec['dataset_id'],prompt=prompt,tools=tools,
       max_turns=80,pool_root=spec['pool_root'],bridge_root=spec['bridge_root'],output_root=str(Path(spec['output_root'])/(phase+'-'+evidence_ref['sha256'][:12])),
-      completion_tool='submit_decision',tool_state=state,
+      completion_tool='submit_decision',tool_state=state,planner='ecarsi.stages.evidence',
       trace=dict(workflow_id='cross-sample/'+spec['run_id'],dataset_id=spec['dataset_id'],unit_id='cross-sample.'+phase,depends_on=[parent]))
 
 
