@@ -30,7 +30,7 @@ def validate_spec(spec):
             continue
         if type(value) is not int or value < (0 if key == 'extra_rounds_after_convergence' else 1):
             raise ValueError('Invalid round policy: ' + key)
-    from . import validate_spec as validate_organize
+    from .coordinator import validate_spec as validate_organize
     expected = {f'{phase}_{resource}' for phase in ('prepare', 'execute')
                 for resource in ('cpus', 'memory_mb', 'timeout_seconds')}
     if not isinstance(spec['organize'], dict) or set(spec['organize']) != expected:
@@ -211,7 +211,7 @@ def dataset_step(action, args):
         publication = read(path)
         if publication is None or publication.get('state') == 'incomplete':
             return None
-        from . import check_pool
+        from .coordinator import check_pool
         def accepted(ref):
             request = Path(ref['path']).relative_to(Path(spec['pool_root']) / 'requests').parts[0]
             result = check_pool(spec['pool_root'], request, Path(ref['path']).name)
@@ -409,7 +409,7 @@ class DatasetWorkflow:
 
     @workflow.run
     async def run(self, spec, resume=False):
-        from . import OrganizeWorkflow
+        from .coordinator import OrganizeWorkflow
         self._stage = 'organize'
         stage = await call(dataset_step, 'organize', [spec])
         organized = await call(dataset_step, 'completed', ['organize', stage]) if resume else None

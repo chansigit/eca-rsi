@@ -1,5 +1,5 @@
 import asyncio
 
-from . import main
+from .coordinator import main
 
 asyncio.run(main())

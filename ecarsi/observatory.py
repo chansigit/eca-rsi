@@ -241,8 +241,8 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
              bridge_root: Path | None = None, temporal_service_root: Path | None = None) -> dict:
     """Read published records; never connect to a scheduler or submit work."""
     root = Path(root)
-    pool = Path(pool_root) if pool_root else root / "organize-v2-pool"
-    bridge = Path(bridge_root) if bridge_root else root / "organize-v2-bridge"
+    pool = Path(pool_root) if pool_root else root / "pool"
+    bridge = Path(bridge_root) if bridge_root else root / "bridge"
     cache = cache if cache is not None else {}
     pool_done = cache.setdefault("pool_done", {})
     bridge_done = cache.setdefault("bridge_done", {})
@@ -276,7 +276,6 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
         stale.pop(key, None)
         return True
     scheduler = read(pool / "scheduler.json", {})
-    worker = read(root / "organize-v2-pool-worker/worker.json", {})
     bridge_summary = read(bridge / "summary.json", {})
     pool_rows = []
     if (pool / "config.json").is_file():
@@ -311,7 +310,7 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
                 "peak_rss_bytes": receipt.get("peak_rss_bytes"),
             }
             pool_rows.append(row)
-            if row["state"] in {"succeeded", "failed", "cancelled"}:
+            if row["state"] in {"succeeded", "cancelled"}:  # a failed request can still be retried in place
                 pool_done[(entry.name, entry.inode())] = row
     bridge_rows = []
     if (bridge / "config.json").is_file():
@@ -340,7 +339,7 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
                 "host": (item.get("worker") or {}).get("host"),
             }
             bridge_rows.append(row)
-            if row["state"] in {"reply_saved", "failed"}:
+            if row["state"] == "reply_saved":  # a failed turn can still be retried in place
                 bridge_done[(entry.name, entry.inode())] = row
     pool_by_id = {row["id"]: row for row in pool_rows}
     for row in bridge_rows:
@@ -369,7 +368,7 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
         "mode": "development / read-only", "temporal_ui": temporal_ui,
         "temporal_port": temporal_port, "temporal_source": temporal_source,
         "temporal_service": service,
-        "scheduler": scheduler, "worker": worker, "bridge_summary": bridge_summary,
+        "scheduler": scheduler, "bridge_summary": bridge_summary,
         "worker_live_count": sum(w["reporting"] for w in workers), "workers": workers,
         "pool_waiting": sum(t["state"] == "queued" for t in pool_rows),
         "pool_requests": sorted(pool_rows, key=lambda x: x["submitted_at"], reverse=True),
@@ -441,7 +440,7 @@ def serve(root: Path, port: int, temporal_port: int, bind: str,
                             result = task_timeline(data["pool_requests"], data["bridge_requests"],
                                                    since, until, dataset, limit, dataset_page)
                             result["resources"] = summarize_resources(resource_history(
-                                Path(pool_root) if pool_root else Path(root) / "organize-v2-pool", since, until,
+                                Path(pool_root) if pool_root else Path(root) / "pool", since, until,
                                 cache.setdefault("resource_files", {})), since, until)
                             result["indexed_since"] = cache.get("indexed_since")
                             result["indexing"] = bool(cache.get("walk"))
@@ -632,8 +631,8 @@ def session_stats(bridge, pool, hours, now):
 
 def status_report(root, pool_root=None, bridge_root=None, temporal_service_root=None, sessions_hours=None):
     root = Path(root)
-    pool = Path(pool_root) if pool_root else root / 'organize-v2-pool'
-    bridge = Path(bridge_root) if bridge_root else root / 'organize-v2-bridge'
+    pool = Path(pool_root) if pool_root else root / 'pool'
+    bridge = Path(bridge_root) if bridge_root else root / 'bridge'
     now = time.time()
     hq = hq_view(pool)
     jobs = {}

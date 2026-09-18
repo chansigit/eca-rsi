@@ -166,7 +166,7 @@ class CrosssampleWorkflow:
 
     @workflow.run
     async def run(self, spec):
-        from . import AgentWorkflow
+        from .coordinator import AgentWorkflow
         self._deg_limit = getattr(self, '_deg_limit', spec['max_in_flight_deg'])
 
         async def run_operation(action, paths, parents, **details):

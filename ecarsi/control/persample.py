@@ -180,12 +180,12 @@ def sample_step(action, args):
 
 
 async def call(fn, *args):
-    from . import SHORT, activity_retry
+    from .coordinator import SHORT, activity_retry
     return await workflow.execute_activity(fn, args=args, start_to_close_timeout=SHORT, retry_policy=activity_retry(fn))
 
 
 async def await_pool(spec, request):
-    from . import check_pool
+    from .coordinator import check_pool
     while True:
         result = await call(check_pool, spec["pool_root"], request["id"], request["output"])
         if result["state"] == "ready":
@@ -199,7 +199,7 @@ async def await_pool(spec, request):
 class SampleWorkflow:
     @workflow.run
     async def run(self, spec, entry, parent, notify_computed=False):
-        from . import AgentWorkflow
+        from .coordinator import AgentWorkflow
         request = await call(sample_step, "compute", [spec, entry, parent])
         computed = await await_pool(spec, request)
         if notify_computed:

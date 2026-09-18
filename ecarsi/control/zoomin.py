@@ -134,7 +134,7 @@ class ZoominWorkflow:
 
     @workflow.run
     async def run(self,spec):
-        from . import AgentWorkflow
+        from .coordinator import AgentWorkflow
         self._deg_limit=getattr(self,'_deg_limit',spec['max_in_flight_deg'])
         async def run(action,paths,parents,**details):
             request=await call(zoomin_step,action,[spec,dict(paths=paths,**details),parents])

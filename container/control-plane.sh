@@ -41,7 +41,7 @@ start() {
     coordinators) local n; n=$(pids coordinators | wc -l)
         for ((i=n; i<COORDINATORS; i++)); do launch "coordinator-$i" env "APPTAINERENV_ECA_RSI_STAGE_LIMIT_FLOORS=$STAGE_LIMIT_FLOORS" \
             "${PY[@]}" -m ecarsi.control --service-root "$CONTROL" --task-queue "$TASK_QUEUE" worker --workflow-slots 2; done ;;
-    observatory) launch observatory env PYTHONPATH="$CODE" "$HOSTPY" -m ecarsi.observatory serve --root "$BASE" --bind "$HOST_IP" --port "${OBSERVATORY_PORT:-8765}" --temporal-service-root "$CONTROL" ;;
+    observatory) launch observatory env PYTHONPATH="$CODE" "$HOSTPY" -m ecarsi.observatory serve --root "$BASE" --pool-root "$POOL" --bridge-root "$BRIDGE" --bind "$HOST_IP" --port "${OBSERVATORY_PORT:-8765}" --temporal-service-root "$CONTROL" ;;
     keeper) launch worker-keeper "$BASE/worker-keeper.sh" ;;
   esac
 }
@@ -58,6 +58,6 @@ case $cmd in
   stop) for c in "${comps[@]}"; do stop "$c"; done; status ;;
   restart) for c in "${comps[@]}"; do stop "$c"; done; for c in "${comps[@]}"; do start "$c"; done; sleep 3; status ;;
   status) status ;;
-  report) (cd /tmp && "${PY[@]}" -m ecarsi.observatory status --root "$BASE" --temporal-service-root "$CONTROL" "$@") ;;
+  report) (cd /tmp && "${PY[@]}" -m ecarsi.observatory status --root "$BASE" --pool-root "$POOL" --bridge-root "$BRIDGE" --temporal-service-root "$CONTROL" "$@") ;;
   *) echo "usage: $0 start|stop|restart|status [component...] | report [--sessions HOURS] [--json]"; exit 2 ;;
 esac

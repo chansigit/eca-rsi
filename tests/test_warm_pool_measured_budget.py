@@ -65,7 +65,7 @@ def test_rss_kill_is_retryable_and_check_pool_doubles_the_budget(tmp_path):
     receipt = read(root / "requests" / "big" / request["attempt_id"] / "receipt.json")
     assert receipt["state"] == "failed" and receipt["retryable"] is True
     assert receipt["error"].startswith("MemoryError") and "RSS" in receipt["error"]
-    from ecarsi.control import check_pool
+    from ecarsi.control.coordinator import check_pool
     assert check_pool(str(root), "big", "result.json") == {"state": "waiting"}
     retried = read(root / "requests" / "big" / "request.json")
     assert retried["spec"]["memory_mb"] == 128 and retried["retry_count"] == 1

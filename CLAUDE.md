@@ -199,7 +199,7 @@ python -m pytest -q tests/test_downstream.py tests/test_downstream_state.py test
 同一套内核，包装成 Temporal + HyperQueue + Bridge 的批量系统；第一代模块位置不动，第二代收进子包：
 
 ```
-ecarsi/control/     Temporal 工作流（__init__ 原 work_coordinator；temporal / dataset / persample / crosssample / zoomin）
+ecarsi/control/     Temporal 工作流（coordinator 原 work_coordinator；temporal / dataset / persample / crosssample / zoomin；包本身不引 temporalio）
 ecarsi/agent/       模型回合服务（__init__ 原 agent_bridge；dispatch / session / parallel / tool_errors）；叫 agent 是为了让 bridge 只指外部包 agent-harness-bridge
 ecarsi/warm_pool/   有界计算请求 + HyperQueue 适配；budget（原 operation_budget）
 ecarsi/stages/      Pool 里跑的程序：organize / persample / crosssample / zoomin / release（原 *_v2、dataset_release，v3 已折回），

@@ -73,7 +73,7 @@ def test_workflow_fanout_and_annotation_order(monkeypatch, change_limit):
 
 
 def test_confirmed_worker_interruption_recovers_with_a_finite_attempt_budget(tmp_path):
-    from ecarsi.control import check_pool
+    from ecarsi.control.coordinator import check_pool
     from ecarsi.warm_pool.state import submit
     tmp_path.chmod(0o700);(tmp_path/'requests').mkdir();save(tmp_path/'config.json',{'runtime':{}})
     submit(tmp_path,dict(request_id='r',operation_id='compute',args=['-c','pass'],cpus=1,memory_mb=64,timeout_seconds=30,outputs=['result.json']))
@@ -87,7 +87,7 @@ def test_confirmed_worker_interruption_recovers_with_a_finite_attempt_budget(tmp
 
 
 def test_uncertain_observation_waits_for_same_attempt_receipt(tmp_path):
-    from ecarsi.control import check_pool, check_bridge
+    from ecarsi.control.coordinator import check_pool, check_bridge
     from ecarsi.warm_pool.state import submit
     from ecarsi.agent.session import reference
     tmp_path.chmod(0o700); (tmp_path/'requests').mkdir(); save(tmp_path/'config.json', {'runtime':{}})

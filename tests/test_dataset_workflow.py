@@ -11,7 +11,7 @@ def test_organize_resume_accepts_relocated_publication_but_rejects_changed_data(
     from tests.test_organize_v2_publish import outputs
     from ecarsi.stages.organize import publish
     from ecarsi import layout as L
-    import ecarsi.control as coordinator
+    import ecarsi.control.coordinator as coordinator
 
     output, destination = outputs(tmp_path)
     publish(output, destination)
@@ -139,7 +139,7 @@ def test_unit_waits_for_accepted_pool_release_before_completing(monkeypatch):
 
 
 def test_completed_stage_requires_same_input_spec_and_accepted_result(tmp_path, monkeypatch):
-    import ecarsi.control as coordinator
+    import ecarsi.control.coordinator as coordinator
     pool = tmp_path / 'pool'
     output = pool / 'requests' / 'compute' / 'attempt' / 'final.json'
     output.parent.mkdir(parents=True)

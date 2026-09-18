@@ -32,7 +32,7 @@ Stage 程序      ecarsi.stages        organize / persample / crosssample / zoom
 
 | 包 | 模块 | 原名 | 职责 |
 |---|---|---|---|
-| `ecarsi.control` | `__init__` | work_coordinator | 活动、AgentWorkflow、CLI（`worker` / `start-*` / `resume-*` / `status-*`）、POLL_RETRY / SHORT |
+| `ecarsi.control` | `coordinator` | work_coordinator | 活动、AgentWorkflow、CLI（`worker` / `start-*` / `resume-*` / `status-*`）、POLL_RETRY / SHORT |
 | | `temporal` | temporal_service | 托管 Temporal server + PostgreSQL，`service.json` 端点 |
 | | `dataset` `persample` `crosssample` `zoomin` | *_workflow | 各阶段工作流；`persample.saved_module` 让已存请求保留原程序 |
 | `ecarsi.agent` | `__init__` | agent_bridge | 回合请求的 submit / status / serve / reconcile；`adapter_path` 指向被 pin 的 host 代码 |

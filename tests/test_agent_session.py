@@ -279,7 +279,7 @@ def test_completion_tool_and_business_trace(tmp_path):
     final = session.complete_tool(ref, context)
     assert verified(read(final)["output"])["accepted"] is True
     assert session.complete_tool(ref, context) == final
-    from ecarsi.control import agent_step
+    from ecarsi.control.coordinator import agent_step
     assert agent_step("cached_completion", [ref]) == final
     save(Path(spec["pool_root"]) / "requests" / item["request_id"] / "cancel.json", {"requested_at": 1})
     with pytest.raises(ValueError, match="uncancelled"):
@@ -325,7 +325,7 @@ def test_worker_images_and_state_survive_sdk_continuation(tmp_path, portable):
 
 def test_invalid_arguments_return_to_model_without_executing_tool(tmp_path,monkeypatch):
     from harness_bridge import _harness_openai as adapter
-    from ecarsi.control import agent_step
+    from ecarsi.control.coordinator import agent_step
     from ecarsi.agent.tool_errors import write_rejection
     class CorrectingModel(ScriptedModel):
         async def get_response(self,**kwargs):
