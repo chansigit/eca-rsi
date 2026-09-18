@@ -1,3 +1,7 @@
+> **Retired on branch `gen2` (ecarsi 0.3.1).** Dataset admission is the Temporal control plane's
+> (`python -m ecarsi.control start-dataset`, see docs-gen2/ARCHITECTURE.md); `eca-rsi batch`, the node
+> agents, the preparation queue and the driver memory leases described below exist only on `main`.
+
 # Persistent dataset queue
 
 `eca-rsi batch` distributes dataset drivers across the Slurm allocations you

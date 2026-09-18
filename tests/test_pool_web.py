@@ -101,9 +101,6 @@ def test_monitor_routes_follow_live_pool_and_auth(tmp_path, monkeypatch):
     try:
         assert get("/_pool", False)[0] == 401
         assert get("/_models/status.json", False)[0] == 401
-        assert get("/_workflows/status.json", False)[0] == 401
-        assert get("/_workflows/status.json")[0] == 200
-        assert get("/_workflows/status.json")[1]["Cache-Control"] == "no-store"
         assert get("/_models/status.json")[0] == 200
         assert get("/_models/status.json")[1]["Cache-Control"] == "no-store"
         assert get("/_pool/status.json", False)[0] == 401
@@ -138,14 +135,7 @@ def test_monitor_routes_follow_live_pool_and_auth(tmp_path, monkeypatch):
         for path in ("/_pool", "/_pool/", "/%5fpool?direct=1", "/__pool__"):
             assert get(path)[0] == 404
         assert json.loads(get("/_pool/health")[2]) == {"available": True}
-        # Neither health nor compute metrics may read dataset files/logs.
-        with monkeypatch.context() as patch:
-            from ecarsi import batch
-            def broken_queue():
-                raise OSError("dataset storage temporarily unavailable")
-            patch.setattr(batch, "monitor", broken_queue)
-            assert json.loads(get("/_pool/health")[2]) == {"available": True}
-            assert get("/_pool/status.json")[0] == 200
+        assert get("/_pool/status.json")[0] == 200
         assert get("/_pool/unknown")[0] == 404
         client.close(); cluster.close()
         assert (tmp_path / "scheduler.json").exists()

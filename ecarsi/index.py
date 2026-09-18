@@ -637,11 +637,6 @@ def collection_of(path: Path) -> str:
     return ""
 
 
-def submission(root: Path) -> dict:
-    """Optional batch status supplies visibility before organize creates a run."""
-    from .batch import monitor
-    return monitor()["by_mirror"].get(str(root.resolve()), {})
-
 
 def display_name(root: Path) -> str:
     """'Stomach' for .../eca-pp/Stomach/rsi, else the directory name."""
@@ -665,15 +660,6 @@ def dataset_state(root: Path, states: list[dict] | None = None) -> dict:
         stage, cls = "failed", "failed"
     else:
         stage, cls = (states[0]["stage"] if len(states) == 1 else f"{released}/{len(states)} released"), "running"
-    queued = submission(root)
-    if queued.get("waiting"):
-        stage, cls = "queued for driver", "queued"
-    elif queued.get("state") in {"paused", "failed"}:
-        stage = cls = queued["state"]
-    elif queued.get("state") == "running" and not states:
-        stage, cls = "organizing", "running"
-    if not n_in and queued.get("n_cells"):
-        n_in = [queued["n_cells"]]
     fin = [s["finished"] for s in states if s.get("finished")]
     events = {k: [s["events"][k] for s in states if s.get("events") and s["events"][k]] for k in ("organize", "release")}
     return {"units": len(states), "released": released, "n_input": sum(n_in) if n_in else None, "events": events,
@@ -681,7 +667,7 @@ def dataset_state(root: Path, states: list[dict] | None = None) -> dict:
             "species": ", ".join(sorted({str(s["species"]) for s in states if s["species"]})),
             "finished": max(fin) if fin and released == len(states) else None,
             "updated": state_mtime(root), "stage": stage, "cls": cls,
-            "awaiting_start": cls == "queued" or queued.get("dispatch_paused", False)}
+            "awaiting_start": False}
 
 
 def _hero(s_cls: str, s_stage: str, title: str, crumb: str = "", sub: str = "", facts=(), next_: str = "") -> str:
@@ -914,8 +900,6 @@ def render_root(root: Path, name: str | None = None) -> str:
                         f'<td class="muted">{e(s["last_event"])}</td></tr>')
         next_ = (f'This run has {len(units)} analysis units; open one below for its rounds, final UMAP and files.' if units
                  else "No analysis unit has been planned yet; organize has not finished.")
-        if ds["stage"] == "queued for driver":
-            next_ = "Submitted and waiting for a dataset driver. Heavy computation will use the warm pool."
         body = (_hero(ds["cls"], ds["stage"], title, "", sub, facts, next_)
                 + f'<section class="block" id="units"><h2>Units <span class="count">{ds["released"]}/{len(units)} released</span></h2>'
                 + f'<p class="lede">{EXPLAIN["units"]}</p>'

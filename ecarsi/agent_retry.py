@@ -24,20 +24,18 @@ BACKOFF_SECONDS = 20  # linear: 20s, 40s, 60s, 80s, 100s
 def run_with_retry(coro_fn: Callable[[], Coroutine[object, object, T]], label: str) -> T:
     """asyncio.run(coro_fn()) with retries on transient SDK/agent failures."""
     import asyncio
-    from .driver_budget import model_wait
 
     last_exc: Exception | None = None
-    with model_wait():
-        for attempt in range(1, MAX_ATTEMPTS + 1):
-            try:
-                return asyncio.run(coro_fn())
-            except Exception as e:  # noqa: BLE001 - deliberately broad, see module docstring
-                last_exc = e
-                if attempt == MAX_ATTEMPTS:
-                    break
-                wait = BACKOFF_SECONDS * attempt
-                print(f"[retry] {label} attempt {attempt}/{MAX_ATTEMPTS} failed "
-                      f"({type(e).__name__}: {e}); retrying in {wait}s")
-                time.sleep(wait)
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            return asyncio.run(coro_fn())
+        except Exception as e:  # noqa: BLE001 - deliberately broad, see module docstring
+            last_exc = e
+            if attempt == MAX_ATTEMPTS:
+                break
+            wait = BACKOFF_SECONDS * attempt
+            print(f"[retry] {label} attempt {attempt}/{MAX_ATTEMPTS} failed "
+                  f"({type(e).__name__}: {e}); retrying in {wait}s")
+            time.sleep(wait)
     assert last_exc is not None
     raise last_exc

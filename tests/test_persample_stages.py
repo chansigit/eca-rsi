@@ -24,10 +24,6 @@ def test_released_unit_is_verified_without_rewriting_orchestration(tmp_path, mon
     for _ in range(2):
         assert osp_dispatch.main([str(tmp_path)]) == 0
         assert record.read_text() == '{"started_at": 123}'
-    import subprocess
-    subprocess.run([sys.executable, '-P', '-m', 'ecarsi.driver_python', '-P', '-m', 'ecarsi',
-                    'persample', str(tmp_path)], check=True, capture_output=True, timeout=30)
-    assert record.read_text() == '{"started_at": 123}'
     final.write_bytes(b'changed')
     with pytest.raises(ValueError, match='completed output changed'):
         osp_dispatch.main([str(tmp_path)])

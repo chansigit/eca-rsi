@@ -53,12 +53,11 @@ def test_fleet_http_never_scans_on_cold_or_stale_cache(tmp_path, monkeypatch):
         raise AssertionError('request performed a synchronous dataset scan')
     monkeypatch.setattr(serve, '_dataset_state', forbidden)
     monkeypatch.setattr(serve.index, 'collection_of', forbidden)
-    monkeypatch.setattr('ecarsi.workflow_web.render', forbidden)
     httpd = http.server.ThreadingHTTPServer(('127.0.0.1', 0), partial(serve.Handler, registry=reg, states=cache))
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     try:
         base = f'http://127.0.0.1:{httpd.server_address[1]}'
-        for path in ['/', '/_home', '/_history.json', '/_workflows/status.json']:
+        for path in ['/', '/_home', '/_history.json']:
             with urllib.request.urlopen(base+path, timeout=2) as response:
                 assert response.status == 200
                 body = response.read()
@@ -88,39 +87,6 @@ def test_cached_registry_and_saved_states_survive_slow_refresh(tmp_path, monkeyp
     assert restored.get(root)['cached_at'] is not None
 
 
-def test_background_batch_monitor_never_reads_on_request(monkeypatch):
-    from types import SimpleNamespace
-    from ecarsi import batch
-    starts = []
-    monkeypatch.setattr(batch, '_monitor_background', None)
-    def forbidden():
-        raise AssertionError('request scanned the whole task queue')
-    monkeypatch.setattr(batch, '_read_monitor', forbidden)
-    monkeypatch.setattr(threading, 'Thread', lambda **kw: SimpleNamespace(start=lambda: starts.append(kw['target'])))
-    ready = batch.start_monitor()
-    assert batch.start_monitor() is ready and not ready.is_set()
-    assert len(starts) == 1
-    assert batch.monitor() == dict(datasets=[], nodes={}, by_mirror={})
-    last = dict(datasets=[{'state': 'running'}], nodes={}, by_mirror={})
-    batch._monitor_background = last
-    assert batch.monitor() is last
-
-
-def test_state_warmer_waits_for_initial_queue_snapshot(monkeypatch):
-    from types import SimpleNamespace
-    targets, reads = [], []
-    monkeypatch.setattr(threading, 'Thread', lambda **kw: SimpleNamespace(start=lambda: targets.append(kw['target'])))
-    cache = serve.StateCache(_Reg({}))
-    monkeypatch.setattr(cache, 'refresh', lambda: reads.append(True))
-    class PendingSnapshot(Exception):
-        pass
-    def wait():
-        raise PendingSnapshot
-    cache.start(SimpleNamespace(wait=wait))
-    for target in targets:
-        with pytest.raises(PendingSnapshot):
-            target()
-    assert not reads
 
 
 def test_rendered_pages_are_gzipped_when_accepted(tmp_path):

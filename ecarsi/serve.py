@@ -85,7 +85,7 @@ def default_registry() -> Path:
 
 def _check_dataset(path: Path) -> Path:
     path = Path(path)
-    if not (L.is_root(path) or L.is_unit(path) or index.submission(path)):
+    if not (L.is_root(path) or L.is_unit(path)):
         raise ValueError(
             f"{path} is neither an organize root nor a unit dir (see ecarsi.layout)"
         )
@@ -394,7 +394,7 @@ def _dataset_state(root: Path) -> dict:
     """Per-dataset summary read from disk (ecarsi.index), for the navigator / list."""
     blank = {"units": 0, "released": 0, "n_input": None, "final_cells": None, "rounds": 0, "species": "",
              "finished": None, "updated": None, "events": {"organize": [], "release": []}}
-    if not root.is_dir() and not index.submission(root):
+    if not root.is_dir():
         return {**blank, "stage": "missing on disk", "cls": "failed"}
     try:
         return index.dataset_state(root)
@@ -409,8 +409,6 @@ class StateCache:
         self._registry, self._ttl = registry, ttl
         self._states: dict[Path, tuple[float, dict]] = {}
         self._lock = threading.Lock()
-        self._workflow_html = '<p class="muted">Loading workflow activity…</p>'
-        self._workflow_at = None
         self._cache_file = cache_file
         self._save_lock = threading.Lock()
         self._last_saved = 0
@@ -457,10 +455,8 @@ class StateCache:
             for gone in set(self._states) - roots:
                 del self._states[gone]
 
-    def start(self, ready=None) -> None:
+    def start(self) -> None:
         def loop():
-            if ready is not None:
-                ready.wait()  # do not replace cached queue states with startup guesses
             while True:
                 try:
                     self.refresh()
@@ -469,22 +465,6 @@ class StateCache:
                 time.sleep(self._ttl)
 
         threading.Thread(target=loop, daemon=True, name="state-warmer").start()
-        def workflows():
-            from .workflow_web import render
-            if ready is not None:
-                ready.wait()
-            while True:
-                try:
-                    value = render()
-                    self._workflow_html, self._workflow_at = value, time.time()
-                except Exception as exc:
-                    sys.stderr.write(f'[serve] workflow refresh: {exc}\n')
-                time.sleep(5)
-        threading.Thread(target=workflows, daemon=True, name='workflow-warmer').start()
-
-    def workflow(self):
-        age = f'Last data refresh: {index._when(self._workflow_at)}.' if self._workflow_at else 'Waiting for the first data refresh.'
-        return f'<p class="muted">{age}</p>'+self._workflow_html
 
 
 NAV_CSS = """
@@ -820,11 +800,10 @@ HOME_JS = r"""
 """
 
 
-def _home_html(items: dict[str, Path], state=_dataset_state, workflow_html=None) -> str:
+def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
     """Overview: what this site is, fleet numbers, and a filterable, sortable
     table of every dataset. This is the page `/` opens."""
     import time
-    from .workflow_web import render as workflow_activity
 
     e = _h.escape
     states = {name: (state(p), p) for name, p in items.items()}
@@ -884,9 +863,6 @@ def _home_html(items: dict[str, Path], state=_dataset_state, workflow_html=None)
         '<p class="next">Pick a dataset in the table or the sidebar. Green = released, amber = still running, red = failed.</p></header>'
         f'{freshness}<div class="glance">{stat_html(stats)}</div>'
         f'<div class="glance cell-glance" aria-label="Cell counts">{stat_html(cell_stats)}</div>'
-        '<section class="block" id="workflows"><h2>Workflow activity</h2>'
-        f'<div id="workflow-status">{workflow_activity() if workflow_html is None else workflow_html}</div>'
-        '<p class="muted" id="workflow-refresh">Refreshes every 5 seconds.</p></section>'
         '<section class="block" id="history"><h2>Cells over time <span class="count" id="hist-n"></span></h2>'
         '<p class="lede">Cells in and this curve count cells at their recorded organize step; queued inputs are shown separately as Cells awaiting start. '
         'Cells released counts recorded releases, including released units of a dataset still running. '
@@ -903,13 +879,7 @@ def _home_html(items: dict[str, Path], state=_dataset_state, workflow_html=None)
         f"{table}</section>"
         f'<footer>rendered {time.strftime("%Y-%m-%d %H:%M:%S")} by {APP} (ecarsi serve) from the registry · reload for the current state</footer>'
         f"</main><script>const HISTORY_DATA = {json.dumps(history)};</script>"
-        f"<script>{HOME_JS}</script><script>{HISTORY_JS}</script>"
-        "<script>(async function refreshWorkflows(){try{const r=await fetch('/_workflows/status.json',"
-        "{cache:'no-store',signal:AbortSignal.timeout(8000)});if(!r.ok)throw Error(r.status);"
-        "document.getElementById('workflow-status').innerHTML=(await r.json()).html;"
-        "document.getElementById('workflow-refresh').textContent='Updated '+new Date().toLocaleTimeString()+' · refreshes every 5 seconds';}"
-        "catch(e){document.getElementById('workflow-refresh').textContent='Refresh failed · showing last received data · retrying';}"
-        "setTimeout(refreshWorkflows,5000);})();</script></body></html>"
+        f"<script>{HOME_JS}</script><script>{HISTORY_JS}</script></body></html>"
     )
 
 
@@ -986,7 +956,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def _send(self, code: int, body: bytes, ctype: str) -> None:
         self.send_response(code)
         self.send_header("Content-Type", ctype)
-        if urllib.parse.unquote(self.path).startswith(("/_pool", "/_models", "/_workflows")):
+        if urllib.parse.unquote(self.path).startswith(("/_pool", "/_models")):
             self.send_header("Cache-Control", "no-store")
         if len(body) > 1024 and "gzip" in self.headers.get("Accept-Encoding", ""):
             body = gzip.compress(body, 5)  # rendered pages are 80-450 KB of HTML and compress ~5x; matters through the tunnel
@@ -1084,9 +1054,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if not self._authorized():
             return self._demand_auth()
         raw = self.path.split("?", 1)[0]
-        if raw == "/_workflows/status.json":
-            from .workflow_web import render
-            return self._json(200, {"html": self._states.workflow() if self._states else render()})
         if raw == "/_models/status.json":
             from . import model_web
             try:
@@ -1106,8 +1073,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._json(503, {"error": "Warm pool is not running or cannot be reached"})
             return self._json(200, state)
         if raw == "/_home":
-            return self._html(_home_html(self._items(), self._state,
-                                        self._states.workflow() if self._states else None))
+            return self._html(_home_html(self._items(), self._state))
         if raw == "/_history.json":  # the curve's data; ?at=YYYY-MM-DDTHH:MM (or epoch) reads it at one moment
             hist = fleet_history({n: (self._state(p), p) for n, p in self._items().items()})
             at = urllib.parse.parse_qs(self.path.partition("?")[2]).get("at")
@@ -1135,8 +1101,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 explain=f"no dataset bound as {name!r}; see the navigator at /",
             )
         if not root.is_dir():
-            if index.submission(root) and parts[1:] in ([], [L.INDEX]):
-                return self._html(index.render_root(root, name))
             return self.send_error(
                 404,
                 "dataset missing",
@@ -1226,8 +1190,6 @@ def start_ngrok(port: int, domain: str | None) -> tuple[subprocess.Popen, str]:
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
-    from .batch import start_monitor
-    monitor_ready = start_monitor()
     from .pool_web import start_averages
     start_averages()
     reg_path = Path(args.registry).expanduser().resolve()
@@ -1250,7 +1212,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     registry.start()
     cache_key = hashlib.sha256(str(reg_path).encode()).hexdigest()[:16]
     states = StateCache(registry, cache_file=Path.home()/'.cache/ecarsi-periscope'/f'{cache_key}.json')
-    states.start(monitor_ready)
+    states.start()
     httpd = http.server.ThreadingHTTPServer(
         (args.bind, args.port), partial(Handler, registry=registry, auth=args.auth, states=states,
                                       pool_scheduler=args.pool_scheduler)

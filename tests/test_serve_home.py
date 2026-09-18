@@ -12,7 +12,7 @@ def test_cell_row_compacts_inputs_but_keeps_releases_exact(monkeypatch, count, d
     from ecarsi import serve
     monkeypatch.setattr(serve, 'fleet_totals', lambda _: dict(cells_in=count, cells_queued=count,
         cells_released=count, kept=None, undated_input=0))
-    html = _home_html({}, workflow_html='')
+    html = _home_html({})
     row = html.split('aria-label="Cell counts">', 1)[1].split('<section', 1)[0]
     assert 'data-stat="datasets"' not in row
     for key in ('cells-in', 'cells-queued'):
