@@ -261,7 +261,8 @@ function windowNow() {
   return {since:view.since,until:view.until};
 }
 function setWindow(w) {
-  const now=Date.now()/1000, since=Math.max(now-MAX_SPAN,Math.min(w.since,w.until-30)), until=Math.min(now,w.until);
+  const now=Date.now()/1000, since=Math.max(now-MAX_SPAN,Math.min(w.since,w.until-30));
+  const until=Math.min(now,Math.max(w.until,since+30));   // a pan past the 7-day cap must not invert the window
   if (until>=now-2 && view.span==='all' && since<=now-MAX_SPAN+1) { view.live=true; }
   else if (until>=now-2) { view.live=true; view.span=Math.round(until-since); }
   else { view.live=false; view.since=since; view.until=until; }
@@ -403,10 +404,33 @@ $('timeline').addEventListener('wheel',event=>{
   event.preventDefault();
   const rect=track.getBoundingClientRect();
   setWindow(zoomWindow(currentTimelineWindow,Math.max(0,Math.min(1,(event.clientX-rect.left)/rect.width)),event.deltaY));
-  clearTimeout(zoomTimer);
-  ++refreshSeq;
-  zoomTimer=setTimeout(refresh,140);
+  navigated();
 },{passive:false});
+function displayWindow() {
+  return !view.live && Number.isFinite(view.since) ? {since:view.since,until:view.until}
+       : fullTimeline?.framed || windowNow();
+}
+function renderWindow() {
+  // Zoom and pan redraw from the tasks already in the browser — a fetch per wheel notch made every
+  // notch cost a server walk. The window is only re-fetched when the loaded set cannot answer it.
+  if (!fullTimeline) return;
+  const {since,until}=displayWindow();
+  const tasks=fullTimeline.tasks.filter(t=>t.submitted_at<=until && (t.finished_at??Infinity)>=since);
+  const resources=(fullTimeline.resources||[]).filter(r=>r.observed_at>=since && r.observed_at<=until);
+  const data={...fullTimeline,since,until,tasks,resources,total:tasks.length,
+              truncated:fullTimeline.truncated && tasks.length<fullTimeline.total};
+  renderTimeline(data); renderResourceHistory(data);
+}
+function needsFetch() {
+  if (!loaded) return true;
+  const {since,until}=displayWindow();
+  return since<loaded.since-1 || until>loaded.until+1 || loaded.truncated;
+}
+function navigated() {  // after a zoom, pan, selection or framing
+  renderWindow();
+  clearTimeout(zoomTimer);
+  if (needsFetch()) zoomTimer=setTimeout(refresh,400);
+}
 function resetTimelineView() { view.live=true; view.span='all'; syncControls(); writeHash(); }
 // Drag on a track pans; drag on the axis selects a window; a click on a bar frames its stage run.
 (function(){
@@ -446,7 +470,7 @@ function resetTimelineView() { view.live=true; view.span='all'; syncControls(); 
       const a=timeAtFraction(since,until,f(Math.min(d.x0,event.clientX))), b=timeAtFraction(since,until,f(Math.max(d.x0,event.clientX)));
       if (b-a>=30) setWindow({since:a,until:b});
     }
-    refresh();
+    navigated();
   };
   root.addEventListener('pointerup',finish); root.addEventListener('pointercancel',()=>{ if(drag){drag.box?.remove();drag=null;for(const t of root.querySelectorAll('.timeline-track,.timeline-flow'))t.style.transform='';} });
 })();
@@ -474,11 +498,11 @@ function idleNote(data) {
   return data.idle_seconds?` Nothing has run for ${duration(data.idle_seconds)}; the axis ends after the last task instead of at the clock.`:'';
 }
 function frameWorkflow(workflowId) {
-  const now=Date.now()/1000, tasks=(timelineData?.tasks||[]).filter(t=>t.trace?.workflow_id===workflowId);
+  const now=Date.now()/1000, tasks=(fullTimeline?.tasks||[]).filter(t=>t.trace?.workflow_id===workflowId);
   if (!tasks.length) return;
   const since=Math.min(...tasks.map(t=>t.started_at||t.submitted_at)), until=Math.max(...tasks.map(t=>t.finished_at||now));
   const pad=Math.max(30,(until-since)*.05);
-  setWindow({since:since-pad,until:until+pad}); refresh();
+  setWindow({since:since-pad,until:until+pad}); navigated();
 }
 function renderFailures(items) {
   const list=$('failure-list'); $('failure-count').textContent=items.length?`(${items.length})`:'';
@@ -487,14 +511,14 @@ function renderFailures(items) {
     const button=event.target.closest?.('[data-failure]'); if (!button) return;
     const f=items[Number(button.dataset.failure)], now=Date.now()/1000;
     $('timeline-dataset').value=f.dataset||''; $('timeline-view').value='workers';
-    setWindow({since:f.at-1800,until:Math.min(now,f.at+300)}); refresh();
+    setWindow({since:f.at-1800,until:Math.min(now,f.at+300)}); navigated();
   };
 }
-$('timeline').addEventListener('dblclick',event=>{ event.preventDefault(); resetTimelineView(); refresh(); });
+$('timeline').addEventListener('dblclick',event=>{ event.preventDefault(); resetTimelineView(); navigated(); });
 document.querySelector('.timeline-spans').addEventListener('click',event=>{ const b=event.target.closest?.('[data-span]'); if(!b)return; view.live=true; view.span=b.dataset.span==='all'?'all':Number(b.dataset.span); syncControls(); writeHash(); refresh(); });
 $('timeline-live').addEventListener('click',()=>{ if (!view.live) { const span=view.until-view.since; view.live=true; view.span=span>=MAX_SPAN-60?'all':Math.round(span); } syncControls(); writeHash(); refresh(); });
 let datasetTimer; $('timeline-dataset').addEventListener('input',()=>{ clearTimeout(datasetTimer); datasetTimer=setTimeout(()=>{ datasetPage=0; writeHash(); refresh(); },400); });
-let timelineData=null, selectedStep=null, datasetPage=0, detailLimit=80;
+let timelineData=null, fullTimeline=null, loaded=null, selectedStep=null, datasetPage=0, detailLimit=80;
 const expandedRuns=new Set(), collapsedDatasets=new Set();
 let initializedFlow=false;
 const stageNames={'organize':'Organize','persample':'Per-sample','per-sample':'Per-sample','cross-sample':'Cross-sample','zoom-in':'Zoom-in','dataset':'Release'};
@@ -611,11 +635,11 @@ function renderTimeline(data) {
     $('flow-pages').innerHTML='';$('flow-detail').hidden=true;$('flow-layout').className='flow-layout';renderWorkerTimeline(data);
   } else renderDatasetTimeline(data);
 }
-$('timeline-view').addEventListener('change',()=>{datasetPage=0;if(timelineData)renderTimeline(timelineData);refresh();});
+$('timeline-view').addEventListener('change',()=>{datasetPage=0;renderWindow();refresh();});
 try { if (localStorage.getItem('observatory.logTime')==='0') $('timeline-log').checked=false; } catch (e) {}
 $('timeline-log').addEventListener('change',()=>{
   try { localStorage.setItem('observatory.logTime',$('timeline-log').checked?'1':'0'); } catch (e) {}
-  writeHash(); if (timelineData) { renderTimeline(timelineData); renderResourceHistory(timelineData); }
+  writeHash(); renderWindow();
 });
 $('timeline-view').addEventListener('change',writeHash);
 $('timeline').addEventListener('click',event=>{
@@ -729,7 +753,7 @@ function renderResourceHistory(data) {
   $('resource-history').innerHTML=resourceRows.size?chart:'<div class="empty">No resource samples in this window</div>';
 }
 
-let refreshSeq=0, timelineSignature='', resourceSignature='';
+let refreshSeq=0, timelineSignature='';
 function poolMeter(label, value, mean, detail='') {
   const valid=Number.isFinite(value), averaged=Number.isFinite(mean);
   const pct=x=>Math.max(0,Math.min(100,x));
@@ -791,13 +815,13 @@ async function refresh() {
       if (!timelineResponse.ok) throw new Error(`Timeline HTTP ${timelineResponse.status}`);
       const timeline=await timelineResponse.json();
       if (seq!==refreshSeq) return;
+      loaded={since,until,truncated:timeline.truncated};
       frameActivity(timeline,all?(d.earliest_activity??Infinity):Infinity);
+      timeline.framed={since:timeline.since,until:timeline.until};
       const {resources,...taskData}=timeline;
-      const signature=JSON.stringify(taskData);
-      if (signature!==timelineSignature) { renderTimeline(timeline); timelineSignature=signature; }
+      const signature=JSON.stringify(taskData)+String(view.live?0:view.since)+String(view.live?0:view.until);
+      if (signature!==timelineSignature) { fullTimeline=timeline; renderWindow(); timelineSignature=signature; }
       if (timeline.indexing) { $('timeline-state').textContent='Indexing older history…'; $('timeline-state').className='status off'; }
-      const resourceKey=JSON.stringify([timeline.since,timeline.until,resources]);
-      if (resourceKey!==resourceSignature) { renderResourceHistory(timeline); resourceSignature=resourceKey; }
     }
   } catch(e) { if (seq===refreshSeq) $('updated').textContent=`Unavailable: ${e.message}`; }
   finally { if (seq===refreshSeq) setLoading(false); }
