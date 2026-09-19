@@ -540,8 +540,174 @@ def _round_started_after(log: list[tuple[str, str]], n: int) -> tuple[int, str] 
     return None
 
 
+
+# ---------------------------------------------- generation 2 (durable control plane)
+# A gen-2 run records its state in publication.json files instead of progress.log / stats.txt /
+# decision.txt, and keeps its computed artefacts in the Pool's request folders; only release/ is
+# copied into the unit. These readers return the state a gen-1 unit returns, so one navigator lists
+# both generations and the release sections (ledger, sankey, UMAP, needs review) are shared.
+
+def _gen2_rounds(unit: Path) -> list[dict]:
+    out = []
+    for rdir in sorted((unit / L.ROUNDS).glob("round*")):
+        record = _json(rdir / L.GEN2_PUBLICATION, {})
+        stats = record.get("stats") or {}
+        row = {"n": record.get("round") or L.round_number(rdir), "dir": rdir, "stats": None, "decision": None,
+               "step": None, "reason": stats.get("reason", ""), "msp_report": False, "zmip_report": False, "sankey": False}
+        if stats:
+            row["stats"] = {k: stats.get(k) for k in ("n_in", "n_out", "removed", "frac")}
+            row["decision"] = stats.get("decision")
+        else:
+            cross = _json(rdir / L.GEN2_CROSS / L.GEN2_PUBLICATION, {})
+            zoom = _json(rdir / L.GEN2_ZOOM / L.GEN2_PUBLICATION, {})
+            row["step"] = ("zoom-in done, deciding" if zoom else "zoom-in" if cross
+                           else "cross-sample" if (rdir / L.GEN2_CROSS).is_dir() else "starting")
+            if cross:
+                row["n_in"] = cross.get("n_input")
+        out.append(row)
+    return out
+
+
+def _gen2_unit_state(unit: Path) -> dict:
+    published = _json(unit / L.GEN2_PUBLICATION, {})
+    per = _json(unit / L.GEN2_PERSAMPLE / L.GEN2_PUBLICATION, {})
+    manifest = _json(unit.parent.parent / L.GEN2_ORGANIZE / L.UNITS / unit.name / L.INPUT / L.MANIFEST, {})
+    rounds = _gen2_rounds(unit)
+    release = L.release_dir(unit)
+    released = (release / "receipt.json").is_file()
+    done = [r for r in rounds if r["stats"]]
+    failed_samples = per.get("failed_samples") or []
+    skipped = per.get("skipped_samples") or []
+    # A unit's own failure is recorded by the dataset that waited for it, not inside the unit.
+    dataset = _json(unit.parent.parent / L.GEN2_PUBLICATION, {})
+    failure = next((f for f in dataset.get("failed_units", []) if f.get("unit") == unit.name), None)
+    if released:
+        stage, cls = f"released after {len(rounds)} round(s)", "released"
+    elif failure:
+        stage, cls = f"failed — {failure.get('error', '')}"[:120], "failed"
+    elif failed_samples:
+        stage, cls = f"{len(failed_samples)} sample(s) failed", "failed"
+    elif rounds and rounds[-1]["stats"] is None:
+        stage, cls = f"round {rounds[-1]['n']} · {rounds[-1]['step']}", "running"
+    elif rounds:
+        stage, cls = f"round {rounds[-1]['n']} done, next round pending", "running"
+    elif per:
+        stage, cls = ("per-sample done, first round pending" if per.get("state") == "complete"
+                      else f"per-sample {len(per.get('samples', []))} sample(s)"), "running"
+    else:
+        stage, cls = "organized, per-sample not started", "running"
+    n_input = published.get("n_input") or per.get("n_input") or manifest.get("n_cells")
+    final_cells = published.get("n_survived") if released else (done[-1]["stats"]["n_out"] if done else None)
+    events = {"organize": None, "release": None}
+    organized = unit.parent.parent / L.GEN2_ORGANIZE / L.GEN2_PUBLICATION
+    if organized.is_file() and n_input:
+        events["organize"] = (organized.stat().st_mtime, n_input)
+    if released and final_cells is not None:
+        events["release"] = ((release / "receipt.json").stat().st_mtime, final_cells)
+    return {"name": unit.name, "dir": unit, "generation": 2, "n_input": n_input,
+            "species": manifest.get("species") or "",
+            "finished": _when(events["release"][0]) if events["release"] else None,
+            "persample": {"manifest": bool(per), "n": len(per.get("samples", [])) + len(failed_samples),
+                          "n_done": len(per.get("samples", [])), "done": per.get("state") == "complete",
+                          "samples": [], "species": manifest.get("species"), "sample_column": None,
+                          "n_excluded": per.get("n_removed"), "skipped": skipped, "failed": failed_samples},
+            "rounds": rounds, "released": released, "stage": stage, "stage_class": cls,
+            "last_event": published.get("reason", "") or (rounds[-1]["reason"] if rounds else ""),
+            "final_cells": final_cells,
+            "output_h5ad": (release / "final.h5ad") if (release / "final.h5ad").is_file() else None,
+            "output_note": "final" if released else "", "sample_decisions": {},
+            "forced": bool(published.get("forced_release")), "events": events}
+
+
+def _gen2_unit_body(unit: Path, s: dict, base: str = "") -> str:
+    e = _h.escape
+    release = L.release_dir(unit)
+    items = review.from_json(release / "needs_review.json") if (release / "needs_review.json").is_file() else []
+    done = [r for r in s["rounds"] if r["stats"]]
+    n_in, n_fin = s["n_input"], s["final_cells"]
+    removed_frac = (1 - n_fin / n_in) if n_in and n_fin is not None else None
+    per = s["persample"]
+    glance = [
+        _stat(_n(n_in) or "–", "input cells", e(str(s["species"] or ""))),
+        _stat(_n(n_fin) or "–", "final cells" if s["released"] else "cells now",
+              "" if s["released"] or n_fin is None else "after the last finished round"),
+        _stat(_pct(removed_frac) if removed_frac is not None else "–", "removed overall",
+              "QC, excluded samples and rounds", "tone-bad" if removed_frac and removed_frac > 0.3 else ""),
+        _stat(str(len(done)) + (" <small>+1 running</small>" if s["rounds"] and not s["rounds"][-1]["stats"] else ""), "rounds"),
+        _stat(f'{per["n_done"]}/{per["n"]}' if per["n"] else "–", "samples annotated",
+              f'{len(per["skipped"])} skipped' if per["skipped"] else ""),
+        _stat(str(len(items)), "needs review", "items, see below" if items else "nothing so far",
+              "tone-warn" if items else ""),
+    ]
+    sections = (("files", "Files"), ("rounds", "Rounds"), ("sankey", "Cell identity"),
+                ("umap", "Final UMAP"), ("review", "Needs review"))
+    parts = ['<div class="glance">' + "".join(glance) + "</div>",
+             '<nav class="jump" aria-label="sections">'
+             + "".join(f'<a href="#{k}">{t}</a>' for k, t in sections) + "</nav>"]
+    files = []
+    if s["released"]:
+        for name, what in (("summary.json", "what happened, round by round"),
+                           ("needs_review.md", "the review items below, as text"),
+                           ("needs_review.json", "same, machine-readable"),
+                           ("cell_ledger.csv.gz", "one row per input cell: status and labels per stage"),
+                           ("cell_exclusions.csv.gz", "every removal with its reason"),
+                           ("final.h5ad", "the released matrix"),
+                           ("umap.json", "final embedding and labels behind the UMAP panels")):
+            if (release / name).is_file():
+                files.append((name, f'<a href="{base}{L.RELEASE}/{name}">{name}</a> <span class="muted">{what}</span>'))
+    parts.append('<section class="block" id="files"><h2>Files</h2>'
+                 "<p class=\"lede\">A generation-2 run keeps its computed artefacts in the warm pool's request folders, "
+                 'each referenced by the publication that accepted it; the unit directory holds those publications and, '
+                 'once released, the copied release.</p>'
+                 + ('<dl class="files">' + "".join(f"<dt>{e(k)}</dt><dd>{v}</dd>" for k, v in files) + "</dl>"
+                    if files else '<p class="empty">No release yet: the loop has not converged.</p>') + "</section>")
+    rows = []
+    for r in s["rounds"]:
+        stats = r["stats"] or {}
+        rows.append(f'<tr><td>{r["n"]}</td><td class="num">{_n(stats.get("n_in") or r.get("n_in"))}</td>'
+                    f'<td class="num">{_n(stats.get("n_out"))}</td><td class="num">{_n(stats.get("removed"))}</td>'
+                    f'<td class="num">{_pct(stats.get("frac")) if stats.get("frac") is not None else ""}</td>'
+                    f'<td>{e(str(r["decision"] or r["step"] or ""))}</td>'
+                    f'<td class="muted">{e(str(r.get("reason") or ""))}</td></tr>')
+    parts.append('<section class="block" id="rounds"><h2>Rounds '
+                 f'<span class="count">{len(done)} finished</span></h2>'
+                 '<p class="lede">Each round integrates the survivors again, annotates them and zooms into lineages; '
+                 'the decision and its reason come from the recorded round policy.</p>'
+                 + ('<div class="wrap"><table><thead><tr><th>round</th><th class="r">cells in</th>'
+                    '<th class="r">cells out</th><th class="r">removed</th><th class="r">%</th>'
+                    '<th>decision</th><th>reason</th></tr></thead>'
+                    f'<tbody>{"".join(rows)}</tbody></table></div>' if rows else '<p class="empty">No round has started.</p>')
+                 + "</section>")
+    if per["skipped"] or per["failed"]:
+        detail = "".join(f'<li><b>{e(str(x.get("sample", "")))}</b> {e(str(x.get("error", ""))[:200])}</li>'
+                         for x in list(per["skipped"]) + list(per["failed"]))
+        parts.append('<section class="block"><h2>Samples needing attention</h2><ul class="warn">' + detail + "</ul></section>")
+    sankey = release / "sankey.json"
+    if sankey.is_file():
+        data = sankey.read_text(encoding="utf-8").replace("<", "\\u003c")
+        parts.append('<section class="block" id="sankey"><h2>Cell identity across steps and rounds '
+                     f'<span class="count">coarse labels</span></h2><p class="lede">{EXPLAIN["sankey"]}</p>'
+                     f'<div id="sankey-vis" class="wrap"></div><script>const SANKEY_DATA = {data};{SANKEY_JS}</script></section>')
+    umap = release / "umap.json"
+    if umap.is_file():
+        data = umap.read_text(encoding="utf-8").replace("<", "\\u003c")
+        parts.append('<section class="block" id="umap"><h2>Final UMAP '
+                     '<span class="count">every released cell · coarse and fine labels</span></h2>'
+                     f'<p class="lede">{EXPLAIN["umap"]}</p><div id="umap-vis">'
+                     f'<p class="umap-status">loading {base}{L.RELEASE}/umap.json… (JavaScript required)</p>'
+                     '<div class="umap-row"></div></div>'
+                     f'<script type="application/json" id="umap-data">{data}</script><script>{UMAP_JS}</script></section>')
+    counts = review.counts(items)
+    brief = " · ".join(f"{n} {t.lower()}" for _, t, n, _ in counts) if counts else "nothing to review"
+    parts.append(f'<section class="block" id="review"><h2>Needs review <span class="count">{len(items)} items — {e(brief)}</span></h2>'
+                 f'<p class="lede">{EXPLAIN["review"]}</p>' + review.to_html(items, base) + "</section>")
+    return "".join(parts)
+
+
 def unit_state(unit: Path) -> dict:
     """Everything the pages need, read from disk."""
+    if L.is_gen2_unit(unit):
+        return _gen2_unit_state(unit)
     im = _json(L.input_manifest(unit), {})
     ps = persample_state(unit)
     rounds = rounds_state(unit)
@@ -648,7 +814,7 @@ def dataset_state(root: Path, states: list[dict] | None = None) -> dict:
     """Aggregate of a run root (or a unit bound on its own) for the fleet
     pages; `states` = unit_state() per unit when the caller already has them."""
     if states is None:
-        states = [unit_state(u) for u in ([root] if L.is_unit(root) else L.units(root))]
+        states = [unit_state(u) for u in ([root] if L.is_unit(root) or L.is_gen2_unit(root) else L.units(root))]
     released = sum(1 for s in states if s["released"])
     final = [s["final_cells"] for s in states if s["final_cells"] is not None]
     n_in = [s["n_input"] for s in states if s["n_input"] is not None]
@@ -864,7 +1030,8 @@ def render_unit(unit: Path, dataset: str | None = None) -> str:
     crumb = f'<div class="crumb"><a href="../../{L.INDEX}">{e(ds)}</a> / {L.UNITS} / {e(s["name"])}</div>' if root else ""
     hero = _hero(s["stage_class"], s["stage"], s["name"], crumb, (f"analysis unit of <b>{e(ds)}</b> · " if ds else "") + f'<code class="path">{e(str(unit))}</code>',
                  _unit_facts(s), "Start with the numbers below, then the final UMAP; Needs review lists what the agents were unsure about.")
-    return _page(f"{s['name']} — {ds} · eca-rsi" if root else f"{s['name']} — eca-rsi unit", unit, hero + _unit_body(unit, s))
+    body = _gen2_unit_body(unit, s) if s.get("generation") == 2 else _unit_body(unit, s)
+    return _page(f"{s['name']} — {ds} · eca-rsi" if root else f"{s['name']} — eca-rsi unit", unit, hero + body)
 
 
 # ---------------------------------------------------------------- root page
@@ -873,7 +1040,8 @@ def render_root(root: Path, name: str | None = None) -> str:
     """A run root; `name` is the name it is served under. With exactly one
     unit its whole content is shown inline, so the page is never a dead end."""
     e = _h.escape
-    om = _json(L.organize_manifest(root), {})
+    manifest_path = L.gen2_organize_manifest(root) if L.is_gen2_root(root) else L.organize_manifest(root)
+    om = _json(manifest_path, {})
     units = L.units(root)
     states = [unit_state(u) for u in units]
     ds = dataset_state(root, states)
@@ -888,7 +1056,8 @@ def render_root(root: Path, name: str | None = None) -> str:
         next_ = (f'This run has one analysis unit, <b>{e(u.name)}</b>, shown below in full '
                  f'(<a href="{L.UNITS}/{e(u.name)}/{L.INDEX}">open it on its own page</a>). '
                  "Start with the numbers, then the final UMAP; Needs review lists what the agents were unsure about.")
-        body = _hero(ds["cls"], ds["stage"], title, "", sub, facts, next_) + _unit_body(u, s, f"{L.UNITS}/{e(u.name)}/")
+        inline = _gen2_unit_body if s.get("generation") == 2 else _unit_body
+        body = _hero(ds["cls"], ds["stage"], title, "", sub, facts, next_) + inline(u, s, f"{L.UNITS}/{e(u.name)}/")
     else:
         rows = []
         for u, s in zip(units, states):
@@ -911,7 +1080,7 @@ def render_root(root: Path, name: str | None = None) -> str:
         extra.append('<div class="callout tone-warn"><b>organize warnings</b><ul class="warn">'
                      + "".join(f"<li>{e(w)}</li>" for w in om["warnings"]) + "</ul></div>")
     if om:
-        extra.append(f'<p class="muted">Organize plan and cell-conservation audit: <a href="{L.ORGANIZE}/{L.MANIFEST}">{L.ORGANIZE}/{L.MANIFEST}</a>'
+        extra.append(f'<p class="muted">Organize plan and cell-conservation audit: <a href="{manifest_path.relative_to(root).as_posix()}">{manifest_path.relative_to(root).as_posix()}</a>'
                      + (f' · input units from eca-pp: {e(", ".join(u["name"] for u in om.get("input_units", [])))}' if om.get("input_units") else "") + "</p>")
     return _page(f"{title} — eca-rsi run", root, body + "".join(extra))
 
@@ -920,7 +1089,10 @@ def render_root(root: Path, name: str | None = None) -> str:
 # last changed" — and, since ecarsi.mirror copies with mtimes, how fresh a copy is
 STATE_GLOBS = (L.PROGRESS, f"{L.UNITS}/*/{L.PROGRESS}", f"{L.ORGANIZE}/{L.MANIFEST}", f"{L.INPUT}/{L.MANIFEST}",
                f"{L.PERSAMPLE}/{L.MANIFEST}", f"{L.PERSAMPLE}/*/{L.RUN_STATE}", f"{L.ROUNDS}/*/{L.MANIFEST}",
-               f"{L.ROUNDS}/*/{L.STATS}", f"{L.ROUNDS}/*/{L.DECISION}", f"{L.RELEASE}/summary.json", f"{L.RELEASE}/pruned.json")
+               f"{L.ROUNDS}/*/{L.STATS}", f"{L.ROUNDS}/*/{L.DECISION}", f"{L.RELEASE}/summary.json", f"{L.RELEASE}/pruned.json",
+               L.GEN2_PUBLICATION, f"{L.UNITS}/*/{L.GEN2_PUBLICATION}", f"{L.UNITS}/*/{L.ROUNDS}/*/{L.GEN2_PUBLICATION}",
+               f"{L.UNITS}/*/{L.GEN2_PERSAMPLE}/{L.GEN2_PUBLICATION}", f"{L.RELEASE}/receipt.json",
+               f"{L.UNITS}/*/{L.RELEASE}/receipt.json")
 
 
 def state_mtime(d: Path) -> float | None:

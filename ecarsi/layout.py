@@ -99,9 +99,29 @@ def unit_dir(root: Path, name: str) -> Path:
     return root / UNITS / name
 
 
+# Generation 2 (durable control plane): the same units/<name>/rounds/roundNN skeleton, but the state
+# is in publication.json files, organize is published under 00-organize/ and each stage has its own
+# numbered directory; the computed artefacts stay in the Pool's request folders.
+GEN2_SPEC, GEN2_ORGANIZE, GEN2_PUBLICATION = "spec.json", "00-organize", "publication.json"
+GEN2_PERSAMPLE, GEN2_CROSS, GEN2_ZOOM = "01-per-sample", "02-cross-sample", "03-zoom-in"
+
+
+def is_gen2_root(root: Path) -> bool:
+    return (root / GEN2_SPEC).is_file() and (root / GEN2_ORGANIZE).is_dir()
+
+
+def is_gen2_unit(unit: Path) -> bool:
+    return ((unit / GEN2_PERSAMPLE / GEN2_PUBLICATION).is_file()
+            or ((unit / GEN2_PUBLICATION).is_file() and is_gen2_root(unit.parent.parent)))
+
+
+def gen2_organize_manifest(root: Path) -> Path:
+    return root / GEN2_ORGANIZE / ORGANIZE / MANIFEST
+
+
 def units(root: Path) -> list[Path]:
     ur = units_root(root)
-    return sorted(p for p in ur.iterdir() if p.is_dir() and is_unit(p)) if ur.is_dir() else []
+    return sorted(p for p in ur.iterdir() if p.is_dir() and (is_unit(p) or is_gen2_unit(p))) if ur.is_dir() else []
 
 
 def root_of(unit: Path) -> Path | None:

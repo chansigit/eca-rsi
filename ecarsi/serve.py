@@ -86,7 +86,7 @@ def default_registry() -> Path:
 
 def _check_dataset(path: Path) -> Path:
     path = Path(path)
-    if not (L.is_root(path) or L.is_unit(path)):
+    if not (L.is_root(path) or L.is_unit(path) or L.is_gen2_unit(path)):
         raise ValueError(
             f"{path} is neither an organize root nor a unit dir (see ecarsi.layout)"
         )
