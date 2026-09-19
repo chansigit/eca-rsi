@@ -91,6 +91,7 @@
   .timeline-bar::before { content:""; position:absolute; inset:0 -4px; }
   .timeline-bar:hover,.timeline-bar:focus-visible { outline:2px solid #2d5046; outline-offset:2px; z-index:2; }
   .timeline-bar.failed { outline:2px solid #a4514e; outline-offset:-2px; }
+.timeline-bar.labelled { overflow:hidden; white-space:nowrap; font-size:11px; line-height:25px; padding:0 5px; color:#fff; text-shadow:0 0 2px #0008; box-sizing:border-box; }
   .timeline-flow { position:absolute; inset:0; width:100%; height:100%; z-index:0; pointer-events:none; overflow:visible; }
   .timeline-flow .flow-edge { opacity:max(var(--flow-idle-opacity,.14),var(--edge-min-opacity,0)); transition:opacity .15s; }
   .timeline.flow-focused .flow-edge:not(.flow-active) { opacity:.025; }
@@ -167,7 +168,7 @@
 <body>
 <main>
   <header><div class="brand">RSI <small>v2 / development observatory</small></div><div class="meta"><span><i class="live-dot"></i> Read-only</span><span id="updated">Connecting…</span></div></header>
-  <section class="panel" style="margin-bottom:20px"><div class="panel-head"><div><h2>Workflow timeline</h2><div class="sub">Browse datasets and stage runs. Expand a run to see its steps; select a step for individual calls and worker tasks.</div></div><span class="status off" id="timeline-state">Loading</span></div><div class="timeline-controls"><select id="timeline-view" aria-label="Timeline view"><option value="datasets">Datasets</option><option value="workers">Workers</option></select><select id="timeline-range" aria-label="Time range"><option value="auto">Latest activity</option><option value="3600" selected>Last hour</option><option value="14400">Last 4 hours</option><option value="86400">Last 24 hours</option><option value="custom">Custom</option></select><input id="timeline-from" type="datetime-local" aria-label="From" hidden><input id="timeline-to" type="datetime-local" aria-label="To" hidden><input id="timeline-dataset" type="search" placeholder="Filter dataset…" aria-label="Filter dataset"><button id="timeline-apply" type="button">Apply</button></div><div class="timeline-legend"><span>One color per dataset</span><span><i class="model-key"></i>Model call</span><span><i class="compute-key"></i>Worker task</span><span><i style="background:transparent;border:2px solid #a4514e"></i>Failed task</span><span>Wheel to zoom · Double-click to reset</span></div><div class="flow-layout" id="flow-layout"><div class="timeline-wrap" id="flow-scroll"><div class="timeline" id="timeline"></div></div><aside id="flow-detail" class="flow-detail" aria-label="Selected step details" hidden></aside></div><div id="flow-pages" class="flow-pages"></div><div class="note" id="timeline-note"></div></section>
+  <section class="panel" style="margin-bottom:20px"><div class="panel-head"><div><h2>Worker timeline</h2><div class="sub">One lane per worker: what it ran, for which dataset, when. Stacked bars are concurrent tasks; hover a bar for the task. Switch the view to Datasets for stage runs and their handoffs.</div></div><span class="status off" id="timeline-state">Loading</span></div><div class="timeline-controls"><select id="timeline-view" aria-label="Timeline view"><option value="workers" selected>Workers</option><option value="datasets">Datasets</option></select><select id="timeline-range" aria-label="Time range"><option value="auto">Latest activity</option><option value="3600" selected>Last hour</option><option value="14400">Last 4 hours</option><option value="86400">Last 24 hours</option><option value="custom">Custom</option></select><input id="timeline-from" type="datetime-local" aria-label="From" hidden><input id="timeline-to" type="datetime-local" aria-label="To" hidden><input id="timeline-dataset" type="search" placeholder="Filter dataset…" aria-label="Filter dataset"><button id="timeline-apply" type="button">Apply</button></div><div class="timeline-legend"><span>One color per dataset</span><span><i class="model-key"></i>Model call</span><span><i class="compute-key"></i>Worker task</span><span><i style="background:transparent;border:2px solid #a4514e"></i>Failed task</span><span>Wheel to zoom · Double-click to reset</span></div><div class="flow-layout" id="flow-layout"><div class="timeline-wrap" id="flow-scroll"><div class="timeline" id="timeline"></div></div><aside id="flow-detail" class="flow-detail" aria-label="Selected step details" hidden></aside></div><div id="flow-pages" class="flow-pages"></div><div class="note" id="timeline-note"></div></section>
   <section class="panel" id="compute-pool" style="margin-bottom:20px">
     <div class="panel-head"><div><h2>Compute Warm Pool</h2></div><span id="compute-pool-state" class="status off">Checking</span></div>
     <p id="compute-pool-summary" class="sub"></p>
@@ -499,8 +500,9 @@ function renderWorkerTimeline(data) {
     group.ends[slot]=task.finished_at||Infinity;
     group.items.push({task,slot});
   }
-  let chart=timelineAxis(from,to);
-  for (const group of [...groups.values()].sort((a,b)=>a.base.localeCompare(b.base))) {
+  let chart=timelineAxis(from,to,'Worker');
+  const short=name=>String(name||'').split('/').pop().trim()||name;
+  for (const group of [...groups.values()].sort((a,b)=>(a.items[0].task.host||a.base).localeCompare(b.items[0].task.host||b.base)||a.base.localeCompare(b.base))) {
     const bridge=group.base==='Agent Bridge';
     const label=bridge?group.base:group.items[0].task.host||group.base;
     const items=group.items.map(({task:t,slot})=>{
@@ -522,16 +524,17 @@ function renderWorkerTimeline(data) {
       if (parentsByChild.has(taskKey(t))) body.push(`Upstream: ${parentsByChild.get(taskKey(t)).join(', ')}`);
       if (t.trace_source!=='explicit') body.push(`Identity: ${t.trace_source}`);
       const width=pos(end)-pos(start);
-      return end>start?`<span class="timeline-bar ${/fail/i.test(t.state)?'failed':t.service}" tabindex="0" style="top:${8+slot*33}px;left:${pos(start)}%;width:${width}%;background:${datasetColor(t.trace.dataset_id)}" data-slot="${slot}" data-task-id="${esc(t.id)}" data-workflow="${esc(t.trace.workflow_id)}" data-tip-title="${esc(t.trace.dataset_id)}" data-tip-step="${esc(t.trace.unit_id||t.operation)}" data-tip-body="${esc(body.join('\n'))}"></span>`:'';
+      const text=`${short(t.trace.dataset_id)} · ${t.operation==='agent.call'?'model call':bridge?taskName(t):stepName(t)}`;
+      return end>start?`<span class="timeline-bar labelled ${/fail/i.test(t.state)?'failed':t.service}" tabindex="0" style="top:${8+slot*33}px;left:${pos(start)}%;width:${width}%;background:${datasetColor(t.trace.dataset_id)}" data-slot="${slot}" data-task-id="${esc(t.id)}" data-workflow="${esc(t.trace.workflow_id)}" data-tip-title="${esc(t.trace.dataset_id)}" data-tip-step="${esc(t.trace.unit_id||t.operation)}" data-tip-body="${esc(body.join('\n'))}">${esc(text)}</span>`:'';
     }).join('');
-    const detail=bridge?'Model turns; legacy Organize records cover whole planning sessions. Stacked bars show overlapping requests.':`Worker: ${group.base}. Stacked bars show concurrent tasks on this worker.`;
-    chart+=`<div class="timeline-row" data-group="${esc(group.base)}"><div class="timeline-label" tabindex="0" data-tip-title="${esc(label)}" data-tip-body="${esc(detail)}">${esc(label)}<small>Peak: ${group.ends.length} concurrent ${bridge?'requests':'tasks'}</small></div><div class="timeline-track" style="height:${group.ends.length*33+8}px">${items}</div></div>`;
+    const detail=bridge?'Model turns; legacy Organize records cover whole planning sessions. Stacked bars show overlapping requests.':`Worker ${group.base} on ${label}. Stacked bars show concurrent tasks on this worker.`;
+    chart+=`<div class="timeline-row" data-group="${esc(group.base)}"><div class="timeline-label" tabindex="0" data-tip-title="${esc(label)}" data-tip-body="${esc(detail)}">${esc(label)}<small>${bridge?'':esc(String(group.base).replace(label+'-',''))+' · '}Peak: ${group.ends.length} concurrent ${bridge?'requests':'tasks'}</small></div><div class="timeline-track" style="height:${group.ends.length*33+8}px">${items}</div></div>`;
   }
   $('timeline').innerHTML=groups.size?chart:'<div class="empty">No started tasks in this window</div>';
-  const linked=drawFlow(flowEdges);
+  drawFlow([]);  // handoff ribbons belong to the Datasets view; here they only cross the lanes
   $('timeline-state').textContent=`${data.total} tasks`;
   const queued=(data.tasks||[]).filter(t=>!t.started_at).length;
-  $('timeline-note').textContent=`${linked} of ${flowEdges.length} loaded workflow handoffs visible. Connections use recorded dependencies, or the known Organize order for older runs. ${queued} waiting to start; started-task queue time is in task details. Stacked bars show actual overlap within a group, not fixed execution slots. Model-turn bars exclude worker tool waits; legacy Organize bars cover whole planning sessions. ${data.truncated?'Results capped at 2,000 tasks; narrow the time range or filter a dataset. ':''}Hover a task to isolate its workflow.`;
+  $('timeline-note').textContent=`${tasks.length} started tasks on ${groups.size} lanes in this window; ${queued} waiting to start. ` + `Started-task queue time is in task details. Stacked bars show actual overlap within a group, not fixed execution slots. Model-turn bars exclude worker tool waits; legacy Organize bars cover whole planning sessions. ${data.truncated?'Results capped at 2,000 tasks; narrow the time range or filter a dataset. ':''}Hover a task to isolate its workflow.`;
 }
 function timelineAxis(from,to,label="Worker / service") {
   const ticks=[0,.25,.5,.75,1].map(f=>`<span class="timeline-tick" style="left:${f*100}%">${esc(new Date((from+f*(to-from))*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:to-from<600?'2-digit':undefined}))}</span>`).join('');
