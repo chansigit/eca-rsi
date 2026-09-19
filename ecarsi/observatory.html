@@ -75,8 +75,22 @@
   .note { font-size:12px; color:#7a786e; padding-top:12px; border-top:1px solid #e9e4d8; margin-top:15px; }
   .code { background:#f2efe6; border:1px solid #e4ddce; border-radius:9px; padding:10px; font:11px/1.55 ui-monospace,monospace; overflow-wrap:anywhere; user-select:all; }
   .timeline-wrap { overflow:auto; }
+.pool-history { min-height:120px; }
   #flow-scroll { max-height:700px; scrollbar-gutter:stable; }
-  .timeline { min-width:870px; position:relative; }
+  .timeline { min-width:870px; min-height:260px; position:relative; }
+/* Space is reserved before anything loads, so the panels below never jump; while a fetch is slow a shimmer
+   sweeps the area instead of the content popping in. */
+.timeline-skeleton { padding:8px 0; }
+.timeline-skeleton-row { display:grid; grid-template-columns:245px minmax(0,1fr); height:41px; align-items:center; border-bottom:1px solid #eee9dd; position:relative; }
+.timeline-skeleton-row i { display:block; height:12px; border-radius:6px; background:#ebe6da; }
+.timeline-skeleton-row b { position:absolute; top:8px; height:25px; border-radius:2px; background:#e3ddcf; margin-left:245px; }
+.timeline-skeleton-row i,.timeline-skeleton-row b { background-image:linear-gradient(90deg,transparent 0,#fff9 50%,transparent 100%); background-size:240px 100%; background-repeat:no-repeat; animation:shimmer 1.4s infinite; }
+.timeline.loading::after { content:""; position:absolute; inset:0; pointer-events:none; z-index:4; background:linear-gradient(90deg,transparent 0,#fffdfa99 50%,transparent 100%); background-size:38% 100%; background-repeat:no-repeat; animation:shimmer 1.2s infinite; }
+@keyframes shimmer { from { background-position:-240px 0; } to { background-position:calc(100% + 240px) 0; } }
+.timeline-bar { animation:bar-in .25s ease-out; }
+@keyframes bar-in { from { opacity:0; transform:translateY(3px); } to { opacity:1; transform:none; } }
+.status.loading::before { content:""; display:inline-block; width:6px; height:6px; border-radius:50%; background:currentColor; margin-right:6px; vertical-align:1px; animation:pulse 1s infinite; }
+@keyframes pulse { 0%,100% { opacity:.25; } 50% { opacity:1; } }
   .timeline-axis,.timeline-row { display:grid; grid-template-columns:245px minmax(0,1fr); }
   .timeline-axis,.timeline-row { position:relative; z-index:1; }
   .timeline-axis { color:var(--muted); font:11px ui-monospace,monospace; margin-bottom:9px; }
@@ -185,7 +199,7 @@
 <body>
 <main>
   <header><div class="brand">RSI <small>v2 / development observatory</small></div><div class="meta"><span><i class="live-dot"></i> Read-only</span><span id="updated">Connecting…</span></div></header>
-  <section class="panel" style="margin-bottom:20px"><div class="panel-head"><div><h2>Worker timeline</h2><div class="sub">One lane per worker: what it ran, for which dataset, when. Opens on the whole recorded history with the last minutes stretched (log time) and the right edge following the clock. Stacked bars are concurrent tasks; hover a bar for the task; Datasets shows stage runs and their handoffs.</div></div><span class="status off" id="timeline-state">Loading</span></div><div class="timeline-controls"><select id="timeline-view" aria-label="Timeline view"><option value="workers" selected>Workers</option><option value="datasets">Datasets</option></select><span class="timeline-spans" role="group" aria-label="Window"><button type="button" data-span="3600">1h</button><button type="button" data-span="14400">4h</button><button type="button" data-span="86400">24h</button><button type="button" data-span="all" class="on">All</button></span><button type="button" id="timeline-live" class="on" title="The right edge follows the clock; pan or zoom into the past to pause">● LIVE</button><label class="timeline-log-toggle" title="Compress the distant past and stretch the last minutes"><input type="checkbox" id="timeline-log" checked> Log time</label><input id="timeline-dataset" type="search" placeholder="Filter dataset…" aria-label="Filter dataset"><details class="timeline-failures"><summary>Recent failures <span id="failure-count"></span></summary><ul id="failure-list"></ul></details></div><div class="timeline-legend"><span>One color per dataset</span><span><i class="model-key"></i>Model call</span><span><i class="compute-key"></i>Worker task</span><span><i style="background:transparent;border:2px solid #a4514e"></i>Failed task</span><span>Drag to pan · Wheel to zoom · Drag on the axis to select · Click a bar for its run · Double-click for All</span></div><div class="flow-layout" id="flow-layout"><div class="timeline-wrap" id="flow-scroll"><div class="timeline" id="timeline"></div></div><aside id="flow-detail" class="flow-detail" aria-label="Selected step details" hidden></aside></div><div id="flow-pages" class="flow-pages"></div><div class="note" id="timeline-note"></div></section>
+  <section class="panel" style="margin-bottom:20px"><div class="panel-head"><div><h2>Worker timeline</h2><div class="sub">One lane per worker: what it ran, for which dataset, when. Opens on the whole recorded history with the last minutes stretched (log time) and the right edge following the clock. Stacked bars are concurrent tasks; hover a bar for the task; Datasets shows stage runs and their handoffs.</div></div><span class="status off" id="timeline-state">Loading</span></div><div class="timeline-controls"><select id="timeline-view" aria-label="Timeline view"><option value="workers" selected>Workers</option><option value="datasets">Datasets</option></select><span class="timeline-spans" role="group" aria-label="Window"><button type="button" data-span="3600">1h</button><button type="button" data-span="14400">4h</button><button type="button" data-span="86400">24h</button><button type="button" data-span="all" class="on">All</button></span><button type="button" id="timeline-live" class="on" title="The right edge follows the clock; pan or zoom into the past to pause">● LIVE</button><label class="timeline-log-toggle" title="Compress the distant past and stretch the last minutes"><input type="checkbox" id="timeline-log" checked> Log time</label><input id="timeline-dataset" type="search" placeholder="Filter dataset…" aria-label="Filter dataset"><details class="timeline-failures"><summary>Recent failures <span id="failure-count"></span></summary><ul id="failure-list"></ul></details></div><div class="timeline-legend"><span>One color per dataset</span><span><i class="model-key"></i>Model call</span><span><i class="compute-key"></i>Worker task</span><span><i style="background:transparent;border:2px solid #a4514e"></i>Failed task</span><span>Drag to pan · Wheel to zoom · Drag on the axis to select · Click a bar for its run · Double-click for All</span></div><div class="flow-layout" id="flow-layout"><div class="timeline-wrap" id="flow-scroll"><div class="timeline" id="timeline" aria-busy="true"><div class="timeline-skeleton" aria-hidden="true"><div class="timeline-skeleton-row"><i style="width:60%"></i><b style="left:4%;width:22%"></b><b style="left:38%;width:30%"></b></div><div class="timeline-skeleton-row"><i style="width:45%"></i><b style="left:10%;width:35%"></b><b style="left:60%;width:18%"></b></div><div class="timeline-skeleton-row"><i style="width:70%"></i><b style="left:2%;width:12%"></b><b style="left:26%;width:44%"></b></div><div class="timeline-skeleton-row"><i style="width:50%"></i><b style="left:30%;width:26%"></b><b style="left:70%;width:20%"></b></div></div></div></div><aside id="flow-detail" class="flow-detail" aria-label="Selected step details" hidden></aside></div><div id="flow-pages" class="flow-pages"></div><div class="note" id="timeline-note"></div></section>
   <section class="panel" id="compute-pool" style="margin-bottom:20px">
     <div class="panel-head"><div><h2>Compute Warm Pool</h2></div><span id="compute-pool-state" class="status off">Checking</span></div>
     <p id="compute-pool-summary" class="sub"></p>
@@ -726,8 +740,16 @@ function renderComputePool(data) {
   $('pool-history').innerHTML=departed.length?'<ul>'+departed.sort((a,b)=>(b.last_seen||b.last_activity||0)-(a.last_seen||a.last_activity||0)).map(w=>`<li title="${esc(w.worker_id||'Worker ID not recorded')} · Slurm job ${esc(w.slurm_job_id||'not recorded')}">${esc(w.host)} · ${w.history_only?'Last task '+esc(when(w.last_activity)):w.last_seen?'Last seen '+esc(when(w.last_seen)):'No telemetry'}${w.tasks.length?' · '+w.tasks.length+' unresolved tasks':''}</li>`).join('')+'</ul>':'<p class="sub">None</p>';
 }
 
+let loadingTimer=null;
+function setLoading(on) {
+  clearTimeout(loadingTimer); loadingTimer=null;
+  const root=$('timeline'), state=$('timeline-state');
+  if (on) { loadingTimer=setTimeout(()=>{ root.classList.add('loading'); root.setAttribute('aria-busy','true'); state.classList.add('loading'); },300); return; }
+  root.classList.remove('loading'); root.removeAttribute('aria-busy'); state.classList.remove('loading');
+}
 async function refresh() {
   const seq=++refreshSeq;
+  setLoading(true);
   try {
     const response = await fetch('api/status', {cache:'no-store'});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -758,6 +780,7 @@ async function refresh() {
       if (resourceKey!==resourceSignature) { renderResourceHistory(timeline); resourceSignature=resourceKey; }
     }
   } catch(e) { if (seq===refreshSeq) $('updated').textContent=`Unavailable: ${e.message}`; }
+  finally { if (seq===refreshSeq) setLoading(false); }
 }
 readHash(); refresh(); setInterval(refresh,10000);
 </script>
