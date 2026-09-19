@@ -450,6 +450,29 @@ function resetTimelineView() { view.live=true; view.span='all'; syncControls(); 
   };
   root.addEventListener('pointerup',finish); root.addEventListener('pointercancel',()=>{ if(drag){drag.box?.remove();drag=null;for(const t of root.querySelectorAll('.timeline-track,.timeline-flow'))t.style.transform='';} });
 })();
+function frameActivity(timeline,earliest) {
+  // Empty time is not information. A live window ends at the clock, so an idle pool would squeeze a
+  // whole batch into the left edge while the blank present takes the screen; the axis stops shortly
+  // after the last task instead (and says how long it has been idle). A running task holds the edge
+  // at now, and an explicitly chosen window is left exactly as asked.
+  const tasks=timeline.tasks||[];
+  if (!tasks.length || !view.live) return;
+  if (Number.isFinite(earliest)) {
+    const first=Math.min(...tasks.map(t=>t.submitted_at),earliest);
+    if (Number.isFinite(first)) timeline.since=Math.max(timeline.since,Math.min(first-60,timeline.until-600));
+  }
+  if (tasks.some(t=>!t.finished_at)) return;   // still working: the present is the interesting part
+  const last=Math.max(...tasks.map(t=>t.finished_at));
+  const idle=timeline.until-last;
+  if (idle<60) return;
+  timeline.idle_seconds=idle;
+  // A log axis magnifies the right edge, so the margin after the last task must stay seconds wide there;
+  // a linear axis can afford a proportional one.
+  timeline.until=last+Math.min(idle,$('timeline-log').checked?30:Math.max(30,(last-timeline.since)*.02));
+}
+function idleNote(data) {
+  return data.idle_seconds?` Nothing has run for ${duration(data.idle_seconds)}; the axis ends after the last task instead of at the clock.`:'';
+}
 function frameWorkflow(workflowId) {
   const now=Date.now()/1000, tasks=(timelineData?.tasks||[]).filter(t=>t.trace?.workflow_id===workflowId);
   if (!tasks.length) return;
@@ -567,7 +590,7 @@ function renderDatasetTimeline(data) {
   const shown=new Set(renderedTasks);
   drawFlow(buildFlowEdges(data.tasks||[]).filter(e=>shown.has(e.parent)&&shown.has(e.child)));
   $('timeline-state').textContent=`${totalDatasets} datasets · ${data.tasks.length} loaded tasks`;
-  $('timeline-note').textContent=`${data.truncated?'Showing '+data.tasks.length+' of '+data.total+' tasks on this page; filter a dataset or narrow the range for complete detail. ':''}Stage runs are separate recorded workflow IDs. Their spans include gaps; filled segments are actual model calls or worker tasks. Status refers to loaded task records.`;
+  $('timeline-note').textContent=`${data.truncated?'Showing '+data.tasks.length+' of '+data.total+' tasks on this page; filter a dataset or narrow the range for complete detail. ':''}Stage runs are separate recorded workflow IDs. Their spans include gaps; filled segments are actual model calls or worker tasks. Status refers to loaded task records.`+idleNote(data);
   $('flow-pages').innerHTML=totalDatasets>pageSize?`<button type="button" class="flow-button" data-page="${datasetPage-1}" ${datasetPage===0?'disabled':''}>Previous</button><span>${datasetPage*pageSize+1}–${Math.min((datasetPage+1)*pageSize,totalDatasets)} of ${totalDatasets} datasets</span><button type="button" class="flow-button" data-page="${datasetPage+1}" ${(datasetPage+1)*pageSize>=totalDatasets?'disabled':''}>Next</button>`:'';
 }
 function renderStepDetail() {
@@ -662,13 +685,13 @@ function renderWorkerTimeline(data) {
   drawFlow([]);  // handoff ribbons belong to the Datasets view; here they only cross the lanes
   $('timeline-state').textContent=`${data.total} tasks`;
   const queued=(data.tasks||[]).filter(t=>!t.started_at).length;
-  $('timeline-note').textContent=`${tasks.length} started tasks on ${groups.size} lanes in this window; ${queued} waiting to start. ` + `Started-task queue time is in task details. Stacked bars show actual overlap within a group, not fixed execution slots. Model-turn bars exclude worker tool waits; legacy Organize bars cover whole planning sessions. ${data.truncated?'Results capped at 2,000 tasks; narrow the time range or filter a dataset. ':''}Hover a task to isolate its workflow.`;
+  $('timeline-note').textContent=`${tasks.length} started tasks on ${groups.size} lanes in this window; ${queued} waiting to start. ` + `Started-task queue time is in task details. Stacked bars show actual overlap within a group, not fixed execution slots. Model-turn bars exclude worker tool waits; legacy Organize bars cover whole planning sessions. ${data.truncated?'Results capped at 2,000 tasks; narrow the time range or filter a dataset. ':''}Hover a task to isolate its workflow.`+idleNote(data);
 }
 function timelineAxis(from,to,label="Worker / service") {
   const clock=t=>new Date(t*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:to-from<600?'2-digit':undefined});
   let ticks;
   if ($('timeline-log').checked) {
-    const pos=timeScale(from,to), ages=[[0,'now'],[60,'1 min'],[300,'5 min'],[900,'15 min'],[3600,'1 h'],[14400,'4 h'],[43200,'12 h'],[86400,'1 d'],[259200,'3 d'],[604800,'7 d']];
+    const pos=timeScale(from,to), live=to>=Date.now()/1000-30, ages=[[0,live?'now':'latest'],[60,'1 min'],[300,'5 min'],[900,'15 min'],[3600,'1 h'],[14400,'4 h'],[43200,'12 h'],[86400,'1 d'],[259200,'3 d'],[604800,'7 d']];
     ticks=ages.filter(([age])=>age<=to-from).map(([age,text])=>`<span class="timeline-tick" style="left:${pos(to-age)}%" title="${esc(clock(to-age))}">${age?'−'+text:text}</span>`).join('');
   } else ticks=[0,.25,.5,.75,1].map(f=>`<span class="timeline-tick" style="left:${f*100}%">${esc(clock(from+f*(to-from)))}</span>`).join('');
   return `<div class="timeline-axis"><span>${esc(label)}</span><div class="timeline-scale">${ticks}</div></div>`;
@@ -768,10 +791,7 @@ async function refresh() {
       if (!timelineResponse.ok) throw new Error(`Timeline HTTP ${timelineResponse.status}`);
       const timeline=await timelineResponse.json();
       if (seq!==refreshSeq) return;
-      if (all) {  // frame the recorded history, not seven empty days
-        const first=Math.min(...timeline.tasks.map(t=>t.submitted_at),d.earliest_activity||Infinity);
-        if (Number.isFinite(first)) timeline.since=Math.max(timeline.since,Math.min(first-60,timeline.until-600));
-      }
+      frameActivity(timeline,all?(d.earliest_activity??Infinity):Infinity);
       const {resources,...taskData}=timeline;
       const signature=JSON.stringify(taskData);
       if (signature!==timelineSignature) { renderTimeline(timeline); timelineSignature=signature; }
