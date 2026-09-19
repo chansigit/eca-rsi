@@ -1,9 +1,24 @@
 // Smoke-run every render path of observatory.html against a stub DOM. Extract the script FROM DISK first:
-//   python3 -c "import re,pathlib;h=pathlib.Path('ecarsi/observatory.html').read_text();pathlib.Path('/tmp/g2/observatory-inline.js').write_text('\n'.join(re.findall(r'<script[^>]*>(.*?)</script>',h,flags=re.S)))"
+//   python3 -c "import re,pathlib;h=pathlib.Path('ecarsi/observatory.html').read_text();pathlib.Path('/tmp/g2/observatory-inline.js').write_text(chr(10).join(re.findall(r'<script[^>]*>(.*?)</script>',h,flags=re.S)))"
 const fs=require("fs"); let src=fs.readFileSync("/tmp/g2/observatory-inline.js","utf8");
-let logOn=true, viewValue="workers";
-const el=()=>new Proxy({style:{},classList:{toggle(){},add(){},remove(){},contains(){return false}},dataset:{},addEventListener(){},querySelectorAll(){return []},querySelector(){return el()},getBoundingClientRect(){return {left:0,right:1000,top:0,bottom:100,width:1000,height:100}},setPointerCapture(){},closest(){return null},appendChild(){},remove(){},insertAdjacentHTML(){},setAttribute(){},removeAttribute(){},get value(){return viewValue},set value(v){viewValue=v},get checked(){return logOn},set checked(v){logOn=v},hidden:false,textContent:"",innerHTML:"",className:"",clientWidth:1000,scrollHeight:300},{get(t,k){return k in t?t[k]:(k==="then"?undefined:(t[k]=el()))},set(t,k,v){t[k]=v;return true}});
-global.document={getElementById:()=>el(),querySelector:()=>el(),querySelectorAll:()=>[],createElement:()=>el(),body:el(),addEventListener(){}};
+// Each element keeps its own value/checked: one shared backing store made the dataset filter
+// overwrite the view select and hid a real bug behind a fake one.
+const nodes=new Map();
+function makeNode(id) {
+  const node={style:{},classList:{toggle(){},add(){},remove(){},contains(){return false}},dataset:{},addEventListener(){},
+    querySelectorAll(){return []},querySelector(){return el()},getBoundingClientRect(){return {left:0,right:1000,top:0,bottom:100,width:1000,height:100}},
+    setPointerCapture(){},closest(){return null},appendChild(){},remove(){},insertAdjacentHTML(){},setAttribute(){},removeAttribute(){},
+    value:id==='timeline-view'?'workers':'', checked:id==='timeline-log', hidden:false, textContent:'', innerHTML:'', className:'',
+    clientWidth:1000, scrollHeight:300};
+  return new Proxy(node,{get(t,k){return k in t?t[k]:(k==='then'?undefined:(t[k]=el()))},set(t,k,v){t[k]=v;return true}});
+}
+function el(id) {
+  if (id===undefined) return makeNode();
+  if (!nodes.has(id)) nodes.set(id,makeNode(id));
+  return nodes.get(id);
+}
+global.el=el;
+global.document={getElementById:id=>el(id),querySelector:()=>el(),querySelectorAll:()=>[],createElement:()=>el(),body:el(),addEventListener(){}};
 global.window={addEventListener(){},modelMonitor:{},poolMonitor:{}}; global.location={hash:""}; global.history={replaceState(){}};
 global.localStorage={getItem:()=>null,setItem(){}}; global.matchMedia=()=>({matches:false}); let fetchCount=0, counting=false;
 global.fetch=()=>{ if (counting) fetchCount++; return new Promise(()=>{}); };
@@ -19,7 +34,7 @@ src+=`
            task("f",${now-94500},${now-94400},{state:"failed"})],total:4});
   for (const log of [true,false]) for (const v of ["workers","datasets"]) {
     const d=base(); d.tasks.forEach(t=>t.trace.dataset_id=t.trace.dataset_id);
-    document.getElementById("timeline-log").checked=log; document.getElementById("timeline-view").value=v;
+    el("timeline-log").checked=log; el("timeline-view").value=v;
     frameActivity(d,${now-604000}); renderTimeline(d); renderResourceHistory(d); timelineAxis(d.since,d.until);
   }
   renderFailures([{id:"f",at:${now-94400},operation:"osp.compute",dataset:"D / Organ"}]);
@@ -39,6 +54,14 @@ src+=`
   if (!FETCHES()) throw new Error("a window outside the loaded range must refetch");
   loaded.truncated=true; COUNT(true); setWindow(inside); navigated();
   if (!FETCHES()) throw new Error("a truncated load must refetch when zoomed");
-  console.log("all render paths ok; client-side zoom verified");
+  // double-click returns to the page as it opens
+  el("timeline-view").value="datasets"; el("timeline-log").checked=false;
+  el("timeline-dataset").value="Organ"; setWindow({since:${now}-7200,until:${now}-3600});
+  resetTimelineView();
+  if (!(view.live && view.span==="all")) throw new Error("reset must return to the live whole-history window");
+  if (el("timeline-view").value!=="workers") throw new Error("reset must return to worker lanes");
+  if (el("timeline-log").checked!==true) throw new Error("reset must turn log time back on");
+  if (el("timeline-dataset").value!=="") throw new Error("reset must clear the dataset filter");
+  console.log("all render paths ok; client-side zoom and double-click reset verified");
 })();`;
 try { new Function(src)(); } catch (e) { console.log("SMOKE ERROR:", e.stack.split("\n").slice(0,3).join(" | ")); process.exit(1); }
