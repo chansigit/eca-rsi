@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+import re
 from pathlib import Path
 
 from temporalio import activity, workflow
@@ -54,6 +55,59 @@ def validate_spec(spec):
 UNFINISHED = frozenset({'FAILED', 'TERMINATED', 'CANCELED', 'TIMED_OUT'})
 
 
+def superseded_sessions(root):
+    """Sessions whose Pool and Bridge requests no longer matter for resume: a restart ran the same
+    judgement again as a fresh session, a context reset continued it in a fresh conversation."""
+    from ..warm_pool.state import read
+    ids = set()
+    for path in Path(root).rglob('restart.json'):
+        ids.add(read(path)['superseded'])
+    for path in Path(root).rglob('context-reset-*.json'):
+        generation = int(path.stem.rsplit('-', 1)[1])
+        base = re.sub(r'-g\d+$', '', read(path)['spec']['session_id'])
+        ids.add(base if generation == 2 else f'{base}-g{generation - 1}')
+    return ids
+
+
+def request_session(spec):
+    """The agent session a Pool or Bridge request served; None for a host step."""
+    if spec.get('operation_id') == 'agent.call' and len(spec.get('args', [])) == 4:
+        return Path(spec['args'][3]).parent.name.rsplit('.turn-', 1)[0]
+    name = spec.get('request_id', '')
+    for marker in ('.turn-', '.tool-'):
+        if marker in name:
+            return name.split(marker, 1)[0]
+    return None
+
+
+def request_states(pool_root, bridge_root, identities, superseded):
+    """Every Pool and Bridge request of these workflows with the state resume records; raises on one
+    that neither finished nor was superseded (its session restarted or reset, or a model attempt
+    was replaced)."""
+    from ..warm_pool.state import read, status
+    from ..agent import status as bridge_status
+    from ..agent.dispatch import completed_replacement
+    requests = []
+    for service, root, inspect, allowed in (
+        ('pool_root', pool_root, status, {'queued', 'running', 'succeeded'}),
+        ('bridge_root', bridge_root, bridge_status, {'queued', 'running', 'reply_saved'}),
+    ):
+        for path in sorted((Path(root) / 'requests').glob('*/request.json')):
+            spec = read(path)['spec']
+            if spec.get('trace', {}).get('workflow_id') not in identities:
+                continue
+            state = inspect(root, path.parent.name)['state']
+            if state not in allowed:
+                if request_session(spec) in superseded:
+                    state = 'superseded_session'
+                elif service == 'pool_root' and completed_replacement(root, path.parent.name, bridge_root):
+                    state = 'superseded_model_attempt'
+                else:
+                    raise ValueError(f'Reconcile {path.parent.name} ({state}) before resume')
+            requests.append(dict(service=service, request_id=path.parent.name, state=state))
+    return requests
+
+
 async def resume_dataset(client, identity, task_queue, reason):
     """New Temporal run, same immutable dataset and accepted external request IDs.
 
@@ -104,21 +158,7 @@ async def resume_dataset(client, identity, task_queue, reason):
             if any(stage[key] != spec[key] for key in ('dataset_id', 'pool_root', 'bridge_root')):
                 raise ValueError('Saved stage belongs to another dataset or service')
             identities.add(prefix + stage['run_id'])
-    requests = []
-    for service, inspect, allowed in (
-        ('pool_root', status, {'queued', 'running', 'succeeded'}),
-        ('bridge_root', bridge_status, {'queued', 'running', 'reply_saved'}),
-    ):
-        for path in sorted((Path(spec[service]) / 'requests').glob('*/request.json')):
-            if read(path)['spec'].get('trace', {}).get('workflow_id') in identities:
-                state = inspect(spec[service], path.parent.name)['state']
-                if state not in allowed:
-                    from ..agent.dispatch import completed_replacement
-                    if service != 'pool_root' or not completed_replacement(
-                            spec['pool_root'], path.parent.name, spec['bridge_root']):
-                        raise ValueError(f'Reconcile {path.parent.name} ({state}) before resume')
-                    state = 'superseded_model_attempt'
-                requests.append(dict(service=service, request_id=path.parent.name, state=state))
+    requests = request_states(spec['pool_root'], spec['bridge_root'], identities, superseded_sessions(root))
     from uuid import uuid4
     audit = root / 'recoveries' / (uuid4().hex + '.json')
     audit.parent.mkdir(mode=0o700, exist_ok=True)

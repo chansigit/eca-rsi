@@ -11,6 +11,12 @@ generation (`eca-rsi run`, Slurm pool, batch admission) keeps its modules where 
   agent-harness-bridge package), `ecarsi.stages` (organize/persample/crosssample/zoomin `_v2`, dataset_release),
   `ecarsi.warm_pool.budget` (operation_budget) and `ecarsi.observatory` (dev_observatory); `python -m
   ecarsi.control|agent|observatory` entry points.
+- A dead agent session restarts once (`control.coordinator.run_agent`: new session id `-r2`, directory `restart/`,
+  same evidence; `restart.json` names the superseded session and resume treats that session's requests as
+  superseded, as it now does for context resets). A second death skips the sample (finalized unannotated, prior
+  label `unannotated`, `skipped_samples` in the per-sample publication, needs_review kind `agent_skipped`) or the
+  lineage (kept with its cross-sample labels, `skipped_lineages` in the zoom-in publication, plan reason); a
+  cross-sample session only restarts. Skipped cells above 10 % of a stage's input (`SKIPPED_CELL_LIMIT`) fail it.
 - Round cap default 10 → 15 (`round_policy.DEFAULT_CAP`, `--cap`); gen-2 dataset specs state `round_policy.cap` explicitly.
 - Pool failures of the budget class get one automatic retry from `control.coordinator.check_pool_once`: an execution
   deadline at twice the time limit, a preferred GPU's memory budget on CPUs (`warm_pool.state.retry` grew

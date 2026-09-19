@@ -295,7 +295,16 @@ def finalize(computed_ref, annotation_ref, destination):
         path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ref["path"], path)
     validation = bundle["validation"]
-    if not bundle["empty"]:
+    if not bundle["empty"] and annotation_ref is None:
+        # Control skipped the annotation (two agent sessions died): survivors keep OSP's clustering
+        # and carry 'unannotated' as the prior label cross-sample sees.
+        import scanpy as sc
+        data = sc.read_h5ad(folder / "clustered.h5ad")
+        for column in ("_ann_coarse", "_ann_fine"):
+            data.obs[column] = "unannotated"
+        data.write_h5ad(folder / "clustered.h5ad")
+        validation = validate_outputs(folder, False)
+    elif not bundle["empty"]:
         from osp.annotate import _validate_proposal, _apply_proposal, _plot_annotation
         from osp.report import generate_report
         import scanpy as sc

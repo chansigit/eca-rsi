@@ -56,6 +56,10 @@ KINDS: list[tuple[str, str, str]] = [
     ("sample_excluded", "Samples excluded from integration",
      "Whole samples the inclusion agent kept out, or that OSP QC emptied (step persample). "
      "They stay on disk untouched (persample/)."),
+    ("agent_skipped", "Samples left unannotated after agent failure",
+     "The per-sample annotation session died twice (bridge retries, context resets and one full restart "
+     "exhausted). Survivors kept OSP's clustering with the label 'unannotated' and entered cross-sample. "
+     "Lineages in the same situation appear under 'Lineages not zoomed' with the reason."),
     ("reassigned", "Clusters moved between lineages",
      "Zoom-in reassignments. The same population moving every round means the coarse label upstream is unstable."),
     ("annotation_boundary", "Uncertain coarse-label boundaries",

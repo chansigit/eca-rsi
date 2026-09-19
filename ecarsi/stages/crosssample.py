@@ -47,7 +47,7 @@ def inspect_input(spec, destination):
         if bundle['empty']:
             empty.append(ref)
             continue
-        proposal = read(artifact(bundle, 'annotation_proposal.json'))
+        proposal = read(artifact(bundle, 'annotation_proposal.json')) if 'annotation_proposal.json' in bundle['files'] else None
         label = bundle['sample']
         samples.append(dict(sample=label, bundle=ref, n_cells=bundle['validation']['n_survived'],
                             qc=bundle['validation']['qc_summary'], annotation=proposal))
@@ -85,7 +85,7 @@ def compute(inspected_ref, inclusion_ref, destination):
         data = an.read_h5ad(artifact(bundle, 'clustered.h5ad'), backed='r')
         ids = data.obs_names.copy()
         from osp.annotate import _OPS
-        proposal = read(artifact(bundle,'annotation_proposal.json'))
+        proposal = read(artifact(bundle,'annotation_proposal.json')) if 'annotation_proposal.json' in bundle['files'] else {}
         for action in proposal.get('qc_actions',[]):
             if action['action'] != 'drop':continue
             affected = data.obs[proposal['cluster_key']].astype(str).eq(str(action['cluster']))

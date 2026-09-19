@@ -166,7 +166,6 @@ class CrosssampleWorkflow:
 
     @workflow.run
     async def run(self, spec):
-        from .coordinator import AgentWorkflow
         self._deg_limit = getattr(self, '_deg_limit', spec['max_in_flight_deg'])
 
         async def run_operation(action, paths, parents, **details):
@@ -179,8 +178,8 @@ class CrosssampleWorkflow:
             path, _ = await run_operation('agent', [evidence] + ([types] if types else []), [parent], phase=phase)
             policy = 'session' if workflow.patched('agent-session-policy-v1') else 'read'
             session = await call(crosssample_step, policy, [path])
-            result = await workflow.execute_child_workflow(AgentWorkflow.run, session,
-                id=workflow.info().workflow_id + '/' + session['session_id'])
+            from .coordinator import run_agent
+            result = await run_agent(session, workflow.info().workflow_id + '/' + session['session_id'], call)
             accepted = await call(crosssample_step, 'accepted', [result])
             return accepted['path'], accepted['parent']
 

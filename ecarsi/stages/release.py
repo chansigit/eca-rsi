@@ -136,6 +136,10 @@ def review_items(unit, exclusions, decisions):
     for ref in unit['rounds']:
         record = verified(ref)
         items += _loop_items(record['round'], record['stats'], unit['forced_release'], record['round'] == len(unit['rounds']))
+    for entry in verified(unit['per_sample']).get('skipped_samples', []):
+        items.append(Item('agent_skipped', 0, 'per-sample', entry['sample'], n_cells=entry['n_cells'],
+            note='annotation agent failed twice; survivors kept unannotated: ' + str(entry.get('error', ''))[:300],
+            link=unit['per_sample']['path']))
     for (number, stage), rows in exclusions.groupby(['round', 'release_stage'], sort=False):
         uncertain = []
         for row in rows.itertuples():

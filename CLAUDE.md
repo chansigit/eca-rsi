@@ -214,6 +214,10 @@ ecarsi/observatory.py   状态页 + `status` 报告（原 dev_observatory）
   在新布局下不能回放，切换只在没有会话在飞时做（或归档相关请求后 resume）。
 - 第二代的文档在 `docs-gen2/`（AGENT_BRIDGE_V2、WARM_POOL_V2、DURABLE_CONTROL、DATASET_V2 …），`design/` 是设计页。
 - 控制面节点上不要无节制扫描 pool / bridge 的 requests 目录（会拖垮协调器的 Lustre 客户端）。
+- **会话死亡**（2026-09-18 起）：任何 agent 会话失败先自动重开一次全新会话（`-r2`，同一份证据）；再失败时样本跳过
+  （不注释、先验标签 `unannotated`，needs_review `agent_skipped`）或 lineage 跳过（保留 cross-sample 标签，写进 plan reason），
+  cross-sample 会话只重开不跳过；跳过的细胞超过该阶段输入的 10%（`SKIPPED_CELL_LIMIT`）整个阶段失败。
+  被替代的会话（重开、上下文重置）的请求在 resume 预检中视为 superseded，不再需要手工归档。
 - 第一代的 batch 准入（`eca-rsi batch`、节点代理、OSP compute-ahead、driver 内存租借）随 0.3.0 留在树里但不再维护；第二代数据集由控制面准入。
 
 ## 上一代:run.sh 六步循环(分支 primitive;2026-08-25 推倒重做后;总共 ~300 行)

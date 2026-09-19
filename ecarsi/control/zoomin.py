@@ -134,7 +134,8 @@ class ZoominWorkflow:
 
     @workflow.run
     async def run(self,spec):
-        from .coordinator import AgentWorkflow
+        from .coordinator import run_agent
+        from .persample import SKIPPED_CELL_LIMIT
         self._deg_limit=getattr(self,'_deg_limit',spec['max_in_flight_deg'])
         async def run(action,paths,parents,**details):
             request=await call(zoomin_step,action,[spec,dict(paths=paths,**details),parents])
@@ -143,8 +144,7 @@ class ZoominWorkflow:
             path,_=await run('agent',[evidence],[parent],kind=kind)
             policy='session' if workflow.patched('agent-session-policy-v1') else 'read'
             session=await call(zoomin_step,policy,[path])
-            result=await workflow.execute_child_workflow(AgentWorkflow.run,session,
-                id=workflow.info().workflow_id+'/'+session['session_id'])
+            result=await run_agent(session,workflow.info().workflow_id+'/'+session['session_id'],call)
             accepted=await call(zoomin_step,'accepted',[result])
             return accepted['path'],accepted['parent']
         self._stage='preparing lineage evidence'
@@ -154,7 +154,7 @@ class ZoominWorkflow:
         decision=await call(zoomin_step,'read',[plan])
         lines=decision['proposal']['lineages']
         chosen=[i for i,line in enumerate(lines) if line['zoom']]
-        results=[]
+        results,skipped=[],[]
         if chosen:
             self._stage='computing and annotating lineages'
             shared=asyncio.create_task(run('markers',[prepared,plan],[plan_parent]))
@@ -176,7 +176,11 @@ class ZoominWorkflow:
                     ordered=[comparisons[i] for i in sorted(comparisons)]
                     evidence,evidence_parent=await run('assemble',[computed]+[v[0] for v in ordered],[compute_parent]+[v[1] for v in ordered])
                 # Free numerical admission before the model session, across every lineage.
-                accepted,accepted_parent=await judge('lineage',evidence,evidence_parent)
+                try:
+                    accepted,accepted_parent=await judge('lineage',evidence,evidence_parent)
+                except Exception as exc:
+                    # Two sessions died: this lineage keeps its cross-sample labels for the round.
+                    return dict(skipped=dict(index=index,name=lines[index]['name'],n_cells=lines[index]['n_cells'],error=str(exc)))
                 decision=await call(zoomin_step,'read',[accepted])
                 return await run('apply',[decision['evidence']['path'],accepted],[accepted_parent])
             if workflow.patched('zoomin-preserve-independent-lineages-v1'):
@@ -187,8 +191,14 @@ class ZoominWorkflow:
                                            non_retryable=True)
             else:
                 results=await asyncio.gather(*[lineage(i) for i in chosen])
+            skipped=[r['skipped'] for r in results if isinstance(r,dict)]
+            results=[r for r in results if not isinstance(r,dict)]
+            lost=sum(s['n_cells'] for s in skipped)
+            if skipped and lost>SKIPPED_CELL_LIMIT*sum(line['n_cells'] for line in lines):
+                raise ApplicationError(f'{len(skipped)} lineages skipped after their agent sessions died hold {lost} cells, '
+                                       f'over {SKIPPED_CELL_LIMIT:.0%} of the round input',non_retryable=True)
         self._stage='merging lineage results'
-        result,_=await run('merge',[prepared,plan]+[r[0] for r in results],[plan_parent]+[r[1] for r in results])
+        result,_=await run('merge',[prepared,plan]+[r[0] for r in results],[plan_parent]+[r[1] for r in results],skipped=skipped)
         publication=await call(zoomin_step,'publish',[spec,result])
         self._stage='complete'
         return publication

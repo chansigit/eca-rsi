@@ -263,6 +263,13 @@ def agent_step(action: str, args: list):
             raise ValueError("Cannot finish an agent with pending tools")
         return immutable(Path(spec["output_root"]) / "result.json",
                                  {"session": args[0], "reply": reference(args[1])})["path"]
+    if action == "restart":
+        spec, reason = args
+        root = Path(spec["output_root"])
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fresh = dict(spec, session_id=spec["session_id"] + "-r2", output_root=str(root / "restart"))
+        intent = immutable(root / "restart.json", dict(reason=reason, superseded=spec["session_id"], spec=fresh))
+        return verified(intent)["spec"]
     if action == "tool":
         from jsonschema import ValidationError
         from ..agent.tool_errors import reject_arguments
@@ -375,6 +382,17 @@ class AgentWorkflow:
                     self._stage = "complete"
                     return completed
         raise ApplicationError("Agent model-turn budget exhausted", non_retryable=True)
+
+
+async def run_agent(spec, identity, call):
+    """One session's AgentWorkflow child. A session that dies (turn budget, provider, host error)
+    runs once more from the same evidence as a fresh session with a new id and directory before
+    the failure reaches the stage; resume treats the dead session's requests as superseded."""
+    try:
+        return await workflow.execute_child_workflow(AgentWorkflow.run, spec, id=identity)
+    except Exception as exc:
+        fresh = await call(agent_step, "restart", [spec, str(exc)])
+        return await workflow.execute_child_workflow(AgentWorkflow.run, fresh, id=identity + "/restart")
 
 
 def validate_spec(spec):
@@ -589,13 +607,8 @@ async def main():
         if read(Path(spec["output_root"]) / "spec.json") != spec:
             raise ValueError("Saved workflow specification changed")
         verified(spec["input_manifest" if args.command == "resume-persample" else "input"])
-        for root, inspect, allowed in ((spec["pool_root"], status, {"queued", "running", "succeeded"}),
-                (spec["bridge_root"], bridge_status, {"queued", "running", "reply_saved"})):
-            for path in (Path(root) / "requests").glob("*/request.json"):
-                if read(path)["spec"].get("trace", {}).get("workflow_id") == identity:
-                    state = inspect(root, path.parent.name)["state"]
-                    if state not in allowed:
-                        raise ValueError(f"Reconcile {path.parent.name} ({state}) before resume")
+        from .dataset import request_states, superseded_sessions
+        request_states(spec["pool_root"], spec["bridge_root"], {identity}, superseded_sessions(spec["output_root"]))
         handle = await client.start_workflow(run, spec, id=identity,
             task_queue=args.task_queue or history.events[0].workflow_execution_started_event_attributes.task_queue.name,
             id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY)

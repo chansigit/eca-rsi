@@ -151,10 +151,22 @@ def lineage_labels(bundle):
     return own, sorted({label for line in plan['lineages'] for label in line['coarse_labels']} - set(own))
 
 
-def merge(prepared, decision, results, destination):
+def plan_without(plan, skipped):
+    """The accepted plan with the skipped lineages (both agent sessions died) no longer zoomed:
+    merge_back keeps their cross-sample labels, exactly as for lineages the plan never zoomed."""
+    names = {s['name']: s for s in skipped}
+    zoomed = {line['name'] for line in plan['lineages'] if line['zoom']}
+    if not names.keys() <= zoomed:
+        raise ValueError('Skipped lineages must be zoomed lineages of the plan: ' + ', '.join(sorted(names.keys() - zoomed)))
+    return {**plan, 'lineages': [{**line, 'zoom': False, 'reason': 'annotation agent failed twice; cross-sample labels kept: '
+                                  + str(names[line['name']].get('error', ''))[:300]} if line['name'] in names else line
+                                 for line in plan['lineages']]}
+
+
+def merge(prepared, decision, results, destination, skipped=()):
     import pandas as pd
     from zmip.merge import merge_back
-    plan = accepted_plan(prepared, decision)
+    plan = plan_without(accepted_plan(prepared, decision), skipped)
     source = verified(prepared)
     data = data_from(verified(source['input']), 'annotated.h5ad')
     accepted, ledgers = {}, []
@@ -177,8 +189,8 @@ def merge(prepared, decision, results, destination):
             or set(kept.obs_names) & set(ledger.cell_uid) or set(kept.obs_names) | set(ledger.cell_uid) != set(data.obs_names)):
         raise ValueError('Global zoom-in cell conservation failed')
     ledger.to_csv(destination/'cell_exclusions.csv.gz', index=False)
-    sealed(destination, destination/'final.json', state='complete', input=source['input'],
-        planning=prepared, decision=decision, lineages=results, n_input=len(data), n_survived=len(kept), n_removed=len(ledger))
+    sealed(destination, destination/'final.json', state='complete', input=source['input'], planning=prepared, decision=decision,
+        lineages=results, skipped_lineages=list(skipped), n_input=len(data), n_survived=len(kept), n_removed=len(ledger))
 
 
 def intersections(bundle):
@@ -488,7 +500,7 @@ def main():
     elif action == 'assemble':assemble(refs[0],refs[1:],dest)
     elif action == 'agent':save(dest/'agent.json',agent_spec(spec,refs[0],packet['kind'],packet['request_id']))
     elif action == 'apply':apply_lineage(*refs,dest)
-    elif action == 'merge':merge(refs[0],refs[1],refs[2:],dest)
+    elif action == 'merge':merge(refs[0],refs[1],refs[2:],dest,packet.get('skipped',()))
     else:raise ValueError('Unknown zoom-in operation')
 
 

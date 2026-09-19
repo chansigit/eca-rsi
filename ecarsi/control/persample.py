@@ -5,6 +5,8 @@ from pathlib import Path
 from temporalio import activity, workflow
 from temporalio.exceptions import ApplicationError
 
+SKIPPED_CELL_LIMIT = 0.10  # a stage whose skipped samples or lineages hold more of its input cells fails instead
+
 
 def validate_spec(spec, *, resume=False):
     from ..warm_pool.state import reference
@@ -103,12 +105,26 @@ def sample_step(action, args):
                                 root, path.parent.name, spec['bridge_root']):
                             return False
         return found
+    if action == "skipped":
+        spec, computed, error = args
+        bundle = read(computed)
+        record = dict(sample=bundle["sample"], n_cells=bundle["validation"]["n_survived"], error=error)
+        return immutable(Path(spec["output_root"]) / ("skipped-" + digest(bundle["sample"])[:20] + ".json"), record)["path"]
     if action == "publish":
         spec, results, failed, totals = args
         results = sorted(results, key=lambda p: read(p)["sample"])
         records = [verified(reference(path)) for path in results]
         if len({r["sample"] for r in records}) != len(records):
             raise ValueError("Sample completed twice")
+        root = Path(spec["output_root"])
+        skipped = []
+        for record in records:
+            if "annotation" in record and record["annotation"] is None and not record["empty"]:
+                note = read(root / ("skipped-" + digest(record["sample"])[:20] + ".json"), {})
+                skipped.append(dict(sample=record["sample"], n_cells=record["validation"]["n_survived"], error=note.get("error", "")))
+        if sum(s["n_cells"] for s in skipped) > SKIPPED_CELL_LIMIT * totals["n_input"]:
+            failed = failed + [dict(sample=s["sample"], error="annotation skipped, and the skipped samples hold more than "
+                f"{SKIPPED_CELL_LIMIT:.0%} of the input cells: {s['error']}") for s in skipped]
         n_input = sum(r["validation"]["n_input"] for r in records)
         n_kept = sum(r["validation"]["n_survived"] for r in records)
         n_removed = sum(r["validation"]["n_removed"] for r in records)
@@ -117,10 +133,9 @@ def sample_step(action, args):
             raise ValueError("Per-sample sample/cell conservation failed")
         publication = {
             "state": "incomplete" if failed else "complete", "input": spec["input_manifest"],
-            "samples": [reference(p) for p in results], "failed_samples": failed,
+            "samples": [reference(p) for p in results], "failed_samples": failed, "skipped_samples": skipped,
             "n_input": totals["n_input"], "n_survived": n_kept,
             "n_removed": n_removed + totals["n_excluded"], "partition_exclusions": totals["exclusions"]}
-        root = Path(spec["output_root"])
         with lock(root / "publication.lock"):
             previous = read(root / "publication.json")
             if previous and previous != publication:
@@ -199,7 +214,6 @@ async def await_pool(spec, request):
 class SampleWorkflow:
     @workflow.run
     async def run(self, spec, entry, parent, notify_computed=False):
-        from .coordinator import AgentWorkflow
         request = await call(sample_step, "compute", [spec, entry, parent])
         computed = await await_pool(spec, request)
         if notify_computed:
@@ -209,11 +223,16 @@ class SampleWorkflow:
         bundle = await call(sample_step, "read", [computed])
         annotation, parent = None, request["id"]
         if not bundle["empty"]:
+            from .coordinator import run_agent
             session = await call(sample_step, "agent", [spec, computed, request["id"]])
-            result = await workflow.execute_child_workflow(AgentWorkflow.run, session,
-                id=workflow.info().workflow_id + "/annotate")
-            accepted = await call(sample_step, "accepted_annotation", [result])
-            annotation, parent = accepted["path"], accepted["parent"]
+            try:
+                result = await run_agent(session, workflow.info().workflow_id + "/annotate", call)
+            except Exception as exc:
+                # Two sessions died: the sample keeps OSP's clustering unannotated and is listed for review.
+                await call(sample_step, "skipped", [spec, computed, str(exc)])
+            else:
+                accepted = await call(sample_step, "accepted_annotation", [result])
+                annotation, parent = accepted["path"], accepted["parent"]
         request = await call(sample_step, "finalize", [spec, computed, annotation, parent])
         return await await_pool(spec, request)
 
@@ -312,6 +331,7 @@ class PersampleWorkflow:
                     failed.append({"sample": sample, "error": str(exc)})
         self._stage = "publishing"
         output = await call(sample_step, "publish", [spec, completed, failed, totals])
+        failed = (await call(sample_step, "read", [output]))["failed_samples"]  # publish adds skips past the limit
         if failed:
             raise ApplicationError(f"{len(failed)} samples failed; completed siblings retained at {output}", non_retryable=True)
         self._stage = "complete"
