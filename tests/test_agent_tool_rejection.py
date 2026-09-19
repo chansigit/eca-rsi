@@ -155,5 +155,8 @@ def test_retry_can_raise_a_memory_budget_without_losing_request_identity(tmp_pat
     assert again["original_digest"] == request["digest"]
     # The Coordinator resubmits its unchanged 4096 MiB request on recovery; same work.
     assert state.submit(str(pool), spec)["attempt_id"] == retried["attempt_id"]
-    with pytest.raises(ValueError, match="different content"):
-        state.submit(str(pool), dict(spec, cpus=2))
+    # A resubmission that really differs replays the saved request and records the difference
+    # (since the 2026-09-17 replay-on-resubmit rule); it no longer fails the resume.
+    assert state.submit(str(pool), dict(spec, cpus=2))["attempt_id"] == retried["attempt_id"]
+    audit = state.read(folder / "resubmitted.json")
+    assert audit["spec"]["cpus"] == 2 and state.read(folder / "request.json")["spec"]["cpus"] == 1
