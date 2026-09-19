@@ -91,6 +91,7 @@
   .timeline-bar::before { content:""; position:absolute; inset:0 -4px; }
   .timeline-bar:hover,.timeline-bar:focus-visible { outline:2px solid #2d5046; outline-offset:2px; z-index:2; }
   .timeline-bar.failed { outline:2px solid #a4514e; outline-offset:-2px; }
+.timeline-log-toggle { display:inline-flex; align-items:center; gap:4px; font-size:12px; cursor:pointer; }
 .timeline-bar.labelled { overflow:hidden; white-space:nowrap; font-size:11px; line-height:25px; padding:0 5px; color:#fff; text-shadow:0 0 2px #0008; box-sizing:border-box; }
   .timeline-flow { position:absolute; inset:0; width:100%; height:100%; z-index:0; pointer-events:none; overflow:visible; }
   .timeline-flow .flow-edge { opacity:max(var(--flow-idle-opacity,.14),var(--edge-min-opacity,0)); transition:opacity .15s; }
@@ -168,7 +169,7 @@
 <body>
 <main>
   <header><div class="brand">RSI <small>v2 / development observatory</small></div><div class="meta"><span><i class="live-dot"></i> Read-only</span><span id="updated">Connecting…</span></div></header>
-  <section class="panel" style="margin-bottom:20px"><div class="panel-head"><div><h2>Worker timeline</h2><div class="sub">One lane per worker: what it ran, for which dataset, when. Stacked bars are concurrent tasks; hover a bar for the task. Switch the view to Datasets for stage runs and their handoffs.</div></div><span class="status off" id="timeline-state">Loading</span></div><div class="timeline-controls"><select id="timeline-view" aria-label="Timeline view"><option value="workers" selected>Workers</option><option value="datasets">Datasets</option></select><select id="timeline-range" aria-label="Time range"><option value="auto">Latest activity</option><option value="3600" selected>Last hour</option><option value="14400">Last 4 hours</option><option value="86400">Last 24 hours</option><option value="custom">Custom</option></select><input id="timeline-from" type="datetime-local" aria-label="From" hidden><input id="timeline-to" type="datetime-local" aria-label="To" hidden><input id="timeline-dataset" type="search" placeholder="Filter dataset…" aria-label="Filter dataset"><button id="timeline-apply" type="button">Apply</button></div><div class="timeline-legend"><span>One color per dataset</span><span><i class="model-key"></i>Model call</span><span><i class="compute-key"></i>Worker task</span><span><i style="background:transparent;border:2px solid #a4514e"></i>Failed task</span><span>Wheel to zoom · Double-click to reset</span></div><div class="flow-layout" id="flow-layout"><div class="timeline-wrap" id="flow-scroll"><div class="timeline" id="timeline"></div></div><aside id="flow-detail" class="flow-detail" aria-label="Selected step details" hidden></aside></div><div id="flow-pages" class="flow-pages"></div><div class="note" id="timeline-note"></div></section>
+  <section class="panel" style="margin-bottom:20px"><div class="panel-head"><div><h2>Worker timeline</h2><div class="sub">One lane per worker: what it ran, for which dataset, when. Stacked bars are concurrent tasks; hover a bar for the task. Switch the view to Datasets for stage runs and their handoffs.</div></div><span class="status off" id="timeline-state">Loading</span></div><div class="timeline-controls"><select id="timeline-view" aria-label="Timeline view"><option value="workers" selected>Workers</option><option value="datasets">Datasets</option></select><select id="timeline-range" aria-label="Time range"><option value="auto">Latest activity</option><option value="3600" selected>Last hour</option><option value="14400">Last 4 hours</option><option value="86400">Last 24 hours</option><option value="604800">Last 7 days</option><option value="custom">Custom</option></select><label class="timeline-log-toggle" title="Compress the distant past and stretch the last minutes; the range widens to 7 days"><input type="checkbox" id="timeline-log"> Log time</label><input id="timeline-from" type="datetime-local" aria-label="From" hidden><input id="timeline-to" type="datetime-local" aria-label="To" hidden><input id="timeline-dataset" type="search" placeholder="Filter dataset…" aria-label="Filter dataset"><button id="timeline-apply" type="button">Apply</button></div><div class="timeline-legend"><span>One color per dataset</span><span><i class="model-key"></i>Model call</span><span><i class="compute-key"></i>Worker task</span><span><i style="background:transparent;border:2px solid #a4514e"></i>Failed task</span><span>Wheel to zoom · Double-click to reset</span></div><div class="flow-layout" id="flow-layout"><div class="timeline-wrap" id="flow-scroll"><div class="timeline" id="timeline"></div></div><aside id="flow-detail" class="flow-detail" aria-label="Selected step details" hidden></aside></div><div id="flow-pages" class="flow-pages"></div><div class="note" id="timeline-note"></div></section>
   <section class="panel" id="compute-pool" style="margin-bottom:20px">
     <div class="panel-head"><div><h2>Compute Warm Pool</h2></div><span id="compute-pool-state" class="status off">Checking</span></div>
     <p id="compute-pool-summary" class="sub"></p>
@@ -221,10 +222,23 @@ document.querySelector('.timeline-wrap').addEventListener('scroll',hideTimelineT
 window.addEventListener('scroll',hideTimelineTip,{passive:true});
 let viewWindow=null, currentTimelineWindow=null, zoomTimer;
 const localTime=seconds=>{ const d=new Date(seconds*1000); return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16); };
+const LOG_TAU=60;  // seconds that take the first big slice of a log axis
+function timeScale(from,to) {
+  const span=Math.max(1,to-from);
+  if (!$('timeline-log').checked) return t=>100*(t-from)/span;
+  const k=Math.log1p(span/LOG_TAU);
+  return t=>100*(1-Math.log1p(Math.max(0,Math.min(span,to-t))/LOG_TAU)/k);
+}
+function timeAtFraction(from,to,fraction) {  // inverse of timeScale, for the zoom anchor
+  const span=Math.max(1,to-from);
+  if (!$('timeline-log').checked) return from+span*fraction;
+  return to-LOG_TAU*Math.expm1((1-fraction)*Math.log1p(span/LOG_TAU));
+}
 function zoomWindow(window,fraction,deltaY) {
   const span=window.until-window.since;
-  const next=Math.max(30,Math.min(86400,span*Math.exp(Math.max(-500,Math.min(500,deltaY))*.002)));
-  const anchor=window.since+span*fraction;
+  const next=Math.max(30,Math.min(604800,span*Math.exp(Math.max(-500,Math.min(500,deltaY))*.002)));
+  const anchor=timeAtFraction(window.since,window.until,fraction);
+  fraction=(anchor-window.since)/span;
   const until=Math.min(Date.now()/1000,anchor+next*(1-fraction));
   return {since:until-next,until};
 }
@@ -401,7 +415,7 @@ function runSpan(run,data) {
   return `<button type="button" class="flow-span ${recordedState(run.tasks)==='Needs attention'?'failed':''}" style="--dataset:${color};left:${100*(from-data.since)/span}%;width:${width}%" data-run-toggle="${esc(run.key)}" aria-label="Expand ${esc(run.name)}" data-tip-title="${esc(run.tasks[0].trace?.dataset_id)}" data-tip-step="${esc(run.name)}" data-tip-body="${esc(`${run.tasks.length} recorded tasks\nElapsed span: ${duration(end-start)} (includes gaps)\nRun: ${run.workflow}`)}">${segments}</button>`;
 }
 function stepBars(step,data) {
-  const ends=[], items=[], now=Date.now()/1000, span=data.until-data.since;
+  const ends=[], items=[], now=Date.now()/1000, pos=timeScale(data.since,data.until);
   for(const t of [...step.tasks].sort((a,b)=>(a.started_at||a.submitted_at)-(b.started_at||b.submitted_at))) {
     const start=t.started_at||t.submitted_at, end=t.finished_at||now;
     let slot=ends.findIndex(v=>v<=start);if(slot<0)slot=ends.length;ends[slot]=end;
@@ -409,7 +423,7 @@ function stepBars(step,data) {
     if(to<from)continue;
     const location=t.service==='bridge'?(t.model?.model||'Agent Bridge'):(t.host||t.worker_id||'Unassigned');
     const body=`${taskName(t)}\n${location}\n${t.state}\nStarted: ${when(t.started_at)}\nFinished: ${when(t.finished_at)}\n${t.started_at?'Duration: '+duration(end-start):'Waiting to start'}\nRequest: ${t.id}`;
-    items.push(`<button type="button" class="timeline-bar ${t.service}${/fail|cancel|unknown/.test(t.state)?' failed':''}${!t.started_at?' waiting':''}" style="--dataset:${datasetColor(step.dataset)};background:${datasetColor(step.dataset)};top:${8+slot*25}px;left:${100*(from-data.since)/span}%;width:${100*(to-from)/span}%" data-slot="${slot}" data-step-select="${esc(step.key)}" data-task-id="${esc(t.id)}" data-workflow="${esc(t.trace.workflow_id)}" data-tip-title="${esc(step.dataset)}" data-tip-step="${esc(step.name)}" data-tip-body="${esc(body)}" aria-label="${esc(step.name+' — '+taskName(t)+' — '+t.state)}"></button>`);
+    items.push(`<button type="button" class="timeline-bar ${t.service}${/fail|cancel|unknown/.test(t.state)?' failed':''}${!t.started_at?' waiting':''}" style="--dataset:${datasetColor(step.dataset)};background:${datasetColor(step.dataset)};top:${8+slot*25}px;left:${pos(from)}%;width:${pos(to)-pos(from)}%" data-slot="${slot}" data-step-select="${esc(step.key)}" data-task-id="${esc(t.id)}" data-workflow="${esc(t.trace.workflow_id)}" data-tip-title="${esc(step.dataset)}" data-tip-step="${esc(step.name)}" data-tip-body="${esc(body)}" aria-label="${esc(step.name+' — '+taskName(t)+' — '+t.state)}"></button>`);
   }
   return `<div class="timeline-track" style="height:${Math.max(1,ends.length)*25+14}px">${items.join('')}</div>`;
 }
@@ -467,6 +481,12 @@ function renderTimeline(data) {
   } else renderDatasetTimeline(data);
 }
 $('timeline-view').addEventListener('change',()=>{datasetPage=0;if(timelineData)renderTimeline(timelineData);refresh();});
+try { $('timeline-log').checked=localStorage.getItem('observatory.logTime')==='1'; if ($('timeline-log').checked) $('timeline-range').value='604800'; } catch (e) {}
+$('timeline-log').addEventListener('change',()=>{
+  try { localStorage.setItem('observatory.logTime',$('timeline-log').checked?'1':'0'); } catch (e) {}
+  if ($('timeline-log').checked) { viewWindow=null; $('timeline-range').value='604800'; $('timeline-from').hidden=$('timeline-to').hidden=true; refresh(); }
+  else if (timelineData) { renderTimeline(timelineData); renderResourceHistory(timelineData); }
+});
 $('timeline').addEventListener('click',event=>{
   const target=event.target.closest?.('[data-dataset-toggle],[data-run-toggle],[data-step-select]');if(!target)return;
   if(target.dataset.datasetToggle!==undefined) { const key=target.dataset.datasetToggle;collapsedDatasets.has(key)?collapsedDatasets.delete(key):collapsedDatasets.add(key); }
@@ -484,7 +504,7 @@ function renderWorkerTimeline(data) {
   hideTimelineTip();
   activeWorkflow=null;
   $('timeline').classList.remove('flow-focused');
-  const from=data.since, to=data.until, span=to-from, pos=t=>100*(t-from)/span;
+  const from=data.since, to=data.until, pos=timeScale(from,to);
   currentTimelineWindow={since:from,until:to};
   const tasks=(data.tasks||[]).filter(t=>t.started_at).sort((a,b)=>a.started_at-b.started_at);
   const flowEdges=buildFlowEdges(data.tasks||[]);
@@ -537,11 +557,16 @@ function renderWorkerTimeline(data) {
   $('timeline-note').textContent=`${tasks.length} started tasks on ${groups.size} lanes in this window; ${queued} waiting to start. ` + `Started-task queue time is in task details. Stacked bars show actual overlap within a group, not fixed execution slots. Model-turn bars exclude worker tool waits; legacy Organize bars cover whole planning sessions. ${data.truncated?'Results capped at 2,000 tasks; narrow the time range or filter a dataset. ':''}Hover a task to isolate its workflow.`;
 }
 function timelineAxis(from,to,label="Worker / service") {
-  const ticks=[0,.25,.5,.75,1].map(f=>`<span class="timeline-tick" style="left:${f*100}%">${esc(new Date((from+f*(to-from))*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:to-from<600?'2-digit':undefined}))}</span>`).join('');
+  const clock=t=>new Date(t*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:to-from<600?'2-digit':undefined});
+  let ticks;
+  if ($('timeline-log').checked) {
+    const pos=timeScale(from,to), ages=[[0,'now'],[60,'1 min'],[300,'5 min'],[900,'15 min'],[3600,'1 h'],[14400,'4 h'],[43200,'12 h'],[86400,'1 d'],[259200,'3 d'],[604800,'7 d']];
+    ticks=ages.filter(([age])=>age<=to-from).map(([age,text])=>`<span class="timeline-tick" style="left:${pos(to-age)}%" title="${esc(clock(to-age))}">${age?'−'+text:text}</span>`).join('');
+  } else ticks=[0,.25,.5,.75,1].map(f=>`<span class="timeline-tick" style="left:${f*100}%">${esc(clock(from+f*(to-from)))}</span>`).join('');
   return `<div class="timeline-axis"><span>${esc(label)}</span><div class="timeline-scale">${ticks}</div></div>`;
 }
 function renderResourceHistory(data) {
-  const span=data.until-data.since, pos=t=>100*(t-data.since)/span;
+  const pos=timeScale(data.since,data.until);
   let chart=timelineAxis(data.since,data.until);
   const resourceGroups=new Map();
   for (const row of data.resources||[]) { const key=row.worker_id||row.host; if (!resourceGroups.has(key)) resourceGroups.set(key,[]); resourceGroups.get(key).push(row); }
@@ -640,7 +665,7 @@ async function refresh() {
   } catch(e) { if (seq===refreshSeq) $('updated').textContent=`Unavailable: ${e.message}`; }
 }
 $('timeline-range').addEventListener('change',()=>{ const custom=$('timeline-range').value==='custom'; $('timeline-from').hidden=!custom; $('timeline-to').hidden=!custom; viewWindow=null; if (custom) { const now=Date.now()/1000, window=currentTimelineWindow||{since:now-3600,until:now}; $('timeline-from').value=localTime(window.since); $('timeline-to').value=localTime(window.until); } refresh(); });
-$('timeline-apply').addEventListener('click',()=>{ datasetPage=0; if ($('timeline-range').value==='custom') { const since=Date.parse($('timeline-from').value)/1000, until=Date.parse($('timeline-to').value)/1000; if (!(until>since && until-since<=86400)) { $('timeline-state').textContent='Select up to 24 hours'; return; } viewWindow={since,until}; } else viewWindow=null; refresh(); });
+$('timeline-apply').addEventListener('click',()=>{ datasetPage=0; if ($('timeline-range').value==='custom') { const since=Date.parse($('timeline-from').value)/1000, until=Date.parse($('timeline-to').value)/1000; if (!(until>since && until-since<=604800)) { $('timeline-state').textContent='Select up to 7 days'; return; } viewWindow={since,until}; } else viewWindow=null; refresh(); });
 refresh(); setInterval(refresh,10000);
 </script>
 </body>
