@@ -428,8 +428,8 @@ class ControlPlane:
         dataset_page = int(query["dataset_page"][0]) if "dataset_page" in query else None
         dataset = query.get("dataset", [""])[0]
         timeline = name == "timeline"
-        if timeline and (not 0 < until - since <= 7 * 86400 or not 1 <= limit <= 2000 or len(dataset) > 256):
-            raise ValueError("choose a time window of at most 7 days and limit up to 2000")
+        if timeline and (not 0 < until - since <= 7 * 86400 or not 1 <= limit <= 5000 or len(dataset) > 256):
+            raise ValueError("choose a time window of at most 7 days and limit up to 5000")
         with self.guard:
             if timeline and since < cache.get("indexed_since", 0) and not cache.get("walk"):
                 # A window older than the index widens the horizon to reach it; the folders it
@@ -449,9 +449,16 @@ class ControlPlane:
                 result["indexing"] = bool(cache.get("walk"))
                 return result
             data = dict(data)
+            rows = data["pool_requests"] + data["bridge_requests"]
             data["pool_total"] = len(data["pool_requests"])
             data["pool_succeeded"] = sum(r["state"] == "succeeded" for r in data["pool_requests"])
             data["indexed_since"] = cache.get("indexed_since")
+            data["earliest_activity"] = min((r["submitted_at"] for r in rows), default=None)
+            day = time.time() - 86400
+            failed = [dict(id=r["id"], at=r.get("finished_at") or r["submitted_at"], operation=r.get("operation"),
+                           dataset=(r.get("trace") or {}).get("dataset_id"), workflow_id=(r.get("trace") or {}).get("workflow_id"))
+                      for r in rows if "fail" in str(r.get("state")) and (r.get("finished_at") or r["submitted_at"]) >= day]
+            data["recent_failures"] = sorted(failed, key=lambda f: -f["at"])[:50]
             data["pool_requests"] = data["pool_requests"][:20]
             data["bridge_requests"] = data["bridge_requests"][:20]
             return data

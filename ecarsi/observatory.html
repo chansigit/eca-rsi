@@ -92,6 +92,22 @@
   .timeline-bar:hover,.timeline-bar:focus-visible { outline:2px solid #2d5046; outline-offset:2px; z-index:2; }
   .timeline-bar.failed { outline:2px solid #a4514e; outline-offset:-2px; }
 .timeline-log-toggle { display:inline-flex; align-items:center; gap:4px; font-size:12px; cursor:pointer; }
+.timeline-spans { display:inline-flex; border:1px solid #d9d2c2; border-radius:6px; overflow:hidden; }
+.timeline-spans button { border:0; background:#fff; padding:4px 9px; font-size:12px; cursor:pointer; }
+.timeline-spans button+button { border-left:1px solid #d9d2c2; }
+.timeline-spans button.on { background:#2d5046; color:#fff; }
+#timeline-live { border:1px solid #d9d2c2; border-radius:6px; background:#fff; padding:4px 9px; font-size:12px; cursor:pointer; }
+#timeline-live.on { border-color:#a4514e; color:#a4514e; font-weight:650; }
+.timeline-select { position:absolute; top:0; bottom:0; background:#2d504633; border:1px solid #2d5046; pointer-events:none; z-index:3; }
+.timeline-track,.timeline-flow { will-change:transform; }
+.timeline-failures { position:relative; font-size:12px; }
+.timeline-failures summary { cursor:pointer; }
+.timeline-failures ul { position:absolute; right:0; z-index:6; margin:4px 0 0; padding:6px; list-style:none; background:#fff; border:1px solid #d9d2c2; border-radius:6px; box-shadow:0 6px 18px #0002; max-height:320px; overflow:auto; min-width:320px; }
+.timeline-failures li button { width:100%; text-align:left; border:0; background:none; padding:4px 6px; cursor:pointer; font:inherit; border-radius:4px; }
+.timeline-failures li button:hover { background:#f2eee4; }
+.timeline-failures li button time { color:#a4514e; font-variant-numeric:tabular-nums; margin-right:6px; }
+.timeline-failures li button small { display:block; color:#7a7264; font-size:10px; }
+.timeline-failures li.empty { padding:4px 6px; color:#7a7264; }
 .timeline-bar.labelled { overflow:hidden; white-space:nowrap; font-size:11px; line-height:25px; padding:0 5px; color:#fff; text-shadow:0 0 2px #0008; box-sizing:border-box; }
   .timeline-flow { position:absolute; inset:0; width:100%; height:100%; z-index:0; pointer-events:none; overflow:visible; }
   .timeline-flow .flow-edge { opacity:max(var(--flow-idle-opacity,.14),var(--edge-min-opacity,0)); transition:opacity .15s; }
@@ -169,7 +185,7 @@
 <body>
 <main>
   <header><div class="brand">RSI <small>v2 / development observatory</small></div><div class="meta"><span><i class="live-dot"></i> Read-only</span><span id="updated">Connecting…</span></div></header>
-  <section class="panel" style="margin-bottom:20px"><div class="panel-head"><div><h2>Worker timeline</h2><div class="sub">One lane per worker: what it ran, for which dataset, when. Stacked bars are concurrent tasks; hover a bar for the task. Switch the view to Datasets for stage runs and their handoffs.</div></div><span class="status off" id="timeline-state">Loading</span></div><div class="timeline-controls"><select id="timeline-view" aria-label="Timeline view"><option value="workers" selected>Workers</option><option value="datasets">Datasets</option></select><select id="timeline-range" aria-label="Time range"><option value="auto">Latest activity</option><option value="3600" selected>Last hour</option><option value="14400">Last 4 hours</option><option value="86400">Last 24 hours</option><option value="604800">Last 7 days</option><option value="custom">Custom</option></select><label class="timeline-log-toggle" title="Compress the distant past and stretch the last minutes; the range widens to 7 days"><input type="checkbox" id="timeline-log"> Log time</label><input id="timeline-from" type="datetime-local" aria-label="From" hidden><input id="timeline-to" type="datetime-local" aria-label="To" hidden><input id="timeline-dataset" type="search" placeholder="Filter dataset…" aria-label="Filter dataset"><button id="timeline-apply" type="button">Apply</button></div><div class="timeline-legend"><span>One color per dataset</span><span><i class="model-key"></i>Model call</span><span><i class="compute-key"></i>Worker task</span><span><i style="background:transparent;border:2px solid #a4514e"></i>Failed task</span><span>Wheel to zoom · Double-click to reset</span></div><div class="flow-layout" id="flow-layout"><div class="timeline-wrap" id="flow-scroll"><div class="timeline" id="timeline"></div></div><aside id="flow-detail" class="flow-detail" aria-label="Selected step details" hidden></aside></div><div id="flow-pages" class="flow-pages"></div><div class="note" id="timeline-note"></div></section>
+  <section class="panel" style="margin-bottom:20px"><div class="panel-head"><div><h2>Worker timeline</h2><div class="sub">One lane per worker: what it ran, for which dataset, when. Opens on the whole recorded history with the last minutes stretched (log time) and the right edge following the clock. Stacked bars are concurrent tasks; hover a bar for the task; Datasets shows stage runs and their handoffs.</div></div><span class="status off" id="timeline-state">Loading</span></div><div class="timeline-controls"><select id="timeline-view" aria-label="Timeline view"><option value="workers" selected>Workers</option><option value="datasets">Datasets</option></select><span class="timeline-spans" role="group" aria-label="Window"><button type="button" data-span="3600">1h</button><button type="button" data-span="14400">4h</button><button type="button" data-span="86400">24h</button><button type="button" data-span="all" class="on">All</button></span><button type="button" id="timeline-live" class="on" title="The right edge follows the clock; pan or zoom into the past to pause">● LIVE</button><label class="timeline-log-toggle" title="Compress the distant past and stretch the last minutes"><input type="checkbox" id="timeline-log" checked> Log time</label><input id="timeline-dataset" type="search" placeholder="Filter dataset…" aria-label="Filter dataset"><details class="timeline-failures"><summary>Recent failures <span id="failure-count"></span></summary><ul id="failure-list"></ul></details></div><div class="timeline-legend"><span>One color per dataset</span><span><i class="model-key"></i>Model call</span><span><i class="compute-key"></i>Worker task</span><span><i style="background:transparent;border:2px solid #a4514e"></i>Failed task</span><span>Drag to pan · Wheel to zoom · Drag on the axis to select · Click a bar for its run · Double-click for All</span></div><div class="flow-layout" id="flow-layout"><div class="timeline-wrap" id="flow-scroll"><div class="timeline" id="timeline"></div></div><aside id="flow-detail" class="flow-detail" aria-label="Selected step details" hidden></aside></div><div id="flow-pages" class="flow-pages"></div><div class="note" id="timeline-note"></div></section>
   <section class="panel" id="compute-pool" style="margin-bottom:20px">
     <div class="panel-head"><div><h2>Compute Warm Pool</h2></div><span id="compute-pool-state" class="status off">Checking</span></div>
     <p id="compute-pool-summary" class="sub"></p>
@@ -220,7 +236,44 @@ $('timeline').addEventListener('focusout',()=>{ hideTimelineTip(); highlightFlow
 $('timeline').addEventListener('keydown',event=>{ if (event.key==='Escape') hideTimelineTip(); });
 document.querySelector('.timeline-wrap').addEventListener('scroll',hideTimelineTip);
 window.addEventListener('scroll',hideTimelineTip,{passive:true});
-let viewWindow=null, currentTimelineWindow=null, zoomTimer;
+// The window is either live (right edge = now, a chosen span or everything recorded) or fixed (after a
+// pan, zoom, selection or a click on a run). Stored in the hash so a reload or a shared link keeps it.
+const view={span:'all',live:true,since:null,until:null};
+let currentTimelineWindow=null, zoomTimer;
+const MAX_SPAN=604800;
+function windowNow() {
+  const now=Date.now()/1000;
+  if (view.live) return {since:now-(view.span==='all'?MAX_SPAN:Number(view.span)),until:now};
+  return {since:view.since,until:view.until};
+}
+function setWindow(w) {
+  const now=Date.now()/1000, since=Math.max(now-MAX_SPAN,Math.min(w.since,w.until-30)), until=Math.min(now,w.until);
+  if (until>=now-2 && view.span==='all' && since<=now-MAX_SPAN+1) { view.live=true; }
+  else if (until>=now-2) { view.live=true; view.span=Math.round(until-since); }
+  else { view.live=false; view.since=since; view.until=until; }
+  syncControls(); writeHash();
+}
+function syncControls() {
+  for (const b of document.querySelectorAll('.timeline-spans button')) b.classList.toggle('on',view.live&&String(view.span)===b.dataset.span);
+  const live=$('timeline-live'); live.classList.toggle('on',view.live); live.textContent=view.live?'● LIVE':'Now ↦';
+  live.title=view.live?'The right edge follows the clock; pan or zoom into the past to pause':'Back to the present, keeping the current span';
+}
+function writeHash() {
+  const h=new URLSearchParams({view:$('timeline-view').value,log:$('timeline-log').checked?'1':'0'});
+  if (view.live) h.set('span',String(view.span)); else { h.set('since',String(Math.round(view.since))); h.set('until',String(Math.round(view.until))); }
+  const dataset=$('timeline-dataset').value.trim(); if (dataset) h.set('dataset',dataset);
+  history.replaceState(null,'','#'+h);
+}
+function readHash() {
+  const h=new URLSearchParams(location.hash.replace(/^#/,''));
+  if (h.get('view')==='datasets') $('timeline-view').value='datasets';
+  if (h.has('log')) $('timeline-log').checked=h.get('log')==='1';
+  if (h.get('dataset')) $('timeline-dataset').value=h.get('dataset');
+  const since=Number(h.get('since')), until=Number(h.get('until'));
+  if (since&&until&&until>since) { view.live=false; view.since=since; view.until=until; }
+  else if (h.get('span')) { view.live=true; view.span=h.get('span')==='all'?'all':Number(h.get('span'))||'all'; }
+  syncControls();
+}
 const localTime=seconds=>{ const d=new Date(seconds*1000); return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16); };
 const LOG_TAU=60;  // seconds that take the first big slice of a log axis
 function timeScale(from,to) {
@@ -241,19 +294,6 @@ function zoomWindow(window,fraction,deltaY) {
   fraction=(anchor-window.since)/span;
   const until=Math.min(Date.now()/1000,anchor+next*(1-fraction));
   return {since:until-next,until};
-}
-function latestActivityWindow(tasks,now=Date.now()/1000) {
-  const intervals=tasks.filter(t=>t.started_at).sort((a,b)=>a.started_at-b.started_at);
-  if (!intervals.length) return null;
-  let start=intervals[0].started_at, end=intervals[0].finished_at||now;
-  for (const task of intervals.slice(1)) {
-    if (task.started_at>end+300) { start=task.started_at; end=task.finished_at||now; }
-    else end=Math.max(end,task.finished_at||now);
-  }
-  const activity=Math.max(1,end-start), span=Math.max(120,activity*1.16);
-  let since=start-(span-activity)/2, until=since+span;
-  if (until>now) { since-=until-now; until=now; }
-  return {since,until};
 }
 const datasetColors=new Map();
 try {
@@ -348,21 +388,75 @@ $('timeline').addEventListener('wheel',event=>{
   if (!track || !currentTimelineWindow) return;
   event.preventDefault();
   const rect=track.getBoundingClientRect();
-  viewWindow=zoomWindow(viewWindow||currentTimelineWindow,Math.max(0,Math.min(1,(event.clientX-rect.left)/rect.width)),event.deltaY);
-  $('timeline-range').value='custom';
-  $('timeline-from').hidden=$('timeline-to').hidden=false;
-  $('timeline-from').value=localTime(viewWindow.since);
-  $('timeline-to').value=localTime(viewWindow.until);
+  setWindow(zoomWindow(currentTimelineWindow,Math.max(0,Math.min(1,(event.clientX-rect.left)/rect.width)),event.deltaY));
   clearTimeout(zoomTimer);
   ++refreshSeq;
   zoomTimer=setTimeout(refresh,140);
 },{passive:false});
-function resetTimelineView() {
-  viewWindow=null;
-  $('timeline-range').value='auto';
-  $('timeline-from').hidden=$('timeline-to').hidden=true;
+function resetTimelineView() { view.live=true; view.span='all'; syncControls(); writeHash(); }
+// Drag on a track pans; drag on the axis selects a window; a click on a bar frames its stage run.
+(function(){
+  const root=$('timeline'); let drag=null;
+  root.addEventListener('pointerdown',event=>{
+    if (event.button!==0 || !currentTimelineWindow) return;
+    const scale=event.target.closest?.('.timeline-scale'), track=event.target.closest?.('.timeline-track');
+    const surface=scale||track; if (!surface) return;
+    const rect=surface.getBoundingClientRect();
+    drag={mode:scale?'select':'pan',x0:event.clientX,rect,moved:false,box:null};
+    root.setPointerCapture(event.pointerId);
+  });
+  root.addEventListener('pointermove',event=>{
+    if (!drag) return;
+    const dx=event.clientX-drag.x0; if (Math.abs(dx)>3) drag.moved=true; if (!drag.moved) return;
+    if (drag.mode==='pan') { for (const t of root.querySelectorAll('.timeline-track,.timeline-flow')) t.style.transform=`translateX(${dx}px)`; }
+    else {
+      if (!drag.box) { drag.box=document.createElement('div'); drag.box.className='timeline-select'; root.appendChild(drag.box); }
+      const left=Math.min(event.clientX,drag.x0)-root.getBoundingClientRect().left;
+      drag.box.style.left=left+'px'; drag.box.style.width=Math.abs(dx)+'px';
+    }
+  });
+  const finish=event=>{
+    if (!drag) return;
+    const d=drag; drag=null; d.box?.remove();
+    for (const t of root.querySelectorAll('.timeline-track,.timeline-flow')) t.style.transform='';
+    const {since,until}=currentTimelineWindow, f=x=>Math.max(0,Math.min(1,(x-d.rect.left)/d.rect.width));
+    if (!d.moved) {
+      const bar=event.target.closest?.('.timeline-bar[data-workflow]');
+      if (bar && ($('timeline-view').value||'workers')==='workers') frameWorkflow(bar.dataset.workflow);
+      return;
+    }
+    if (d.mode==='pan') {
+      const shift=timeAtFraction(since,until,f(d.x0))-timeAtFraction(since,until,f(event.clientX));
+      setWindow({since:since+shift,until:until+shift});
+    } else {
+      const a=timeAtFraction(since,until,f(Math.min(d.x0,event.clientX))), b=timeAtFraction(since,until,f(Math.max(d.x0,event.clientX)));
+      if (b-a>=30) setWindow({since:a,until:b});
+    }
+    refresh();
+  };
+  root.addEventListener('pointerup',finish); root.addEventListener('pointercancel',()=>{ if(drag){drag.box?.remove();drag=null;for(const t of root.querySelectorAll('.timeline-track,.timeline-flow'))t.style.transform='';} });
+})();
+function frameWorkflow(workflowId) {
+  const now=Date.now()/1000, tasks=(timelineData?.tasks||[]).filter(t=>t.trace?.workflow_id===workflowId);
+  if (!tasks.length) return;
+  const since=Math.min(...tasks.map(t=>t.started_at||t.submitted_at)), until=Math.max(...tasks.map(t=>t.finished_at||now));
+  const pad=Math.max(30,(until-since)*.05);
+  setWindow({since:since-pad,until:until+pad}); refresh();
+}
+function renderFailures(items) {
+  const list=$('failure-list'); $('failure-count').textContent=items.length?`(${items.length})`:'';
+  list.innerHTML=items.length?items.map((f,i)=>`<li><button type="button" data-failure="${i}"><time>${esc(when(f.at))}</time> ${esc(f.dataset||'—')} · ${esc(f.operation||f.id)}<small>${esc(f.id)}</small></button></li>`).join(''):'<li class="empty">None in the last 24 hours</li>';
+  list.onclick=event=>{
+    const button=event.target.closest?.('[data-failure]'); if (!button) return;
+    const f=items[Number(button.dataset.failure)], now=Date.now()/1000;
+    $('timeline-dataset').value=f.dataset||''; $('timeline-view').value='workers';
+    setWindow({since:f.at-1800,until:Math.min(now,f.at+300)}); refresh();
+  };
 }
 $('timeline').addEventListener('dblclick',event=>{ event.preventDefault(); resetTimelineView(); refresh(); });
+document.querySelector('.timeline-spans').addEventListener('click',event=>{ const b=event.target.closest?.('[data-span]'); if(!b)return; view.live=true; view.span=b.dataset.span==='all'?'all':Number(b.dataset.span); syncControls(); writeHash(); refresh(); });
+$('timeline-live').addEventListener('click',()=>{ if (!view.live) { const span=view.until-view.since; view.live=true; view.span=span>=MAX_SPAN-60?'all':Math.round(span); } syncControls(); writeHash(); refresh(); });
+let datasetTimer; $('timeline-dataset').addEventListener('input',()=>{ clearTimeout(datasetTimer); datasetTimer=setTimeout(()=>{ datasetPage=0; writeHash(); refresh(); },400); });
 let timelineData=null, selectedStep=null, datasetPage=0, detailLimit=80;
 const expandedRuns=new Set(), collapsedDatasets=new Set();
 let initializedFlow=false;
@@ -481,12 +575,12 @@ function renderTimeline(data) {
   } else renderDatasetTimeline(data);
 }
 $('timeline-view').addEventListener('change',()=>{datasetPage=0;if(timelineData)renderTimeline(timelineData);refresh();});
-try { $('timeline-log').checked=localStorage.getItem('observatory.logTime')==='1'; if ($('timeline-log').checked) $('timeline-range').value='604800'; } catch (e) {}
+try { if (localStorage.getItem('observatory.logTime')==='0') $('timeline-log').checked=false; } catch (e) {}
 $('timeline-log').addEventListener('change',()=>{
   try { localStorage.setItem('observatory.logTime',$('timeline-log').checked?'1':'0'); } catch (e) {}
-  if ($('timeline-log').checked) { viewWindow=null; $('timeline-range').value='604800'; $('timeline-from').hidden=$('timeline-to').hidden=true; refresh(); }
-  else if (timelineData) { renderTimeline(timelineData); renderResourceHistory(timelineData); }
+  writeHash(); if (timelineData) { renderTimeline(timelineData); renderResourceHistory(timelineData); }
 });
+$('timeline-view').addEventListener('change',writeHash);
 $('timeline').addEventListener('click',event=>{
   const target=event.target.closest?.('[data-dataset-toggle],[data-run-toggle],[data-step-select]');if(!target)return;
   if(target.dataset.datasetToggle!==undefined) { const key=target.dataset.datasetToggle;collapsedDatasets.has(key)?collapsedDatasets.delete(key):collapsedDatasets.add(key); }
@@ -642,19 +736,20 @@ async function refresh() {
     $('updated').textContent = `Updated ${when(d.generated_at)}`;
     $('host').textContent = `${d.host} · isolated v2 state`;
     renderComputePool(d);
-    const now=Date.now()/1000, range=$('timeline-range').value;
+    renderFailures(d.recent_failures||[]);
     const dataset=$('timeline-dataset').value.trim();
-    const recent=[...d.pool_requests,...d.bridge_requests].filter(t=>!dataset||t.trace?.dataset_id?.toLowerCase().includes(dataset.toLowerCase()));
-    const latest=range==='auto'?latestActivityWindow(recent,now):null;
-    const since=viewWindow?viewWindow.since:latest?latest.since:range==='custom'?Date.parse($('timeline-from').value)/1000:now-Number(range||14400);
-    const until=viewWindow?viewWindow.until:latest?latest.until:range==='custom'?Date.parse($('timeline-to').value)/1000:now;
+    const all=view.live&&view.span==='all', {since,until}=windowNow();
     if (Number.isFinite(since) && Number.isFinite(until)) {
-      const params=new URLSearchParams({since:String(since),until:String(until),dataset});
+      const params=new URLSearchParams({since:String(since),until:String(until),dataset,limit:all?'5000':'2000'});
       if(($("timeline-view").value||"datasets")==="datasets")params.set("dataset_page",String(datasetPage));
       const timelineResponse=await fetch('api/timeline?'+params,{cache:'no-store'});
       if (!timelineResponse.ok) throw new Error(`Timeline HTTP ${timelineResponse.status}`);
       const timeline=await timelineResponse.json();
       if (seq!==refreshSeq) return;
+      if (all) {  // frame the recorded history, not seven empty days
+        const first=Math.min(...timeline.tasks.map(t=>t.submitted_at),d.earliest_activity||Infinity);
+        if (Number.isFinite(first)) timeline.since=Math.max(timeline.since,Math.min(first-60,timeline.until-600));
+      }
       const {resources,...taskData}=timeline;
       const signature=JSON.stringify(taskData);
       if (signature!==timelineSignature) { renderTimeline(timeline); timelineSignature=signature; }
@@ -664,9 +759,7 @@ async function refresh() {
     }
   } catch(e) { if (seq===refreshSeq) $('updated').textContent=`Unavailable: ${e.message}`; }
 }
-$('timeline-range').addEventListener('change',()=>{ const custom=$('timeline-range').value==='custom'; $('timeline-from').hidden=!custom; $('timeline-to').hidden=!custom; viewWindow=null; if (custom) { const now=Date.now()/1000, window=currentTimelineWindow||{since:now-3600,until:now}; $('timeline-from').value=localTime(window.since); $('timeline-to').value=localTime(window.until); } refresh(); });
-$('timeline-apply').addEventListener('click',()=>{ datasetPage=0; if ($('timeline-range').value==='custom') { const since=Date.parse($('timeline-from').value)/1000, until=Date.parse($('timeline-to').value)/1000; if (!(until>since && until-since<=604800)) { $('timeline-state').textContent='Select up to 7 days'; return; } viewWindow={since,until}; } else viewWindow=null; refresh(); });
-refresh(); setInterval(refresh,10000);
+readHash(); refresh(); setInterval(refresh,10000);
 </script>
 </body>
 </html>

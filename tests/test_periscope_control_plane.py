@@ -45,6 +45,7 @@ def test_control_page_and_apis_are_served_under_control(tmp_path):
         status, kind, body = get(server, '/_control/api/status')
         data = json.loads(body)
         assert status == 200 and kind.startswith('application/json') and data['workers'] == [] and data['pool_total'] == 0
+        assert data['earliest_activity'] is None and data['recent_failures'] == []
         now = int(time.time())
         status, _, body = get(server, f'/_control/api/timeline?since={now - 600}&until={now}')
         assert status == 200 and json.loads(body)['indexing'] is False  # inside the index: no widening walk
