@@ -1,6 +1,6 @@
 """eca-rsi — the one entry point of the main line.
 
-    eca-rsi [--harness BACKEND] [--model MODEL] run <eca-pp-dir> <root> [--rounds N] [--cap 10] [--mirror DIR] [--serve [PORT]]
+    eca-rsi [--harness BACKEND] [--model MODEL] run <eca-pp-dir> <root> [--rounds N] [--cap 15] [--mirror DIR] [--serve [PORT]]
     eca-rsi organize  <eca-pp-dir> <root> [--mirror DIR]
     eca-rsi persample <unit> [...]           eca-rsi loop   <unit> [...]      (both also take --mirror DIR)
     eca-rsi crosssample <unit> [round_dir]   eca-rsi zoomin <unit> [round_dir]
@@ -56,7 +56,7 @@ def run(argv: list[str]) -> int:
     ap.add_argument("--stop-after", choices=["organize", "persample"], help="validate the front pipeline without entering the loop")
     ap.add_argument("--plan-json", help="explicit organize plan")
     ap.add_argument("--rounds", type=int, default=None, help="fixed number of loop rounds (default: converge on cell count)")
-    ap.add_argument("--cap", type=int, default=None, help="loop safety cap (default 10)")
+    ap.add_argument("--cap", type=int, default=None, help="loop safety cap (default 15)")
     ap.add_argument("--force-reopen", action="store_true", help="continue past an existing release")
     ap.add_argument("--no-prune", action="store_true", help="keep intermediate round h5ads after release (default: prune them)")
     ap.add_argument("--mirror", metavar="DIR", help="keep a copy of <root> here: light files after every step, all of it at release")

@@ -21,7 +21,7 @@ deliberately NOT a criterion):
                      (3) and, on top of either, fewer than 1000 cells in absolute
                          terms (the floor; loop_control max_removed tunes it).
                      Round 1 never releases (it works on raw integration);
-                     a safety cap (--cap, default 10) forces a flagged
+                     a safety cap (--cap, default 15) forces a flagged
                      release so the loop cannot run forever.
 The loop never stops for a human: doubts accumulate as flags and are
 reported once, in release/needs_review.{md,json} (ecarsi.review).

@@ -6,7 +6,7 @@ PLATEAU_FRAC = 0.02        # (2) three consecutive rounds each < 2%
 PLATEAU_ROUNDS = 3
 RELEASE_MAX_REMOVED = 1000 # (3) floor on top of (1)/(2): a round that still removed >= 1000 cells never
                            #     releases — "< 1%" of 400k cells is 4k cells (issue #3; 5 of 6 tome releases)
-DEFAULT_CAP = 10           # safety ceiling in auto mode (forced, flagged release)
+DEFAULT_CAP = 15           # safety ceiling in auto mode (forced, flagged release); 10 until 2026-09-18
 
 
 def decide(n: int, stats: list[dict], rounds: int | None, cap: int, extra: int = 0,

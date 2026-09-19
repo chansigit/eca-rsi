@@ -21,7 +21,7 @@ eca-rsi organize|persample|loop|serve ...                          # 分步,等�
 ```
 python -m ecarsi.organize    <输入目录> <root>       # eca-pp 守门 + 分析单元规划(agent)+ 细胞守恒审计
 python -m ecarsi.persample   <unit>                 # 样本列识别(agent)+ host 子进程池并行跑 osp(每样本 subset.h5ad;QC 只此一次,doublet 只在完整样本池算)
-python -m ecarsi.loop        <unit> [--rounds N] [--cap 10] [--force-reopen]
+python -m ecarsi.loop        <unit> [--rounds N] [--cap 15] [--force-reopen]
    round 1: ecarsi.crosssample(样本纳入 agent → msp integrate/inspect/annotate)→ ecarsi.zoomin(zmip)
    round N: 上轮 zoomin/annotated_zmip.h5ad,先验列改名 r(N-1)_* → msp --from-h5ad → zmip
 python -m ecarsi.ledger      <unit> [round dirs]    # 逐细胞台账 cell_ledger.csv + Sankey(每步删除流进红色 sink)
@@ -71,7 +71,7 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
 - **停机只看细胞数**,标签变动不作判据(agent 措辞有随机性):给了 `--rounds N` 就按总轮数发布，允许 `--rounds 1`;
   没给则 (1) 本轮删除比 < 1% 或删除数 < 100,或 (2) 连续三轮删除比 < 2%,**且** (3) 本轮删除 < 1000 细胞(绝对下限,2026-09-10 起,
   `loop_control.json` 的 `max_removed` 可调;reason 会写明 `removed 0.81% but 1,989 cells >= 1,000 floor`)即 release；自动模式首轮继续;
-  `--cap`(默认 10)是安全上限,触顶强制 release 并标记。`--force-reopen` 越过已有 release 继续开轮。
+  `--cap`(默认 15,2026-09-18 起;此前 10)是安全上限,触顶强制 release 并标记。`--force-reopen` 越过已有 release 继续开轮。
 - **手动挡**:`<unit>/loop_control.json` 在每个轮次边界重读(唯一做决定的时刻),可在跑的过程中编辑:
   `cap`(改安全上限)、`rounds`(固定总轮数)、`extra_rounds_after_convergence`(收敛后再跑 n 轮)、
   `stop_after_round`(该轮后暂停:退出码 3,不 release,重跑续上)。每次覆盖写 progress.log 并进该轮 stats 的 reason;

@@ -243,7 +243,7 @@ Label wording changes are not a stopping criterion. Unresolved biological
 questions accumulate in `needs_review` rather than prompting for approval.
 Execution failures or missing required outputs can still stop a unit.
 
-`--cap` sets the automatic-mode round limit (default 10); reaching it without
+`--cap` sets the automatic-mode round limit (default 15); reaching it without
 convergence produces a forced release with a review flag. `--rounds N` overrides
 automatic stopping and releases after the specified total round count, including
 `--rounds 1`. Check the recorded reason before interpreting a release as converged.

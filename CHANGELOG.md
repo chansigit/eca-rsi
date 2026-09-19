@@ -11,6 +11,7 @@ generation (`eca-rsi run`, Slurm pool, batch admission) keeps its modules where 
   agent-harness-bridge package), `ecarsi.stages` (organize/persample/crosssample/zoomin `_v2`, dataset_release),
   `ecarsi.warm_pool.budget` (operation_budget) and `ecarsi.observatory` (dev_observatory); `python -m
   ecarsi.control|agent|observatory` entry points.
+- Round cap default 10 → 15 (`round_policy.DEFAULT_CAP`, `--cap`); gen-2 dataset specs state `round_policy.cap` explicitly.
 - Pool failures of the budget class get one automatic retry from `control.coordinator.check_pool_once`: an execution
   deadline at twice the time limit, a preferred GPU's memory budget on CPUs (`warm_pool.state.retry` grew
   `timeout_seconds` / `without_gpu`, also on `warm_pool retry`). On 2026-09-18 a node whose Lustre client stalled
