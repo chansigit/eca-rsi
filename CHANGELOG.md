@@ -11,6 +11,9 @@ generation (`eca-rsi run`, Slurm pool, batch admission) keeps its modules where 
   agent-harness-bridge package), `ecarsi.stages` (organize/persample/crosssample/zoomin `_v2`, dataset_release),
   `ecarsi.warm_pool.budget` (operation_budget) and `ecarsi.observatory` (dev_observatory); `python -m
   ecarsi.control|agent|observatory` entry points.
+- The observatory's web server is gone: Periscope (`ecarsi serve --control-plane <run dir>`) mounts the same page and
+  APIs at `/_control/` (`observatory.ControlPlane`; sidebar item "Control plane"); `container/control-plane.sh`
+  starts Periscope for the run directory. `ecarsi.observatory` keeps `status` / `releases` / `tokens` / `temporal-ui`.
 - A dead agent session restarts once (`control.coordinator.run_agent`: new session id `-r2`, directory `restart/`,
   same evidence; `restart.json` names the superseded session and resume treats that session's requests as
   superseded, as it now does for context resets). A second death skips the sample (finalized unannotated, prior

@@ -5,6 +5,7 @@ startup line); the CLI verb stays `serve`.
 
     ecarsi serve [dir...] [--registry FILE] [--port 8899] [--bind 127.0.0.1]
                  [--ngrok [--domain csj.example.app]] [--auth user:pass]
+                 [--control-plane RUN_DIR [--control-pool-root P] [--control-bridge-root B] [--control-temporal-root T]]
     ecarsi serve scan-add <dir-or-glob>... [--name N] [--dry-run] [--registry FILE]
     ecarsi serve remove   <name>... [--registry FILE]
     ecarsi serve list     [--json] [--registry FILE]
@@ -234,12 +235,13 @@ NAV_JS = r"""
 (function(){
   const $ = id => document.getElementById(id);
   const items = [...document.querySelectorAll("#sb-list .item")], frame = $("frame"), crumb = $("crumb"), open = $("open"),
-        q = $("nav-q"), n = $("nav-n"), msg = $("nav-msg"), empty = $("empty"), home = $("home-item"), pool = $("pool-item"), models = $("models-item"),
+        q = $("nav-q"), n = $("nav-n"), msg = $("nav-msg"), empty = $("empty"), home = $("home-item"), pool = $("pool-item"), models = $("models-item"), control = $("control-item"),
         sort = $("nav-sort"), sp = $("nav-sp"), st = $("nav-st"), groups = [...document.querySelectorAll("#sb-list details.group")];
   const names = new Set(items.map(i => i.dataset.name));
   // -- sidebar <-> main pane --
   function mark(name){ items.forEach(i => i.classList.toggle("active", i.dataset.name === name));
     if (home) home.classList.toggle("active", name === "__home__");
+    if (control) control.classList.toggle("active", name === "_control");
     if (pool) pool.classList.toggle("active", name === "_warm_pool_panel");
     if (models) models.classList.toggle("active", name === "_model_pool_panel");
     const cur = items.find(i => i.dataset.name === name); if (cur) { const g = cur.closest("details.group"); if (g) g.open = true; } }
@@ -249,6 +251,7 @@ NAV_JS = r"""
   function fromHash(){
     const h = location.hash.replace(/^#/, "");
     if (h === "/__home__") return "/_home";
+    if (h === "/_control/") return control ? "/_control/" : null;
     const m = h.match(/^\/([^/]+)\/(.*)$/); return m && names.has(m[1]) ? "/" + m[1] + "/" + m[2] : null; }
   frame.addEventListener("load", () => {
     const p = frameUrl(); if (!p || window.poolMonitor.isOpen() || window.modelMonitor.isOpen()) return;
@@ -260,12 +263,13 @@ NAV_JS = r"""
     }
     const m = p.match(/^\/([^/]+)\//); if (!m) return;
     if (location.hash !== "#" + p) history.replaceState(null, "", "#" + p);
-    mark(m[1]); crumb.textContent = decodeURIComponent(p); open.href = p;
+    mark(m[1]); crumb.textContent = p === "/_control/" ? "control plane" : decodeURIComponent(p); open.href = p;
     try { document.title = frame.contentDocument.title || "Periscope"; } catch (e) {}
   });
   window.addEventListener("hashchange", () => { const p = fromHash(); if (p) show(p); });
   items.forEach(i => i.addEventListener("click", ev => { if (ev.target.closest("input.sel")) return; ev.preventDefault(); show("/" + i.dataset.name + "/"); }));
   if (home) home.addEventListener("click", ev => { ev.preventDefault(); show("/_home"); });
+  if (control) control.addEventListener("click", ev => { ev.preventDefault(); show("/_control/"); });
   async function showMonitor(monitor, other, name, title){
     other.close();
     if(!await monitor.open())return;
@@ -531,7 +535,7 @@ DATASET_STATES = (("released", "Completed"), ("running", "Running"), ("queued", 
                   ("paused", "Paused"), ("neutral", "Not started"), ("failed", "Failed"))
 
 
-def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_state) -> str:
+def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_state, control: bool = False) -> str:
     """Shell: datasets grouped by collection down the left, the selected
     dataset's own pages (root landing page -> its units -> ...) in an iframe on
     the right. The iframe keeps the address in the hash (#/<name>/...), so
@@ -590,7 +594,9 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
         "</div>"
         '<a class="item home-item" id="home-item" href="/_home" data-name="__home__">'
         '<span class="nm"><b>Overview</b> · all datasets</span></a>'
-        '<button class="item home-item" id="models-item" title="Primary and fallback model inventory"><span class="nm"><b>Agent Bridge</b></span></button>'
+        + ('<a class="item home-item" id="control-item" href="/_control/" data-name="_control" title="Temporal, warm pool and bridge of the run directory">'
+           '<span class="nm"><b>Control plane</b></span></a>' if control else '')
+        + '<button class="item home-item" id="models-item" title="Primary and fallback model inventory"><span class="nm"><b>Agent Bridge</b></span></button>'
         '<button class="item home-item" id="pool-item" disabled aria-disabled="true" title="Checking warm pool availability">'
         '<span class="nm"><b>Warm pool</b></span><span class="cells" id="pool-state">checking</span></button>'
         f'<div class="sb-list" id="sb-list">{rows or empty_note}</div>'
@@ -910,8 +916,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     self.path are recomputed per request, which is safe — translate_path
     reads them fresh on every call, not cached from __init__)."""
 
-    def __init__(self, *a, registry: Registry, auth: str | None = None, states: StateCache | None = None, pool_scheduler: str | None = None, **kw):
+    def __init__(self, *a, registry: Registry, auth: str | None = None, states: StateCache | None = None, pool_scheduler: str | None = None,
+                 control=None, **kw):
         self._registry = registry
+        self._control = control  # observatory.ControlPlane behind /_control/ when serve got --control-plane
         self._auth = auth  # "user:pass" -> HTTP basic auth enforced here, on every request; None = open
         self._state = states.get if states else _dataset_state  # fleet pages: cached states when a warmer runs
         self._states = states
@@ -1061,6 +1069,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._json(200, {**data, "html": model_web.render(data)})
             except Exception:
                 return self._json(503, {"error": "Model configuration is unavailable"})
+        if raw == "/_control" or raw.startswith("/_control/"):
+            if self._control is None:
+                return self._json(404, {"error": "no control plane: start the server with --control-plane <run dir>"})
+            if raw == "/_control":
+                return self._redirect("/_control/")
+            if raw == "/_control/":
+                return self._send(200, self._control.page(), "text/html; charset=utf-8")
+            if raw in {"/_control/api/status", "/_control/api/timeline"}:
+                try:
+                    query = urllib.parse.parse_qs(self.path.partition("?")[2])
+                    return self._json(200, self._control.api(raw.rsplit("/", 1)[1], query))
+                except (ValueError, OverflowError) as e:
+                    return self._json(400, {"error": str(e)})
+            return self._json(404, {"error": "Not found"})
         pool_path = urllib.parse.unquote(raw).rstrip("/")
         if pool_path == "/_pool" or pool_path.startswith("/_pool/"):
             if pool_path not in {"/_pool/health", "/_pool/status.json"}:
@@ -1086,7 +1108,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         parts = [p for p in raw.split("/") if p]
         if not parts:
             return self._html(
-                _navigator_html(self._items(), self._registry.path, self._state)
+                _navigator_html(self._items(), self._registry.path, self._state, control=self._control is not None)
             )
         name = parts[0]
         root = self._items().get(name)
@@ -1213,9 +1235,16 @@ def cmd_serve(args: argparse.Namespace) -> int:
     cache_key = hashlib.sha256(str(reg_path).encode()).hexdigest()[:16]
     states = StateCache(registry, cache_file=Path.home()/'.cache/ecarsi-periscope'/f'{cache_key}.json')
     states.start()
+    control = None
+    if args.control_plane:
+        from .observatory import ControlPlane
+        base = Path(args.control_plane).expanduser().resolve()
+        control = ControlPlane(base, pool_root=Path(args.control_pool_root or base / 'pool'),
+                               bridge_root=Path(args.control_bridge_root or base / 'bridge'),
+                               temporal_service_root=Path(args.control_temporal_root or base / 'durable-control')).start()
     httpd = http.server.ThreadingHTTPServer(
         (args.bind, args.port), partial(Handler, registry=registry, auth=args.auth, states=states,
-                                      pool_scheduler=args.pool_scheduler)
+                                      pool_scheduler=args.pool_scheduler, control=control)
     )
     print(
         f"[serve] {APP} on http://{args.bind}:{args.port}/  ({len(items)} dataset(s); registry {reg_path}"
@@ -1224,7 +1253,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
             f"  [password-protected, user {args.auth.split(':', 1)[0]!r}]"
             if args.auth
             else "  [no password]"
-        ),
+        )
+        + (f"  [control plane {control.root} at /_control/]" if control else ""),
         flush=True,
     )
     for name, p in sorted(items.items()):
@@ -1513,6 +1543,11 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--port", type=int, default=8899)
     ap.add_argument("--pool-scheduler", default=os.environ.get("ECA_POOL_SCHEDULER"),
                     help="optional warm pool scheduler address or JSON file (default: ECA_POOL_SCHEDULER)")
+    ap.add_argument("--control-plane", default=None, metavar="RUN_DIR",
+                    help="gen-2 run directory: serve its Temporal / warm pool / bridge monitor at /_control/")
+    ap.add_argument("--control-pool-root", default=None, help="pool root of the run directory (default RUN_DIR/pool)")
+    ap.add_argument("--control-bridge-root", default=None, help="bridge root (default RUN_DIR/bridge)")
+    ap.add_argument("--control-temporal-root", default=None, help="Temporal service root (default RUN_DIR/durable-control)")
     ap.add_argument(
         "--bind",
         default="127.0.0.1",

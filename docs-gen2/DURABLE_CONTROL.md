@@ -47,7 +47,7 @@ capacity for the Temporal service, database and other control components.
 The observatory can follow the same record:
 
 ```bash
-python -m ecarsi.observatory serve --root /shared/rsi/runs \
+python -m ecarsi.serve --control-plane /shared/rsi/runs \
   --temporal-service-root /shared/rsi/control --port 8765
 ```
 

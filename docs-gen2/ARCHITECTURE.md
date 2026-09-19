@@ -56,7 +56,7 @@ python -m ecarsi.control.temporal --root <control> --postgres-bin … --temporal
 python -m ecarsi.warm_pool --root <pool> scheduler --host <node>          # HyperQueue 调度器；add-worker 加节点
 python -m ecarsi.agent serve <bridge>                                      # 模型回合服务（运行目录里仍叫 bridge）
 python -m ecarsi.control --service-root <control> --task-queue <q> worker  # 协调器（可多份）
-python -m ecarsi.observatory serve --root <base> --bind <ip> --port 8765 --temporal-service-root <control>
+python -m ecarsi.serve --control-plane <base> --bind <ip> --port 8765 --temporal-service-root <control>
 python -m ecarsi.control --service-root <control> --task-queue <q> start-dataset|resume-dataset|status-dataset <run_id>
 ```
 

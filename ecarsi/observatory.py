@@ -1,9 +1,9 @@
-"""Read-only development dashboard for the isolated RSI v2 records."""
+"""Read-only control-plane records of RSI v2: the monitor Periscope serves at /_control/ (`ecarsi serve
+--control-plane <run dir>`) and the `status` / `releases` / `tokens` command-line reports."""
 
 import argparse
 import asyncio
 from datetime import datetime, timedelta, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
@@ -11,7 +11,6 @@ import re
 import socket
 import threading
 import time
-from urllib.parse import parse_qs, urlsplit
 
 from .agent import status as bridge_status
 from .warm_pool.state import lock, read, status as pool_status
@@ -376,100 +375,86 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
     }
 
 
-def serve(root: Path, port: int, temporal_port: int, bind: str,
-          pool_root: Path | None = None, bridge_root: Path | None = None,
-          temporal_service_root: Path | None = None) -> None:
-    cache = {}
-    guard = threading.Lock()
+class ControlPlane:
+    """The control-plane monitor Periscope mounts at /_control/: one paced index of the pool and bridge
+    request folders, refreshed at most every 2 s on demand and widened in the background when a page
+    asks for a window older than the index. Read-only; never connects to a scheduler or submits work."""
 
-    def warm():
-        # The first walk over every saved pool/bridge request takes minutes on
-        # Lustre; do it at startup so the first page load does not look down.
-        try:
-            with guard:
-                cache["snapshot"] = snapshot(root, temporal_port, bind, cache,
-                                             pool_root, bridge_root, temporal_service_root)
-                cache["snapshot_at"] = time.monotonic()
-        except Exception as exc:  # noqa: BLE001 - the request path rebuilds it anyway
-            print(f"observatory warm-up skipped: {exc}", flush=True)
-    threading.Thread(target=warm, daemon=True).start()
+    def __init__(self, root: Path, pool_root: Path | None = None, bridge_root: Path | None = None,
+                 temporal_service_root: Path | None = None, temporal_port: int = 8233, temporal_host: str = "127.0.0.1"):
+        self.root, self.pool_root, self.bridge_root = Path(root), pool_root, bridge_root
+        self.temporal_service_root, self.temporal_port, self.temporal_host = temporal_service_root, temporal_port, temporal_host
+        self.cache, self.guard = {}, threading.Lock()
 
-    def widen():
-        # Refreshes pause while this runs (the handler checks cache["walk"]), so the index caches
-        # have a single writer; readers only ever take the finished snapshot under the guard.
+    def _snapshot(self):
+        return snapshot(self.root, self.temporal_port, self.temporal_host, self.cache,
+                        self.pool_root, self.bridge_root, self.temporal_service_root)
+
+    def start(self):
+        """Warm the index in the background: the first walk over every saved request takes minutes on
+        Lustre, and a page load must not look like an outage meanwhile."""
+        def warm():
+            try:
+                with self.guard:
+                    self.cache["snapshot"], self.cache["snapshot_at"] = self._snapshot(), time.monotonic()
+            except Exception as exc:  # noqa: BLE001 - the request path rebuilds it anyway
+                print(f"control plane warm-up skipped: {exc}", flush=True)
+        threading.Thread(target=warm, daemon=True).start()
+        return self
+
+    def _widen(self):
+        # Refreshes pause while this runs (api() checks cache["walk"]), so the index caches have a
+        # single writer; readers only ever take the finished snapshot under the guard.
         try:
-            built = snapshot(root, temporal_port, bind, cache, pool_root, bridge_root, temporal_service_root)
+            built = self._snapshot()
         except Exception as exc:  # noqa: BLE001 - the page keeps its last records
-            print(f"observatory widening skipped: {exc}", flush=True)
+            print(f"control plane widening skipped: {exc}", flush=True)
             built = None
-        with guard:
+        with self.guard:
             if built is not None:
-                cache["snapshot"] = built
-                cache["snapshot_at"] = time.monotonic()
-            cache.pop("walk", None)
+                self.cache["snapshot"], self.cache["snapshot_at"] = built, time.monotonic()
+            self.cache.pop("walk", None)
 
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            url = urlsplit(self.path)
-            if url.path == "/":
-                body, kind = PAGE.read_bytes(), "text/html; charset=utf-8"
-            elif url.path in {"/api/status", "/api/timeline"}:
-                try:
-                    query = parse_qs(url.query)
-                    until = float(query.get("until", [time.time()])[0])
-                    since = float(query.get("since", [until - 3600])[0])
-                    limit = int(query.get("limit", [2000])[0])
-                    dataset_page = int(query["dataset_page"][0]) if "dataset_page" in query else None
-                    dataset = query.get("dataset", [""])[0]
-                    timeline = url.path == "/api/timeline"
-                    if timeline and (not 0 < until - since <= 7 * 86400 or not 1 <= limit <= 2000 or len(dataset) > 256):
-                        raise ValueError("choose a time window of at most 7 days and limit up to 2000")
-                    with guard:
-                        if timeline and since < cache.get("indexed_since", 0) and not cache.get("walk"):
-                            # A window older than the index widens the horizon to reach it; the folders it
-                            # uncovers are read in the background while the page keeps its current records.
-                            cache["horizon"] = max(cache.get("horizon", INDEX_HORIZON), time.time() - since + 3600)
-                            cache["walk"] = threading.Thread(target=widen, daemon=True)
-                            cache["walk"].start()
-                        if not cache.get("walk") and time.monotonic() - cache.get("snapshot_at", 0) >= 2:
-                            cache["snapshot"] = snapshot(root, temporal_port, bind, cache,
-                                                         pool_root, bridge_root, temporal_service_root)
-                            cache["snapshot_at"] = time.monotonic()
-                        data = cache["snapshot"]
-                        if timeline:
-                            result = task_timeline(data["pool_requests"], data["bridge_requests"],
-                                                   since, until, dataset, limit, dataset_page)
-                            result["resources"] = summarize_resources(resource_history(
-                                Path(pool_root) if pool_root else Path(root) / "pool", since, until,
-                                cache.setdefault("resource_files", {})), since, until)
-                            result["indexed_since"] = cache.get("indexed_since")
-                            result["indexing"] = bool(cache.get("walk"))
-                        else:
-                            data = dict(data)
-                            data["pool_total"] = len(data["pool_requests"])
-                            data["pool_succeeded"] = sum(r["state"] == "succeeded" for r in data["pool_requests"])
-                            data["indexed_since"] = cache.get("indexed_since")
-                            data["pool_requests"] = data["pool_requests"][:20]
-                            data["bridge_requests"] = data["bridge_requests"][:20]
-                            result = data
-                    body = json.dumps(result, allow_nan=False).encode()
-                except (ValueError, OverflowError) as exc:
-                    self.send_error(400, str(exc))
-                    return
-                kind = "application/json; charset=utf-8"
-            else:
-                self.send_error(404)
-                return
-            self.send_response(200)
-            self.send_header("Content-Type", kind)
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+    @staticmethod
+    def page() -> bytes:
+        return PAGE.read_bytes()
 
-    with ThreadingHTTPServer((bind, port), Handler) as server:
-        print(f"RSI v2 observatory: {bind}:{port}", flush=True)
-        server.serve_forever()
+    def api(self, name: str, query: dict) -> dict:
+        """'status' or 'timeline' with the page's query parameters; ValueError for a bad window."""
+        cache = self.cache
+        until = float(query.get("until", [time.time()])[0])
+        since = float(query.get("since", [until - 3600])[0])
+        limit = int(query.get("limit", [2000])[0])
+        dataset_page = int(query["dataset_page"][0]) if "dataset_page" in query else None
+        dataset = query.get("dataset", [""])[0]
+        timeline = name == "timeline"
+        if timeline and (not 0 < until - since <= 7 * 86400 or not 1 <= limit <= 2000 or len(dataset) > 256):
+            raise ValueError("choose a time window of at most 7 days and limit up to 2000")
+        with self.guard:
+            if timeline and since < cache.get("indexed_since", 0) and not cache.get("walk"):
+                # A window older than the index widens the horizon to reach it; the folders it
+                # uncovers are read in the background while the page keeps its current records.
+                cache["horizon"] = max(cache.get("horizon", INDEX_HORIZON), time.time() - since + 3600)
+                cache["walk"] = threading.Thread(target=self._widen, daemon=True)
+                cache["walk"].start()
+            if not cache.get("walk") and time.monotonic() - cache.get("snapshot_at", 0) >= 2:
+                cache["snapshot"], cache["snapshot_at"] = self._snapshot(), time.monotonic()
+            data = cache["snapshot"]
+            if timeline:
+                result = task_timeline(data["pool_requests"], data["bridge_requests"], since, until, dataset, limit, dataset_page)
+                result["resources"] = summarize_resources(resource_history(
+                    Path(self.pool_root) if self.pool_root else self.root / "pool", since, until,
+                    cache.setdefault("resource_files", {})), since, until)
+                result["indexed_since"] = cache.get("indexed_since")
+                result["indexing"] = bool(cache.get("walk"))
+                return result
+            data = dict(data)
+            data["pool_total"] = len(data["pool_requests"])
+            data["pool_succeeded"] = sum(r["state"] == "succeeded" for r in data["pool_requests"])
+            data["indexed_since"] = cache.get("indexed_since")
+            data["pool_requests"] = data["pool_requests"][:20]
+            data["bridge_requests"] = data["bridge_requests"][:20]
+            return data
 
 
 async def temporal_ui(database: Path, port: int, ui_port: int, bind: str) -> None:
@@ -802,14 +787,6 @@ def render_tokens(rows):
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    web = commands.add_parser("serve")
-    web.add_argument("--root", type=Path, required=True)
-    web.add_argument("--port", type=int, default=8765)
-    web.add_argument("--temporal-ui-port", type=int, default=8233)
-    web.add_argument("--temporal-service-root", type=Path, help="shared PostgreSQL-backed Temporal service discovery")
-    web.add_argument("--bind", default="127.0.0.1")
-    web.add_argument("--pool-root", type=Path, help="shared Pool receipt and worker telemetry root")
-    web.add_argument("--bridge-root", type=Path, help="shared Agent Bridge receipt root")
     history = commands.add_parser("temporal-ui")
     history.add_argument("--database", type=Path, required=True)
     history.add_argument("--port", type=int, default=7233)
@@ -838,9 +815,6 @@ def main() -> None:
     elif args.command == "status":
         report = status_report(args.root, args.pool_root, args.bridge_root, args.temporal_service_root, args.sessions)
         print(json.dumps(report, indent=2, default=str) if args.json else render_status(report))
-    elif args.command == "serve":
-        serve(args.root, args.port, args.temporal_ui_port, args.bind,
-              args.pool_root, args.bridge_root, args.temporal_service_root)
     else:
         asyncio.run(temporal_ui(args.database, args.port, args.ui_port, args.bind))
 

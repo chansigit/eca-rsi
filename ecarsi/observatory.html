@@ -607,7 +607,7 @@ function renderComputePool(data) {
 async function refresh() {
   const seq=++refreshSeq;
   try {
-    const response = await fetch('/api/status', {cache:'no-store'});
+    const response = await fetch('api/status', {cache:'no-store'});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const d = await response.json();
     if (seq!==refreshSeq) return;
@@ -623,7 +623,7 @@ async function refresh() {
     if (Number.isFinite(since) && Number.isFinite(until)) {
       const params=new URLSearchParams({since:String(since),until:String(until),dataset});
       if(($("timeline-view").value||"datasets")==="datasets")params.set("dataset_page",String(datasetPage));
-      const timelineResponse=await fetch('/api/timeline?'+params,{cache:'no-store'});
+      const timelineResponse=await fetch('api/timeline?'+params,{cache:'no-store'});
       if (!timelineResponse.ok) throw new Error(`Timeline HTTP ${timelineResponse.status}`);
       const timeline=await timelineResponse.json();
       if (seq!==refreshSeq) return;

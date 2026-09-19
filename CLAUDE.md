@@ -205,11 +205,11 @@ ecarsi/warm_pool/   有界计算请求 + HyperQueue 适配；budget（原 operat
 ecarsi/stages/      Pool 里跑的程序：organize / persample / crosssample / zoomin / release（原 *_v2、dataset_release，v3 已折回），
                     contract（协议 v4 的共享件）、evidence / execution（Pool 上的执行计划，session 按登记的 planner 名字调用）；
                     stages.program() 给 control 拿被 pin 的文件
-ecarsi/observatory.py   状态页 + `status` 报告（原 dev_observatory）
+ecarsi/observatory.py   控制面监视器（2026-09-18 起并入 Periscope：`ecarsi serve --control-plane <run dir>` 在 /_control/ 出页面）+ `status` / `releases` / `tokens` 报告
 ```
 
 - 入口：`python -m ecarsi.control.temporal` / `ecarsi.warm_pool` / `ecarsi.agent serve` / `ecarsi.control … worker` /
-  `ecarsi.observatory serve`；`container/control-plane.sh` 是启动模板，部署副本放运行目录并在那里配路径。
+  `ecarsi.serve --control-plane <run dir>`（Periscope 侧栏多一项 Control plane）；`container/control-plane.sh` 是启动模板，部署副本放运行目录并在那里配路径。
 - 请求按内容 pin 程序文件、按请求 id 回放已存内容：会话在飞时不改 stages / agent/session.py；旧布局的已存请求
   在新布局下不能回放，切换只在没有会话在飞时做（或归档相关请求后 resume）。
 - 第二代的文档在 `docs-gen2/`（AGENT_BRIDGE_V2、WARM_POOL_V2、DURABLE_CONTROL、DATASET_V2 …），`design/` 是设计页。
