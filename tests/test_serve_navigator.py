@@ -16,7 +16,8 @@ def test_groups_collapsed_with_tallies_and_species(tmp_path):
     items = {f"x-{k}": tmp_path / "x" / k for k in ("a1", "a2", "b1", "c1", "d1")}
     html = serve._navigator_html(items, tmp_path / "reg.json", state=_state)
     assert '<details class="group">' in html and '<details class="group" open>' not in html
-    assert '<span class="st released">2 Completed</span> · <span class="st running">1 Running</span> · <span class="st neutral">1 Not started</span> · <span class="st failed">1 Failed</span>' in html
+    assert ('<span class="st released" title="Completed">\u27052</span> <span class="st running" title="Running">\U0001F5041</span> '
+            '<span class="st neutral" title="Not started">\u26AA1</span> <span class="st failed" title="Failed">\u274C1</span>') in html
     assert 'data-species="mm"' in html and 'data-species="hs"' in html
     assert '<select id="nav-sp"><option value="">all</option>' in html
     assert '<a id="brand" href="/_home"' in html and 'brand.addEventListener("click"' in serve.NAV_JS
@@ -27,6 +28,7 @@ def test_groups_collapsed_with_tallies_and_species(tmp_path):
 
 
 def test_group_tally_drops_zero_parts():
-    assert serve.group_tally({"released": 3}) == '<span class="st released">3 Completed</span>'
-    assert serve.group_tally({"running": 1, "neutral": 1}) == '<span class="st running">1 Running</span> · <span class="st neutral">1 Not started</span>'
+    assert serve.group_tally({"released": 3}) == '<span class="st released" title="Completed">\u27053</span>'
+    assert serve.group_tally({"running": 1, "neutral": 1}) == ('<span class="st running" title="Running">\U0001F5041</span> '
+                                                               '<span class="st neutral" title="Not started">\u26AA1</span>')
     assert serve.group_tally({}) == ""

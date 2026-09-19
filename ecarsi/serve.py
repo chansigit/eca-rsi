@@ -526,13 +526,16 @@ a.icon{text-decoration:none}
 
 
 def group_tally(counts: dict[str, int]) -> str:
-    """Use the same distinct dataset states as the overview and filters."""
-    return " · ".join(f'<span class="st {cls}">{counts[cls]} {label}</span>'
-                      for cls, label in DATASET_STATES if counts.get(cls))
+    """One glyph and a count per state (the word is the tooltip): a collection row has no room for
+    '12 Completed · 3 Running · 1 Failed'. Same states and order as the overview and filters."""
+    return " ".join(f'<span class="st {cls}" title="{label}">{STATE_GLYPHS[cls]}{counts[cls]}</span>'
+                    for cls, label in DATASET_STATES if counts.get(cls))
 
 
 DATASET_STATES = (("released", "Completed"), ("running", "Running"), ("queued", "Queued"),
                   ("paused", "Paused"), ("neutral", "Not started"), ("failed", "Failed"))
+STATE_GLYPHS = {"released": "\u2705", "running": "\U0001F504", "queued": "\u23F3",
+                "paused": "\u23F8\ufe0f", "neutral": "\u26AA", "failed": "\u274C"}
 
 
 def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_state, control: bool = False) -> str:
