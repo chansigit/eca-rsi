@@ -660,7 +660,7 @@ function timelineAxis(from,to,label="Worker / service") {
   return `<div class="timeline-axis"><span>${esc(label)}</span><div class="timeline-scale">${ticks}</div></div>`;
 }
 function renderResourceHistory(data) {
-  const pos=timeScale(data.since,data.until);
+  const span=data.until-data.since, pos=timeScale(data.since,data.until);
   let chart=timelineAxis(data.since,data.until);
   const resourceGroups=new Map();
   for (const row of data.resources||[]) { const key=row.worker_id||row.host; if (!resourceGroups.has(key)) resourceGroups.set(key,[]); resourceGroups.get(key).push(row); }
