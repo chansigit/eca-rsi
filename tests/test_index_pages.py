@@ -204,3 +204,20 @@ def test_every_inline_script_parses(tmp_path, name, js):
     f = tmp_path / f"{name}.js"
     f.write_text(js)
     subprocess.run(["node", "--check", str(f)], check=True)
+
+
+def test_the_umap_surface_belongs_to_the_page_in_both_themes():
+    """A pure-white canvas is a lightbox cut into warm paper by day and a glare by night. The
+    panel follows the page, which means the two greys that are supposed to recede cannot be
+    baked light -- on a dark surface a light grey is the most prominent thing in the plot."""
+    css = CSS
+    assert "--canvas:#fdfbf6;--umap-dim:#e3e6ea;--umap-blank:#bbbbbb;" in css
+    assert "--canvas:#22262a;--umap-dim:#343a41;--umap-blank:#5d646d;" in css   # the dark half
+    assert "background:var(--canvas)" in css and "--plot:#fff" not in css
+    # the kernels' PNGs carry their own white, so their backing stays light in both themes
+    assert "figure img{" in css and "background:var(--plot)" in css
+    assert "--plot:#fdfbf6" in css and "--plot:#f2efe6" in css
+    js = UMAP_JS
+    assert 'theme("--umap-dim"), blank = theme("--umap-blank")' in js
+    assert "0xffeae6e3" not in js and "0xffbbbbbb" not in js      # nothing baked light any more
+    assert "getComputedStyle(document.documentElement).getPropertyValue(name)" in js

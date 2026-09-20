@@ -38,7 +38,12 @@ CSS = """
     Sharing one set made a high-confidence badge and a released dataset the same green. */
  --done:#38618c;--done-bg:#e0e8f2;--live:#3d7a4a;--live-bg:#e3eedf;
  --fail:#a63d3d;--fail-bg:#f5e0dc;--wait:#8a6d1f;--wait-bg:#f4ecd4;
- --row-alt:#f7f3ea;--row-hover:#ece9dd;--tip-bg:#2c2a25;--tip-ink:#f4efe4;--tip-muted:#b9b3a5;--plot:#fff;
+ --row-alt:#f7f3ea;--row-hover:#ece9dd;--tip-bg:#2c2a25;--tip-ink:#f4efe4;--tip-muted:#b9b3a5;--plot:#fdfbf6;
+ /* --plot backs the kernels' PNGs, which carry their own white, so it stays light in both
+    themes; --canvas is our own UMAP surface and follows the page. Pure white read as a
+    lightbox cut into the paper. --umap-dim/--umap-blank recede against --canvas, so they
+    cannot be baked light: the JS reads them from here. */
+ --canvas:#fdfbf6;--umap-dim:#e3e6ea;--umap-blank:#bbbbbb;
  --t1:.75rem;--t2:.8125rem;--t3:.875rem;--t4:1rem;--t5:1.125rem;--t6:1.25rem;--t7:1.5rem;--t8:1.875rem;
  --s1:8px;--s2:16px;--s3:24px;--s4:32px;--s5:48px;--r:4px;
  --paper-light:rgba(255,250,230,.48);--glint:rgba(255,255,255,.65);--shade:rgba(82,65,36,.055);
@@ -52,7 +57,7 @@ CSS = """
  --ok:#7fc28b;--ok-bg:#243a2a;--run:#d9a441;--run-bg:#3d3320;--bad:#e07070;--bad-bg:#432727;--none:#a09a8c;--none-bg:#31363c;
  --done:#7aa8d4;--done-bg:#22303f;--live:#7fc28b;--live-bg:#243a2a;
  --fail:#e07070;--fail-bg:#432727;--wait:#d2b45e;--wait-bg:#38321f;
- --row-alt:#2b3035;--row-hover:#333940;--tip-bg:#e9e4d8;--tip-ink:#1e2124;--tip-muted:#5b564c;--paper-light:rgba(187,155,102,.035);--glint:rgba(255,246,220,.035);--shade:rgba(0,0,0,.14)}}
+ --row-alt:#2b3035;--row-hover:#333940;--tip-bg:#e9e4d8;--tip-ink:#1e2124;--tip-muted:#5b564c;--plot:#f2efe6;--canvas:#22262a;--umap-dim:#343a41;--umap-blank:#5d646d;--paper-light:rgba(187,155,102,.035);--glint:rgba(255,246,220,.035);--shade:rgba(0,0,0,.14)}}
 *{box-sizing:border-box}
 html{font-size:16px}
 body{margin:0;background:radial-gradient(ellipse at 12% 0,var(--paper-light),transparent 65%),var(--bg);color:var(--ink);font:var(--t4)/1.5 var(--sans)}
@@ -177,7 +182,7 @@ svg.sk.dim .sk-flow{opacity:.07}svg.sk.dim .sk-flow.hi{opacity:.85}
 .umap-row{display:flex;gap:var(--s3);align-items:flex-start;flex-wrap:wrap}
 .umap-panel{flex:1 1 520px;min-width:0}.umap-panel h3{margin:0 0 var(--s1);display:flex;align-items:baseline;gap:var(--s1)}
 .umap-panel h3 .count{font-size:var(--t3);font-weight:400;color:var(--muted)}
-.umap-panel canvas{display:block;border:1px solid var(--line);border-radius:var(--r);cursor:crosshair;background:var(--plot);max-width:100%}
+.umap-panel canvas{display:block;border:1px solid var(--line);border-radius:var(--r);cursor:crosshair;background:var(--canvas);max-width:100%}
 .umap-legend{margin-top:var(--s1);max-height:280px;overflow-y:auto;font-size:var(--t3);border:1px solid var(--line);border-radius:var(--r);padding:4px;columns:2;column-gap:4px}
 .umap-leg{display:flex;align-items:center;gap:8px;padding:3px 8px;cursor:pointer;border-radius:4px;break-inside:avoid}
 .umap-leg:hover{background:var(--none-bg)}.umap-leg.on{background:var(--accent-bg);font-weight:600}.umap-leg.off{opacity:.45}
@@ -311,6 +316,9 @@ catch (e) { status.textContent = "Could not render embedded UMAP data (" + e + "
 
 function rgba(hex){ const h = hex.replace("#", ""); const v = parseInt(h.length === 3 ? h.split("").map(c => c + c).join("") : h, 16);
   return [(v >> 16) & 255, (v >> 8) & 255, v & 255]; }
+// A palette colour as one packed ABGR pixel, read once per repaint so switching theme is enough.
+function theme(name){ const c = rgba(getComputedStyle(document.documentElement).getPropertyValue(name).trim() || "#bbbbbb");
+  return 0xff000000 | (c[2] << 16) | (c[1] << 8) | c[0]; }
 function init(){
   X = Float32Array.from(D.x, v => v / 65535); Y = Float32Array.from(D.y, v => 1 - v / 65535);
   // spatial grid over data space for O(1) nearest-cell lookup on hover
@@ -379,14 +387,17 @@ function renderBase(P){ // points → pixel buffer (no per-point canvas calls), 
   // markers. Bound both density scaling and zoom to keep dense clouds legible.
   const radius = Math.min(7, Math.max(1, Math.min(3.5, 0.16 * (S - 2 * PAD) / Math.sqrt(Math.max(1, D.n)))) * Math.sqrt(view.k));
   const r = Math.max(1, Math.round(dpr * radius));
-  const stride = lod ? Math.max(1, Math.ceil(D.n / 30000)) : 1, idx = P.idx, rgb = P.rgb, dim = 0xffeae6e3; // ABGR little-endian: #e3e6ea
+  const stride = lod ? Math.max(1, Math.ceil(D.n / 30000)) : 1, idx = P.idx, rgb = P.rgb;
   const pack = c => 0xff000000 | (c[2] << 16) | (c[1] << 8) | c[0];
+  // Grey is only grey against a known surface: on the dark theme the panel is dark, so the
+  // recede-into-the-background colours have to come from the palette rather than be baked light.
+  const dim = theme("--umap-dim"), blank = theme("--umap-blank");
   const cols = rgb.map(pack);
   const passes = focus === null ? [null] : [false, true];
   for (const want of passes) {
     for (let i = 0; i < D.n; i += stride) { const c = idx[i], isF = focus !== null && c === focus; if (want !== null && isF !== want) continue;
       const x = Math.round(sx(i) * dpr), y = Math.round(sy(i) * dpr); if (x < 0 || y < 0 || x >= W || y >= W) continue;
-      const col = focus !== null && !isF ? dim : (c >= 0 ? cols[c] : 0xffbbbbbb);
+      const col = focus !== null && !isF ? dim : (c >= 0 ? cols[c] : blank);
       const y0 = Math.max(0, y - r), y1 = Math.min(W - 1, y + r);
       for (let yy = y0; yy <= y1; yy++) {
         const dx = Math.floor(Math.sqrt(r * r - (yy - y) * (yy - y)));
