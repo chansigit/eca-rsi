@@ -15,7 +15,9 @@ from pathlib import Path
 
 from . import PROMPTS
 
-HEAVY = (".h5ad", ".zarr", ".parquet")
+# Matrices, and the machine-side inputs and caches a stage feeds its agent: a lineage's
+# deg_input/*.npy alone is 759 MiB, against ~50 MiB of tables and figures worth reading.
+HEAVY = (".h5ad", ".zarr", ".parquet", ".npy", ".npz", ".sqlite")
 
 
 def copy_light(files, folder):

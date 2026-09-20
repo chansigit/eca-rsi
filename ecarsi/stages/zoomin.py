@@ -133,6 +133,7 @@ def apply_lineage(evidence, decision, destination):
     ledger['input_version'] = evidence['sha256'];ledger['decision'] = json.dumps(decision)
     ledger.to_csv(destination/'cell_exclusions.csv.gz', index=False)
     save(destination/'annotation_proposal.json', accepted)
+    lineage_report(bundle, data, kept, destination)
     kept.write_h5ad(destination/'annotated.h5ad')
     import anndata as an
     disk = an.read_h5ad(destination/'annotated.h5ad', backed='r')
@@ -143,6 +144,25 @@ def apply_lineage(evidence, decision, destination):
         disk.file.close()
     sealed(destination, destination/'final.json', state='complete', evidence=evidence,
         decision=decision, lineage=bundle['lineage'], n_input=len(data), n_survived=len(kept), n_removed=len(removed))
+
+
+def lineage_report(bundle, data, kept, destination):
+    """The per-lineage page generation 1 always wrote: an MSP report of this lineage's own
+    evidence and of what the agent decided about it. Generation 1 computed and annotated a
+    lineage in one directory; here they are two requests, so the evidence a reader wants
+    (QC tables, DEG tables, embeddings) is staged next to the decision first. Rendering is
+    the last thing a lineage does and the least important: a report that will not draw must
+    not throw away an accepted annotation."""
+    from msp.evidence import plot_annotation
+    from msp.report import compose_title, generate_report
+    from .contract import copy_light
+    name = bundle['lineage']['name']
+    try:
+        copy_light(bundle['files'], destination)
+        plot_annotation(data, kept, str(destination/'figures'))
+        generate_report(str(destination), title=compose_title('zoom-in lineage (zmip)', str(destination), subject=name))
+    except Exception as exc:                      # noqa: BLE001 - any drawing failure, never fatal
+        print(f'[zoom-in] warning: no report for lineage {name}: {type(exc).__name__}: {exc}', flush=True)
 
 
 def lineage_labels(bundle):
