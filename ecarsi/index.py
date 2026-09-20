@@ -74,6 +74,7 @@ main.page{max-width:1200px;margin:0 auto;padding:var(--s3) var(--s3) var(--s5)}
 .sp-line{fill:none;stroke:var(--line);stroke-width:1.5;stroke-linejoin:round}
 circle.sp{fill:var(--st,var(--none));stroke:none}
 circle.sp.open{fill:var(--card);stroke:var(--st,var(--none));stroke-width:1.6}
+circle.sp-hit{fill:transparent;stroke:none;cursor:help}
 .sofar{margin-left:.4em;font-size:.85em;font-weight:400;color:var(--muted)}
 /* paper chapters: ink headings and neutral rules, no accent rails */
 .hero{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:var(--s3);margin-bottom:var(--s3)}
@@ -999,14 +1000,18 @@ def sparkline(points: list[dict], width: int = 108, height: int = 22) -> str:
     x = (lambda i: 3 + i * (width - 6) / max(len(points) - 1, 1)) if len(points) > 1 else (lambda i: width / 2)
     y = lambda f: height - 3 - (height - 6) * (min(f, top) / top)
     path = " ".join(("M" if i == 0 else "L") + f"{x(i):.1f} {y(p['frac']):.1f}" for i, p in enumerate(points))
-    dots = "".join(
-        f'<circle cx="{x(i):.1f}" cy="{y(p["frac"]):.1f}" r="2.6" class="sp {trend_band(p["frac"])}'
-        + ('"' if p["settled"] else ' open"') + f'><title>round {p["n"]}: {100 * p["frac"]:.2f}%'
-        + ("" if p["settled"] else " so far") + "</title></circle>" for i, p in enumerate(points))
+    dots = "".join(f'<circle cx="{x(i):.1f}" cy="{y(p["frac"]):.1f}" r="2.6" class="sp {trend_band(p["frac"])}'
+                   + ('"' if p["settled"] else ' open"') + "/>" for i, p in enumerate(points))
+    # A 2.6 px dot is hard to point at; each one gets an invisible target on top of it, and the
+    # title rides there so the reading comes up wherever the pointer lands near the round.
+    hits = "".join(f'<circle cx="{x(i):.1f}" cy="{y(p["frac"]):.1f}" r="7" class="sp-hit">'
+                   f'<title>round {p["n"]}: {100 * p["frac"]:.2f}% removed'
+                   + ("" if p["settled"] else " so far (cross-sample; the round is still removing)")
+                   + "</title></circle>" for i, p in enumerate(points))
     last = points[-1]
     return (f'<svg class="spark" viewBox="0 0 {width} {height}" width="{width}" height="{height}" role="img" '
             f'aria-label="removal per round, last {100 * last["frac"]:.2f}%">'
-            f'<path d="{path}" class="sp-line"/>{dots}</svg>')
+            f'<path d="{path}" class="sp-line"/>{dots}{hits}</svg>')
 
 
 def _hero(s_cls: str, s_stage: str, title: str, crumb: str = "", sub: str = "", facts=(), next_: str = "") -> str:
