@@ -10,8 +10,32 @@ rejected 25 times in a row, 167k tokens each). Measured 2026-09-16 over 6 h: 64 
 submit_decision, 56 % of submit_quality and 32 % of submit_types calls were rejected.
 """
 import json
+import shutil
+from pathlib import Path
 
 from . import PROMPTS
+
+HEAVY = (".h5ad", ".zarr", ".parquet")
+
+
+def copy_light(files, folder):
+    """Copy the readable half of a publication -- report, figures, tables -- out of the pool
+    request that produced it. `files` is a {name: {path, sha256}} map. Copying never raises:
+    a missing report is worth a warning, not a failed stage."""
+    folder = Path(folder)
+    for name, ref in sorted((files or {}).items()):
+        if name.endswith(HEAVY):
+            continue
+        target, source = folder / name, Path(ref["path"])
+        try:
+            if target.is_file() and target.stat().st_size == source.stat().st_size:
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            partial = target.with_name(target.name + ".part")
+            shutil.copyfile(source, partial)
+            partial.replace(target)
+        except OSError as exc:
+            print(f"[publish] warning: {folder.name}/{name} not copied: {exc}", flush=True)
 
 NO_ARGUMENTS = {'type': 'object', 'required': [], 'additionalProperties': False,
                 'properties': {'offset': {'type': 'integer', 'description': 'Ignored: the whole listing comes back in one call.'}}}

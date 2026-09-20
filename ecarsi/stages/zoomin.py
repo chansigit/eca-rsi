@@ -169,6 +169,8 @@ def plan_without(plan, skipped):
 def merge(prepared, decision, results, destination, skipped=()):
     import pandas as pd
     from zmip.merge import merge_back
+    from zmip.report import slug
+    from .contract import copy_light
     plan = plan_without(accepted_plan(prepared, decision), skipped)
     source = verified(prepared)
     data = data_from(verified(source['input']), 'annotated.h5ad')
@@ -185,6 +187,10 @@ def merge(prepared, decision, results, destination, skipped=()):
             removed=pd.read_csv(artifact(result, 'annotation_removed.csv'), dtype=str, keep_default_na=False),
             reassigned=pd.read_csv(artifact(result, 'annotation_reassigned.csv'), dtype=str, keep_default_na=False))
         ledgers.append(pd.read_csv(artifact(result, 'cell_exclusions.csv.gz'), dtype=str, keep_default_na=False))
+        # The report looks a lineage up at <destination>/<slug>/ and links there: generation 1
+        # computed each lineage in that subdirectory, generation 2 in a pool request of its own.
+        # Without this copy every zoomed lineage renders "(not run yet)" and its link is dead.
+        copy_light(result['files'], destination/slug(name))
     save(destination/'zmip_plan.json', plan)
     # with_report: zmip's own global page for the round, as generation 1 always published.
     kept, removed, _ = merge_back(data, plan, accepted, str(destination), with_report=True)
