@@ -98,7 +98,13 @@ def reconcile_local(root, cpu_ids, gpu_ids=(), shared=False):
         index.mkdir(mode=0o700, parents=True, exist_ok=True)
         with lock(index.with_name(index.name + ".seed.lock")):
             if not (index / ".seeded").exists():
-                for folder in (root / "requests").iterdir():
+                # The walk only exists for a host that accepted attempts before this index
+                # did; a host whose only worker directory is the one add-worker just made
+                # has none, and must not pay for it. 85k request folders on Lustre kept a
+                # fresh node out of the pool for a quarter of an hour, finding nothing
+                # (2026-09-20, sh02-06n61). Every later acceptance marks the index directly.
+                worked_here = [p for p in (root / "worker-state").glob(host + "-*") if p.is_dir()]
+                for folder in (() if len(worked_here) == 1 else (root / "requests").iterdir()):
                     request = read(folder / "request.json")
                     if not request:
                         continue

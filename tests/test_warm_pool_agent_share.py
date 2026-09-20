@@ -16,6 +16,10 @@ def test_model_turns_ask_for_a_slice_and_compute_for_whole_cores():
 
 
 def _accepted_attempt(root, name, operation, cpu, ident=None):
+    # Two worker directories: this host ran here before, so its index is seeded from the
+    # requests rather than assumed empty (a host joining for the first time skips that).
+    for previous in ("old-job", "this-job"):
+        (root / "worker-state" / f"{socket.gethostname().split('.')[0]}-{previous}").mkdir(parents=True, exist_ok=True)
     folder = root / "requests" / name
     attempt = folder / "attempt"
     attempt.mkdir(parents=True)
@@ -57,3 +61,21 @@ def test_dead_model_turn_on_the_core_still_gets_a_worker_lost_receipt(tmp_path):
     assert reconcile_local(tmp_path, [cpu], shared=True) == []
     assert (attempt / "receipt.json").is_file()
     assert "WorkerLost" in (attempt / "receipt.json").read_text()
+
+
+def test_a_host_joining_for_the_first_time_does_not_walk_every_request(tmp_path):
+    """85k request folders on Lustre; a node that never ran here holds none of them."""
+    cpu = sorted(os.sched_getaffinity(0))[0]
+    attempt = _accepted_attempt(tmp_path, "turn-a", "agent.call", cpu)
+    host = socket.gethostname().split(".")[0]
+    for stale in (tmp_path / "worker-state").iterdir():
+        stale.rmdir()
+    (tmp_path / "worker-state" / f"{host}-fresh-job").mkdir(parents=True)
+    (tmp_path / "cache" / "active" / host).mkdir(parents=True, exist_ok=True)
+
+    holder = open(attempt / "execution.lock", "w")
+    fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        assert reconcile_local(tmp_path, [cpu]) == []  # not seeded from the walk
+    finally:
+        holder.close()
