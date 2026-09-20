@@ -3,6 +3,12 @@ attic-v01/
 runs/
 data/
 *.log
+
+# Slurm and HyperQueue write these into whatever directory a command was run from,
+# so they appear here whenever someone drives a batch from the checkout.
+slurm-*.out
+job-*/
+
 *.egg-info/
 __pycache__/
 dist/
