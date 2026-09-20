@@ -56,6 +56,9 @@ def test_clicking_a_dataset_answers_before_the_server_has_rendered_it(tmp_path):
     html = serve._navigator_html({f"x-{k}": tmp_path / "x" / k for k in ("a1", "b1")},
                                  tmp_path / "reg.json", state=_state)
     assert '<div id="pending" hidden aria-live="polite">' in html and 'class="ph-bars"' in html
+    # the page's own skeleton, so the real page lands in place rather than shifting everything
+    assert '<main class="page"><header class="hero"><div class="title">' in html
+    assert '<section class="block">' in html and 'id="pending"' in html
     js = serve.NAV_JS
     assert "function placeholder(path)" in js
     assert 'frame.style.display = "none"; pending.hidden = false;' in js   # the old page is not held

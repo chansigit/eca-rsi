@@ -77,7 +77,14 @@ main.page{max-width:1200px;margin:0 auto;padding:var(--s3) var(--s3) var(--s5)}
 .sp-line{fill:none;stroke:var(--line);stroke-width:1.5;stroke-linejoin:round}
 circle.sp{fill:var(--st,var(--none));stroke:none}
 circle.sp.open{fill:var(--card);stroke:var(--st,var(--none));stroke-width:1.6}
-circle.sp-hit{fill:transparent;stroke:none;cursor:help}
+/* the pointer target: transparent but hit-testable (fill:none would not be). No cursor change --
+   `help` draws a question mark over the number the reader is trying to read. The point under it
+   grows instead, so it is obvious which round the tooltip belongs to. */
+circle.sp-hit{fill:transparent;stroke:none}
+/* the dot is painted over its target, so it must not take the pointer itself: otherwise landing
+   exactly on a point hits the one element that carries no reading. */
+circle.sp{pointer-events:none;transition:r .08s}
+circle.sp-hit:hover+circle.sp{r:4}
 .sofar{margin-left:.4em;font-size:.85em;font-weight:400;color:var(--muted)}
 /* paper chapters: ink headings and neutral rules, no accent rails */
 .hero{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:var(--s3);margin-bottom:var(--s3)}
@@ -1008,18 +1015,20 @@ def sparkline(points: list[dict], width: int = 108, height: int = 22) -> str:
     x = lambda i: 3 + i * step
     y = lambda f: height - 3 - (height - 6) * (min(f, top) / top)
     path = " ".join(("M" if i == 0 else "L") + f"{x(i):.1f} {y(p['frac']):.1f}" for i, p in enumerate(points))
-    dots = "".join(f'<circle cx="{x(i):.1f}" cy="{y(p["frac"]):.1f}" r="2.6" class="sp {trend_band(p["frac"])}'
-                   + ('"' if p["settled"] else ' open"') + "/>" for i, p in enumerate(points))
-    # A 2.6 px dot is hard to point at; each one gets an invisible target on top of it, and the
-    # title rides there so the reading comes up wherever the pointer lands near the round.
-    hits = "".join(f'<circle cx="{x(i):.1f}" cy="{y(p["frac"]):.1f}" r="7" class="sp-hit">'
-                   f'<title>round {p["n"]}: {100 * p["frac"]:.2f}% removed'
-                   + ("" if p["settled"] else " so far (cross-sample; the round is still removing)")
-                   + "</title></circle>" for i, p in enumerate(points))
+    # A 2.6 px dot is hard to point at, so each round gets a wide invisible target carrying the
+    # reading, with its own dot drawn immediately after it -- the pair lets CSS grow the dot the
+    # pointer is over (`circle.sp-hit:hover + circle.sp`) without any script.
+    marks = "".join(
+        f'<circle cx="{x(i):.1f}" cy="{y(p["frac"]):.1f}" r="7" class="sp-hit">'
+        f'<title>round {p["n"]}: {100 * p["frac"]:.2f}% removed'
+        + ("" if p["settled"] else " so far (cross-sample; the round is still removing)")
+        + f'</title></circle><circle cx="{x(i):.1f}" cy="{y(p["frac"]):.1f}" r="2.6" '
+          f'class="sp {trend_band(p["frac"])}' + ('"' if p["settled"] else ' open"') + "/>"
+        for i, p in enumerate(points))
     last = points[-1]
     return (f'<svg class="spark" viewBox="0 0 {width} {height}" width="{width}" height="{height}" role="img" '
             f'aria-label="removal per round, last {100 * last["frac"]:.2f}%">'
-            f'<path d="{path}" class="sp-line"/>{dots}{hits}</svg>')
+            f'<path d="{path}" class="sp-line"/>{marks}</svg>')
 
 
 def _hero(s_cls: str, s_stage: str, title: str, crumb: str = "", sub: str = "", facts=(), next_: str = "") -> str:

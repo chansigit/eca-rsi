@@ -512,18 +512,14 @@ iframe{flex:1;border:0;width:100%;background:var(--bg)}
 .icon{background:none;border:0;cursor:pointer;color:var(--muted);font-size:var(--t5);padding:2px 8px;border-radius:6px;line-height:1}.icon:hover{background:var(--none-bg)}
 a.icon{text-decoration:none}
 #sb-show{display:none}body.sb-hidden aside.sb{display:none}body.sb-hidden #sb-show{display:inline-block}
-/* the pane while a dataset page is being rendered: real title and status, bars for the rest */
-#pending{flex:1;min-height:0;overflow:auto;padding:var(--s3);background:var(--bg)}
-#pending .ph-head{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap}
-#pending h1{margin:0;font-size:var(--t5)}
-#pending .facts{display:flex;gap:var(--s3);margin:var(--s2) 0 var(--s3);color:var(--muted);font-size:var(--t3)}
-#pending .facts dt{font-weight:600}#pending .facts dd{margin:0}
+/* the pane while a dataset page is being rendered. The markup is the page's own hero and block,
+   styled by index.CSS, so only the unknown part needs rules here. */
+#pending{flex:1;min-height:0;overflow:auto;background:var(--bg)}
 #pending .ph-bars{display:flex;flex-direction:column;gap:var(--s2);max-width:70ch}
 #pending .ph-bars i{height:14px;border-radius:var(--r);background:var(--none-bg);
  background-image:linear-gradient(90deg,transparent,color-mix(in srgb,var(--card) 80%,transparent),transparent);
  background-size:200% 100%;animation:ph 1.4s linear infinite}
 #pending .ph-bars i:nth-child(2){width:85%;animation-delay:.15s}#pending .ph-bars i:nth-child(3){width:60%;animation-delay:.3s}
-#pending .ph-note{color:var(--muted);font-size:var(--t3);margin-top:var(--s3)}
 @keyframes ph{from{background-position:200% 0}to{background-position:-200% 0}}
 @media (prefers-reduced-motion:reduce){#pending .ph-bars i{animation:none}}
 #bind-form{margin:0}#bind-form input{width:100%;font:var(--t3) var(--mono);padding:6px 10px;border:1px solid var(--line-strong);border-radius:6px;margin:4px 0}
@@ -637,9 +633,13 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
         # Everything the sidebar already knows about the dataset, shown the instant it is clicked.
         # A dataset page is rendered from disk on every request; on a cold run directory that is
         # seconds, and until now the pane kept showing the previous dataset all the way through.
-        '<div id="pending" hidden aria-live="polite"><div class="ph-head"><h1></h1><span class="pill"></span></div>'
-        '<dl class="facts"></dl><div class="ph-bars"><i></i><i></i><i></i></div>'
-        '<p class="ph-note">reading the run directory…</p></div>'
+        # The same skeleton the page itself uses -- page > hero > block -- so the real page
+        # replaces it in place instead of everything jumping when it arrives.
+        '<div id="pending" hidden aria-live="polite"><main class="page">'
+        '<header class="hero"><div class="title"><h1></h1><span class="pill"></span></div>'
+        '<dl class="facts"></dl></header>'
+        '<section class="block"><h2>Reading the run directory<span class="count">…</span></h2>'
+        '<div class="ph-bars"><i></i><i></i><i></i></div></section></main></div>'
         f'<section id="model-panel" hidden aria-label="Agent Bridge"></section>'
         '<div id="empty" style="display:none"><h2>Nothing bound yet</h2><p>Use <b>+ Bind…</b> in the sidebar or, on the server host, '
         "<code>eca-rsi serve scan-add &lt;dir-or-glob&gt;</code>. The server picks up registry changes on the next request.</p>"

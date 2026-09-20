@@ -257,6 +257,10 @@ def test_a_running_round_shows_the_stage_subtotal_and_the_trend_marks_it_unsettl
     svg = index.sparkline(trend)
     assert svg.count('class="sp ') == 2 and 'class="sp failed"' in svg   # 22 % is over 3 %
     assert svg.count('class="sp-hit"') == 2                              # one pointer target per round
+    # the target carries the reading and is followed by its dot, so CSS can grow the one hovered
+    assert svg.index('class="sp-hit"') < svg.index('class="sp failed"')
+    assert 'cursor:help' not in index.CSS                                # a ? over the number, not the number
+    assert 'circle.sp{pointer-events:none' in index.CSS and 'circle.sp-hit:hover+circle.sp{r:4}' in index.CSS
     assert 'class="sp released open"' in svg                             # 1.43 % is under 1.5 %: green, still removing
     assert 'round 2: 1.43% removed so far' in svg
     assert index.sparkline([]) == '<span class="muted">–</span>'
