@@ -1,9 +1,11 @@
+import inspect
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
+from ecarsi import serve
 from ecarsi.serve import NAV_JS, _home_html, _navigator_html
 
 
@@ -79,3 +81,15 @@ def test_access_log_names_the_tunnel_visitor(capsys):
     Handler.log_message(Fake(), '"GET /Aorta/ HTTP/1.1" %s -', 200)
     line = capsys.readouterr().err
     assert "203.0.113.9" in line and '"TestBrowser/1.0"' in line and "127.0.0.1" not in line
+
+
+def test_the_overview_table_fits_without_a_horizontal_scrollbar(tmp_path):
+    """Ten columns of run state: the counts are scaled once (as in the sidebar) and the three
+    free-text columns are capped, so the numbers, the sparkline and the status share one screen."""
+    css = serve.HOME_CSS
+    assert "#ds-table td:first-child{max-width:24ch}" in css          # dataset name
+    assert "#ds-table td:nth-child(2){max-width:14ch" in css          # collection
+    assert "#ds-table td:nth-child(3){max-width:8ch}" in css          # species
+    assert "#ds-table .spark{width:84px}" in css and "max-width:18ch" in css
+    assert 'index._n(s["n_input"])' not in inspect.getsource(serve._home_html)   # thousands, not raw
+    assert 'index._k(s["n_input"])' in inspect.getsource(serve._home_html)

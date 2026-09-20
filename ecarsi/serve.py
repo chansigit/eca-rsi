@@ -609,7 +609,12 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
     )
 
 
-HOME_CSS = ("td.nw{white-space:nowrap}#ds-table td{padding:8px 10px}#ds-table .pill{white-space:normal;line-height:1.35;max-width:22ch}"
+HOME_CSS = ("td.nw{white-space:nowrap}#ds-table td{padding:7px 8px}#ds-table .pill{white-space:normal;line-height:1.35;max-width:18ch}"
+            # ten columns is a lot of table: the long text ones are capped so the numbers,
+            # the sparkline and the status stay on one screen instead of behind a scrollbar.
+            "#ds-table{table-layout:auto;width:100%}#ds-table th,#ds-table td{overflow-wrap:anywhere}"
+            "#ds-table td:first-child{max-width:24ch}#ds-table td:nth-child(2){max-width:14ch;white-space:normal}"
+            "#ds-table td:nth-child(3){max-width:8ch}#ds-table .spark{width:84px}"
             ".cell-glance{grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1.5fr) minmax(0,1.1fr)}.cell-glance .v{white-space:nowrap}"
             "@media(max-width:700px){.cell-glance{grid-template-columns:repeat(2,minmax(0,1fr))}}"
             ".hist{position:relative;margin-top:var(--s1)}.hist-svg{display:block;width:100%;height:auto}"
@@ -829,8 +834,8 @@ def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
         rows.append(
             f'<tr data-text="{e((name + " " + coll + " " + s["species"] + " " + s["stage"]).lower())}">'
             f'<td><a href="/{e(name)}/" title="{e(name)}"><b>{e(short)}</b></a></td><td class="nw">{e(coll)}</td><td>{e(s["species"])}</td>'
-            f'<td class="num" data-v="{s["n_input"] or 0}">{index._n(s["n_input"])}</td>'
-            f'<td class="num" data-v="{s["final_cells"] or 0}">{index._n(s["final_cells"])}</td>'
+            f'<td class="num" data-v="{s["n_input"] or 0}">{index._k(s["n_input"])}</td>'
+            f'<td class="num" data-v="{s["final_cells"] or 0}">{index._k(s["final_cells"])}</td>'
             f'<td class="num" data-v="{kept if kept is not None else -1}">{f"{kept:.0f}%" if kept is not None else ""}</td>'
             f'<td class="num" data-v="{s["rounds"]}">{s["rounds"] or ""}</td>'
             f'<td>{index.sparkline(trend)}</td>'
