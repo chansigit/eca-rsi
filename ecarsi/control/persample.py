@@ -8,6 +8,21 @@ from temporalio.exceptions import ApplicationError
 SKIPPED_CELL_LIMIT = 0.10  # a stage whose skipped samples or lineages hold more of its input cells fails instead
 
 
+def sample_summary(records, skipped, failed):
+    """What the unit page shows per sample. The numbers live in each sample's final.json
+    inside the pool request that produced it; this is the one place they are written where
+    the page can read them without walking the pool."""
+    skipped = {s["sample"] for s in skipped}
+    rows = [dict(sample=r["sample"], n_input=r["validation"]["n_input"],
+                 n_survived=r["validation"]["n_survived"], n_removed=r["validation"]["n_removed"],
+                 empty=bool(r.get("empty")),
+                 state="empty" if r.get("empty") else "unannotated" if r["sample"] in skipped else "done")
+            for r in records]
+    return sorted(rows + [dict(sample=f["sample"], n_input=None, n_survived=None, n_removed=None,
+                               empty=False, state="failed") for f in failed],
+                  key=lambda r: r["sample"])
+
+
 def materialize_reports(root, records):
     """Copy each sample's report and figures next to the publication.
 
@@ -160,6 +175,7 @@ def sample_step(action, args):
                            n_input + totals["n_excluded"] != totals["n_input"] or n_kept + n_removed != n_input):
             raise ValueError("Per-sample sample/cell conservation failed")
         materialize_reports(root, records)
+        save(root / "samples.json", sample_summary(records, skipped, failed))
         publication = {
             "state": "incomplete" if failed else "complete", "input": spec["input_manifest"],
             "samples": [reference(p) for p in results], "failed_samples": failed, "skipped_samples": skipped,

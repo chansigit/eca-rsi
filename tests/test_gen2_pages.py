@@ -156,9 +156,13 @@ def test_publish_copies_the_sample_reports_into_the_unit_and_the_page_links_them
     assert not (per / 'study__s1__abc' / 'clustered.h5ad').exists()  # matrices stay in the pool
     assert not list((per / 'study__s1__abc').glob('*.part'))
 
+    from ecarsi.control.persample import sample_summary
+    records = [dict(record, validation={'n_input': 100, 'n_survived': 90, 'n_removed': 10}, empty=False)]
+    save(per / 'samples.json', sample_summary(records, [], []))
     page = index.render_unit(root / 'units' / 'u')
     assert '01-per-sample/study__s1__abc/report.html' in page
     assert '01-per-sample/study__s1__abc/qc_summary.csv' in page
+    assert '>100<' in page and '>90<' in page  # the counts gen-1 pages have always shown
 
     materialize_reports(per, [record])  # a retried publish copies nothing twice
 

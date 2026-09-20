@@ -681,22 +681,31 @@ def _gen2_unit_body(unit: Path, s: dict, base: str = "") -> str:
                     '<th>decision</th><th>reason</th></tr></thead>'
                     f'<tbody>{"".join(rows)}</tbody></table></div>' if rows else '<p class="empty">No round has started.</p>')
                  + "</section>")
+    summary = _json(unit / L.GEN2_PERSAMPLE / "samples.json", [])
+    if not summary:  # published before the summary existed: the reports still name the samples
+        summary = [{"sample": r.parent.name} for r in reports]
     rows = []
-    for report in reports:
-        folder = report.parent
-        extra = [f'<a href="{base}{L.GEN2_PERSAMPLE}/{folder.name}/{n}">{n}</a>'
-                 for n in ("qc_summary.csv", "qc_removed.csv", "annotation_proposal.json") if (folder / n).is_file()]
-        rows.append(f'<tr><td><a href="{base}{L.GEN2_PERSAMPLE}/{folder.name}/report.html"><b>{e(folder.name)}</b></a></td>'
-                    f'<td class="muted">{" · ".join(extra)}</td></tr>')
+    for row in summary:
+        folder = unit / L.GEN2_PERSAMPLE / row["sample"]
+        links = [f'<a href="{base}{L.GEN2_PERSAMPLE}/{row["sample"]}/{n}">{label}</a>'
+                 for n, label in (("report.html", "osp report"), ("qc_summary.csv", "qc"),
+                                  ("annotation_proposal.json", "annotation"))
+                 if (folder / n).is_file()]
+        kept = row.get("n_survived")
+        rows.append(f'<tr><td>{e(row["sample"])}</td>'
+                    f'<td class="num">{_n(row.get("n_input"))}</td><td class="num">{_n(kept)}</td>'
+                    f'<td class="num">{_pct(row["n_removed"] / row["n_input"]) if row.get("n_input") and row.get("n_removed") is not None else ""}</td>'
+                    f'<td>{e(str(row.get("state", "")))}</td><td class="muted">{" · ".join(links)}</td></tr>')
     parts.append('<section class="block" id="samples"><h2>Samples '
-                 f'<span class="count">{len(reports)} report(s)</span></h2>'
-                 f'<p class="lede">{EXPLAIN["samples"]} Each report is OSP\'s own page for that sample: QC, clustering '
-                 'and the annotation the agent proposed.</p>'
-                 + (f'<div class="wrap"><table><tbody>{"".join(rows)}</tbody></table></div>' if rows else
-                    '<p class="empty">No sample report has been copied here yet'
-                    + (' — this unit ran before the reports were published into the unit directory; they are still in '
-                       'the pool request folders the publication references.' if per["n_done"] else '.') + '</p>')
-                 + "</section>")
+                 f'<span class="count">{per["n_done"]}/{per["n"]} done</span></h2>' if per["n"] else
+                 '<section class="block" id="samples"><h2>Samples</h2>')
+    parts[-1] += (f'<p class="lede">{EXPLAIN["samples"]} Each report is OSP\'s own page for that sample: QC, '
+                  'clustering and the annotation the agent proposed.</p>'
+                  + (f'<div class="wrap"><table><thead><tr><th>sample</th><th class="r">input cells</th>'
+                     '<th class="r">kept</th><th class="r">removed</th><th>osp</th><th>files</th></tr></thead>'
+                     f'<tbody>{"".join(rows)}</tbody></table></div>' if rows else
+                     '<p class="empty">No sample has finished yet.</p>')
+                  + "</section>")
     if per["skipped"] or per["failed"]:
         detail = "".join(f'<li><b>{e(str(x.get("sample", "")))}</b> {e(str(x.get("error", ""))[:200])}</li>'
                          for x in list(per["skipped"]) + list(per["failed"]))
