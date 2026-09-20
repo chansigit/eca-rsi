@@ -881,11 +881,12 @@ def _render_index(root: Path, sub: str, name: str | None = None) -> str | None:
         parts = parts[:-1]
     elif parts and not sub.endswith("/"):
         return None  # a file, not a directory landing page
-    if L.is_unit(root):
+    if L.is_unit(root) or L.is_gen2_unit(root):
         return index.render_unit(root, name) if not parts else None
     if not parts:
         return index.render_root(root, name)
-    if len(parts) == 2 and parts[0] == L.UNITS and L.is_unit(root / L.UNITS / parts[1]):
+    if len(parts) == 2 and parts[0] == L.UNITS and (L.is_unit(root / L.UNITS / parts[1])
+                                                    or L.is_gen2_unit(root / L.UNITS / parts[1])):
         return index.render_unit(root / L.UNITS / parts[1], name)
     return None
 

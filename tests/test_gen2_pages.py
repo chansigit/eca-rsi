@@ -161,3 +161,11 @@ def test_publish_copies_the_sample_reports_into_the_unit_and_the_page_links_them
     assert '01-per-sample/study__s1__abc/qc_summary.csv' in page
 
     materialize_reports(per, [record])  # a retried publish copies nothing twice
+
+
+def test_a_gen2_unit_under_a_root_gets_its_page_not_a_directory_listing(tmp_path):
+    root = tmp_path / 'run'
+    gen2_run(root, released=False)
+    assert serve._render_index(root, 'units/u/', 'd') is not None
+    assert serve._render_index(root, '', 'd') is not None
+    assert serve._render_index(root, 'units/u/rounds/', 'd') is None  # still a plain directory
