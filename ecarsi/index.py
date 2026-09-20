@@ -585,8 +585,18 @@ def _gen2_unit_state(unit: Path) -> dict:
     failed_samples = per.get("failed_samples") or []
     skipped = per.get("skipped_samples") or []
     # A unit's own failure is recorded by the dataset that waited for it, not inside the unit.
-    dataset = _json(unit.parent.parent / L.GEN2_PUBLICATION, {})
+    # A resumed dataset does not rewrite that record until it finishes, so a failure older
+    # than the unit's newest publication has already been superseded by the work that followed.
+    dataset_path = unit.parent.parent / L.GEN2_PUBLICATION
+    dataset = _json(dataset_path, {})
     failure = next((f for f in dataset.get("failed_units", []) if f.get("unit") == unit.name), None)
+    if failure is not None and dataset_path.is_file():
+        newest = max((p.stat().st_mtime for p in [unit / L.GEN2_PERSAMPLE / L.GEN2_PUBLICATION,
+                                                  *[r["dir"] / L.GEN2_PUBLICATION for r in rounds],
+                                                  *(unit / L.ROUNDS).glob("round*/0*/" + L.GEN2_PUBLICATION)]
+                      if p.is_file()), default=0)
+        if newest > dataset_path.stat().st_mtime:
+            failure = None
     if released:
         stage, cls = f"released after {len(rounds)} round(s)", "released"
     elif failure:

@@ -198,3 +198,22 @@ def test_a_round_shows_its_own_reports_ledger_and_sankey(tmp_path):
                  f'rounds/round01/{L.LEDGER}/cell_ledger.csv.gz'):
         assert link in page
     assert 'through round 1' in page and 'SANKEY_DATA' in page
+
+
+def test_a_resumed_unit_is_not_still_failed_from_the_attempt_before(tmp_path):
+    """A dataset records a unit's failure when it gives up, and rewrites that record only
+    when it finishes. A resume that has already published newer work is not failed."""
+    root = tmp_path / 'run'
+    gen2_run(root, released=False)
+    unit = root / 'units' / 'u'
+    save(root / 'publication.json', {'state': 'incomplete', 'dataset_id': 'D', 'units': [],
+                                     'failed_units': [{'unit': 'u', 'error': 'Child Workflow execution failed'}],
+                                     'n_input': 100, 'n_survived': 0, 'n_removed': 0, 'forced_release': False})
+    assert index.unit_state(unit)['stage_class'] == 'failed'
+
+    later = (root / 'publication.json').stat().st_mtime + 60
+    resumed = unit / 'rounds' / 'round02' / L.GEN2_CROSS / 'publication.json'
+    save(resumed, {'state': 'complete', 'n_input': 70})
+    os.utime(resumed, (later, later))
+    state = index.unit_state(unit)
+    assert state['stage_class'] == 'running' and 'failed' not in state['stage']
