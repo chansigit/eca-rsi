@@ -25,8 +25,10 @@ The venv also carries `distributed`, so the gen-1 Dask pool tests run there:
       tests/test_pool_multitask.py tests/test_pool_observe.py tests/test_compute_policy.py
 
 They skip themselves in the science image, which has no `distributed` on purpose: generation 2
-schedules through HyperQueue and never imports dask, so the image the workers run stays without it.
-Add it there only if msp's dask compute endpoint (eca-rsi#8) is merged and used in production.
+schedules through HyperQueue and pins `MSP_COMPUTE_ENDPOINT=local` in every task it runs, so nothing
+the workers execute imports dask. Adding it back would only make sense if one single operation
+outgrew one node (msp's dask endpoint, eca-rsi#8, parallelises inside an operation, where HyperQueue
+parallelises across them) — no stage has come close so far.
 
 Expected failures in the image run:
 
