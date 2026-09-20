@@ -520,9 +520,10 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
     groups: dict[str, list[str]] = {}
     tally: dict[str, dict[str, int]] = {}
     species: dict[str, int] = {}
+    colls = index.collections(items)
     for name, p in sorted(items.items()):
         st = state(p)
-        coll = (st['collection'] if 'collection' in st else index.collection_of(p)) or "other"
+        coll = colls[name] or "other"
         short = name[len(coll) + 1:] if name.startswith(coll + "-") else name
         cells = index._n(st["final_cells"])
         sp = st.get("species") or ""
@@ -620,9 +621,10 @@ def fleet_history(states: dict) -> dict:
     curve; `states` = {name: (dataset_state, path)}. Derived from the logs of
     what is bound now, so unbinding a dataset removes it from the past too."""
     out = {}
+    colls = index.collections({n: p for n, (_, p) in states.items()})
     for name, (s, p) in sorted(states.items()):
         ev = s.get("events") or {}
-        out[name] = {"collection": s['collection'] if 'collection' in s else index.collection_of(p), "species": s["species"],
+        out[name] = {"collection": colls[name], "species": s["species"],
                      "organize": [list(e) for e in ev.get("organize", [])], "release": [list(e) for e in ev.get("release", [])],
                      "state": s["cls"], "input_cells": s.get("n_input") or 0,
                      "awaiting_start": s.get("awaiting_start", s["cls"] == "queued"),
@@ -810,8 +812,9 @@ def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
                        for v, k, c, key in rows)
     rank = {cls: i for i, (cls, _) in enumerate(DATASET_STATES)}
     rows = []
+    colls = index.collections({n: p for n, (_, p) in states.items()})
     for name, (s, p) in sorted(states.items()):
-        coll = s['collection'] if 'collection' in s else index.collection_of(p)
+        coll = colls[name]
         short = name[len(coll) + 1:] if coll and name.startswith(coll + "-") else name  # the collection has its own column
         kept = 100 * s["final_cells"] / s["n_input"] if s["n_input"] and s["final_cells"] is not None else None
         rows.append(

@@ -115,3 +115,17 @@ def test_a_run_whose_files_stopped_moving_is_reported_stopped_not_running(tmp_pa
             os.utime(path, (old, old))
     stale = index.dataset_state(root)
     assert stale['cls'] == 'failed' and stale['stage'] == 'stopped · ' + fresh['stage']
+
+
+def test_a_run_outside_the_fleet_tree_joins_the_collection_its_name_carries(tmp_path):
+    """The gen-2 runs live in the control plane's run directory, not next to their
+    eca-pp inputs, so the path says nothing; their name does."""
+    fleet = tmp_path / 'oak' / 'chondroatlas' / '08_Yan'
+    save(fleet / 'standardize' / 'result.json', {})
+    (fleet / 'rsi').mkdir()
+    items = {'chondroatlas-08_Yanetal': fleet / 'rsi',
+             'chondroatlas-g2-08_Yanetal': tmp_path / 'plane' / 'chondro' / '08_Yanetal',
+             'somethingelse-42': tmp_path / 'plane' / 'chondro' / 'x'}
+    assert index.collections(items) == {'chondroatlas-08_Yanetal': 'chondroatlas',
+                                        'chondroatlas-g2-08_Yanetal': 'chondroatlas',
+                                        'somethingelse-42': ''}

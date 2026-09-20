@@ -806,6 +806,17 @@ def collection_of(path: Path) -> str:
 
 
 
+def collections(items: dict) -> dict:
+    """Collection per dataset name. The fleet path decides when it has one; a run kept
+    outside that tree (a control-plane run directory, a one-off) still belongs to the
+    collection its name carries -- `<collection>-<rest>` is the prefix the pages already
+    strip from the name -- as long as some other dataset puts that collection on the map."""
+    direct = {name: collection_of(Path(p)) for name, p in items.items()}
+    known = sorted({c for c in direct.values() if c}, key=len, reverse=True)
+    return {name: c or next((k for k in known if name.startswith(k + "-")), "")
+            for name, c in direct.items()}
+
+
 def display_name(root: Path) -> str:
     """'Stomach' for .../eca-pp/Stomach/rsi, else the directory name."""
     parts = Path(root).parts
