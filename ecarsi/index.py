@@ -594,6 +594,8 @@ def _gen2_unit_state(unit: Path) -> dict:
     elif per:
         stage, cls = ("per-sample done, first round pending" if per.get("state") == "complete"
                       else f"per-sample {len(per.get('samples', []))} sample(s)"), "running"
+    elif any((unit / L.GEN2_PERSAMPLE).glob("*")):
+        stage, cls = "per-sample running", "running"
     else:
         stage, cls = "organized, per-sample not started", "running"
     n_input = published.get("n_input") or per.get("n_input") or manifest.get("n_cells")

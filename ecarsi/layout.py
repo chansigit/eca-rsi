@@ -111,8 +111,14 @@ def is_gen2_root(root: Path) -> bool:
 
 
 def is_gen2_unit(unit: Path) -> bool:
-    return ((unit / GEN2_PERSAMPLE / GEN2_PUBLICATION).is_file()
-            or ((unit / GEN2_PUBLICATION).is_file() and is_gen2_root(unit.parent.parent)))
+    if (unit / GEN2_PERSAMPLE / GEN2_PUBLICATION).is_file():
+        return True
+    if not is_gen2_root(unit.parent.parent):
+        return False
+    # A unit the control plane is still working on has a stage directory long before
+    # anything publishes; the landing page renders mid-run, as it does for generation 1.
+    return ((unit / GEN2_PUBLICATION).is_file()
+            or any((unit / d).is_dir() for d in (GEN2_PERSAMPLE, GEN2_CROSS, GEN2_ZOOM)))
 
 
 def gen2_organize_manifest(root: Path) -> Path:

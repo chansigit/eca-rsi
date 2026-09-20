@@ -79,3 +79,22 @@ def test_unfinished_gen2_unit_reports_its_round_or_the_datasets_failure(tmp_path
         (root / 'units/u/rounds/round03/02-cross-sample').mkdir(parents=True)
         assert index.dataset_state(root)['stage'] == 'round 3 · cross-sample'
     assert index.render_root(root, 'D')
+
+
+def test_a_unit_still_in_per_sample_is_listed_before_anything_publishes(tmp_path):
+    """The control plane creates the stage directory long before it publishes; the page
+    renders mid-run the way generation 1 does, instead of claiming nothing was planned."""
+    root = tmp_path / 'run'
+    save(root / 'spec.json', {'run_id': 'r', 'dataset_id': 'D'})
+    save(root / '00-organize' / 'publication.json', {'state': 'complete', 'units': [{'name': 'u'}]})
+    save(root / '00-organize' / 'organize' / 'manifest.json', {'species': 'human', 'n_cells': 100, 'warnings': []})
+    save(root / '00-organize' / 'units' / 'u' / 'input' / 'manifest.json', {'species': 'human', 'n_cells': 100})
+    unit = root / 'units' / 'u'
+    (unit / '01-per-sample' / 'agent-abc').mkdir(parents=True)
+
+    assert L.is_gen2_unit(unit) and [u.name for u in L.units(root)] == ['u']
+    state = index.unit_state(unit)
+    assert state['generation'] == 2 and state['stage'] == 'per-sample running'
+    assert state['n_input'] == 100
+    assert index.dataset_state(root)['units'] == 1
+    assert 'No analysis unit has been planned' not in index.render_root(root)
