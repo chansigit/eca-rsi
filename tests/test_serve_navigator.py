@@ -2,7 +2,7 @@
 tallies, a species filter, and the fields the filter JS reads."""
 from pathlib import Path
 
-from ecarsi import serve
+from ecarsi import index, serve
 
 
 def _state(p: Path) -> dict:
@@ -16,8 +16,7 @@ def test_groups_collapsed_with_tallies_and_species(tmp_path):
     items = {f"x-{k}": tmp_path / "x" / k for k in ("a1", "a2", "b1", "c1", "d1")}
     html = serve._navigator_html(items, tmp_path / "reg.json", state=_state)
     assert '<details class="group">' in html and '<details class="group" open>' not in html
-    assert ('<span class="st released" title="Completed">\u27052</span> <span class="st running" title="Running">\U0001F5041</span> '
-            '<span class="st neutral" title="Not started">\u26AA1</span> <span class="st failed" title="Failed">\u274C1</span>') in html
+    assert serve.group_tally({"released": 2, "running": 1, "neutral": 1, "failed": 1}) in html
     assert 'data-species="mm"' in html and 'data-species="hs"' in html
     assert '<select id="nav-sp"><option value="">all</option>' in html
     assert '<a id="brand" href="/_home"' in html and 'brand.addEventListener("click"' in serve.NAV_JS
@@ -28,7 +27,10 @@ def test_groups_collapsed_with_tallies_and_species(tmp_path):
 
 
 def test_group_tally_drops_zero_parts():
-    assert serve.group_tally({"released": 3}) == '<span class="st released" title="Completed">\u27053</span>'
-    assert serve.group_tally({"running": 1, "neutral": 1}) == ('<span class="st running" title="Running">\U0001F5041</span> '
-                                                               '<span class="st neutral" title="Not started">\u26AA1</span>')
+    dot = '<i class="dot"></i>'
+    assert serve.group_tally({"released": 3}) == f'<span class="st released" title="Completed">{dot}3</span>'
+    assert serve.group_tally({"running": 1, "neutral": 1}) == (f'<span class="st running" title="Running">{dot}1</span> '
+                                                               f'<span class="st neutral" title="Not started">{dot}1</span>')
     assert serve.group_tally({}) == ""
+    # the state's colour comes from the page palette (index.CSS .released/.running/\u2026), not from a glyph
+    assert ".released,.include{--st:var(--ok)" in index.CSS and ".pill::before,.dot{" in index.CSS

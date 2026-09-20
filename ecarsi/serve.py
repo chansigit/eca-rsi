@@ -462,7 +462,8 @@ aside.sb{width:360px;flex:0 0 360px;background:var(--card);border-right:1px soli
 details.group{margin-bottom:4px}details.group>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:var(--s1);padding:8px 10px;border-radius:var(--r);font-size:var(--t3);font-weight:650;color:var(--muted)}
 details.group>summary::-webkit-details-marker{display:none}details.group>summary::before{content:"";width:0;height:0;border:5px solid transparent;border-left-color:currentColor;margin-right:2px;transition:transform .1s}
 details.group[open]>summary::before{transform:rotate(90deg)}details.group>summary:hover{background:var(--none-bg)}
-details.group>summary .gn{margin-left:auto;font-weight:400;font-variant-numeric:tabular-nums}
+details.group>summary .gn{margin-left:auto;font-weight:400;font-variant-numeric:tabular-nums;display:flex;align-items:center;gap:.6em}
+details.group>summary .gn .st{display:inline-flex;align-items:center;gap:.35em}
 .items{padding-left:var(--s1)}
 .item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:var(--r);color:var(--ink);text-decoration:none;font-size:var(--t3)}
 .item:hover{background:var(--none-bg)}.item.active{background:var(--accent-bg);color:var(--accent-ink);font-weight:600}
@@ -498,16 +499,16 @@ a.icon{text-decoration:none}
 
 
 def group_tally(counts: dict[str, int]) -> str:
-    """One glyph and a count per state (the word is the tooltip): a collection row has no room for
-    '12 Completed · 3 Running · 1 Failed'. Same states and order as the overview and filters."""
-    return " ".join(f'<span class="st {cls}" title="{label}">{STATE_GLYPHS[cls]}{counts[cls]}</span>'
+    """A dot and a count per state (the word is the tooltip): a collection row has no room for
+    '12 Completed · 3 Running · 1 Failed'. Same states and order as the overview and filters.
+    The dot is the page's own status colour — emoji bring their own palette and their own
+    advance widths, which a column of counts cannot line up."""
+    return " ".join(f'<span class="st {cls}" title="{label}"><i class="dot"></i>{counts[cls]}</span>'
                     for cls, label in DATASET_STATES if counts.get(cls))
 
 
 DATASET_STATES = (("released", "Completed"), ("running", "Running"), ("queued", "Queued"),
                   ("paused", "Paused"), ("neutral", "Not started"), ("failed", "Failed"))
-STATE_GLYPHS = {"released": "\u2705", "running": "\U0001F504", "queued": "\u23F3",
-                "paused": "\u23F8\ufe0f", "neutral": "\u26AA", "failed": "\u274C"}
 
 
 def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_state, control: bool = False) -> str:
