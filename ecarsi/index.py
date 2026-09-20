@@ -641,7 +641,8 @@ def _gen2_unit_body(unit: Path, s: dict, base: str = "") -> str:
         _stat(str(len(items)), "needs review", "items, see below" if items else "nothing so far",
               "tone-warn" if items else ""),
     ]
-    sections = (("files", "Files"), ("rounds", "Rounds"), ("sankey", "Cell identity"),
+    reports = sorted((unit / L.GEN2_PERSAMPLE).glob("*/report.html"))
+    sections = (("files", "Files"), ("rounds", "Rounds"), ("samples", "Samples"), ("sankey", "Cell identity"),
                 ("umap", "Final UMAP"), ("review", "Needs review"))
     parts = ['<div class="glance">' + "".join(glance) + "</div>",
              '<nav class="jump" aria-label="sections">'
@@ -679,6 +680,22 @@ def _gen2_unit_body(unit: Path, s: dict, base: str = "") -> str:
                     '<th class="r">cells out</th><th class="r">removed</th><th class="r">%</th>'
                     '<th>decision</th><th>reason</th></tr></thead>'
                     f'<tbody>{"".join(rows)}</tbody></table></div>' if rows else '<p class="empty">No round has started.</p>')
+                 + "</section>")
+    rows = []
+    for report in reports:
+        folder = report.parent
+        extra = [f'<a href="{base}{L.GEN2_PERSAMPLE}/{folder.name}/{n}">{n}</a>'
+                 for n in ("qc_summary.csv", "qc_removed.csv", "annotation_proposal.json") if (folder / n).is_file()]
+        rows.append(f'<tr><td><a href="{base}{L.GEN2_PERSAMPLE}/{folder.name}/report.html"><b>{e(folder.name)}</b></a></td>'
+                    f'<td class="muted">{" · ".join(extra)}</td></tr>')
+    parts.append('<section class="block" id="samples"><h2>Samples '
+                 f'<span class="count">{len(reports)} report(s)</span></h2>'
+                 f'<p class="lede">{EXPLAIN["samples"]} Each report is OSP\'s own page for that sample: QC, clustering '
+                 'and the annotation the agent proposed.</p>'
+                 + (f'<div class="wrap"><table><tbody>{"".join(rows)}</tbody></table></div>' if rows else
+                    '<p class="empty">No sample report has been copied here yet'
+                    + (' — this unit ran before the reports were published into the unit directory; they are still in '
+                       'the pool request folders the publication references.' if per["n_done"] else '.') + '</p>')
                  + "</section>")
     if per["skipped"] or per["failed"]:
         detail = "".join(f'<li><b>{e(str(x.get("sample", "")))}</b> {e(str(x.get("error", ""))[:200])}</li>'
@@ -806,12 +823,12 @@ def collection_of(path: Path) -> str:
 
 
 
-def collections(items: dict) -> dict:
-    """Collection per dataset name. The fleet path decides when it has one; a run kept
-    outside that tree (a control-plane run directory, a one-off) still belongs to the
-    collection its name carries -- `<collection>-<rest>` is the prefix the pages already
-    strip from the name -- as long as some other dataset puts that collection on the map."""
-    direct = {name: collection_of(Path(p)) for name, p in items.items()}
+def collections(direct: dict) -> dict:
+    """Fill in the collections a path could not give. `direct` is name -> collection_of()
+    (empty where the path says nothing). A run kept outside the fleet tree -- a
+    control-plane run directory, a one-off -- still belongs to the collection its name
+    carries: `<collection>-<rest>` is the prefix the pages already strip from the name.
+    Takes the collections rather than the paths so the fleet pages never touch disk."""
     known = sorted({c for c in direct.values() if c}, key=len, reverse=True)
     return {name: c or next((k for k in known if name.startswith(k + "-")), "")
             for name, c in direct.items()}

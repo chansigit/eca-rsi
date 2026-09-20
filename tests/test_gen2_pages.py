@@ -126,6 +126,38 @@ def test_a_run_outside_the_fleet_tree_joins_the_collection_its_name_carries(tmp_
     items = {'chondroatlas-08_Yanetal': fleet / 'rsi',
              'chondroatlas-g2-08_Yanetal': tmp_path / 'plane' / 'chondro' / '08_Yanetal',
              'somethingelse-42': tmp_path / 'plane' / 'chondro' / 'x'}
-    assert index.collections(items) == {'chondroatlas-08_Yanetal': 'chondroatlas',
+    direct = {n: index.collection_of(p) for n, p in items.items()}
+    assert index.collections(direct) == {'chondroatlas-08_Yanetal': 'chondroatlas',
                                         'chondroatlas-g2-08_Yanetal': 'chondroatlas',
                                         'somethingelse-42': ''}
+
+
+def test_publish_copies_the_sample_reports_into_the_unit_and_the_page_links_them(tmp_path):
+    """The pool request that produced a sample is a replay cache; the report a person
+    reads belongs in the unit directory, and the unit page lists it."""
+    from ecarsi.control.persample import materialize_reports
+
+    pool = tmp_path / 'pool' / 'req' / 'outputs' / 'sample'
+    (pool / 'figures').mkdir(parents=True)
+    (pool / 'report.html').write_text('<html>osp</html>')
+    (pool / 'figures' / 'umap.png').write_bytes(b'png')
+    (pool / 'qc_summary.csv').write_text('n,1\n')
+    (pool / 'clustered.h5ad').write_bytes(b'x' * 1000)
+    record = {'sample': 'study__s1__abc',
+              'files': {n: {'path': str(pool / n)} for n in
+                        ('report.html', 'figures/umap.png', 'qc_summary.csv', 'clustered.h5ad')}}
+
+    root = tmp_path / 'run'
+    gen2_run(root, released=False)
+    per = root / 'units' / 'u' / L.GEN2_PERSAMPLE
+    materialize_reports(per, [record])
+    assert (per / 'study__s1__abc' / 'report.html').read_text() == '<html>osp</html>'
+    assert (per / 'study__s1__abc' / 'figures' / 'umap.png').is_file()
+    assert not (per / 'study__s1__abc' / 'clustered.h5ad').exists()  # matrices stay in the pool
+    assert not list((per / 'study__s1__abc').glob('*.part'))
+
+    page = index.render_unit(root / 'units' / 'u')
+    assert '01-per-sample/study__s1__abc/report.html' in page
+    assert '01-per-sample/study__s1__abc/qc_summary.csv' in page
+
+    materialize_reports(per, [record])  # a retried publish copies nothing twice

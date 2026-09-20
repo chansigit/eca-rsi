@@ -8,6 +8,34 @@ from temporalio.exceptions import ApplicationError
 SKIPPED_CELL_LIMIT = 0.10  # a stage whose skipped samples or lineages hold more of its input cells fails instead
 
 
+def materialize_reports(root, records):
+    """Copy each sample's report and figures next to the publication.
+
+    A finished sample's outputs live in the pool request that produced them, and the
+    publication references them by path and digest. That request is a replay cache the
+    run does not own -- archiving or clearing it would orphan every report -- and a unit
+    page has listed per-sample reports since generation 1. The matrices stay where they
+    are: only what a person reads is copied. Failing to copy a report never fails a unit.
+    """
+    import shutil
+
+    for record in records:
+        folder = root / record["sample"]
+        for name, ref in sorted((record.get("files") or {}).items()):
+            if name.endswith(".h5ad"):
+                continue  # the matrices are the pool's, and prune drops them anyway
+            target, source = folder / name, Path(ref["path"])
+            try:
+                if target.is_file() and target.stat().st_size == source.stat().st_size:
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                partial = target.with_name(target.name + ".part")
+                shutil.copyfile(source, partial)
+                partial.replace(target)
+            except OSError as exc:
+                print(f"[persample] warning: {record['sample']}/{name} not copied: {exc}", flush=True)
+
+
 def validate_spec(spec, *, resume=False):
     from ..warm_pool.state import reference
     from ..warm_pool.state import identifier, pool_root, read
@@ -131,6 +159,7 @@ def sample_step(action, args):
         if not failed and (len(records) != totals["total_samples"] or
                            n_input + totals["n_excluded"] != totals["n_input"] or n_kept + n_removed != n_input):
             raise ValueError("Per-sample sample/cell conservation failed")
+        materialize_reports(root, records)
         publication = {
             "state": "incomplete" if failed else "complete", "input": spec["input_manifest"],
             "samples": [reference(p) for p in results], "failed_samples": failed, "skipped_samples": skipped,

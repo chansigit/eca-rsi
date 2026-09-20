@@ -520,9 +520,11 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
     groups: dict[str, list[str]] = {}
     tally: dict[str, dict[str, int]] = {}
     species: dict[str, int] = {}
-    colls = index.collections(items)
+    states = {name: state(p) for name, p in sorted(items.items())}
+    colls = index.collections({name: (st['collection'] if 'collection' in st else index.collection_of(items[name]))
+                               for name, st in states.items()})
     for name, p in sorted(items.items()):
-        st = state(p)
+        st = states[name]
         coll = colls[name] or "other"
         short = name[len(coll) + 1:] if name.startswith(coll + "-") else name
         cells = index._n(st["final_cells"])
@@ -621,7 +623,8 @@ def fleet_history(states: dict) -> dict:
     curve; `states` = {name: (dataset_state, path)}. Derived from the logs of
     what is bound now, so unbinding a dataset removes it from the past too."""
     out = {}
-    colls = index.collections({n: p for n, (_, p) in states.items()})
+    colls = index.collections({n: (s['collection'] if 'collection' in s else index.collection_of(p))
+                               for n, (s, p) in states.items()})
     for name, (s, p) in sorted(states.items()):
         ev = s.get("events") or {}
         out[name] = {"collection": colls[name], "species": s["species"],
@@ -812,7 +815,8 @@ def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
                        for v, k, c, key in rows)
     rank = {cls: i for i, (cls, _) in enumerate(DATASET_STATES)}
     rows = []
-    colls = index.collections({n: p for n, (_, p) in states.items()})
+    colls = index.collections({n: (s['collection'] if 'collection' in s else index.collection_of(p))
+                               for n, (s, p) in states.items()})
     for name, (s, p) in sorted(states.items()):
         coll = colls[name]
         short = name[len(coll) + 1:] if coll and name.startswith(coll + "-") else name  # the collection has its own column
