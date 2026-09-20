@@ -1,6 +1,7 @@
 """Periscope reads both generations: gen-2 state comes from publications, not progress.log."""
 import json
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -262,5 +263,18 @@ def test_a_running_round_shows_the_stage_subtotal_and_the_trend_marks_it_unsettl
     # above the ceiling every point sits on the top edge, and the tooltip still tells the truth
     big = index.sparkline([{'n': 1, 'frac': .36, 'settled': True}, {'n': 2, 'frac': .12, 'settled': True},
                            {'n': 3, 'frac': .009, 'settled': True}])
-    assert big.count('cy="3.0" r="2.6"') == 2 and 'round 1: 36.00% removed' in big and 'class="sp released"' in big
+    assert big.count('cy="3.0" r="2.6"') == 2 and 'cx="3.0"' in big and 'cx="14.0"' in big and 'round 1: 36.00% removed' in big and 'class="sp released"' in big
     assert (index.trend_band(0.0099), index.trend_band(0.02), index.trend_band(0.05)) == ('released', 'running', 'failed')
+
+
+def test_a_short_run_is_drawn_short(tmp_path):
+    """A round is a fixed step from the left edge, not a fraction of the frame: two rounds
+    stretched across the whole width would read like a long history of two states."""
+    two = index.sparkline([{'n': 1, 'frac': .2, 'settled': True}, {'n': 2, 'frac': .01, 'settled': True}])
+    assert 'cx="3.0"' in two and 'cx="14.0"' in two and 'cx="105.0"' not in two
+    one = index.sparkline([{'n': 1, 'frac': .2, 'settled': True}])
+    assert 'cx="3.0"' in one                                    # left-aligned, not centred
+    many = index.sparkline([{'n': i, 'frac': .02, 'settled': True} for i in range(1, 16)])
+    xs = [float(v) for v in re.findall(r'cx="([0-9.]+)" cy="[0-9.]+" r="2.6"', many)]
+    assert len(xs) == 15 and xs[0] == 3.0 and xs[-1] <= 105.0   # the safety cap still fits
+    assert xs[1] - xs[0] < index.TREND_STEP                     # compressed only because it must be

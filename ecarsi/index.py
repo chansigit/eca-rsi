@@ -69,8 +69,11 @@ main.page{max-width:1200px;margin:0 auto;padding:var(--s3) var(--s3) var(--s5)}
  line-height:1.6;white-space:nowrap;vertical-align:middle;color:var(--st,var(--none));background:var(--st-bg,var(--none-bg))}
 .pill::before,.dot{content:"";display:inline-block;width:.5rem;height:.5rem;border-radius:50%;background:var(--st,var(--none));flex:none}
 .st{color:var(--st,var(--none));font-weight:600}
-/* convergence sparkline: colour is absolute (see TREND_BANDS), a hollow point is still removing */
-.spark{display:block;overflow:visible}
+/* convergence sparkline: colour is absolute (see TREND_BANDS), a hollow point is still removing.
+   The plot sits in its own tinted frame so a row of them reads as a column of charts, not as ink
+   floating in the table; the tint is translucent so the row's own background still shows through. */
+.spark{display:block;background:color-mix(in srgb,var(--none-bg) 55%,transparent);
+ border:1px solid var(--line);border-radius:var(--r);padding:1px}
 .sp-line{fill:none;stroke:var(--line);stroke-width:1.5;stroke-linejoin:round}
 circle.sp{fill:var(--st,var(--none));stroke:none}
 circle.sp.open{fill:var(--card);stroke:var(--st,var(--none));stroke-width:1.6}
@@ -987,6 +990,7 @@ def dataset_state(root: Path, states: list[dict] | None = None) -> dict:
 
 
 TREND_CEILING = 0.10   # a first round often removes 20-36 %; drawn to scale it flattens the rest
+TREND_STEP = 11        # px per round: the safety cap is 15 rounds, which still fits the frame
 
 
 def sparkline(points: list[dict], width: int = 108, height: int = 22) -> str:
@@ -997,7 +1001,11 @@ def sparkline(points: list[dict], width: int = 108, height: int = 22) -> str:
     if not points:
         return '<span class="muted">–</span>'
     top = min(max(max(p["frac"] for p in points), 0.03), TREND_CEILING)
-    x = (lambda i: 3 + i * (width - 6) / max(len(points) - 1, 1)) if len(points) > 1 else (lambda i: width / 2)
+    # One round is one step, left to right from the frame's edge -- not stretched to fill it.
+    # A run of two rounds spread across the full width reads like a long history of two states;
+    # at a fixed step its shortness is the first thing visible. Long runs compress to fit.
+    step = min(TREND_STEP, (width - 6) / max(len(points) - 1, 1))
+    x = lambda i: 3 + i * step
     y = lambda f: height - 3 - (height - 6) * (min(f, top) / top)
     path = " ".join(("M" if i == 0 else "L") + f"{x(i):.1f} {y(p['frac']):.1f}" for i, p in enumerate(points))
     dots = "".join(f'<circle cx="{x(i):.1f}" cy="{y(p["frac"]):.1f}" r="2.6" class="sp {trend_band(p["frac"])}'
