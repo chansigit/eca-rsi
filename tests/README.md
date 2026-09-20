@@ -1,7 +1,6 @@
 # Running the tests
 
-Two interpreters see different halves of the suite; between them everything except the
-`distributed` (dask) tests runs green.
+Two interpreters see different halves of the suite; between them the whole suite runs green.
 
     S=/scratch/users/chensj16/projects      # the sibling kernel checkouts
 
@@ -19,16 +18,9 @@ Two interpreters see different halves of the suite; between them everything exce
 copy `pytest _pytest pluggy iniconfig packaging` out of
 `/scratch/users/chensj16/venvs/eca-ct/.venv/lib/python3.12/site-packages`.
 
-The venv also carries `distributed`, so the gen-1 Dask pool tests run there:
-
-    /scratch/users/chensj16/venvs/eca-ct/python -m pytest -q \
-      tests/test_pool_multitask.py tests/test_pool_observe.py tests/test_compute_policy.py
-
-They skip themselves in the science image, which has no `distributed` on purpose: generation 2
-schedules through HyperQueue and pins `MSP_COMPUTE_ENDPOINT=local` in every task it runs, so nothing
-the workers execute imports dask. Adding it back would only make sense if one single operation
-outgrew one node (msp's dask endpoint, eca-rsi#8, parallelises inside an operation, where HyperQueue
-parallelises across them) — no stage has come close so far.
+Neither the image nor the venv needs `distributed`: generation 2 schedules through HyperQueue and pins
+`MSP_COMPUTE_ENDPOINT=local` in every task it runs, so nothing the workers execute imports dask. The gen-1
+Dask pool and its tests were removed in 0.3.2; msp's own dask endpoints remain an optional extra it does not install.
 
 Expected failures in the image run:
 

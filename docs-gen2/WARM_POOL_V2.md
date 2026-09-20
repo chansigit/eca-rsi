@@ -6,8 +6,8 @@ backfilling. RSI stores request identities, cancellation intent, execution
 receipts, and output hashes independently of the backend journal.
 
 This is the CPU recovery milestone in the
-[approved component design](DURABLE_WORKFLOWS.md). It does not route existing
-datasets or change the production `ecarsi.pool` service. Commands in the
+[approved component design](DURABLE_WORKFLOWS.md). It did not route existing
+datasets or change the then-production `ecarsi.pool` service (removed in 0.3.2). Commands in the
 acceptance test are synthetic; no scientific throughput claim follows from it.
 Both local recovery and a two-host Slurm trial have passed, including starting
 the replacement Scheduler on the other host while keeping the same state root.

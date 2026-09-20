@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.2 — 2026-09-19
+
+Remove the first generation's Dask warm pool. Generation 1 runs are no longer resumed — their reports and metadata
+stay readable in Periscope, and anything unfinished is recomputed by generation 2 — so the pool that used to feed
+them has no remaining user.
+
+- Delete `ecarsi.pool` (client, scheduler, executor, observe, status, CLI), `ecarsi.pool_web`, `ecarsi.compute_policy`,
+  `container/dask-pool.sh` and their tests, plus the `pool` extra. Periscope loses the **Warm pool** sidebar button,
+  the `/_pool/*` routes and `--pool-scheduler`; it no longer probes a dead scheduler every five seconds.
+- Keep the two shared helpers generation 2 still calls: `pool/slurm.py` → `warm_pool/slurm.py` (inventory,
+  process fencing; the Dask worker supervisor in it is gone) and `pool/budget.py` → `warm_pool/reservation.py`
+  (the Slurm-allocation memory ledger).
+- `OSP_COMPUTE_ENDPOINT` accepts only `local`; the `pool` / `auto` offload went with the pool. msp's own
+  `MSP_COMPUTE_ENDPOINT=dask*` endpoints are untouched — they are an optional extra generation 2 pins to `local`.
+- Nothing in the package imports dask any more.
+
 ## 0.3.1 — 2026-09-17 (branch `gen2`)
 
 The second generation (Temporal control plane, HyperQueue warm pool, durable model-turn bridge, stage programs),

@@ -59,7 +59,7 @@ def gpu_device(gpu_id):
 
 
 def launch(root, cpu_ids, memory_mb, work_dir, prefix, job_id=None, time_limit_seconds=None, gpu=False):
-    from ecarsi.pool.slurm import inventory
+    from ecarsi.warm_pool.slurm import inventory
     profile = inventory(memory_mb * 2**20, gpu=gpu)
     if gpu and not profile["gpu_ids"]:
         raise ValueError("GPU worker requires a nonempty Slurm GPU grant")

@@ -235,17 +235,16 @@ NAV_JS = r"""
 (function(){
   const $ = id => document.getElementById(id);
   const items = [...document.querySelectorAll("#sb-list .item")], frame = $("frame"), crumb = $("crumb"), open = $("open"),
-        q = $("nav-q"), n = $("nav-n"), msg = $("nav-msg"), empty = $("empty"), home = $("home-item"), pool = $("pool-item"), models = $("models-item"), control = $("control-item"),
+        q = $("nav-q"), n = $("nav-n"), msg = $("nav-msg"), empty = $("empty"), home = $("home-item"), models = $("models-item"), control = $("control-item"),
         sort = $("nav-sort"), sp = $("nav-sp"), st = $("nav-st"), groups = [...document.querySelectorAll("#sb-list details.group")];
   const names = new Set(items.map(i => i.dataset.name));
   // -- sidebar <-> main pane --
   function mark(name){ items.forEach(i => i.classList.toggle("active", i.dataset.name === name));
     if (home) home.classList.toggle("active", name === "__home__");
     if (control) control.classList.toggle("active", name === "_control");
-    if (pool) pool.classList.toggle("active", name === "_warm_pool_panel");
     if (models) models.classList.toggle("active", name === "_model_pool_panel");
     const cur = items.find(i => i.dataset.name === name); if (cur) { const g = cur.closest("details.group"); if (g) g.open = true; } }
-  function show(path){ window.modelMonitor.close(); window.poolMonitor.close(); open.hidden = false; if (empty) empty.style.display = "none"; frame.style.display = "";
+  function show(path){ window.modelMonitor.close(); open.hidden = false; if (empty) empty.style.display = "none"; frame.style.display = "";
     if (frameUrl() !== path) frame.src = path; else frame.dispatchEvent(new Event('load')); }
   function frameUrl(){ try { return frame.contentWindow.location.pathname; } catch (e) { return null; } }
   function fromHash(){
@@ -254,7 +253,7 @@ NAV_JS = r"""
     if (h === "/_control/") return control ? "/_control/" : null;
     const m = h.match(/^\/([^/]+)\/(.*)$/); return m && names.has(m[1]) ? "/" + m[1] + "/" + m[2] : null; }
   frame.addEventListener("load", () => {
-    const p = frameUrl(); if (!p || window.poolMonitor.isOpen() || window.modelMonitor.isOpen()) return;
+    const p = frameUrl(); if (!p || window.modelMonitor.isOpen()) return;
     if (p === "/_home") {
       if (location.hash !== "#/__home__") history.replaceState(null, "", "#/__home__");
       mark("__home__"); crumb.textContent = "overview"; open.href = "/_home";
@@ -270,44 +269,18 @@ NAV_JS = r"""
   items.forEach(i => i.addEventListener("click", ev => { if (ev.target.closest("input.sel")) return; ev.preventDefault(); show("/" + i.dataset.name + "/"); }));
   if (home) home.addEventListener("click", ev => { ev.preventDefault(); show("/_home"); });
   if (control) control.addEventListener("click", ev => { ev.preventDefault(); show("/_control/"); });
-  async function showMonitor(monitor, other, name, title){
-    other.close();
+  async function showMonitor(monitor, name, title){
     if(!await monitor.open())return;
     frame.style.display="none";if(empty)empty.style.display="none";
     mark(name);crumb.textContent=title;open.hidden=true;document.title="Periscope";
     history.replaceState(null,"","#/__home__");
     if(matchMedia('(max-width:760px)').matches)document.body.classList.add('sb-hidden');
   }
-  models.addEventListener('click',()=>showMonitor(window.modelMonitor,window.poolMonitor,'_model_pool_panel','Agent Bridge'));
-  if (pool) {
-    pool.addEventListener("click", () => { if(!pool.disabled) showMonitor(window.poolMonitor, window.modelMonitor, "_warm_pool_panel", "Warm pool"); });
-    let poolFailures = 0, poolWasOnline = false;
-    function poolAvailable(available){
-      if(available){poolFailures=0;poolWasOnline=true;} else {poolFailures++;}
-      pool.disabled = !available;
-      pool.setAttribute("aria-disabled", String(!available));
-      pool.title = available ? "Monitor Slurm workers and task queue" : "Warm pool is not running or cannot be reached";
-      $("pool-state").textContent = available ? "online" : poolWasOnline && poolFailures<3 ? "reconnecting" : "offline";
-      if (!available) {
-        if(poolWasOnline && poolFailures<3) return;
-        const visible = window.poolMonitor.isOpen();
-        window.poolMonitor.close();
-        if (visible || pool.classList.contains('active')) show("/_home");
-      }
-    }
-    async function checkPool(){
-      try {
-        const r = await fetch('/_pool/health', {cache:'no-store',signal:AbortSignal.timeout(8000)});
-        poolAvailable(r.ok && (await r.json()).available === true);
-      } catch(e) { poolAvailable(false); }
-      setTimeout(checkPool,5000);
-    }
-    checkPool();
-  }
+  models.addEventListener('click',()=>showMonitor(window.modelMonitor,'_model_pool_panel','Agent Bridge'));
   const brand = $("brand"); if (brand) brand.addEventListener("click", ev => { ev.preventDefault(); show("/_home"); });
   $("sb-toggle").addEventListener("click", () => document.body.classList.toggle("sb-hidden"));
   $("sb-show").addEventListener("click", () => document.body.classList.remove("sb-hidden"));
-  $("reload").addEventListener("click", () => { if(window.modelMonitor.isOpen()){models.click();return;} if(window.poolMonitor.isOpen()){pool.click();return;} location.reload(); });
+  $("reload").addEventListener("click", () => { if(window.modelMonitor.isOpen()){models.click();return;} location.reload(); });
   // -- search + species filter (groups start collapsed; a group folds away when none of its
   //    datasets match and opens while a filter is active) --
   function apply(){ const t = q.value.trim().toLowerCase(), s = sp ? sp.value : "", w = st ? st.value : ""; let k = 0;
@@ -493,9 +466,8 @@ details.group>summary .gn{margin-left:auto;font-weight:400;font-variant-numeric:
 .items{padding-left:var(--s1)}
 .item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:var(--r);color:var(--ink);text-decoration:none;font-size:var(--t3)}
 .item:hover{background:var(--none-bg)}.item.active{background:var(--accent-bg);color:var(--accent-ink);font-weight:600}
-#pool-item,#models-item{border:0;font-family:inherit;text-align:left;cursor:pointer;background:none}
-#pool-item:disabled{opacity:.5;cursor:not-allowed}#pool-item:disabled:hover{background:none}
-#pool-item.active,#models-item.active{background:var(--accent-bg)}#models-item:hover,#pool-item:not(:disabled):hover{background:var(--none-bg)}
+#models-item{border:0;font-family:inherit;text-align:left;cursor:pointer;background:none}
+#models-item.active{background:var(--accent-bg)}#models-item:hover{background:var(--none-bg)}
 .item .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .item .cells{color:var(--muted);font-variant-numeric:tabular-nums;font-size:var(--t2);white-space:nowrap}
 .item input.sel{margin:0;flex:0 0 auto;opacity:0;transition:opacity .1s}
@@ -543,7 +515,7 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
     dataset's own pages (root landing page -> its units -> ...) in an iframe on
     the right. The iframe keeps the address in the hash (#/<name>/...), so
     reload / back / bookmarks land on the same page; `/` opens the overview."""
-    from . import pool_web, model_web
+    from . import model_web
     e = _h.escape
     groups: dict[str, list[str]] = {}
     tally: dict[str, dict[str, int]] = {}
@@ -600,8 +572,6 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
         + ('<a class="item home-item" id="control-item" href="/_control/" data-name="_control" title="Temporal, warm pool and bridge of the run directory">'
            '<span class="nm"><b>Control plane</b></span></a>' if control else '')
         + '<button class="item home-item" id="models-item" title="Primary and fallback model inventory"><span class="nm"><b>Agent Bridge</b></span></button>'
-        '<button class="item home-item" id="pool-item" disabled aria-disabled="true" title="Checking warm pool availability">'
-        '<span class="nm"><b>Warm pool</b></span><span class="cells" id="pool-state">checking</span></button>'
         f'<div class="sb-list" id="sb-list">{rows or empty_note}</div>'
         '<div class="sb-foot">'
         '<div class="row"><button id="bind-open" class="btn plain">+ Bind…</button><button id="unbind-go" class="btn danger" disabled>Unbind…</button></div>'
@@ -619,7 +589,7 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
         '<span id="crumb"></span><button class="icon" id="reload" title="reload page" aria-label="reload page">&#8635;</button>'
         '<a class="icon" id="open" href="/" target="_blank" title="open in a new tab" aria-label="open in a new tab">&#8599;</a></div>'
         '<iframe id="frame" name="frame" title="dataset"></iframe>'
-        f'{pool_web.panel()}<section id="model-panel" hidden aria-label="Agent Bridge"></section>'
+        f'<section id="model-panel" hidden aria-label="Agent Bridge"></section>'
         '<div id="empty" style="display:none"><h2>Nothing bound yet</h2><p>Use <b>+ Bind…</b> in the sidebar or, on the server host, '
         "<code>eca-rsi serve scan-add &lt;dir-or-glob&gt;</code>. The server picks up registry changes on the next request.</p>"
         f"<p>{hint}</p></div></main>"
@@ -627,8 +597,8 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
     return (
         '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
         f'<meta name="viewport" content="width=device-width,initial-scale=1"><title>{APP} · ECA-RSI</title>{FAVICON}'
-        f"<style>{index.CSS}{NAV_CSS}{LOGO_CSS}{pool_web.CSS}{model_web.CSS}</style></head><body>{sidebar}{main}"
-        f"<script>{pool_web.JS}</script><script>{model_web.JS}</script><script>{NAV_JS}</script></body></html>"
+        f"<style>{index.CSS}{NAV_CSS}{LOGO_CSS}{model_web.CSS}</style></head><body>{sidebar}{main}"
+        f"<script>{model_web.JS}</script><script>{NAV_JS}</script></body></html>"
     )
 
 
@@ -919,7 +889,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     self.path are recomputed per request, which is safe — translate_path
     reads them fresh on every call, not cached from __init__)."""
 
-    def __init__(self, *a, registry: Registry, auth: str | None = None, states: StateCache | None = None, pool_scheduler: str | None = None,
+    def __init__(self, *a, registry: Registry, auth: str | None = None, states: StateCache | None = None,
                  control=None, **kw):
         self._registry = registry
         self._control = control  # observatory.ControlPlane behind /_control/ when serve got --control-plane
@@ -927,7 +897,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self._state = states.get if states else _dataset_state  # fleet pages: cached states when a warmer runs
         self._states = states
         self._items = registry.cached_snapshot if states else registry.snapshot
-        self._pool_scheduler = pool_scheduler
         super().__init__(
             *a, **kw
         )  # directory defaults to cwd; do_GET always overrides it before use
@@ -967,7 +936,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def _send(self, code: int, body: bytes, ctype: str) -> None:
         self.send_response(code)
         self.send_header("Content-Type", ctype)
-        if urllib.parse.unquote(self.path).startswith(("/_pool", "/_models")):
+        if urllib.parse.unquote(self.path).startswith("/_models"):
             self.send_header("Cache-Control", "no-store")
         if len(body) > 1024 and "gzip" in self.headers.get("Accept-Encoding", ""):
             body = gzip.compress(body, 5)  # rendered pages are 80-450 KB of HTML and compress ~5x; matters through the tunnel
@@ -1086,17 +1055,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 except (ValueError, OverflowError) as e:
                     return self._json(400, {"error": str(e)})
             return self._json(404, {"error": "Not found"})
-        pool_path = urllib.parse.unquote(raw).rstrip("/")
-        if pool_path == "/_pool" or pool_path.startswith("/_pool/"):
-            if pool_path not in {"/_pool/health", "/_pool/status.json"}:
-                return self._json(404, {"error": "Not found"})
-            from . import pool_web
-            state = pool_web.snapshot(self._pool_scheduler, health_only=pool_path == "/_pool/health")
-            if pool_path == "/_pool/health":
-                return self._json(200, {"available": state is not None})
-            if state is None:
-                return self._json(503, {"error": "Warm pool is not running or cannot be reached"})
-            return self._json(200, state)
         if raw == "/_home":
             return self._html(_home_html(self._items(), self._state))
         if raw == "/_history.json":  # the curve's data; ?at=YYYY-MM-DDTHH:MM (or epoch) reads it at one moment
@@ -1215,8 +1173,6 @@ def start_ngrok(port: int, domain: str | None) -> tuple[subprocess.Popen, str]:
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
-    from .pool_web import start_averages
-    start_averages()
     reg_path = Path(args.registry).expanduser().resolve()
     extra: dict[str, Path] = {}
     for d in args.dir:
@@ -1246,8 +1202,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
                                bridge_root=Path(args.control_bridge_root or base / 'bridge'),
                                temporal_service_root=Path(args.control_temporal_root or base / 'durable-control')).start()
     httpd = http.server.ThreadingHTTPServer(
-        (args.bind, args.port), partial(Handler, registry=registry, auth=args.auth, states=states,
-                                      pool_scheduler=args.pool_scheduler, control=control)
+        (args.bind, args.port), partial(Handler, registry=registry, auth=args.auth, states=states, control=control)
     )
     print(
         f"[serve] {APP} on http://{args.bind}:{args.port}/  ({len(items)} dataset(s); registry {reg_path}"
@@ -1544,8 +1499,6 @@ def main(argv: list[str]) -> int:
         help="extra dataset dirs to serve for this process only (name = basename)",
     )
     ap.add_argument("--port", type=int, default=8899)
-    ap.add_argument("--pool-scheduler", default=os.environ.get("ECA_POOL_SCHEDULER"),
-                    help="optional warm pool scheduler address or JSON file (default: ECA_POOL_SCHEDULER)")
     ap.add_argument("--control-plane", default=None, metavar="RUN_DIR",
                     help="gen-2 run directory: serve its Temporal / warm pool / bridge monitor at /_control/")
     ap.add_argument("--control-pool-root", default=None, help="pool root of the run directory (default RUN_DIR/pool)")

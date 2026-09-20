@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 
-from ecarsi.pool.slurm import inventory, process_identity
+from ecarsi.warm_pool.slurm import inventory, process_identity
 from .state import lock, pool_root, read, save
 
 

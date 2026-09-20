@@ -424,7 +424,7 @@ def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit
                 return 0
             time.sleep(1)
         if profile:
-            from ecarsi.pool.budget import reserve
+            from ecarsi.warm_pool.reservation import reserve
             # Reserve before taking CPU locks so stale legacy entries can prove
             # their old locks are free. The ledger serializes competing claims.
             reserve(profile, "worker:" + str(work_dir), owner_lock, role="worker", worker_directory=work_dir)

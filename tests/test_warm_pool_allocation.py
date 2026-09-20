@@ -32,7 +32,7 @@ def test_slurm_profile_cannot_cross_jobs_or_expand_the_grant(tmp_path, monkeypat
 
 
 def test_shared_memory_ledger_keeps_uncertain_workers_reserved(tmp_path, monkeypatch):
-    from ecarsi.pool.budget import reserve
+    from ecarsi.warm_pool.reservation import reserve
     monkeypatch.setenv("HOME", str(tmp_path))
     first, second = tmp_path / "first", tmp_path / "second"
     first.mkdir(); second.mkdir()
@@ -51,7 +51,7 @@ def test_shared_memory_ledger_keeps_uncertain_workers_reserved(tmp_path, monkeyp
 
 def test_slurm_launch_passes_every_granted_gpu_to_one_worker(tmp_path, monkeypatch):
     profile = dict(job_id="123", gpu_ids=["GPU-a1", "GPU-b2"], cpu_ids=[4, 7])
-    monkeypatch.setattr("ecarsi.pool.slurm.inventory", lambda *a, **k: profile)
+    monkeypatch.setattr("ecarsi.warm_pool.slurm.inventory", lambda *a, **k: profile)
     monkeypatch.setenv("APPTAINER_NV", "0")
     monkeypatch.setenv("APPTAINERENV_CUDA_VISIBLE_DEVICES", "")
     monkeypatch.setenv('ARK_API_KEY', 'test-worker-key')

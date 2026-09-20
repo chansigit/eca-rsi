@@ -80,98 +80,10 @@ def test_deterministic_failure_is_not_retryable(tmp_path, monkeypatch):
     assert not is_done(tmp_path)
 
 
-@pytest.mark.parametrize("fail", [False, True])
-def test_pool_attempt_publication_and_failure_ledger(tmp_path, monkeypatch, fail):
-    from concurrent.futures import Future
-    from pathlib import Path
-    import osp
-    from ecarsi.pool import client
-
-    path = request(tmp_path, False)
-    original = path.read_bytes()
-    monkeypatch.setenv("OSP_COMPUTE_ENDPOINT", "pool")
-    monkeypatch.setenv("ECA_POOL_DATA_ROOT", str(tmp_path))
-    monkeypatch.setenv("OSP_POOL_TASK_CPUS", "4")
-    submitted = []
-
-    class Endpoint:
-        def __init__(self, **kwargs):
-            pass
-        def __enter__(self):
-            return self
-        def __exit__(self, *exc):
-            pass
-        def submit(self, fn, *args, **kwargs):
-            submitted.append(kwargs["needs"])
-            f = Future()
-            f.set_result(fn(*args))
-            return f
-
-    def compute(data, **kwargs):
-        out = Path(kwargs["outdir"])
-        assert out.parent.name == ".pool-attempts" and out != tmp_path
-        if fail:
-            pd.Series({"n_cells": 7, "n_low_quality": 7}).to_csv(out / "qc_summary.csv")
-            raise ValueError("no survivors")
-        publish(out, False)
-        (out / "request.json").write_text("must not overwrite driver request")
-
-    monkeypatch.setattr(client, "PoolEndpoint", Endpoint)
-    monkeypatch.setattr(osp, "run_one_sample_pipeline", compute)
-    monkeypatch.setattr(osp, "generate_report", lambda *_: None)
-    assert osp_worker.run(path) == int(fail)
-    assert submitted[0]["cpus"] == 4
-    assert path.read_bytes() == original
-    if fail:
-        assert read_json(tmp_path / L.RUN_STATE)["failure_kind"] == "qc_zero_survivors"
-        assert list((tmp_path / ".pool-attempts").iterdir())
-    else:
-        assert is_done(tmp_path, False)
-        assert not list((tmp_path / ".pool-attempts").iterdir())
-
-
-@pytest.mark.parametrize("value", ["0", "-1", "many"])
-def test_osp_pool_cpu_override_requires_positive_integer(tmp_path, monkeypatch, value):
+def test_remote_compute_endpoint_is_rejected(tmp_path, monkeypatch):
     path = request(tmp_path, False)
     monkeypatch.setenv("OSP_COMPUTE_ENDPOINT", "pool")
-    monkeypatch.setenv("ECA_POOL_DATA_ROOT", str(tmp_path))
-    monkeypatch.setenv("OSP_POOL_TASK_CPUS", value)
-    with pytest.raises(ValueError, match="OSP_POOL_TASK_CPUS must be a positive integer"):
-        osp_worker.run_compute(read_json(path), tmp_path)
-
-
-@pytest.mark.parametrize("n_cells,expected", [(19999, 2), (20000, 4)])
-def test_osp_pool_cpu_override_min_cells(tmp_path, monkeypatch, n_cells, expected):
-    from ecarsi.pool import client
-    path = request(tmp_path, False)
-    req = read_json(path)
-    req["n_cells"] = n_cells
-    monkeypatch.setenv("OSP_COMPUTE_ENDPOINT", "pool")
-    monkeypatch.setenv("ECA_POOL_DATA_ROOT", str(tmp_path))
-    monkeypatch.setenv("ECA_POOL_TASK_CPUS", "2")
-    monkeypatch.setenv("OSP_POOL_TASK_CPUS", "4")
-    monkeypatch.setenv("OSP_POOL_TASK_CPUS_MIN_CELLS", "20000")
-
-    class Endpoint:
-        def __init__(self, **kwargs): pass
-        def __enter__(self): return self
-        def __exit__(self, *args): pass
-        def submit(self, *args, **kwargs):
-            assert kwargs["needs"]["cpus"] == expected
-            raise RuntimeError("resource request inspected")
-
-    monkeypatch.setattr(client, "PoolEndpoint", Endpoint)
-    with pytest.raises(RuntimeError, match="resource request inspected"):
-        osp_worker.run_compute(req, tmp_path)
-
-
-@pytest.mark.parametrize("value", ["0", "-1", "many"])
-def test_osp_pool_cpu_threshold_requires_positive_integer(tmp_path, monkeypatch, value):
-    path = request(tmp_path, False)
-    monkeypatch.setenv("OSP_COMPUTE_ENDPOINT", "pool")
-    monkeypatch.setenv("ECA_POOL_DATA_ROOT", str(tmp_path))
-    monkeypatch.setenv("OSP_POOL_TASK_CPUS_MIN_CELLS", value)
-    with pytest.raises(ValueError, match="OSP_POOL_TASK_CPUS_MIN_CELLS must be a positive integer"):
+    with pytest.raises(ValueError, match="no longer supported"):
         osp_worker.run_compute(read_json(path), tmp_path)
 
 

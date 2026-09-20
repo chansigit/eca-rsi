@@ -79,11 +79,10 @@ python -m ecarsi.control --service-root <control> --task-queue <q> start-dataset
 
 1. **Temporal 控制面**——每个数据集是一棵持久工作流树，resume 靠请求身份回放而不是重算。
 2. **Stage 程序层**——内核不直接暴露给模型；每个阶段一个程序做 host 校验，`contract` 是它们共享的模型契约。
-3. **资源策略**——`warm_pool.budget` / `driver_budget` / `compute_policy` 按实测定内存，OOM 翻倍重试。
-4. **观测**——`observatory` 与第一代的 Periscope 并存。
+3. **资源策略**——`warm_pool.budget` / `warm_pool.reservation` 按实测定内存，OOM 翻倍重试。
+4. **观测**——`observatory` 并入 Periscope，在 `/_control/` 下。
 5. **准入**——第一代的 batch 准入（节点代理、OSP compute-ahead、driver 内存租借）在本分支撤掉，数据集只由控制面准入。
 
 ## 接缝（还剩的）
 
-- Periscope（`serve.py`，第一代）和 `observatory` 是两套观测；Periscope 现在只看数据集和 Slurm pool。
-- `ecarsi.pool`（第一代的 Slurm pool）仍被 `warm_pool` 用来读节点清单，两套 pool 并存。
+- 第一代的 Dask pool 已在 0.3.2 删除；它的节点清单与内存账本留作 `warm_pool.slurm` / `warm_pool.reservation`。

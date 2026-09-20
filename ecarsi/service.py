@@ -6,7 +6,7 @@ import signal
 import subprocess
 import time
 
-from .pool.slurm import exited, stop_worker
+from .warm_pool.slurm import exited, stop_worker
 from ecarsi.run_state import write_json, writer_lock
 
 

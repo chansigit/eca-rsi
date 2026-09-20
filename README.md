@@ -427,5 +427,5 @@ through Explore → Compute → Annotate → QC → Apply → Stop. Its commands
 governance prompts, and timing examples do not describe the current `ecarsi`
 workflow. `attic-v01/` is an older archive.
 
-Manually provisioned Slurm workers can share the optional [warm pool](SLURM_POOL.md), with independent drivers and CPU/memory/GPU/time-aware admission.
-For the complete Sherlock workflow, see [从申请节点到结束计算](SLURM_POOL_GUIDE.zh-CN.md).
+The gen-1 Dask warm pool (`ecarsi.pool`, its Periscope panel and the `pool` / `auto` OSP compute endpoints) was removed in 0.3.2:
+generation 2 schedules every stage through HyperQueue (`ecarsi.warm_pool`). msp's own `MSP_COMPUTE_ENDPOINT=dask` is unaffected.

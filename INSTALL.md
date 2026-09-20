@@ -152,8 +152,8 @@ editable 安装的 `__file__` 应指向预期源码目录；wheel 安装应指�
 | `ECA_RSI_DEVELOPER_MODE=1` | 放宽 RSI 的代码运行身份比较，记录 `runtime_check: skipped`；仍校验输入、计算配置和输出，内核自己的缓存检查不变 |
 | `OPENROUTER_API_KEY` / `OPENROUTER_BASE_URL` | OpenRouter 密钥 / endpoint；默认 `https://openrouter.ai/api/v1` |
 | `VLLM_API_KEY` / `VLLM_BASE_URL` | 自建服务密钥 / endpoint；默认 `http://127.0.0.1:8000/v1`，MODEL 必须匹配服务名称 |
-| `MSP_COMPUTE_ENDPOINT` / `MSP_DASK_SCHEDULER` | `local`（默认）、`dask-local` 或 `dask`；后者连接已有 Dask scheduler。另支持 `pool` / `auto`，使用 `ECA_POOL_SCHEDULER` |
-| `OSP_COMPUTE_ENDPOINT` / `ECA_POOL_SCHEDULER` | OSP 的 `local`（默认）、`pool` 或 `auto`；pool scheduler 地址或 JSON 文件由后者指定 |
+| `MSP_COMPUTE_ENDPOINT` / `MSP_DASK_SCHEDULER` | `local`（默认）、`dask-local` 或 `dask`；后者连接已有 Dask scheduler |
+| `OSP_COMPUTE_ENDPOINT` | 只支持 `local`；第一代的 `pool` / `auto` 远程计算随 Dask 池在 0.3.2 删除 |
 | `MSP_COMPUTE_GPU=1` | Harmony、图/聚类、DE 选择 GPU 实现；需要 RAPIDS 环境和 GPU worker |
 | `OSP_PYTHON` / `MSP_PYTHON` | 内核解释器，默认当前解释器 |
 | `ZMIP_PYTHON` | 默认依次取 `MSP_PYTHON`、当前解释器 |
@@ -171,7 +171,7 @@ editable 安装的 `__file__` 应指向预期源码目录；wheel 安装应指�
 | `AGENT_LIMIT_WAIT_MIN` / `AGENT_LIMIT_WAIT_MAX_H` | 额度等待间隔（分钟）/ 总预算（小时），默认 10 / 12 |
 
 `--allow-agent-change` 已移除；换模型/后端自动记录，不再拦截续跑。
-暖池使用你手动申请的 Slurm 作业，支持 driver 的 `local` / `pool` / `auto` 路由及 OSP 重计算分发；不会自动申请或归还资源。完整流程见 [从申请节点到结束计算](SLURM_POOL_GUIDE.zh-CN.md)。
+第二代的暖池（`ecarsi.warm_pool`，HyperQueue）同样使用你手动申请的 Slurm 作业，不会自动申请或归还资源；见 [docs-gen2/WARM_POOL_V2.md](docs-gen2/WARM_POOL_V2.md)。
 
 后端细节由共享 bridge 管理。更换解释器时，也要在对应环境安装兼容的内核和
 bridge。并非内核的全部 CLI 参数都能经由 `eca-rsi run` 传入，以驱动的帮助为准。

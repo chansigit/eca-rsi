@@ -143,13 +143,14 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
 - 本轮删除统计从 MSP integrated 到 ZMIP survivors，不含此前 OSP QC 和整样本排除；完整历史查 ledger。
   达到停止阈值不证明注释准确；轮数上限或固定轮数发布应按 reason 与收敛发布区分。
 - `ecarsi.cost` 只累计捕获到的费用事件；缺失记录不能解释成免费或完整账单。
-- 配套版本（2026-09-18 起 main）：ecarsi 0.3.1、bridge 0.2.14、OSP 0.1.7（mt 上限 25 %）、MSP 0.5.2、ZMIP 0.3.9。默认 Harmony 2 CPU；可选 RAPIDS GPU。
+- 配套版本（2026-09-19 起 main）：ecarsi 0.3.2、bridge 0.2.14、OSP 0.1.7（mt 上限 25 %）、MSP 0.5.2、ZMIP 0.3.9。默认 Harmony 2 CPU；可选 RAPIDS GPU。
 - `loop_control.json` 支持 `pause: true` 与 `pause_after_stage: crosssample|zoomin`；停止派发新任务，等待已启动任务到安全点，退出 3、不 release。恢复前清除对应控制项。
   SIGTERM 通过共享 `ECA_RSI_PAUSE_FILE` 请求同样的安全暂停；Slurm 模板提前 600 秒发 TERM，shell 等待子任务落盘后复制部分结果。
 - MSP `.msp-state/*-progress.json` 与 ZMIP `.annotation-progress.json` 原子保存 host 接受的提交及分簇；恢复必须核对输入、证据、代码，再过原校验器。
   ZMIP `.zmip-compute.json` 验证并复用未完成 lineage 的整合；上游重算会归档旧注释进度。模型变化可续未完成簇，但不重做已接受决定。
 - `MSP_COMPUTE_ENDPOINT=local|dask-local|dask` 调度 Harmony、图/聚类、DE；ZMIP lineage 复用同一实现。
-  `dask` 连接 `MSP_DASK_SCHEDULER`，`MSP_COMPUTE_GPU=1` 要求 GPU worker。暖池仍手动管理，没有自动扩缩容、driver tier 或 OSP offload。
+  `dask` 连接 `MSP_DASK_SCHEDULER`，`MSP_COMPUTE_GPU=1` 要求 GPU worker；这是 MSP 自己的可选后端，第二代把它钉死在 `local`。
+  第一代的 Dask 池（`ecarsi.pool`、Periscope 的 Warm pool 面板、`compute_policy`、OSP 的 `pool`/`auto` 端点）已于 0.3.2 删除，`pool/slurm.py` 与 `pool/budget.py` 作为仍在用的公共件搬成 `warm_pool/slurm.py` 与 `warm_pool/reservation.py`。暖池仍手动管理，没有自动扩缩容。
 - MSP 相邻 coarse-label pair 必须提交 `boundary_reviews`（证据、uncertain），未解决边界留在 needs_review；
   ZMIP 同岛拆分要求 `shared_island_reviews`。不把缺失 DEG 或固定混合百分比当作强制合并依据。
 - `MSP_BATCH_COL` 可显式选择校正列，完整 OSP 实验内必须只有一个值；默认仍为 `eca_sample_id`，
