@@ -117,6 +117,20 @@ def test_a_run_whose_files_stopped_moving_is_reported_stopped_not_running(tmp_pa
     assert stale['cls'] == 'failed' and stale['stage'] == 'stopped · ' + fresh['stage']
 
 
+def test_a_stage_finishing_inside_a_long_round_counts_as_run_state_moving(tmp_path):
+    """A round publishes only when it ends, which can be hours; the stages inside it
+    publish as they finish, so the clock keeps moving while the round runs."""
+    root = tmp_path / 'run'
+    gen2_run(root, released=False)
+    old = index.state_mtime(root) - 7200
+    for path in root.rglob('*'):
+        if path.is_file():
+            os.utime(path, (old, old))
+    stage = root / 'units' / 'u' / 'rounds' / 'round02' / '02-cross-sample' / 'publication.json'
+    os.utime(stage, (old + 3600, old + 3600))
+    assert index.state_mtime(root) == old + 3600
+
+
 def test_a_run_outside_the_fleet_tree_joins_the_collection_its_name_carries(tmp_path):
     """The gen-2 runs live in the control plane's run directory, not next to their
     eca-pp inputs, so the path says nothing; their name does."""

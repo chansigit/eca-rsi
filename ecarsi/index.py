@@ -1192,6 +1192,9 @@ STATE_GLOBS = (L.PROGRESS, f"{L.UNITS}/*/{L.PROGRESS}", f"{L.ORGANIZE}/{L.MANIFE
                f"{L.PERSAMPLE}/{L.MANIFEST}", f"{L.PERSAMPLE}/*/{L.RUN_STATE}", f"{L.ROUNDS}/*/{L.MANIFEST}",
                f"{L.ROUNDS}/*/{L.STATS}", f"{L.ROUNDS}/*/{L.DECISION}", f"{L.RELEASE}/summary.json", f"{L.RELEASE}/pruned.json",
                L.GEN2_PUBLICATION, f"{L.UNITS}/*/{L.GEN2_PUBLICATION}", f"{L.UNITS}/*/{L.ROUNDS}/*/{L.GEN2_PUBLICATION}",
+               # a round publishes only when it ends; its stages publish as they finish, so a
+               # long round still moves the clock
+               f"{L.UNITS}/*/{L.ROUNDS}/*/*/{L.GEN2_PUBLICATION}",
                f"{L.UNITS}/*/{L.GEN2_PERSAMPLE}/{L.GEN2_PUBLICATION}", f"{L.RELEASE}/receipt.json",
                f"{L.UNITS}/*/{L.RELEASE}/receipt.json")
 
