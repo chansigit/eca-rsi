@@ -1,4 +1,5 @@
 import importlib
+import importlib.util
 import json
 import sys
 import threading
@@ -75,6 +76,8 @@ def test_installed_aliases_keep_concurrent_lineages_independent(tmp_path, monkey
     assert json.loads((tmp_path / "two" / ".rsi-compute-backend.json").read_text())["backend"] == "cpu"
 
 
+@pytest.mark.skipif(importlib.util.find_spec("distributed") is None,
+                    reason="the gen-1 Dask pool probe; the science image carries no distributed")
 def test_gpu_probe_requires_a_free_compatible_slot(monkeypatch):
     from ecarsi.pool import client as pool_client
 

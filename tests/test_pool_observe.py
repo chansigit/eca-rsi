@@ -1,4 +1,11 @@
 """A broken dataset status file must not stop compute telemetry."""
+# The gen-1 Dask pool: only the environments that carry dask/distributed run these.
+# Generation 2 schedules through HyperQueue and never imports them, so the science image
+# (what the workers run) has no distributed and skips this file. See tests/README.md.
+import pytest
+
+pytest.importorskip("distributed")
+
 import json
 import time
 from types import SimpleNamespace

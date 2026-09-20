@@ -19,11 +19,19 @@ Two interpreters see different halves of the suite; between them everything exce
 copy `pytest _pytest pluggy iniconfig packaging` out of
 `/scratch/users/chensj16/venvs/eca-ct/.venv/lib/python3.12/site-packages`.
 
-Expected failures in that run:
+The venv also carries `distributed`, so the gen-1 Dask pool tests run there:
+
+    /scratch/users/chensj16/venvs/eca-ct/python -m pytest -q \
+      tests/test_pool_multitask.py tests/test_pool_observe.py tests/test_compute_policy.py
+
+They skip themselves in the science image, which has no `distributed` on purpose: generation 2
+schedules through HyperQueue and never imports dask, so the image the workers run stays without it.
+Add it there only if msp's dask compute endpoint (eca-rsi#8) is merged and used in production.
+
+Expected failures in the image run:
 
 | test | why |
 |---|---|
-| `test_pool_multitask.py` (collection), `test_pool_observe.py` (2), `test_compute_policy.py::test_gpu_probe_requires_a_free_compatible_slot` | `distributed` (dask) is not installed in the science image; these cover the optional dask compute endpoint |
 | `test_temporal_service.py::test_coordinator_reconnects_without_resubmitting_work` | timing test against a local Temporal server; times out under load, passes when the node is idle |
 
 `ECA_SIBLINGS` is a colon-separated list of checkout directories, each named after its package.
