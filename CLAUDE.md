@@ -219,6 +219,14 @@ ecarsi/observatory.py   控制面监视器（2026-09-18 起并入 Periscope：`e
   （不注释、先验标签 `unannotated`，needs_review `agent_skipped`）或 lineage 跳过（保留 cross-sample 标签，写进 plan reason），
   cross-sample 会话只重开不跳过；跳过的细胞超过该阶段输入的 10%（`SKIPPED_CELL_LIMIT`）整个阶段失败。
   被替代的会话（重开、上下文重置）的请求在 resume 预检中视为 superseded，不再需要手工归档。
+- **手动挡也在第二代生效**（2026-09-20 起）：`round_policy.read_control()` 是两代共用的读取器，
+  `control/dataset.py` 的 round 活动在每个轮次边界重读 `<unit>/loop_control.json`，覆盖 spec 里冻结的
+  `round_policy`（`cap` / `rounds` / `extra_rounds_after_convergence` / `max_removed`），生效值与原始控制项
+  一起写进该轮 `publication.json` 的 `policy` / `control`。`pause: true` 或 `stop_after_round: N`
+  **优先于 release**：该轮照常发布（含 ledger），下一轮不开，unit workflow 以 `PAUSED: …` 非重试失败告终
+  ——这正是 `resume-dataset <run_id> --reason …` 已有的续跑契约，等价于第一代的退出码 3。清掉控制项再 resume。
+  `pause_after_stage` 第二代**不支持**（阶段是子 workflow），会记进 `control_notes` 并打印，不静默忽略。
+  Periscope 把 `PAUSED` 与真失败区分开：状态色是等待色（`--wait`）而非失败红。
 - 第一代的 batch 准入（`eca-rsi batch`、节点代理、OSP compute-ahead、driver 内存租借）随 0.3.0 留在树里但不再维护；第二代数据集由控制面准入。
 
 ## 上一代:run.sh 六步循环(分支 primitive;2026-08-25 推倒重做后;总共 ~300 行)

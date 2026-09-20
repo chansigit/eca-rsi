@@ -70,54 +70,16 @@ from .index import fmt_elapsed, read_stats, write_all
 from .ledger import run_ledger
 from .run_state import file_identity, read_json, write_json
 
+from .round_policy import read_control as _read_control
 from .round_policy import (
     RELEASE_FRAC, RELEASE_MIN_REMOVED, PLATEAU_FRAC, PLATEAU_ROUNDS,
     RELEASE_MAX_REMOVED, DEFAULT_CAP, PREV_COLS, decide,
 )
 
-CONTROL_KEYS = {"cap": int, "rounds": int, "extra_rounds_after_convergence": int, "stop_after_round": int,
-                "max_removed": int, "pause": bool, "pause_after_stage": str}
-
-
+# The reader lives with the policy it overrides, so generation 2 can read the same file
+# without importing this module. Reported through progress.log here, as it always was.
 def read_control(unit: Path) -> dict:
-    """<unit>/loop_control.json, validated; a bad file is reported and ignored
-    (never fails a run). Values: cap/rounds/stop_after_round/max_removed >= 1,
-    extra_rounds_after_convergence >= 0, rounds may be null."""
-    p = unit / L.LOOP_CONTROL
-    if not p.is_file():
-        return {}
-    try:
-        raw = json.loads(p.read_text())
-        if not isinstance(raw, dict):
-            raise ValueError("not a JSON object")
-        out = {}
-        for key, value in raw.items():
-            if key not in CONTROL_KEYS:
-                raise ValueError(f"unknown key {key!r} (allowed: {', '.join(CONTROL_KEYS)})")
-            if key == "pause":
-                if type(value) is not bool:
-                    raise ValueError("pause must be a boolean")
-                out[key] = value
-                continue
-            if key == "pause_after_stage":
-                if value not in (None, "crosssample", "zoomin"):
-                    raise ValueError("pause_after_stage must be crosssample, zoomin or null")
-                out[key] = value
-                continue
-            if value is None:
-                if key == "rounds":
-                    out[key] = None
-                continue
-            if isinstance(value, bool) or not isinstance(value, int):
-                raise ValueError(f"{key} must be an integer")
-            low = 0 if key == "extra_rounds_after_convergence" else 1
-            if value < low:
-                raise ValueError(f"{key} must be >= {low}")
-            out[key] = value
-        return out
-    except (OSError, ValueError) as exc:
-        _log(unit, f"loop_control.json ignored: {exc}")
-        return {}
+    return _read_control(unit, on_error=lambda message: _log(unit, message))
 
 
 def _controls(unit: Path, args, seen: dict) -> tuple[int | None, int, int, int | None, int]:

@@ -1,4 +1,6 @@
 """Shared cell-count convergence policy for legacy and durable workflows."""
+import json
+from pathlib import Path
 
 RELEASE_FRAC = 0.01        # (1) this round removed < 1% of what entered it ...
 RELEASE_MIN_REMOVED = 100  #     ... or fewer than 100 cells
@@ -45,3 +47,70 @@ def decide(n: int, stats: list[dict], rounds: int | None, cap: int, extra: int =
 PREV_COLS = ("msp_ann_cluster", "msp_ann_coarse", "msp_ann_fine", "msp_ann_action",
              "zmip_lineage", "zmip_cluster", "zmip_ann_coarse", "zmip_ann_fine", "zmip_reassigned_from",
              "zmip_action", "_msp_action", "_msp_verdict")
+
+
+# The manual gearbox. Both generations re-read it at the only moment a decision is made -- the
+# round boundary -- so the limits can be moved while a unit runs. Generation 2 keeps the policy
+# it was admitted with in its immutable spec; this file is the one thing allowed to override it.
+CONTROL_FILE = "loop_control.json"
+CONTROL_KEYS = {"cap": int, "rounds": int, "extra_rounds_after_convergence": int, "stop_after_round": int,
+                "max_removed": int, "pause": bool, "pause_after_stage": str}
+
+
+def read_control(unit, on_error=None) -> dict:
+    """<unit>/loop_control.json, validated; a bad file is reported through `on_error` and
+    ignored, never failing a run. cap/rounds/stop_after_round/max_removed >= 1,
+    extra_rounds_after_convergence >= 0, rounds may be null."""
+    path = Path(unit) / CONTROL_FILE
+    if not path.is_file():
+        return {}
+    try:
+        raw = json.loads(path.read_text())
+        if not isinstance(raw, dict):
+            raise ValueError("not a JSON object")
+        out = {}
+        for key, value in raw.items():
+            if key not in CONTROL_KEYS:
+                raise ValueError(f"unknown key {key!r} (allowed: {', '.join(CONTROL_KEYS)})")
+            if key == "pause":
+                if type(value) is not bool:
+                    raise ValueError("pause must be a boolean")
+                out[key] = value
+                continue
+            if key == "pause_after_stage":
+                if value not in (None, "crosssample", "zoomin"):
+                    raise ValueError("pause_after_stage must be crosssample, zoomin or null")
+                out[key] = value
+                continue
+            if value is None:
+                if key == "rounds":
+                    out[key] = None
+                continue
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"{key} must be an integer")
+            low = 0 if key == "extra_rounds_after_convergence" else 1
+            if value < low:
+                raise ValueError(f"{key} must be >= {low}")
+            out[key] = value
+        return out
+    except (OSError, ValueError) as exc:
+        if on_error is not None:
+            on_error(f"loop_control.json ignored: {exc}")
+        return {}
+
+
+def resolve(policy: dict, control: dict) -> dict:
+    """The policy a unit was admitted with, with loop_control's overrides applied. Only the four
+    decision limits can be moved; the rest of the file is about stopping, not about the rule."""
+    return {**policy, **{k: v for k, v in control.items() if k in policy}}
+
+
+def decide_with_control(n: int, stats: list[dict], policy: dict, control: dict) -> tuple[str, str]:
+    """`decide` under the resolved policy, except that a manual stop outranks everything --
+    including a release the rule would have taken. Stopping is the one instruction the loop
+    cannot infer, so it is never overruled by one it can."""
+    p = resolve(policy, control)
+    if control.get("pause") or control.get("stop_after_round") == n:
+        return "pause", (f"PAUSED: loop_control stopped the unit after round {n}; "
+                         "clear the control and resume the dataset to continue")
+    return decide(n, stats, p["rounds"], p["cap"], p["extra_rounds_after_convergence"], p["max_removed"])

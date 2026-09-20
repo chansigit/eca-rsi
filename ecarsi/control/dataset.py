@@ -350,7 +350,7 @@ def dataset_step(action, args):
             raise ValueError('Unknown dataset stage')
         return validated(settings, validate)
     if action == 'round':
-        from ..round_policy import decide
+        from ..round_policy import decide_with_control, read_control, resolve
         spec, unit, progress, cross_path, zoom_path = args
         before, cross, zoom = (verified(reference(p)) for p in (progress['input'], cross_path, zoom_path))
         if (cross['state'] != 'complete' or zoom['state'] != 'complete'
@@ -362,14 +362,30 @@ def dataset_step(action, args):
             raise ValueError('Invalid round cell accounting')
         stats = progress['stats'] + [dict(n_in=n_in, n_out=n_out, removed=n_in-n_out, frac=(n_in-n_out)/n_in)]
         n = len(stats)
-        policy = spec['round_policy']
-        decision, reason = decide(n, stats, policy['rounds'], policy['cap'],
-                                  policy['extra_rounds_after_convergence'], policy['max_removed'])
+        # The spec's policy is what the dataset was admitted with and cannot change; loop_control
+        # is the manual gearbox, re-read here because a round boundary is the only moment a
+        # decision is made. Generation 1 has worked this way since the start; the durable control
+        # plane froze the policy into workflow input, which left no way to move a limit mid-run.
+        unit_root = Path(spec['output_root']) / 'units' / unit['name']
+        notes = []
+        control = read_control(unit_root, on_error=notes.append)
+        policy = resolve(spec['round_policy'], control)
+        if control.get('pause_after_stage'):
+            # Generation 1 could stop between stages because it drove them in one process. Here a
+            # stage is a child workflow; say so rather than silently honouring only half the file.
+            notes.append('pause_after_stage is not supported by the durable control plane '
+                         '(stages are child workflows); use pause or stop_after_round')
+        decision, reason = decide_with_control(n, stats, spec['round_policy'], control)
         stats[-1].update(decision=decision, reason=reason)
-        directory = Path(spec['output_root']) / 'units' / unit['name'] / 'rounds' / f'round{n:02d}'
+        directory = unit_root / 'rounds' / f'round{n:02d}'
         record = immutable(directory / 'publication.json', dict(round=n, stats=stats[-1],
-            cross_sample=reference(cross_path), zoom_in=reference(zoom_path), policy=policy))
+            cross_sample=reference(cross_path), zoom_in=reference(zoom_path), policy=policy,
+            **({'control': control} if control else {}), **({'control_notes': notes} if notes else {})))
         result = dict(per_sample=progress['per_sample'], input=zoom_path, stats=stats, rounds=progress['rounds'] + [record])
+        for note in notes:
+            print(f'[round {n}] {note}', flush=True)
+        if decision == 'pause':
+            result['paused'] = reason
         if decision == 'release':
             first = verified(reference(progress['per_sample']))
             path = directory.parent.parent / 'publication.json'
@@ -464,6 +480,11 @@ class AnalysisUnitWorkflow:
                 await call(dataset_step, 'round-ledger-published', [spec, unit, progress, result])
             except Exception as exc:  # a report is not worth failing a finished round over
                 print(f'[round] ledger not published: {exc}', flush=True)
+        if progress.get('paused'):
+            # The round is complete and published, with its ledger; only the next one is withheld.
+            # Failing is how a unit stops without releasing and stays resumable -- the same
+            # contract `resume-dataset` already serves, and generation 1's exit code 3.
+            raise ApplicationError(progress['paused'], non_retryable=True)
         if 'publication' in progress:
             if workflow.patched('analysis-unit-release-v1'):
                 self._stage = 'publishing final results'

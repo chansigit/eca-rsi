@@ -650,6 +650,10 @@ def _gen2_unit_state(unit: Path) -> dict:
             failure = None
     if released:
         stage, cls = f"released after {len(rounds)} round(s)", "released"
+    elif failure and str(failure.get("error", "")).startswith("PAUSED"):
+        # A unit stopped by loop_control fails its workflow so it stays resumable; that is a
+        # held run waiting on a person, not a broken one.
+        stage, cls = f"paused — {failure['error'].split(':', 1)[-1].strip()}"[:120], "paused"
     elif failure:
         stage, cls = f"failed — {failure.get('error', '')}"[:120], "failed"
     elif failed_samples:
@@ -1014,6 +1018,9 @@ def dataset_state(root: Path, states: list[dict] | None = None) -> dict:
         stage, cls = "released", "released"
     elif any(s["stage_class"] == "failed" for s in states):
         stage, cls = "failed", "failed"
+    elif any(s["stage_class"] == "paused" for s in states):
+        # A unit held by loop_control stops the dataset too, but it is waiting on a person.
+        stage, cls = (states[0]["stage"] if len(states) == 1 else "paused"), "paused"
     else:
         stage, cls = (states[0]["stage"] if len(states) == 1 else f"{released}/{len(states)} released"), "running"
     fin = [s["finished"] for s in states if s.get("finished")]

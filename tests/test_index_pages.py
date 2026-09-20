@@ -165,7 +165,7 @@ def test_home_overview_has_stats_table_and_filter(tmp_path):
     row = html[html.index('<tr data-text="coll-organ'):]
     row = row[:row.index("</tr>")]
     assert 'href="/coll-Organ/" title="coll-Organ"><b>Organ</b>' in row and '<td class="nw">coll</td><td>mouse</td>' in row
-    assert 'data-v="1000">1,000</td>' in row and 'data-v="800">800</td>' in row and 'data-v="80.0">80%</td>' in row and 'class="pill released"' in row
+    assert 'data-v="1000">1.00k</td>' in row and 'data-v="800">0.80k</td>' in row and 'data-v="80.0">80%</td>' in row and 'class="pill released"' in row
     assert 'aria-sort="none"><button type="button">cells in</button>' in html
     assert "ds-table" in HOME_JS and HOME_JS in html
 
@@ -174,10 +174,11 @@ def test_navigator_groups_by_collection_with_status_dots(tmp_path):
     root, _ = make_run(tmp_path)
     html = _navigator_html({"coll-Organ": root, "Loose": tmp_path / "nowhere"}, tmp_path / "registry.json")
     assert ('<details class="group"><summary>coll<span class="gn">'
-            '<span class="st released" title="Completed">\u27051</span></span></summary>') in html
+            '<span class="st released" title="Completed"><i class="dot"></i>1</span></span></summary>') in html
     assert ('<details class="group"><summary>other<span class="gn">'
-            '<span class="st failed" title="Failed">\u274c1</span></span></summary>') in html
-    assert '<span class="dot released" title="released"></span><span class="nm">Organ</span><span class="cells">800</span>' in html
+            '<span class="st failed" title="Failed"><i class="dot"></i>1</span></span></summary>') in html
+    assert '<span class="dot released" title="released"></span><span class="nm">Organ</span>' in html
+    assert '<span class="cells released" title="cells released">0.80k</span>' in html
     assert '<span class="dot failed" title="missing on disk"></span><span class="nm">Loose</span>' in html
     assert 'id="nav-q"' in html and '<span class="ctl"><label for="nav-sort">' in html and 'id="home-item"' in html and 'id="sb-resizer"' in html
     assert '<span id="nav-n">2</span>' in html
