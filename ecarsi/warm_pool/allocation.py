@@ -43,6 +43,30 @@ def validate_profile(path, cpu_ids, memory_mb):
     return profile
 
 
+def gpu_process_memory_mb(gpu_id, pid):
+    """VRAM held on this card by the attempt's own process tree, or None when the driver
+    will not say (older drivers and MIG report no compute apps). A shared card's total is
+    not this attempt's bill."""
+    result = subprocess.run(["nvidia-smi", "--id=" + gpu_id, "--query-compute-apps=pid,used_gpu_memory",
+                             "--format=csv,noheader,nounits"], capture_output=True, text=True, check=True, timeout=10)
+    mine, seen = 0, False
+    for row in result.stdout.strip().splitlines():
+        if not row.strip() or "not supported" in row.lower():
+            return None
+        process, used = [s.strip() for s in row.split(",")]
+        seen = True
+        if group_of(int(process)) == group_of(pid):
+            mine += int(used)
+    return mine if seen or not result.stdout.strip() else None
+
+
+def group_of(pid):
+    try:
+        return int(Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1].split()[2])
+    except (OSError, IndexError, ValueError):
+        return None
+
+
 def gpu_device(gpu_id):
     if not re.fullmatch(r"GPU-[a-fA-F0-9-]+", gpu_id):
         raise ValueError("GPU identity must be a full NVIDIA UUID")

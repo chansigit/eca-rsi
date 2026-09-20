@@ -163,7 +163,7 @@ def assigned_gpu(spec, environment):
     if not spec.get("gpu"):
         return None
     variant = environment.get("HQ_RESOURCE_VARIANT")
-    if environment.get("ECA_POOL_GPU_LAYOUT") == "slots-v1":
+    if environment.get("ECA_POOL_GPU_LAYOUT") in {"slots-v1", "slots-v2"}:
         from .backend import GPU_SLOT_LIMIT
         slots = {key: value for key, value in environment.items() if key.startswith("HQ_RESOURCE_VALUES_gpuSlot_")}
         if not slots and spec["gpu"]["mode"] == "preferred" and variant == str(GPU_SLOT_LIMIT):
@@ -171,6 +171,8 @@ def assigned_gpu(spec, environment):
         if (variant not in {str(i) for i in range(GPU_SLOT_LIMIT)} or
                 len(slots) != 1 or not (values := slots.get("HQ_RESOURCE_VALUES_gpuSlot_" + variant)) or "," in values):
             raise ValueError("GPU grant disagrees with the selected HQ resource alternative")
+        # slots-v2 hands out one share of the device: "<uuid>#<share>" names the card.
+        values = values.split("#", 1)[0]
     else:
         # Already-submitted jobfiles from the original single-GPU protocol.
         required = spec["gpu"]["mode"] == "required" or variant == "0"
@@ -316,10 +318,13 @@ def run(folder, request, ownership):
                 peak = max(peak, usage["rss_bytes"])
                 cpu_ticks += max(0, usage["ticks"] - previous["ticks"])
                 if gpu_id and now - gpu_stamp >= 5:
-                    from .allocation import gpu_device
+                    from .allocation import gpu_device, gpu_process_memory_mb
                     gpu_stamp = now
                     try:
                         gpu_usage, gpu_blind = gpu_device(gpu_id), None
+                        # The card is shared: charge this attempt for its own processes,
+                        # not for what its neighbours put on the device.
+                        gpu_usage = dict(gpu_usage, attempt_mb=gpu_process_memory_mb(gpu_id, proc.pid))
                     except (subprocess.SubprocessError, OSError, ValueError) as exc:
                         # nvidia-smi blocks while the driver is busy; one unreadable sample
                         # must not kill hours of work. Keep the last reading, try again in
@@ -329,8 +334,9 @@ def run(folder, request, ownership):
                             raise RuntimeError(f"GPU unreadable for {GPU_BLIND_LIMIT} s: {exc}") from exc
                         print(f"[worker] GPU probe failed, keeping the last reading: {exc}", flush=True)
                     else:
-                        peak_gpu_mb = max(peak_gpu_mb, gpu_usage["used_mb"])
-                        if gpu_usage["used_mb"] > spec["gpu"]["memory_mb"]:
+                        mine = gpu_usage["attempt_mb"]
+                        peak_gpu_mb = max(peak_gpu_mb, mine if mine is not None else gpu_usage["used_mb"])
+                        if peak_gpu_mb > spec["gpu"]["memory_mb"]:
                             raise MemoryError("attempt exceeded its GPU memory budget")
                 save(attempt / "usage.json", dict(usage, observed_at=time.time(),
                      cpu_percent=max(0, usage["ticks"] - previous["ticks"]) / os.sysconf("SC_CLK_TCK") / max(.001, now - stamp) * 100,

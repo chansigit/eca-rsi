@@ -8,7 +8,8 @@ import time
 
 import pytest
 
-from ecarsi.warm_pool.backend import GPU_SLOT_LIMIT, gpu_jobfile, gpu_resources, resource_sample
+from ecarsi.warm_pool.backend import (GPU_SHARES_PER_DEVICE, GPU_SLOT_LIMIT, gpu_jobfile,
+                                      gpu_resources, resource_sample)
 from ecarsi.warm_pool.state import validate
 from ecarsi.warm_pool.worker import assigned_gpu
 
@@ -29,11 +30,11 @@ def test_gpu_alternatives_preserve_budget_and_never_use_inherited_visibility(tmp
     assert gpu["time_request"] == cpu["time_request"] == "90s"
     assert str(tmp_path) in task["command"]
     monkeypatch.setattr("ecarsi.warm_pool.allocation.gpu_device", lambda _: {"memory_mb": 24576})
-    slot = {"ECA_POOL_GPU_LAYOUT": "slots-v1", "HQ_RESOURCE_VARIANT": "1", "HQ_RESOURCE_VALUES_gpuSlot_1": "GPU-test"}
+    slot = {"ECA_POOL_GPU_LAYOUT": "slots-v2", "HQ_RESOURCE_VARIANT": "1", "HQ_RESOURCE_VALUES_gpuSlot_1": "GPU-test#3"}
     assert assigned_gpu(spec, slot) == "GPU-test"
-    assert assigned_gpu(spec, {"ECA_POOL_GPU_LAYOUT": "slots-v1", "HQ_RESOURCE_VARIANT": str(GPU_SLOT_LIMIT)}) is None
+    assert assigned_gpu(spec, {"ECA_POOL_GPU_LAYOUT": "slots-v2", "HQ_RESOURCE_VARIANT": str(GPU_SLOT_LIMIT)}) is None
     for wrong in ({**slot, "HQ_RESOURCE_VARIANT": "0"}, {**slot, "HQ_RESOURCE_VALUES_gpuSlot_0": "GPU-other"},
-                  {"ECA_POOL_GPU_LAYOUT": "slots-v1", "HQ_RESOURCE_VARIANT": "1"}):
+                  {"ECA_POOL_GPU_LAYOUT": "slots-v2", "HQ_RESOURCE_VARIANT": "1"}):
         with pytest.raises(ValueError):
             assigned_gpu(spec, wrong)
     assert assigned_gpu(spec, {"HQ_RESOURCE_VARIANT": "1", "CUDA_VISIBLE_DEVICES": "GPU-worker"}) is None
@@ -54,7 +55,8 @@ def test_gpu_alternatives_preserve_budget_and_never_use_inherited_visibility(tmp
 def test_multigpu_memory_is_per_device_and_telemetry_excludes_unallocated_cards(monkeypatch):
     devices = [dict(uuid="GPU-a1", memory_mb=16384), dict(uuid="GPU-b2", memory_mb=49152)]
     args = gpu_resources(devices)
-    assert 'gpuSlot/0=[GPU-a1]' in args and 'gpuSlot/1=[GPU-b2]' in args
+    shares = lambda uuid: "[" + ",".join(f"{uuid}#{i}" for i in range(GPU_SHARES_PER_DEVICE)) + "]"
+    assert f'gpuSlot/0={shares("GPU-a1")}' in args and f'gpuSlot/1={shares("GPU-b2")}' in args
     assert "gpuMemoryMB/0=sum(14745)" in args and "gpuMemoryMB/1=sum(44236)" in args
     assert len(args) == 8
     from types import SimpleNamespace
@@ -86,7 +88,10 @@ def test_native_hq_one_worker_schedules_multiple_gpu_slots(tmp_path):
             time.sleep(.1)
         raise AssertionError(f"native HQ acceptance timed out; inspect {tmp_path}")
     def record(name):
-        return json.loads((tmp_path / (name + ".json")).read_text())
+        entry = json.loads((tmp_path / (name + ".json")).read_text())
+        if entry.get("gpu"):  # slots-v2 grants one share of the card: "<uuid>#<share>"
+            entry["gpu"] = entry["gpu"].split("#", 1)[0]
+        return entry
     def submit_probe(name, gpu_mb=None, hold=False, host_mb=64, mode="required"):
         target = tmp_path / (name + ".json")
         release = tmp_path / (name + ".release")
@@ -127,33 +132,30 @@ def test_native_hq_one_worker_schedules_multiple_gpu_slots(tmp_path):
             submit_probe("oversized", gpu_mb=50 * 1024)
             submit_probe("host-oversized", gpu_mb=1024, host_mb=161)
             assert wait(lambda: record("large"))["gpu"] == "GPU-b2"
+            # A card serves several attempts: what is left of its VRAM decides, not the slot.
             submit_probe("small", gpu_mb=8 * 1024, hold=True)
-            assert wait(lambda: record("small"))["gpu"] == "GPU-a1"
-            submit_probe("third", gpu_mb=2048)
+            assert wait(lambda: record("small"))["gpu"] in {"GPU-a1", "GPU-b2"}
+            submit_probe("third", gpu_mb=2048, host_mb=32)  # 64 + 64 + 32 fits the worker's 160 MB
+            wait(lambda: record("third").get("finished"))
+            assert record("third")["gpu"] in {"GPU-a1", "GPU-b2"}
+            assert record("third")["started"] < record("large").get("finished", float("inf"))
             submit_probe("cpu", host_mb=32)
             wait(lambda: record("cpu").get("finished"))
-            submit_probe("fallback", gpu_mb=2048, host_mb=32, mode="preferred")
-            wait(lambda: record("fallback").get("finished"))
-            assert record("fallback")["gpu"] is None and record("fallback")["variant"] == str(GPU_SLOT_LIMIT)
-            assert not (tmp_path / "third.json").exists(), "a busy GPU was granted twice"
             assert record("cpu")["gpu"] is None
             assert not (tmp_path / "oversized.json").exists(), "GPU memories were incorrectly summed"
             assert not (tmp_path / "host-oversized.json").exists(), "host memory budget was exceeded"
             (tmp_path / "large.release").touch()
             wait(lambda: record("large").get("finished"))
-            wait(lambda: record("third").get("finished"))
-            assert record("third")["gpu"] == "GPU-b2"
-            assert record("third")["started"] >= record("large")["finished"]
             submit_probe("preferred", gpu_mb=2048, host_mb=32, mode="preferred")
             wait(lambda: record("preferred").get("finished"))
-            assert record("preferred")["gpu"] == "GPU-b2"
+            assert record("preferred")["gpu"] in {"GPU-a1", "GPU-b2"}  # either card has room now
             (tmp_path / "small.release").touch()
             wait(lambda: record("small").get("finished"))
             assert not (tmp_path / "oversized.json").exists()
             (tmp_path / "acceptance.json").write_text(json.dumps(dict(
                 kind="native HQ scheduling with synthetic GPU descriptors", worker_count=1,
                 large=record("large"), small=record("small"), third=record("third"), cpu=record("cpu"),
-                fallback=record("fallback"), preferred=record("preferred")), indent=2))
+                preferred=record("preferred"), shares_per_device=GPU_SHARES_PER_DEVICE), indent=2))
     finally:
         for proc in reversed(actors):
             if proc.poll() is None:
@@ -163,3 +165,27 @@ def test_native_hq_one_worker_schedules_multiple_gpu_slots(tmp_path):
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.wait(timeout=10)
+
+
+def test_a_card_serves_several_attempts_and_each_pays_only_for_its_own_processes(monkeypatch):
+    """The slot names the device; VRAM, not the slot, decides how many attempts fit."""
+    from types import SimpleNamespace
+    from ecarsi.warm_pool.allocation import gpu_process_memory_mb
+    from ecarsi.warm_pool.worker import assigned_gpu
+
+    args = gpu_resources([dict(uuid="GPU-a1", memory_mb=81920)])
+    slot = next(a for a in args if a.startswith("gpuSlot/0="))
+    assert slot.count("GPU-a1#") == GPU_SHARES_PER_DEVICE > 1
+    assert "gpuMemoryMB/0=sum(73728)" in args
+
+    spec = {"gpu": {"mode": "preferred", "memory_mb": 4096}}
+    monkeypatch.setattr("ecarsi.warm_pool.allocation.gpu_device",
+                        lambda gpu_id: dict(uuid=gpu_id, name="H100", memory_mb=81920, used_mb=0, utilization_percent=0))
+    for share in range(GPU_SHARES_PER_DEVICE):  # every share resolves to the same card
+        assert assigned_gpu(spec, {"ECA_POOL_GPU_LAYOUT": "slots-v2", "HQ_RESOURCE_VARIANT": "0",
+                                   "HQ_RESOURCE_VALUES_gpuSlot_0": f"GPU-a1#{share}"}) == "GPU-a1"
+
+    mine, other = os.getpid(), 1
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: SimpleNamespace(
+        stdout=f"{mine}, 1500\n{other}, 60000\n"))
+    assert gpu_process_memory_mb("GPU-a1", mine) == 1500  # the neighbour's 60 GiB is not ours

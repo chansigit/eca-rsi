@@ -16,6 +16,14 @@ from .state import digest, file_digest, lock, pool_root, read, save
 # workers that join after submission. Raise this protocol limit if hardware needs it.
 GPU_SLOT_LIMIT = 64
 
+# How many attempts may share one device. The device slot exists to tell a task which
+# card it got, not to serialise the card: what actually bounds concurrency is
+# gpuMemoryMB, which every GPU request spends against the device's own VRAM. One shared
+# list entry per share keeps both properties. Measured 2026-09-20 on an 80 GiB H100:
+# cross-sample integration peaked at 0.7-3.5 GiB and per-sample OSP under 1 GiB, so a
+# single-entry slot left the card 95 % idle while four datasets queued behind it.
+GPU_SHARES_PER_DEVICE = 8
+
 
 def gpu_resources(devices):
     """Independent device and VRAM pairs, with shared worker CPU/RAM resources."""
@@ -23,7 +31,8 @@ def gpu_resources(devices):
         raise ValueError(f"this resource protocol supports at most {GPU_SLOT_LIMIT} GPUs per worker")
     resources = []
     for slot, gpu in enumerate(devices):
-        resources += ["--resource", f"gpuSlot/{slot}=[{gpu['uuid']}]",
+        shares = ",".join(f"{gpu['uuid']}#{share}" for share in range(GPU_SHARES_PER_DEVICE))
+        resources += ["--resource", f"gpuSlot/{slot}=[{shares}]",
                       "--resource", f"gpuMemoryMB/{slot}=sum({int(gpu['memory_mb'] * .9)})"]
     return resources
 
@@ -85,7 +94,7 @@ def gpu_jobfile(request, attempt, name, executor, pythonpath):
                   stdout=str(attempt / "hq-%{INSTANCE_ID}.stdout"), stderr=str(attempt / "hq-%{INSTANCE_ID}.stderr"))
     text = "name = " + json.dumps(name) + "\n[[task]]\n"
     text += "\n".join(k + " = " + json.dumps(v) for k, v in fields.items())
-    text += "\nenv = { PYTHONPATH = " + json.dumps(pythonpath) + ', ECA_POOL_GPU_LAYOUT = "slots-v1" }\n'
+    text += "\nenv = { PYTHONPATH = " + json.dumps(pythonpath) + ', ECA_POOL_GPU_LAYOUT = "slots-v2" }\n'
     resources = {"cpus": spec["cpus"], "mem": spec["memory_mb"], "runtime/" + request["runtime_digest"]: 1}
     variants = [{**resources, f"gpuSlot/{slot}": 1, f"gpuMemoryMB/{slot}": spec["gpu"]["memory_mb"]}
                 for slot in range(GPU_SLOT_LIMIT)]
