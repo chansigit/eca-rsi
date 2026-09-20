@@ -671,25 +671,34 @@ def _gen2_unit_body(unit: Path, s: dict, base: str = "") -> str:
                     if files else '<p class="empty">No release yet: the loop has not converged.</p>') + "</section>")
     rows = []
     for r in s["rounds"]:
-        stats = r["stats"] or {}
-        round_dir = f'{base}{L.ROUNDS}/{r["dir"].name}'
-        links = ([f'<a href="{round_dir}/{L.GEN2_CROSS}/report.html">msp</a>'] if r.get("msp_report") else []) + \
-                ([f'<a href="{round_dir}/{L.GEN2_ZOOM}/figures/">zmip</a>'] if r.get("zmip_report") else [])
-        rows.append(f'<tr><td>{r["n"]}</td><td class="num">{_n(stats.get("n_in") or r.get("n_in"))}</td>'
-                    f'<td class="num">{_n(stats.get("n_out"))}</td><td class="num">{_n(stats.get("removed"))}</td>'
-                    f'<td class="num">{_pct(stats.get("frac")) if stats.get("frac") is not None else ""}</td>'
-                    f'<td>{e(str(r["decision"] or r["step"] or ""))}</td>'
-                    f'<td class="muted">{e(str(r.get("reason") or ""))}</td>'
-                    f'<td class="num nw">{fmt_elapsed(r.get('seconds')) if r.get('seconds') else ''}</td>'
-                    f'<td>{" · ".join(links) or "<span class=\'muted\'>–</span>"}</td></tr>')
-    parts.append('<section class="block" id="rounds"><h2>Rounds '
-                 f'<span class="count">{len(done)} finished</span></h2>'
-                 '<p class="lede">Each round integrates the survivors again, annotates them and zooms into lineages; '
-                 'the decision and its reason come from the recorded round policy.</p>'
-                 + ('<div class="wrap"><table><thead><tr><th>round</th><th class="r">cells in</th>'
-                    '<th class="r">cells out</th><th class="r">removed</th><th class="r">removed %</th>'
-                    '<th>decision</th><th>reason</th><th class="r">wall time</th><th>reports</th></tr></thead>'
-                    f'<tbody>{"".join(rows)}</tbody></table></div>' if rows else '<p class="empty">No round has started.</p>')
+        rp = f'{base}{L.ROUNDS}/{r["dir"].name}'
+        links = " · ".join(x for x in [
+            f'<a href="{rp}/{L.GEN2_CROSS}/report.html">msp</a>' if r.get("msp_report") else "",
+            f'<a href="{rp}/{L.GEN2_ZOOM}/figures/">zmip</a>' if r.get("zmip_report") else ""] if x)
+        st = r["stats"]
+        elapsed = fmt_elapsed(r["seconds"]) if r.get("seconds") else ""
+        if st:
+            dec, frac = r["decision"], st.get("frac")
+            pill = ("failed" if str(r.get("reason", "")).startswith("FORCED") else
+                    "released" if dec == "release" else "neutral")
+            rows.append(f'<tr><td class="num">{r["n"]}</td><td class="num">{_n(st["n_in"])}</td>'
+                        f'<td class="num">{_n(st["n_out"])}</td><td class="num">{_n(st["removed"])}</td>'
+                        f'<td class="num">{_pct(frac) + _bar(frac) if frac is not None else ""}</td>'
+                        f'<td><span class="pill {pill}">{e(str(dec))}</span></td>'
+                        f'<td class="reason">{e(str(r.get("reason") or ""))}</td>'
+                        f'<td class="num">{elapsed}</td><td>{links}</td></tr>')
+        else:
+            rows.append(f'<tr><td class="num">{r["n"]}</td><td class="num">{_n(r.get("n_in"))}</td><td></td><td></td><td></td>'
+                        f'<td><span class="pill running">running</span></td>'
+                        f'<td class="reason st running">{e(str(r["step"] or ""))}</td>'
+                        f'<td class="num">{elapsed}</td><td>{links}</td></tr>')
+    running_round = bool(s["rounds"]) and s["rounds"][-1]["stats"] is None
+    parts.append(f'<section class="block" id="rounds"><h2>Rounds <span class="count">{len(done)} finished'
+                 + (", 1 running" if running_round else "") + f'</span></h2><p class="lede">{EXPLAIN["rounds"]}</p>'
+                 + ('<div class="wrap"><table><thead><tr><th class="r">round</th><th class="r">cells in</th><th class="r">cells out</th>'
+                    '<th class="r">removed</th><th class="r">removed %</th><th>decision</th><th>reason</th>'
+                    '<th class="r">wall time</th><th>reports</th></tr></thead>'
+                    f'<tbody>{"".join(rows)}</tbody></table></div>' if rows else '<p class="empty">No round started yet.</p>')
                  + "</section>")
     summary = _json(unit / L.GEN2_PERSAMPLE / "samples.json", [])
     if not summary:  # published before the summary existed: the reports still name the samples
