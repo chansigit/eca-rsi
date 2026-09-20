@@ -1,5 +1,6 @@
 """Periscope reads both generations: gen-2 state comes from publications, not progress.log."""
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -98,3 +99,19 @@ def test_a_unit_still_in_per_sample_is_listed_before_anything_publishes(tmp_path
     assert state['n_input'] == 100
     assert index.dataset_state(root)['units'] == 1
     assert 'No analysis unit has been planned' not in index.render_root(root)
+
+
+def test_a_run_whose_files_stopped_moving_is_reported_stopped_not_running(tmp_path, monkeypatch):
+    """Nothing on disk records that a driver was killed or a workflow terminated, so a
+    'running' state that has not moved for half a day is reported as stopped."""
+    root = tmp_path / 'run'
+    gen2_run(root, released=False)
+    fresh = index.dataset_state(root)
+    assert fresh['cls'] == 'running' and not fresh['stage'].startswith('stopped')
+
+    old = fresh['updated'] - index.STALE_AFTER - 60
+    for path in root.rglob('*'):
+        if path.is_file():
+            os.utime(path, (old, old))
+    stale = index.dataset_state(root)
+    assert stale['cls'] == 'failed' and stale['stage'] == 'stopped · ' + fresh['stage']

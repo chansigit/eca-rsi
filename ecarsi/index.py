@@ -812,6 +812,22 @@ def display_name(root: Path) -> str:
     return parts[parts.index("eca-pp") + 1] if "eca-pp" in parts[:-1] else root.name
 
 
+# A live run rewrites a state file every few minutes at the very worst (a long msp
+# integration still checkpoints). Nothing on disk records that a run was stopped --
+# a killed driver, an expired Slurm job and a terminated workflow all leave the last
+# state behind -- so a "running" run whose files stopped moving this long ago is
+# reported as stopped instead of pretending it is still working.
+STALE_AFTER = 12 * 3600
+
+
+def _stalled(cls: str, stage: str, updated: float | None) -> tuple[str, str]:
+    import time
+
+    if cls != "running" or not updated or time.time() - updated < STALE_AFTER:
+        return cls, stage
+    return "failed", f"stopped · {stage}"
+
+
 def dataset_state(root: Path, states: list[dict] | None = None) -> dict:
     """Aggregate of a run root (or a unit bound on its own) for the fleet
     pages; `states` = unit_state() per unit when the caller already has them."""
@@ -830,11 +846,13 @@ def dataset_state(root: Path, states: list[dict] | None = None) -> dict:
         stage, cls = (states[0]["stage"] if len(states) == 1 else f"{released}/{len(states)} released"), "running"
     fin = [s["finished"] for s in states if s.get("finished")]
     events = {k: [s["events"][k] for s in states if s.get("events") and s["events"][k]] for k in ("organize", "release")}
+    updated = state_mtime(root)
+    cls, stage = _stalled(cls, stage, updated)
     return {"units": len(states), "released": released, "n_input": sum(n_in) if n_in else None, "events": events,
             "final_cells": sum(final) if final else None, "rounds": max((len(s["rounds"]) for s in states), default=0),
             "species": ", ".join(sorted({str(s["species"]) for s in states if s["species"]})),
             "finished": max(fin) if fin and released == len(states) else None,
-            "updated": state_mtime(root), "stage": stage, "cls": cls,
+            "updated": updated, "stage": stage, "cls": cls,
             "awaiting_start": False}
 
 
