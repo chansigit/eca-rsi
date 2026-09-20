@@ -470,7 +470,7 @@ details.group>summary .gn .st{display:inline-flex;align-items:center;gap:.35em}
 #models-item{border:0;font-family:inherit;text-align:left;cursor:pointer;background:none}
 #models-item.active{background:var(--accent-bg)}#models-item:hover{background:var(--none-bg)}
 .item .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.item .cells{color:var(--muted);font-variant-numeric:tabular-nums;font-size:var(--t2);white-space:nowrap}
+.item .cells{color:var(--st,var(--muted));font-variant-numeric:tabular-nums;font-size:var(--t2);white-space:nowrap}
 .item input.sel{margin:0;flex:0 0 auto;opacity:0;transition:opacity .1s}
 .item:hover input.sel,aside.selecting input.sel,.item input.sel:checked{opacity:1}
 .home-item{margin:var(--s1) var(--s2) 0}
@@ -528,7 +528,9 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
         st = states[name]
         coll = colls[name] or "other"
         short = name[len(coll) + 1:] if name.startswith(coll + "-") else name
-        cells = index._n(st["final_cells"])
+        # A released run's count is its result; a running one's is what the last finished round
+        # left, which is worth reading as provisional. A failed run has no count to report.
+        cells = index._k(st["final_cells"]) if st["cls"] in ("released", "running") else ""
         sp = st.get("species") or ""
         species[sp] = species.get(sp, 0) + 1
         t = tally.setdefault(coll, {})
@@ -540,7 +542,8 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
             f'<input class="sel" type="checkbox" value="{e(name)}" aria-label="select {e(name)} for unbind">'
             f'<span class="dot {e(st["cls"])}" title="{e(st["stage"])}"></span>'
             f'<span class="nm">{e(short)}</span>'
-            + (f'<span class="cells">{cells}</span>' if cells else "") + "</a>"
+            + (f'<span class="cells {e(st["cls"])}" title="{"cells released" if st["cls"] == "released" else "cells left by the last finished round"}">{cells}</span>'
+               if cells else "") + "</a>"
         )
     rows = "".join(
         f'<details class="group"><summary>{e(coll)}<span class="gn">{group_tally(tally[coll])}</span></summary><div class="items">{"".join(rs)}</div></details>'
@@ -830,8 +833,7 @@ def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
             f'<td class="num" data-v="{s["final_cells"] or 0}">{index._n(s["final_cells"])}</td>'
             f'<td class="num" data-v="{kept if kept is not None else -1}">{f"{kept:.0f}%" if kept is not None else ""}</td>'
             f'<td class="num" data-v="{s["rounds"]}">{s["rounds"] or ""}</td>'
-            # sorts on the newest round's removal: the column asks "is this one settling?"
-            f'<td data-v="{(trend[-1]["frac"] if trend else 1):.6f}">{index.sparkline(trend)}</td>'
+            f'<td>{index.sparkline(trend)}</td>'
             f'<td data-v="{rank.get(s["cls"], 9)}"><span class="pill {e(s["cls"])}">{e(s["stage"])}</span></td>'
             f'<td class="num nw" data-v="{s["updated"] or 0}">{index._when(s["updated"])}</td></tr>')
     def th(t, num=False):
@@ -839,7 +841,8 @@ def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
         return f'<th{attrs} aria-sort="none"><button type="button">{t}</button></th>'
     table = ('<div class="wrap"><table id="ds-table"><thead><tr>' + th("dataset") + th("collection") + th("species")
              + th("cells in", True) + th("cells out", True) + th("kept", True) + th("rounds", True)
-             + th("convergence", True) + th("status", True) + th("last updated", True)
+             # not sortable: the shape is the point, and one number cannot stand for it
+             + '<th class="r">convergence</th>' + th("status", True) + th("last updated", True)
              + f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div>' if rows
              else '<p class="empty">No dataset is bound yet. Use <b>+ Bind…</b> in the sidebar or <code>eca-rsi serve scan-add</code> on the server host.</p>')
     return (

@@ -34,3 +34,16 @@ def test_group_tally_drops_zero_parts():
     assert serve.group_tally({}) == ""
     # the state's colour comes from the page palette (index.CSS .released/.running/\u2026), not from a glyph
     assert ".released,.include{--st:var(--ok)" in index.CSS and ".pill::before,.dot{" in index.CSS
+
+
+def test_sidebar_counts_read_in_thousands_and_say_whether_they_are_final(tmp_path):
+    """A column of counts is read for its size, so it is scaled once, in thousands. The colour
+    says how much the number is worth: a released run's is its result, a running one's is only
+    what the last finished round left, and a failed run has no count to report at all."""
+    assert (index._k(1017), index._k(201278), index._k(None)) == ('1.02k', '201.28k', '')
+    items = {f"x-{k}": tmp_path / "x" / k for k in ("a1", "b1", "c1", "d1")}
+    html = serve._navigator_html(items, tmp_path / "reg.json", state=_state)
+    assert '<span class="cells released"' in html and '<span class="cells running"' in html
+    assert '<span class="cells failed"' not in html and '<span class="cells neutral"' not in html
+    assert '9,' not in html and '0.01k' in html          # _state gives 9 cells: scaled, not raw
+    assert '.item .cells{color:var(--st,var(--muted))' in serve.NAV_CSS   # the status palette, once

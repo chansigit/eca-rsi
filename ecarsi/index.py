@@ -867,6 +867,12 @@ def _n(x) -> str:
     return "" if x is None or x == "" else f"{int(x):,}"
 
 
+def _k(x) -> str:
+    """Thousands, two decimals: a column of counts is read for its size, and 201.28k compares
+    at a glance where 201,278 has to be counted. Rounded, so 1,017 is 1.02k."""
+    return "" if x is None or x == "" else f"{int(x) / 1000:.2f}k"
+
+
 def _bar(frac: float) -> str:
     return f'<span class="bar" title="{_pct(frac)}"><i style="width:{min(100, 100 * frac):.1f}%"></i></span>'
 
@@ -979,15 +985,19 @@ def dataset_state(root: Path, states: list[dict] | None = None) -> dict:
             "awaiting_start": False}
 
 
+TREND_CEILING = 0.10   # a first round often removes 20-36 %; drawn to scale it flattens the rest
+
+
 def sparkline(points: list[dict], width: int = 108, height: int = 22) -> str:
     """Per-round removal as a share of what entered the round, oldest left. The scale is the run's
-    own worst round, so the shape shows whether it is settling; the colour is absolute, so two runs
-    can be compared at a glance. A hollow point is a round still removing."""
+    own worst round up to TREND_CEILING, so an early clear-out does not squash the settling that
+    follows; anything above the ceiling is drawn on it and keeps its true value in the tooltip.
+    The colour is absolute, so two runs compare at a glance. A hollow point is still removing."""
     if not points:
         return '<span class="muted">–</span>'
-    top = max(max(p["frac"] for p in points), 0.03)
+    top = min(max(max(p["frac"] for p in points), 0.03), TREND_CEILING)
     x = (lambda i: 3 + i * (width - 6) / max(len(points) - 1, 1)) if len(points) > 1 else (lambda i: width / 2)
-    y = lambda f: height - 3 - (height - 6) * (f / top)
+    y = lambda f: height - 3 - (height - 6) * (min(f, top) / top)
     path = " ".join(("M" if i == 0 else "L") + f"{x(i):.1f} {y(p['frac']):.1f}" for i, p in enumerate(points))
     dots = "".join(
         f'<circle cx="{x(i):.1f}" cy="{y(p["frac"]):.1f}" r="2.6" class="sp {trend_band(p["frac"])}'

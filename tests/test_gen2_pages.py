@@ -258,4 +258,8 @@ def test_a_running_round_shows_the_stage_subtotal_and_the_trend_marks_it_unsettl
     assert 'class="sp released open"' in svg                             # 1.43 % is under 1.5 %: green, still removing
     assert 'round 2: 1.43% so far' in svg
     assert index.sparkline([]) == '<span class="muted">–</span>'
+    # above the ceiling every point sits on the top edge, and the tooltip still tells the truth
+    big = index.sparkline([{'n': 1, 'frac': .36, 'settled': True}, {'n': 2, 'frac': .12, 'settled': True},
+                           {'n': 3, 'frac': .009, 'settled': True}])
+    assert big.count('cy="3.0"') == 2 and 'round 1: 36.00%' in big and 'class="sp released"' in big
     assert (index.trend_band(0.0099), index.trend_band(0.02), index.trend_band(0.05)) == ('released', 'running', 'failed')
