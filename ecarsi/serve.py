@@ -244,8 +244,30 @@ NAV_JS = r"""
     if (control) control.classList.toggle("active", name === "_control");
     if (models) models.classList.toggle("active", name === "_model_pool_panel");
     const cur = items.find(i => i.dataset.name === name); if (cur) { const g = cur.closest("details.group"); if (g) g.open = true; } }
-  function show(path){ window.modelMonitor.close(); open.hidden = false; if (empty) empty.style.display = "none"; frame.style.display = "";
-    if (frameUrl() !== path) frame.src = path; else frame.dispatchEvent(new Event('load')); }
+  // What the sidebar knows is enough to name the page before the server has rendered it: the
+  // title, the status and the counts are already in the DOM. The rest is drawn as bars until
+  // the real page arrives, so a click answers immediately instead of holding the old dataset.
+  const pending = $("pending");
+  function placeholder(path){
+    if (!pending) return;
+    const m = path.match(/^\/([^/]+)\//), item = m && items.find(i => i.dataset.name === m[1]);
+    const title = path === "/_home" ? "overview" : path === "/_control/" ? "control plane"
+                : item ? item.querySelector(".nm").textContent : decodeURIComponent(path);
+    const dot = item && item.querySelector(".dot"), cells = item && item.querySelector(".cells");
+    pending.querySelector("h1").textContent = title;
+    const pill = pending.querySelector(".pill");
+    pill.textContent = dot ? dot.getAttribute("title") || "" : "";
+    pill.className = "pill " + (item ? item.dataset.cls : "neutral");
+    pill.hidden = !pill.textContent;
+    pending.querySelector(".facts").innerHTML =
+      (item && item.dataset.species ? "<div><dt>species</dt><dd>" + item.dataset.species + "</dd></div>" : "")
+      + (cells && cells.textContent ? "<div><dt>cells</dt><dd>" + cells.textContent + "</dd></div>" : "");
+    frame.style.display = "none"; pending.hidden = false;
+  }
+  function show(path){ window.modelMonitor.close(); open.hidden = false; if (empty) empty.style.display = "none";
+    const m = path.match(/^\/([^/]+)\//); if (m) mark(m[1] === "_home" ? "__home__" : m[1]);
+    crumb.textContent = path === "/_home" ? "overview" : path === "/_control/" ? "control plane" : decodeURIComponent(path);
+    if (frameUrl() !== path) { placeholder(path); frame.src = path; } else frame.dispatchEvent(new Event('load')); }
   function frameUrl(){ try { return frame.contentWindow.location.pathname; } catch (e) { return null; } }
   function fromHash(){
     const h = location.hash.replace(/^#/, "");
@@ -253,6 +275,8 @@ NAV_JS = r"""
     if (h === "/_control/") return control ? "/_control/" : null;
     const m = h.match(/^\/([^/]+)\/(.*)$/); return m && names.has(m[1]) ? "/" + m[1] + "/" + m[2] : null; }
   frame.addEventListener("load", () => {
+    if (pending) pending.hidden = true;
+    if (!window.modelMonitor.isOpen()) frame.style.display = "";
     const p = frameUrl(); if (!p || window.modelMonitor.isOpen()) return;
     if (p === "/_home") {
       if (location.hash !== "#/__home__") history.replaceState(null, "", "#/__home__");
@@ -488,6 +512,20 @@ iframe{flex:1;border:0;width:100%;background:var(--bg)}
 .icon{background:none;border:0;cursor:pointer;color:var(--muted);font-size:var(--t5);padding:2px 8px;border-radius:6px;line-height:1}.icon:hover{background:var(--none-bg)}
 a.icon{text-decoration:none}
 #sb-show{display:none}body.sb-hidden aside.sb{display:none}body.sb-hidden #sb-show{display:inline-block}
+/* the pane while a dataset page is being rendered: real title and status, bars for the rest */
+#pending{flex:1;min-height:0;overflow:auto;padding:var(--s3);background:var(--bg)}
+#pending .ph-head{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap}
+#pending h1{margin:0;font-size:var(--t5)}
+#pending .facts{display:flex;gap:var(--s3);margin:var(--s2) 0 var(--s3);color:var(--muted);font-size:var(--t3)}
+#pending .facts dt{font-weight:600}#pending .facts dd{margin:0}
+#pending .ph-bars{display:flex;flex-direction:column;gap:var(--s2);max-width:70ch}
+#pending .ph-bars i{height:14px;border-radius:var(--r);background:var(--none-bg);
+ background-image:linear-gradient(90deg,transparent,color-mix(in srgb,var(--card) 80%,transparent),transparent);
+ background-size:200% 100%;animation:ph 1.4s linear infinite}
+#pending .ph-bars i:nth-child(2){width:85%;animation-delay:.15s}#pending .ph-bars i:nth-child(3){width:60%;animation-delay:.3s}
+#pending .ph-note{color:var(--muted);font-size:var(--t3);margin-top:var(--s3)}
+@keyframes ph{from{background-position:200% 0}to{background-position:-200% 0}}
+@media (prefers-reduced-motion:reduce){#pending .ph-bars i{animation:none}}
 #bind-form{margin:0}#bind-form input{width:100%;font:var(--t3) var(--mono);padding:6px 10px;border:1px solid var(--line-strong);border-radius:6px;margin:4px 0}
 #bind-form p{margin:var(--s1) 0;color:var(--muted)}
 @supports ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
@@ -596,6 +634,12 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
         '<span id="crumb"></span><button class="icon" id="reload" title="reload page" aria-label="reload page">&#8635;</button>'
         '<a class="icon" id="open" href="/" target="_blank" title="open in a new tab" aria-label="open in a new tab">&#8599;</a></div>'
         '<iframe id="frame" name="frame" title="dataset"></iframe>'
+        # Everything the sidebar already knows about the dataset, shown the instant it is clicked.
+        # A dataset page is rendered from disk on every request; on a cold run directory that is
+        # seconds, and until now the pane kept showing the previous dataset all the way through.
+        '<div id="pending" hidden aria-live="polite"><div class="ph-head"><h1></h1><span class="pill"></span></div>'
+        '<dl class="facts"></dl><div class="ph-bars"><i></i><i></i><i></i></div>'
+        '<p class="ph-note">reading the run directory…</p></div>'
         f'<section id="model-panel" hidden aria-label="Agent Bridge"></section>'
         '<div id="empty" style="display:none"><h2>Nothing bound yet</h2><p>Use <b>+ Bind…</b> in the sidebar or, on the server host, '
         "<code>eca-rsi serve scan-add &lt;dir-or-glob&gt;</code>. The server picks up registry changes on the next request.</p>"

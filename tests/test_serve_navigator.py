@@ -47,3 +47,20 @@ def test_sidebar_counts_read_in_thousands_and_say_whether_they_are_final(tmp_pat
     assert '<span class="cells failed"' not in html and '<span class="cells neutral"' not in html
     assert '9,' not in html and '0.01k' in html          # _state gives 9 cells: scaled, not raw
     assert '.item .cells{color:var(--st,var(--muted))' in serve.NAV_CSS   # the status palette, once
+
+
+def test_clicking_a_dataset_answers_before_the_server_has_rendered_it(tmp_path):
+    """A dataset page is built from disk on every request, seconds on a cold run directory. The
+    click is answered from what the sidebar already holds -- name, status, species, cells -- and
+    the rest is drawn as bars until the real page loads, instead of holding the previous dataset."""
+    html = serve._navigator_html({f"x-{k}": tmp_path / "x" / k for k in ("a1", "b1")},
+                                 tmp_path / "reg.json", state=_state)
+    assert '<div id="pending" hidden aria-live="polite">' in html and 'class="ph-bars"' in html
+    js = serve.NAV_JS
+    assert "function placeholder(path)" in js
+    assert 'frame.style.display = "none"; pending.hidden = false;' in js   # the old page is not held
+    assert "placeholder(path); frame.src = path;" in js                    # shown before the request
+    assert "if (pending) pending.hidden = true;" in js                     # and retired on load
+    # the crumb and the sidebar selection move on click, not on load
+    assert 'crumb.textContent = path === "/_home"' in js
+    assert "@media (prefers-reduced-motion:reduce){#pending .ph-bars i{animation:none}}" in serve.NAV_CSS
