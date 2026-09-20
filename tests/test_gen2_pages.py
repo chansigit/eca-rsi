@@ -282,3 +282,21 @@ def test_a_short_run_is_drawn_short(tmp_path):
     xs = [float(v) for v in re.findall(r'cx="([0-9.]+)" cy="[0-9.]+" r="2.6"', many)]
     assert len(xs) == 15 and xs[0] == 3.0 and xs[-1] <= 105.0   # the safety cap still fits
     assert xs[1] - xs[0] < index.TREND_STEP                     # compressed only because it must be
+
+
+def test_a_round_knows_its_input_before_cross_sample_restates_it(tmp_path):
+    """A round's input is settled when the round opens -- it is what the round before left.
+    Cross-sample only restates it, so waiting for that publication left the cells-in column
+    blank for the first half of every round, which reads as unknown rather than pending."""
+    root = gen2_run(tmp_path / 'g2', released=False)
+    unit = root / 'units' / 'u'
+    # round 2 is open but nothing of it has published yet: no cross-sample, no zoom-in
+    (unit / 'rounds' / 'round02' / '02-cross-sample' / 'publication.json').unlink()
+    (unit / 'rounds' / 'round03').mkdir()
+    rounds = index._gen2_rounds(unit)
+    assert [(r['n'], r.get('n_in')) for r in rounds] == [(1, None), (2, 70), (3, 70)]
+    assert rounds[0]['stats']['n_in'] == 90 and rounds[0]['stats']['n_out'] == 70
+    assert f'<td class="num">{index._n(70)}</td>' in index.render_unit(unit)
+    # a first round reads it from per-sample, which is the only thing published before it
+    (unit / 'rounds' / 'round01' / 'publication.json').unlink()
+    assert [(r['n'], r.get('n_in')) for r in index._gen2_rounds(unit)] == [(1, 90), (2, 90), (3, 90)]

@@ -566,6 +566,10 @@ def _round_started_after(log: list[tuple[str, str]], n: int) -> tuple[int, str] 
 
 def _gen2_rounds(unit: Path) -> list[dict]:
     out = []
+    # A round's input is settled the moment the round opens: it is what the previous round
+    # left, or what per-sample published. Waiting for cross-sample to restate it leaves the
+    # column blank for the first half of every round, which reads as "unknown", not "pending".
+    survivors = _json(unit / L.GEN2_PERSAMPLE / L.GEN2_PUBLICATION, {}).get("n_survived")
     for rdir in sorted((unit / L.ROUNDS).glob("round*")):
         record = _json(rdir / L.GEN2_PUBLICATION, {})
         stats = record.get("stats") or {}
@@ -580,13 +584,14 @@ def _gen2_rounds(unit: Path) -> list[dict]:
         if stats:
             row["stats"] = {k: stats.get(k) for k in ("n_in", "n_out", "removed", "frac")}
             row["decision"] = stats.get("decision")
+            survivors = stats.get("n_out")
         else:
             cross = _json(rdir / L.GEN2_CROSS / L.GEN2_PUBLICATION, {})
             zoom = _json(rdir / L.GEN2_ZOOM / L.GEN2_PUBLICATION, {})
             row["step"] = ("zoom-in done, deciding" if zoom else "zoom-in" if cross
                            else "cross-sample" if (rdir / L.GEN2_CROSS).is_dir() else "starting")
+            row["n_in"] = cross.get("n_input") or survivors
             if cross:
-                row["n_in"] = cross.get("n_input")
                 # The round's own number arrives only when it ends. Cross-sample publishes its
                 # half as soon as it is done, which is a subtotal, not a forecast: on this batch
                 # cross-sample removed 61 cells of a round that went on to remove thousands.
