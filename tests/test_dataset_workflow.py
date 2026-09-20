@@ -123,6 +123,10 @@ def test_unit_waits_for_accepted_pool_release_before_completing(monkeypatch):
         if action == 'release':
             assert args[1] == 'unit.json'
             return {'id': 'release', 'output': 'released.json'}
+        if action == 'round-ledger':
+            return {'id': 'ledger', 'output': 'ledger.json'}
+        if action == 'round-ledger-published':
+            return 'ledger'
         assert action == 'released' and args == ['unit.json', 'result.json']
     async def child(*args, **kwargs):
         return 'stage.json'

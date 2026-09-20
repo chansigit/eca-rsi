@@ -555,10 +555,11 @@ def _gen2_rounds(unit: Path) -> list[dict]:
         started = min((p.stat().st_mtime for p in (rdir / L.GEN2_CROSS).glob("spec.json")), default=None)
         finished = (rdir / L.GEN2_PUBLICATION).stat().st_mtime if (rdir / L.GEN2_PUBLICATION).is_file() else None
         row = {"n": record.get("round") or L.round_number(rdir), "dir": rdir, "stats": None, "decision": None,
-               "step": None, "reason": stats.get("reason", ""), "sankey": False,
+               "step": None, "reason": stats.get("reason", ""),
+               "sankey": (rdir / L.LEDGER / "sankey.json").is_file(),
                "seconds": (finished - started) if started and finished else None,
                "msp_report": (rdir / L.GEN2_CROSS / "report.html").is_file(),
-               "zmip_report": (rdir / L.GEN2_ZOOM / "figures").is_dir()}
+               "zmip_report": (rdir / L.GEN2_ZOOM / "report.html").is_file()}
         if stats:
             row["stats"] = {k: stats.get(k) for k in ("n_in", "n_out", "removed", "frac")}
             row["decision"] = stats.get("decision")
@@ -674,7 +675,8 @@ def _gen2_unit_body(unit: Path, s: dict, base: str = "") -> str:
         rp = f'{base}{L.ROUNDS}/{r["dir"].name}'
         links = " · ".join(x for x in [
             f'<a href="{rp}/{L.GEN2_CROSS}/report.html">msp</a>' if r.get("msp_report") else "",
-            f'<a href="{rp}/{L.GEN2_ZOOM}/figures/">zmip</a>' if r.get("zmip_report") else ""] if x)
+            f'<a href="{rp}/{L.GEN2_ZOOM}/report.html">zmip</a>' if r.get("zmip_report") else "",
+            f'<a href="{rp}/{L.LEDGER}/cell_ledger.csv.gz">ledger</a>' if r.get("sankey") else ""] if x)
         st = r["stats"]
         elapsed = fmt_elapsed(r["seconds"]) if r.get("seconds") else ""
         if st:
@@ -736,11 +738,17 @@ def _gen2_unit_body(unit: Path, s: dict, base: str = "") -> str:
         detail = "".join(f'<li><b>{e(str(x.get("sample", "")))}</b> {e(str(x.get("error", ""))[:200])}</li>'
                          for x in list(per["skipped"]) + list(per["failed"]))
         parts.append('<section class="block"><h2>Samples needing attention</h2><ul class="warn">' + detail + "</ul></section>")
-    sankey = release / "sankey.json"
-    if sankey.is_file():
+    # Released: the final ledger. Still looping: the newest round that published one, so the
+    # Sankey is there from round one instead of only after convergence.
+    sankey = next((p for p in [release / "sankey.json"]
+                   + [r["dir"] / L.LEDGER / "sankey.json" for r in reversed(s["rounds"])] if p.is_file()), None)
+    if sankey is not None:
         data = sankey.read_text(encoding="utf-8").replace("<", "\\u003c")
+        through = ("the release" if sankey.parent == release
+                   else "round " + str(next(r["n"] for r in s["rounds"] if r["dir"] / L.LEDGER == sankey.parent)))
         parts.append('<section class="block" id="sankey"><h2>Cell identity across steps and rounds '
-                     f'<span class="count">coarse labels</span></h2><p class="lede">{EXPLAIN["sankey"]}</p>'
+                     f'<span class="count">coarse labels · through {through}</span></h2>'
+                     f'<p class="lede">{EXPLAIN["sankey"]}</p>'
                      f'<div id="sankey-vis" class="wrap"></div><script>const SANKEY_DATA = {data};{SANKEY_JS}</script></section>')
     umap = release / "umap.json"
     if umap.is_file():

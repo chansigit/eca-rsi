@@ -158,9 +158,12 @@ def plan_without(plan, skipped):
     zoomed = {line['name'] for line in plan['lineages'] if line['zoom']}
     if not names.keys() <= zoomed:
         raise ValueError('Skipped lineages must be zoomed lineages of the plan: ' + ', '.join(sorted(names.keys() - zoomed)))
-    return {**plan, 'lineages': [{**line, 'zoom': False, 'reason': 'annotation agent failed twice; cross-sample labels kept: '
-                                  + str(names[line['name']].get('error', ''))[:300]} if line['name'] in names else line
-                                 for line in plan['lineages']]}
+    # Every lineage carries a reason: the agent states one where it declines to zoom, the
+    # host states one where it skipped, and zmip's round report prints the column for all.
+    return {**plan, 'lineages': [{'reason': '', **line, 'zoom': False,
+                                  'reason': 'annotation agent failed twice; cross-sample labels kept: '
+                                  + str(names[line['name']].get('error', ''))[:300]} if line['name'] in names
+                                 else {'reason': '', **line} for line in plan['lineages']]}
 
 
 def merge(prepared, decision, results, destination, skipped=()):
@@ -183,7 +186,8 @@ def merge(prepared, decision, results, destination, skipped=()):
             reassigned=pd.read_csv(artifact(result, 'annotation_reassigned.csv'), dtype=str, keep_default_na=False))
         ledgers.append(pd.read_csv(artifact(result, 'cell_exclusions.csv.gz'), dtype=str, keep_default_na=False))
     save(destination/'zmip_plan.json', plan)
-    kept, removed, _ = merge_back(data, plan, accepted, str(destination))
+    # with_report: zmip's own global page for the round, as generation 1 always published.
+    kept, removed, _ = merge_back(data, plan, accepted, str(destination), with_report=True)
     ledger = pd.concat(ledgers, ignore_index=True) if ledgers else pd.DataFrame(columns=['cell_uid','source_id','source_cell_id','reason','stage','operation','input_version'])
     if (ledger.cell_uid.duplicated().any() or set(ledger.cell_uid) != set(removed.cell)
             or set(kept.obs_names) & set(ledger.cell_uid) or set(kept.obs_names) | set(ledger.cell_uid) != set(data.obs_names)):

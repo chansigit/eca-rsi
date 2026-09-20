@@ -6,17 +6,23 @@ import shutil
 
 from ..warm_pool.state import reference, verified
 from .crosssample import artifact
+from .persample import sealed
 from ..warm_pool.state import lock, read, save
 
 
-def collect(unit_ref):
+def collect(unit_ref, *, complete=True):
+    """The ledger of every input cell across the stages run so far.
+
+    `complete=False` accepts a unit that is still looping -- `unit_ref` is then the
+    round's own view {unit, per_sample, rounds} rather than a unit publication -- so a
+    round can publish its ledger and Sankey while the loop continues."""
     import pandas as pd
     from ..ledger import _obs, _cell_ids, _partition, _table
     from ..run_state import file_identity
     from ..sample_mapping import SAMPLE_KEY
 
-    unit = verified(unit_ref)
-    if unit['state'] != 'complete' or not unit['rounds']:
+    unit = verified(unit_ref) if complete else unit_ref
+    if complete and (unit['state'] != 'complete' or not unit['rounds']):
         raise ValueError('Release requires a completed analysis unit')
     source = Path(unit['unit']['path']) / 'input/organized.h5ad'
     if file_identity(source) != verified(unit['unit']['manifest'])['identity']:
@@ -119,8 +125,8 @@ def collect(unit_ref):
                 lineage = verified(lineage_ref)
                 decision(lineage, 'annotation_proposal.json', number, 'zoom-in', lineage['lineage']['name'])
             previous = ref
-    if previous != unit['final'] or (unit['n_input'], unit['n_survived'], unit['n_removed']) != (
-            len(ledger), len(alive), len(ledger) - len(alive)):
+    if complete and (previous != unit['final'] or (unit['n_input'], unit['n_survived'], unit['n_removed']) != (
+            len(ledger), len(alive), len(ledger) - len(alive))):
         raise ValueError('Final unit publication does not conserve its original input')
     exclusions = pd.concat(exclusions, ignore_index=True).fillna('')
     _partition(set(ledger.index), alive, exclusions.cell_uid, 'release')
@@ -233,9 +239,37 @@ def publish(unit_ref):
         return reference(target / 'receipt.json')
 
 
+def round_ledger(packet_path):
+    """The cell ledger and Sankey of the rounds finished so far, published by the round
+    that just closed. Generation 1 wrote one per round; a reader should not have to wait
+    for the release to see where the cells went.
+
+    ponytail: re-read of every earlier round's obs each time, the way release does it once.
+    A unit is capped at 15 rounds, and the read is seconds against the round's own compute.
+    """
+    from ..ledger import sankey_data
+
+    packet = read(packet_path)
+    unit = {k: packet[k] for k in ('unit', 'per_sample', 'rounds')}
+    _, ledger, excluded, stages, decisions, _ = collect(unit, complete=False)
+    destination = Path.cwd()
+    compression = {'method': 'gzip', 'mtime': 0}
+    ledger.to_csv(destination / 'cell_ledger.csv.gz', compression=compression)
+    excluded.to_csv(destination / 'cell_exclusions.csv.gz', index=False, compression=compression)
+    save(destination / 'sankey.json', sankey_data(ledger, stages))
+    sealed(destination, destination / 'ledger.json', state='complete', input=packet['input'],
+           n_input=len(ledger), n_survived=int((ledger['final_status'] == 'kept').sum()),
+           n_removed=int((ledger['final_status'] == 'removed').sum()))
+    return destination / 'ledger.json'
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('operation', nargs='?', default='release', choices=['release', 'ledger'])
     parser.add_argument('packet', type=Path)
     args = parser.parse_args()
     packet = read(args.packet)
-    save(Path.cwd() / 'released.json', dict(state='complete', input=packet['input'], release=publish(packet['input'])))
+    if args.operation == 'ledger':
+        round_ledger(args.packet)
+    else:
+        save(Path.cwd() / 'released.json', dict(state='complete', input=packet['input'], release=publish(packet['input'])))

@@ -379,6 +379,32 @@ def dataset_step(action, args):
                 forced_release=reason.startswith('FORCED:'), reason=reason))
             result['publication'] = str(path)
         return result
+    if action == 'round-ledger':
+        from ..warm_pool.state import submit
+        spec, unit, progress = args
+        directory = Path(spec['output_root']) / 'units' / unit['name'] / 'rounds' / f"round{len(progress['stats']):02d}"
+        from .. import stages
+        programs = [stages.program('release'), *(stages.PACKAGE / name for name in ('ledger.py', 'sample_mapping.py'))]
+        packet = immutable(directory / 'ledger-input.json', dict(
+            input=reference(progress['input']), unit=unit,
+            per_sample=reference(progress['per_sample']), rounds=progress['rounds']))
+        request_id = spec['run_id'] + '.ledger-' + digest(packet)[:16]
+        parent = Path(verified(reference(progress['input']))['result']['path']).relative_to(
+            Path(spec['pool_root']) / 'requests').parts[0]
+        submit(spec['pool_root'], dict(request_id=request_id, operation_id='dataset.round-ledger',
+            args=['-m', 'ecarsi.stages.release', 'ledger', packet['path']], **spec['zoom_in']['merge_budget'],
+            inputs=[packet, *progress['rounds'], reference(progress['per_sample']),
+                    *[reference(path) for path in programs]],
+            outputs=['ledger.json'], trace=dict(workflow_id='dataset/' + spec['run_id'],
+                dataset_id=spec['dataset_id'], unit_id='dataset.round-ledger', depends_on=[parent])))
+        return dict(id=request_id, output='ledger.json')
+    if action == 'round-ledger-published':
+        spec, unit, progress, result = args
+        from .artifacts import copy_light
+        bundle = verified(reference(result))
+        directory = Path(spec['output_root']) / 'units' / unit['name'] / 'rounds' / f"round{len(progress['stats']):02d}"
+        copy_light(bundle.get('files'), directory / 'ledger')
+        return str(directory / 'ledger')
     if action == 'publish':
         spec, results, failures = args
         publications = [reference(p) for p in sorted(results)]
@@ -429,6 +455,15 @@ class AnalysisUnitWorkflow:
         self._stage = f'round {number}: zoom-in'
         zoom = await execute('zoom_in', cross, number, ZoominWorkflow.run, 'zoom-in/')
         progress = await call(dataset_step, 'round', [spec, unit, progress, cross, zoom])
+        if workflow.patched('round-ledger-v1'):
+            # The round's own Sankey and ledger, the way generation 1 published them: a
+            # reader should not have to wait for the release to see where the cells went.
+            try:
+                request = await call(dataset_step, 'round-ledger', [spec, unit, progress])
+                result = await await_pool(spec, request)
+                await call(dataset_step, 'round-ledger-published', [spec, unit, progress, result])
+            except Exception as exc:  # a report is not worth failing a finished round over
+                print(f'[round] ledger not published: {exc}', flush=True)
         if 'publication' in progress:
             if workflow.patched('analysis-unit-release-v1'):
                 self._stage = 'publishing final results'

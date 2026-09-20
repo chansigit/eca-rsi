@@ -177,3 +177,24 @@ def test_a_gen2_unit_under_a_root_gets_its_page_not_a_directory_listing(tmp_path
     assert serve._render_index(root, 'units/u/', 'd') is not None
     assert serve._render_index(root, '', 'd') is not None
     assert serve._render_index(root, 'units/u/rounds/', 'd') is None  # still a plain directory
+
+
+def test_a_round_shows_its_own_reports_ledger_and_sankey(tmp_path):
+    """Generation 1 published a report and a Sankey per round; the page shows whichever
+    of them a round has produced, and the newest round's Sankey before any release."""
+    root = tmp_path / 'run'
+    gen2_run(root, released=False)
+    rdir = root / 'units' / 'u' / 'rounds' / 'round01'
+    (rdir / L.GEN2_CROSS).mkdir(parents=True, exist_ok=True)
+    (rdir / L.GEN2_CROSS / 'report.html').write_text('<html>msp</html>')
+    (rdir / L.GEN2_ZOOM).mkdir(parents=True, exist_ok=True)
+    (rdir / L.GEN2_ZOOM / 'report.html').write_text('<html>zmip</html>')
+    (rdir / L.LEDGER).mkdir(parents=True, exist_ok=True)
+    (rdir / L.LEDGER / 'cell_ledger.csv.gz').write_bytes(b'')
+    save(rdir / L.LEDGER / 'sankey.json', {'nodes': [], 'links': []})
+
+    page = index.render_unit(root / 'units' / 'u')
+    for link in (f'rounds/round01/{L.GEN2_CROSS}/report.html', f'rounds/round01/{L.GEN2_ZOOM}/report.html',
+                 f'rounds/round01/{L.LEDGER}/cell_ledger.csv.gz'):
+        assert link in page
+    assert 'through round 1' in page and 'SANKEY_DATA' in page
