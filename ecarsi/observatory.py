@@ -386,8 +386,14 @@ class ControlPlane:
         self.temporal_service_root, self.temporal_port, self.temporal_host = temporal_service_root, temporal_port, temporal_host
         self.cache, self.guard = {}, threading.Lock()
 
-    def _snapshot(self):
-        return snapshot(self.root, self.temporal_port, self.temporal_host, self.cache,
+    # What a walk accumulates: which folders it has read, which it found too old to read again,
+    # and how far back it reaches. A widening walk needs its own copy of all of it.
+    INDEX = ("pool_done", "bridge_done", "pool_stale", "bridge_stale", "resource_files",
+             "worker_tails", "horizon", "indexed_since")
+
+    def _snapshot(self, cache=None):
+        return snapshot(self.root, self.temporal_port, self.temporal_host,
+                        self.cache if cache is None else cache,
                         self.pool_root, self.bridge_root, self.temporal_service_root)
 
     def start(self):
@@ -402,16 +408,25 @@ class ControlPlane:
         threading.Thread(target=warm, daemon=True).start()
         return self
 
-    def _widen(self):
-        # Refreshes pause while this runs (api() checks cache["walk"]), so the index caches have a
-        # single writer; readers only ever take the finished snapshot under the guard.
+    def _widen(self, horizon):
+        """Reach back `horizon` seconds, reading every request folder that far back. On a cold
+        Lustre client that is tens of minutes, so it walks a private copy of the index and adopts
+        it only when finished: the two-second refresh keeps running against the narrow index
+        meanwhile. It used to share the index, which meant a page asking for a week of history
+        froze the live worker list for as long as the week took to read (2026-09-20)."""
+        import copy
+
+        with self.guard:
+            private = {k: copy.deepcopy(self.cache[k]) for k in self.INDEX if k in self.cache}
+        private["horizon"] = max(private.get("horizon", INDEX_HORIZON), horizon)
         try:
-            built = self._snapshot()
+            built = self._snapshot(private)
         except Exception as exc:  # noqa: BLE001 - the page keeps its last records
             print(f"control plane widening skipped: {exc}", flush=True)
             built = None
         with self.guard:
-            if built is not None:
+            if built is not None:                      # the wider index replaces the narrow one
+                self.cache.update(private)
                 self.cache["snapshot"], self.cache["snapshot_at"] = built, time.monotonic()
             self.cache.pop("walk", None)
 
@@ -433,11 +448,11 @@ class ControlPlane:
         with self.guard:
             if timeline and since < cache.get("indexed_since", 0) and not cache.get("walk"):
                 # A window older than the index widens the horizon to reach it; the folders it
-                # uncovers are read in the background while the page keeps its current records.
-                cache["horizon"] = max(cache.get("horizon", INDEX_HORIZON), time.time() - since + 3600)
-                cache["walk"] = threading.Thread(target=self._widen, daemon=True)
+                # uncovers are read in the background, on its own copy of the index, while the
+                # page keeps reporting live state from the narrow one.
+                cache["walk"] = threading.Thread(target=self._widen, args=(time.time() - since + 3600,), daemon=True)
                 cache["walk"].start()
-            if not cache.get("walk") and time.monotonic() - cache.get("snapshot_at", 0) >= 2:
+            if time.monotonic() - cache.get("snapshot_at", 0) >= 2:
                 cache["snapshot"], cache["snapshot_at"] = self._snapshot(), time.monotonic()
             data = cache["snapshot"]
             if timeline:

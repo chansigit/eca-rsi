@@ -8,7 +8,7 @@ import urllib.request
 from functools import partial
 
 from ecarsi import serve
-from ecarsi.observatory import ControlPlane
+from ecarsi.observatory import INDEX_HORIZON, ControlPlane
 from ecarsi.warm_pool.state import save
 
 
@@ -76,3 +76,35 @@ def test_observatory_cli_no_longer_serves():
     parser = argparse.ArgumentParser()
     assert 'ControlPlane' in dir(observatory) and not hasattr(observatory, 'serve')
     assert 'serve' not in observatory.main.__doc__ if observatory.main.__doc__ else True
+
+
+def test_a_widening_walk_does_not_freeze_the_live_status(tmp_path):
+    """A page asking for a week of history starts a walk over every saved request -- tens of
+    minutes on a cold Lustre client. The status shown beside it must keep moving: a worker that
+    joins during the walk used to stay invisible until the week had been read (2026-09-20)."""
+    control = ControlPlane(run_dir(tmp_path), temporal_port=0)
+    server = serving(tmp_path, control)
+    walking = threading.Event()
+    release = threading.Event()
+
+    real = control._snapshot
+
+    def slow(cache=None):
+        if cache is not None:                  # the widening walk works on its own index copy
+            walking.set()
+            release.wait(10)
+        return real(cache)
+
+    try:
+        get(server, '/_control/api/status')        # the index must exist before a window can fall outside it
+        control._snapshot = slow
+        assert json.loads(get(server, '/_control/api/timeline?since=1000&until=4600')[2])['indexing'] is True
+        assert walking.wait(10), 'the widening walk never started'
+        first = json.loads(get(server, '/_control/api/status')[2])['generated_at']
+        time.sleep(2.1)
+        second = json.loads(get(server, '/_control/api/status')[2])['generated_at']
+        assert second > first, 'status stopped refreshing while the walk was running'
+        assert control.cache.get('horizon', INDEX_HORIZON) == INDEX_HORIZON  # the live index stayed narrow
+    finally:
+        release.set()
+        server.shutdown()
