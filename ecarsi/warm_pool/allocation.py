@@ -71,15 +71,16 @@ def gpu_device(gpu_id):
     if not re.fullmatch(r"GPU-[a-fA-F0-9-]+", gpu_id):
         raise ValueError("GPU identity must be a full NVIDIA UUID")
     result = subprocess.run(["nvidia-smi", "--id=" + gpu_id,
-        "--query-gpu=uuid,name,memory.total,memory.used,utilization.gpu", "--format=csv,noheader,nounits"],
+        "--query-gpu=uuid,name,memory.total,memory.used,utilization.gpu,compute_mode", "--format=csv,noheader,nounits"],
         capture_output=True, text=True, check=True, timeout=10)
     rows = result.stdout.strip().splitlines()
     if len(rows) != 1:
         raise ValueError("expected exactly one GPU")
-    uuid, name, total, used, utilization = [s.strip() for s in rows[0].split(",")]
+    uuid, name, total, used, utilization, compute_mode = [s.strip() for s in rows[0].split(",")]
     if uuid != gpu_id:
         raise ValueError("GPU UUID mismatch")
-    return dict(uuid=uuid, name=name, memory_mb=int(total), used_mb=int(used), utilization_percent=int(utilization))
+    return dict(uuid=uuid, name=name, memory_mb=int(total), used_mb=int(used),
+                utilization_percent=int(utilization), compute_mode=compute_mode)
 
 
 def launch(root, cpu_ids, memory_mb, work_dir, prefix, job_id=None, time_limit_seconds=None, gpu=False):

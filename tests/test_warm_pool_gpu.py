@@ -53,7 +53,8 @@ def test_gpu_alternatives_preserve_budget_and_never_use_inherited_visibility(tmp
 
 
 def test_multigpu_memory_is_per_device_and_telemetry_excludes_unallocated_cards(monkeypatch):
-    devices = [dict(uuid="GPU-a1", memory_mb=16384), dict(uuid="GPU-b2", memory_mb=49152)]
+    devices = [dict(uuid="GPU-a1", memory_mb=16384, compute_mode="Default"),
+               dict(uuid="GPU-b2", memory_mb=49152, compute_mode="Default")]
     args = gpu_resources(devices)
     shares = lambda uuid: "[" + ",".join(f"{uuid}#{i}" for i in range(GPU_SHARES_PER_DEVICE)) + "]"
     assert f'gpuSlot/0={shares("GPU-a1")}' in args and f'gpuSlot/1={shares("GPU-b2")}' in args
@@ -123,7 +124,8 @@ def test_native_hq_one_worker_schedules_multiple_gpu_slots(tmp_path):
             wait(lambda: call("server", "info"))
             submit_probe("large", gpu_mb=32 * 1024, hold=True)
             assert not (tmp_path / "large.json").exists()
-            devices = [dict(uuid="GPU-a1", memory_mb=16384), dict(uuid="GPU-b2", memory_mb=49152)]
+            devices = [dict(uuid="GPU-a1", memory_mb=16384, compute_mode="Default"),
+                       dict(uuid="GPU-b2", memory_mb=49152, compute_mode="Default")]
             actors.append(subprocess.Popen(command + ["worker", "start", "--manager", "none", "--detect-resources", "none",
                 "--cpus", json.dumps(cpus), "--resource", "mem=sum(160)", "--resource", "runtime/test=sum(3)",
                 "--time-limit", "120s", "--work-dir", str(tmp_path / "worker")] + gpu_resources(devices), stdout=log, stderr=log))
@@ -173,7 +175,7 @@ def test_a_card_serves_several_attempts_and_each_pays_only_for_its_own_processes
     from ecarsi.warm_pool.allocation import gpu_process_memory_mb
     from ecarsi.warm_pool.worker import assigned_gpu
 
-    args = gpu_resources([dict(uuid="GPU-a1", memory_mb=81920)])
+    args = gpu_resources([dict(uuid="GPU-a1", memory_mb=81920, compute_mode="Default")])
     slot = next(a for a in args if a.startswith("gpuSlot/0="))
     assert slot.count("GPU-a1#") == GPU_SHARES_PER_DEVICE > 1
     assert "gpuMemoryMB/0=sum(73728)" in args
@@ -189,3 +191,23 @@ def test_a_card_serves_several_attempts_and_each_pays_only_for_its_own_processes
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: SimpleNamespace(
         stdout=f"{mine}, 1500\n{other}, 60000\n"))
     assert gpu_process_memory_mb("GPU-a1", mine) == 1500  # the neighbour's 60 GiB is not ours
+
+
+def test_an_exclusive_process_card_is_never_shared(monkeypatch):
+    """Sherlock's H100s run in Exclusive_Process: a second CUDA context on the card dies
+    with cudaErrorDevicesUnavailable, so the card must be advertised as a single slot.
+    An unreported mode counts as exclusive — sharing is the guess that loses work."""
+    from types import SimpleNamespace
+    from ecarsi.warm_pool.allocation import gpu_device
+
+    for mode in ("Exclusive_Process", "Exclusive_Thread", "Prohibited", None):
+        gpu = dict(uuid="GPU-a1", memory_mb=81920)
+        if mode:
+            gpu["compute_mode"] = mode
+        slot = next(a for a in gpu_resources([gpu]) if a.startswith("gpuSlot/0="))
+        assert slot == "gpuSlot/0=[GPU-a1#0]", mode
+        assert "gpuMemoryMB/0=sum(73728)" in gpu_resources([gpu])  # VRAM is still reported
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: SimpleNamespace(
+        stdout="GPU-a1, H100, 81559, 1, 0, Exclusive_Process\n", returncode=0))
+    assert gpu_device("GPU-a1")["compute_mode"] == "Exclusive_Process"

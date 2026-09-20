@@ -25,13 +25,21 @@ GPU_SLOT_LIMIT = 64
 GPU_SHARES_PER_DEVICE = 8
 
 
+def device_shares(gpu):
+    """Only a card in Default compute mode admits more than one process: under
+    Exclusive_Process (the 2026-09-20 Sherlock H100s) the second context fails at once
+    with cudaErrorDevicesUnavailable, so sharing such a card kills tasks rather than
+    filling it. An unreported mode is treated as exclusive — the safe direction."""
+    return GPU_SHARES_PER_DEVICE if gpu.get("compute_mode") == "Default" else 1
+
+
 def gpu_resources(devices):
     """Independent device and VRAM pairs, with shared worker CPU/RAM resources."""
     if len(devices) > GPU_SLOT_LIMIT:
         raise ValueError(f"this resource protocol supports at most {GPU_SLOT_LIMIT} GPUs per worker")
     resources = []
     for slot, gpu in enumerate(devices):
-        shares = ",".join(f"{gpu['uuid']}#{share}" for share in range(GPU_SHARES_PER_DEVICE))
+        shares = ",".join(f"{gpu['uuid']}#{share}" for share in range(device_shares(gpu)))
         resources += ["--resource", f"gpuSlot/{slot}=[{shares}]",
                       "--resource", f"gpuMemoryMB/{slot}=sum({int(gpu['memory_mb'] * .9)})"]
     return resources
