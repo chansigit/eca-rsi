@@ -552,8 +552,13 @@ def _gen2_rounds(unit: Path) -> list[dict]:
     for rdir in sorted((unit / L.ROUNDS).glob("round*")):
         record = _json(rdir / L.GEN2_PUBLICATION, {})
         stats = record.get("stats") or {}
+        started = min((p.stat().st_mtime for p in (rdir / L.GEN2_CROSS).glob("spec.json")), default=None)
+        finished = (rdir / L.GEN2_PUBLICATION).stat().st_mtime if (rdir / L.GEN2_PUBLICATION).is_file() else None
         row = {"n": record.get("round") or L.round_number(rdir), "dir": rdir, "stats": None, "decision": None,
-               "step": None, "reason": stats.get("reason", ""), "msp_report": False, "zmip_report": False, "sankey": False}
+               "step": None, "reason": stats.get("reason", ""), "sankey": False,
+               "seconds": (finished - started) if started and finished else None,
+               "msp_report": (rdir / L.GEN2_CROSS / "report.html").is_file(),
+               "zmip_report": (rdir / L.GEN2_ZOOM / "figures").is_dir()}
         if stats:
             row["stats"] = {k: stats.get(k) for k in ("n_in", "n_out", "removed", "frac")}
             row["decision"] = stats.get("decision")
@@ -667,45 +672,57 @@ def _gen2_unit_body(unit: Path, s: dict, base: str = "") -> str:
     rows = []
     for r in s["rounds"]:
         stats = r["stats"] or {}
+        round_dir = f'{base}{L.ROUNDS}/{r["dir"].name}'
+        links = ([f'<a href="{round_dir}/{L.GEN2_CROSS}/report.html">msp</a>'] if r.get("msp_report") else []) + \
+                ([f'<a href="{round_dir}/{L.GEN2_ZOOM}/figures/">zmip</a>'] if r.get("zmip_report") else [])
         rows.append(f'<tr><td>{r["n"]}</td><td class="num">{_n(stats.get("n_in") or r.get("n_in"))}</td>'
                     f'<td class="num">{_n(stats.get("n_out"))}</td><td class="num">{_n(stats.get("removed"))}</td>'
                     f'<td class="num">{_pct(stats.get("frac")) if stats.get("frac") is not None else ""}</td>'
                     f'<td>{e(str(r["decision"] or r["step"] or ""))}</td>'
-                    f'<td class="muted">{e(str(r.get("reason") or ""))}</td></tr>')
+                    f'<td class="muted">{e(str(r.get("reason") or ""))}</td>'
+                    f'<td class="num nw">{fmt_elapsed(r.get('seconds')) if r.get('seconds') else ''}</td>'
+                    f'<td>{" · ".join(links) or "<span class=\'muted\'>–</span>"}</td></tr>')
     parts.append('<section class="block" id="rounds"><h2>Rounds '
                  f'<span class="count">{len(done)} finished</span></h2>'
                  '<p class="lede">Each round integrates the survivors again, annotates them and zooms into lineages; '
                  'the decision and its reason come from the recorded round policy.</p>'
                  + ('<div class="wrap"><table><thead><tr><th>round</th><th class="r">cells in</th>'
-                    '<th class="r">cells out</th><th class="r">removed</th><th class="r">%</th>'
-                    '<th>decision</th><th>reason</th></tr></thead>'
+                    '<th class="r">cells out</th><th class="r">removed</th><th class="r">removed %</th>'
+                    '<th>decision</th><th>reason</th><th class="r">wall time</th><th>reports</th></tr></thead>'
                     f'<tbody>{"".join(rows)}</tbody></table></div>' if rows else '<p class="empty">No round has started.</p>')
                  + "</section>")
     summary = _json(unit / L.GEN2_PERSAMPLE / "samples.json", [])
     if not summary:  # published before the summary existed: the reports still name the samples
         summary = [{"sample": r.parent.name} for r in reports]
+    first = unit / L.ROUNDS / "round01" / L.GEN2_CROSS / "inclusion.json"
+    decided = {d["sample"]: d for d in _json(first, {}).get("samples", [])}
     rows = []
     for row in summary:
         folder = unit / L.GEN2_PERSAMPLE / row["sample"]
-        links = [f'<a href="{base}{L.GEN2_PERSAMPLE}/{row["sample"]}/{n}">{label}</a>'
-                 for n, label in (("report.html", "osp report"), ("qc_summary.csv", "qc"),
-                                  ("annotation_proposal.json", "annotation"))
-                 if (folder / n).is_file()]
-        kept = row.get("n_survived")
-        rows.append(f'<tr><td>{e(row["sample"])}</td>'
-                    f'<td class="num">{_n(row.get("n_input"))}</td><td class="num">{_n(kept)}</td>'
-                    f'<td class="num">{_pct(row["n_removed"] / row["n_input"]) if row.get("n_input") and row.get("n_removed") is not None else ""}</td>'
-                    f'<td>{e(str(row.get("state", "")))}</td><td class="muted">{" · ".join(links)}</td></tr>')
-    parts.append('<section class="block" id="samples"><h2>Samples '
-                 f'<span class="count">{per["n_done"]}/{per["n"]} done</span></h2>' if per["n"] else
-                 '<section class="block" id="samples"><h2>Samples</h2>')
-    parts[-1] += (f'<p class="lede">{EXPLAIN["samples"]} Each report is OSP\'s own page for that sample: QC, '
-                  'clustering and the annotation the agent proposed.</p>'
-                  + (f'<div class="wrap"><table><thead><tr><th>sample</th><th class="r">input cells</th>'
-                     '<th class="r">kept</th><th class="r">removed</th><th>osp</th><th>files</th></tr></thead>'
-                     f'<tbody>{"".join(rows)}</tbody></table></div>' if rows else
-                     '<p class="empty">No sample has finished yet.</p>')
-                  + "</section>")
+        link = (f'<a href="{base}{L.GEN2_PERSAMPLE}/{row["sample"]}/report.html">osp report</a>'
+                if (folder / "report.html").is_file() else '<span class="muted">–</span>')
+        state = row.get("state", "")
+        status = ('<span class="pill empty-sample" title="OSP QC removed every cell; see qc_removed.csv">empty</span>'
+                  if state == "empty" else '<span class="pill failed">failed</span>' if state == "failed"
+                  else '<span class="pill running" title="two agent sessions died; the survivors carry no annotation">unannotated</span>'
+                  if state == "unannotated" else '<span class="pill released">done</span>' if state
+                  else '<span class="pill running">pending</span>')
+        d = decided.get(row["sample"])
+        dec = "" if d is None else "include" if d.get("include") else "exclude"
+        pill = f'<span class="pill {e(dec)}">{e(dec)}</span>' if dec else '<span class="muted">–</span>'
+        if dec == "exclude" and d.get("reason"):
+            pill += (f'<details class="why"><summary title="why excluded?" aria-label="why excluded?">?</summary>'
+                     f'<div class="why-body"><b>{e(row["sample"])} excluded:</b> {e(d["reason"])}</div></details>')
+        rows.append(f'<tr><td>{e(row["sample"])}</td><td class="num">{_n(row.get("n_input"))}</td>'
+                    f'<td>{status}</td><td class="why-cell">{pill}</td><td>{link}</td></tr>')
+    meta = [f'{per["n_done"]}/{per["n"]} done'] if per["n"] else []
+    if per.get("n_excluded"):
+        meta.append(f'{per["n_excluded"]:,} cells excluded before OSP')
+    parts.append(f'<section class="block" id="samples"><h2>Samples <span class="count">{" · ".join(meta)}</span></h2>'
+                 f'<p class="lede">{EXPLAIN["samples"]}</p>'
+                 + ('<div class="wrap"><table><thead><tr><th>sample</th><th class="r">input cells</th><th>osp</th>'
+                    f'<th>integration</th><th>report</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
+                    if rows else '<p class="empty">Per-sample processing has not started.</p>') + "</section>")
     if per["skipped"] or per["failed"]:
         detail = "".join(f'<li><b>{e(str(x.get("sample", "")))}</b> {e(str(x.get("error", ""))[:200])}</li>'
                          for x in list(per["skipped"]) + list(per["failed"]))

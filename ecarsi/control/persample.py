@@ -24,31 +24,11 @@ def sample_summary(records, skipped, failed):
 
 
 def materialize_reports(root, records):
-    """Copy each sample's report and figures next to the publication.
-
-    A finished sample's outputs live in the pool request that produced them, and the
-    publication references them by path and digest. That request is a replay cache the
-    run does not own -- archiving or clearing it would orphan every report -- and a unit
-    page has listed per-sample reports since generation 1. The matrices stay where they
-    are: only what a person reads is copied. Failing to copy a report never fails a unit.
-    """
-    import shutil
+    """Each finished sample's report and figures next to the publication; see artifacts."""
+    from .artifacts import copy_light
 
     for record in records:
-        folder = root / record["sample"]
-        for name, ref in sorted((record.get("files") or {}).items()):
-            if name.endswith(".h5ad"):
-                continue  # the matrices are the pool's, and prune drops them anyway
-            target, source = folder / name, Path(ref["path"])
-            try:
-                if target.is_file() and target.stat().st_size == source.stat().st_size:
-                    continue
-                target.parent.mkdir(parents=True, exist_ok=True)
-                partial = target.with_name(target.name + ".part")
-                shutil.copyfile(source, partial)
-                partial.replace(target)
-            except OSError as exc:
-                print(f"[persample] warning: {record['sample']}/{name} not copied: {exc}", flush=True)
+        copy_light(record.get("files"), root / record["sample"])
 
 
 def validate_spec(spec, *, resume=False):

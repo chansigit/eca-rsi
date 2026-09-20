@@ -69,6 +69,24 @@ def validate_spec(spec, *, resume=False):
     return spec
 
 
+def save_inclusion(root, bundle):
+    """Write round one's per-sample include/exclude decision next to the publication.
+
+    The decision is an agent result inside a pool request, reachable only by following
+    evidence -> inclusion. The unit page has shown that column since generation 1 and
+    must not walk the pool to render, so the round keeps its own copy.
+    """
+    from ..warm_pool.state import read, save
+
+    try:
+        evidence = read(bundle['evidence']['path'])
+        inclusion = read(evidence['inclusion']['path'])
+        proposal = inclusion['proposal']
+    except (KeyError, TypeError, OSError, ValueError):
+        return  # no inclusion step (single sample, or a later round reusing round one's)
+    save(root / 'inclusion.json', {'notes': proposal.get('notes', ''), 'samples': proposal['samples']})
+
+
 @activity.defn
 def crosssample_step(action, args):
     from ..warm_pool.state import immutable, reference, verified
@@ -87,6 +105,9 @@ def crosssample_step(action, args):
             raise ValueError('Cross-sample publication did not conserve the accepted input')
         publication = Path(spec['output_root']) / 'publication.json'
         immutable(publication, {**bundle, 'result': reference(path)})
+        from .artifacts import copy_light
+        copy_light(bundle.get('files'), Path(spec['output_root']))
+        save_inclusion(Path(spec['output_root']), bundle)
         return str(publication)
     spec, payload, parents = args
     root = Path(spec['output_root'])

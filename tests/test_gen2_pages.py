@@ -161,8 +161,12 @@ def test_publish_copies_the_sample_reports_into_the_unit_and_the_page_links_them
     save(per / 'samples.json', sample_summary(records, [], []))
     page = index.render_unit(root / 'units' / 'u')
     assert '01-per-sample/study__s1__abc/report.html' in page
-    assert '01-per-sample/study__s1__abc/qc_summary.csv' in page
-    assert '>100<' in page and '>90<' in page  # the counts gen-1 pages have always shown
+    assert '>100<' in page  # the counts gen-1 pages have always shown
+
+    save(root / 'units' / 'u' / 'rounds' / 'round01' / L.GEN2_CROSS / 'inclusion.json',
+         {'notes': 'n', 'samples': [{'sample': 'study__s1__abc', 'include': False, 'reason': 'ambient RNA'}]})
+    page = index.render_unit(root / 'units' / 'u')
+    assert '>exclude<' in page and 'ambient RNA' in page  # the integration column, as in generation 1
 
     materialize_reports(per, [record])  # a retried publish copies nothing twice
 
