@@ -15,7 +15,7 @@ Two interpreters see different halves of the suite; between them the whole suite
     /scratch/users/chensj16/venvs/eca-ct/python -m pytest -q tests/test_identity_scope.py tests/test_identity_provenance.py
 
 `/tmp/pytest-only` is a node-local copy of pytest and its dependencies (the image has none):
-copy `pytest _pytest pluggy iniconfig packaging` out of
+copy `pytest _pytest pluggy iniconfig packaging py.py` out of
 `/scratch/users/chensj16/venvs/eca-ct/.venv/lib/python3.12/site-packages`.
 
 Neither the image nor the venv needs `distributed`: generation 2 schedules through HyperQueue and pins
