@@ -93,3 +93,32 @@ def test_the_overview_table_fits_without_a_horizontal_scrollbar(tmp_path):
     assert "#ds-table .spark{width:84px}" in css and "max-width:18ch" in css
     assert 'index._n(s["n_input"])' not in inspect.getsource(serve._home_html)   # thousands, not raw
     assert 'index._k(s["n_input"])' in inspect.getsource(serve._home_html)
+
+
+def test_a_wrapped_status_is_a_label_not_a_capsule():
+    """A 999 px radius suits one line. The status column wraps to two or three, and at that
+    height the curve cuts into the words it is meant to hold, with the dot floating off the
+    line it belongs to."""
+    css = serve.HOME_CSS
+    assert "#ds-table .pill{white-space:normal;line-height:1.35;max-width:18ch;" in css
+    assert "border-radius:var(--r);padding:.25em .6em;align-items:flex-start}" in css
+    assert "#ds-table .pill::before{margin-top:.42em}" in css
+    from ecarsi import index
+    assert "border-radius:999px" in index.CSS   # the capsule stays right everywhere it fits
+
+
+def test_the_curve_is_shorter_says_less_and_can_be_read_on_a_log_axis():
+    """Four sentences of caveat above a 280 px chart buried the one thing it shows. The detail
+    is still there, behind a disclosure; the axis is switchable because datasets on this fleet
+    differ by three orders of magnitude and the small ones sit on the floor of a linear one."""
+    html = _home_html({})
+    assert 'id="hist-more">What is counted?</a>' in html
+    assert '<p class="lede" id="hist-detail" hidden>' in html
+    assert "queued inputs are shown separately as Cells awaiting start" not in html.split('id="hist-detail"')[0]
+    assert '<button type="button" id="hist-log" aria-pressed="false">log scale</button>' in html
+    js = serve.HISTORY_JS
+    assert "const W = 960, H = 200," in js and "H = 280" not in js       # shorter
+    assert "let logY = false;" in js                                      # linear until asked
+    assert "Math.log10(Math.max(v, 1)) / lg" in js                        # no log of zero
+    assert "for (let d = 0; Math.pow(10, d) <= top; d++) yt.push(Math.pow(10, d));" in js
+    assert 'logBtn.setAttribute("aria-pressed", String(logY))' in js

@@ -670,7 +670,13 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
     )
 
 
-HOME_CSS = ("td.nw{white-space:nowrap}#ds-table td{padding:7px 8px}#ds-table .pill{white-space:normal;line-height:1.35;max-width:18ch}"
+HOME_CSS = ("td.nw{white-space:nowrap}#ds-table td{padding:7px 8px}"
+            # A capsule is only right for one line. A status here wraps to two or three, and a
+            # 999 px radius then curves in far enough to cut the words it is meant to hold; the
+            # dot, centred on a three-line box, floats away from the line it belongs to.
+            "#ds-table .pill{white-space:normal;line-height:1.35;max-width:18ch;"
+            "border-radius:var(--r);padding:.25em .6em;align-items:flex-start}"
+            "#ds-table .pill::before{margin-top:.42em}"
             # ten columns is a lot of table: the long text ones are capped so the numbers,
             # the sparkline and the status stay on one screen instead of behind a scrollbar.
             "#ds-table{table-layout:auto;width:100%}#ds-table th,#ds-table td{overflow-wrap:anywhere}"
@@ -685,7 +691,8 @@ HOME_CSS = ("td.nw{white-space:nowrap}#ds-table td{padding:7px 8px}#ds-table .pi
             ".hist-legend{display:flex;gap:var(--s3);font-size:var(--t3);color:var(--muted);margin-top:4px}.hist-legend i{display:inline-block;width:18px;height:3px;vertical-align:middle;margin-right:6px}"
             ".hist-legend i.in{background:var(--muted)}.hist-legend i.rel{background:var(--done)}"
             ".hist-range button{font:inherit;font-size:var(--t2);padding:3px 10px;border:1px solid var(--line-strong);background:var(--card);color:var(--ink);border-radius:999px;cursor:pointer}"
-            ".hist-range button.on{background:var(--accent-bg);color:var(--accent-ink);border-color:var(--accent)}")
+            ".hist-range button.on{background:var(--accent-bg);color:var(--accent-ink);border-color:var(--accent)}"
+            ".hist-range .sep{flex:1}#hist-more{color:var(--accent);text-decoration:none;border-bottom:1px dotted currentColor}")
 
 
 def fleet_history(states: dict) -> dict:
@@ -780,7 +787,8 @@ HISTORY_JS = r"""
       note.textContent=undated.toLocaleString('en-US')+' input cells lack a recorded start time and are excluded from Cells in and the time curve.';}
   }
   // -- drawing --
-  const W = 960, H = 280, L = 64, R = 16, T = 14, B = 34;
+  const W = 960, H = 200, L = 64, R = 16, T = 14, B = 30;
+  let logY = false;
   function draw(){
     cards();
     box.innerHTML = "";
@@ -788,12 +796,19 @@ HISTORY_JS = r"""
     const t0 = lo ?? ev[0].t, t1 = hi ?? now(), span = Math.max(t1 - t0, 60);
     const yraw = Math.max(...ev.filter(e => e.k === "in").map((e, i, a) => a.slice(0, i + 1).reduce((s, x) => s + x.n, 0)), 1);
     const nice = [1, 2, 5, 10, 20, 50, 100, 200, 500].map(m => m * Math.pow(10, Math.floor(Math.log10(yraw)) - 1)).find(s => yraw / s <= 6) || yraw / 4;
-    const ymax = Math.ceil(yraw / nice) * nice;
-    const x = t => L + (Math.min(Math.max(t, t0), t1) - t0) / span * (W - L - R), y = v => T + (1 - v / ymax) * (H - T - B);
+    // A log axis has no zero, and both series start there. Decades from 1 to the top, with the
+    // baseline pinned at 1 cell: the step down to "none yet" is drawn, it just has no decade.
+    const top = logY ? Math.pow(10, Math.ceil(Math.log10(Math.max(yraw, 10)))) : Math.ceil(yraw / nice) * nice;
+    const lg = Math.log10(top);
+    const x = t => L + (Math.min(Math.max(t, t0), t1) - t0) / span * (W - L - R),
+          y = logY ? v => T + (1 - Math.log10(Math.max(v, 1)) / lg) * (H - T - B)
+                   : v => T + (1 - v / top) * (H - T - B);
+    const ymax = top;
     const step = k => { let v = 0, d = `M${x(t0)} ${y(0)}`; for (const e of ev) { if (e.k !== k) continue; if (e.t > t1) break;
         const xx = x(e.t); d += ` H${xx.toFixed(1)}`; v += e.n; d += ` V${y(v).toFixed(1)}`; } return d + ` H${x(t1)}`; };
     const yt = [];
-    for (let v = 0; v <= ymax + nice / 2; v += nice) yt.push(v);
+    if (logY) { for (let d = 0; Math.pow(10, d) <= top; d++) yt.push(Math.pow(10, d)); }
+    else for (let v = 0; v <= ymax + nice / 2; v += nice) yt.push(v);
     const xt = []; const days = span / 86400, stepS = days > 14 ? 7 * 86400 : days > 3 ? 86400 : days > 0.6 ? 6 * 3600 : 3600;
     for (let t = Math.ceil(t0 / stepS) * stepS; t <= t1; t += stepS) xt.push(t);
     const xl = t => { const d = new Date(t * 1000); return stepS >= 86400 ? `${d.getMonth() + 1}/${d.getDate()}` : `${String(d.getHours()).padStart(2, "0")}:00`; };
@@ -823,6 +838,12 @@ HISTORY_JS = r"""
   const buttons = [...document.querySelectorAll(".hist-range button")];
   function setRange(days){ buttons.forEach(b => b.classList.toggle("on", Number(b.dataset.r) === days)); }
   buttons.forEach(b => b.addEventListener("click", () => { const d = Number(b.dataset.r); lo = d ? now() - d * 86400 : null; hi = null; setRange(d); draw(); }));
+  const logBtn = document.getElementById("hist-log");
+  if (logBtn) logBtn.addEventListener("click", () => { logY = !logY;
+    logBtn.classList.toggle("on", logY); logBtn.setAttribute("aria-pressed", String(logY)); draw(); });
+  const more = document.getElementById("hist-more"), detail = document.getElementById("hist-detail");
+  if (more && detail) more.addEventListener("click", ev => { ev.preventDefault();
+    detail.hidden = !detail.hidden; more.textContent = detail.hidden ? "What is counted?" : "Hide"; });
   if (q) q.addEventListener("input", () => { ev = events(); draw(); });
   draw();
 })();
@@ -924,14 +945,19 @@ def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
         f'{freshness}<div class="glance">{stat_html(stats)}</div>'
         f'<div class="glance cell-glance" aria-label="Cell counts">{stat_html(cell_stats)}</div>'
         '<section class="block" id="history"><h2>Cells over time <span class="count" id="hist-n"></span></h2>'
-        '<p class="lede">Cells in and this curve count cells at their recorded organize step; queued inputs are shown separately as Cells awaiting start. '
-        'Cells released counts recorded releases, including released units of a dataset still running. '
-        'Read from the run logs of whatever is bound right now — unbind a dataset and it leaves the past too. '
-        'Hover to read a moment, drag to zoom, double-click to reset. The table filter applies to both the summary cards and the curve; time zoom only changes the curve.</p>'
+        '<p class="lede">Counted at each dataset\'s recorded organize and release steps, for whatever is bound right now. '
+        'Hover to read a moment, drag to zoom. <a href="#" id="hist-more">What is counted?</a></p>'
+        '<p class="lede" id="hist-detail" hidden>Cells in excludes queued inputs, which are shown separately as '
+        '<b>Cells awaiting start</b>; Cells released includes released units of a dataset still running. Unbind a '
+        'dataset and it leaves the past too. The table filter applies to the cards and the curve; a time zoom only to the curve.</p>'
         f'<p class="muted" id="hist-undated"{" hidden" if not totals["undated_input"] else ""}>'
         f'{totals["undated_input"]:,} input cells lack a recorded start time and are excluded from Cells in and the time curve.</p>'
         '<div class="toolbar hist-range"><button type="button" data-r="1">24h</button><button type="button" data-r="7">7d</button>'
-        '<button type="button" data-r="30">30d</button><button type="button" data-r="0" class="on">all</button></div>'
+        '<button type="button" data-r="30">30d</button><button type="button" data-r="0" class="on">all</button>'
+        # Datasets differ by three orders of magnitude, so on a linear axis the small ones sit on
+        # the floor. The toggle is off by default: a linear axis is the one where the area read
+        # as cells, and a reader should opt into a scale that changes what a slope means.
+        '<span class="sep"></span><button type="button" id="hist-log" aria-pressed="false">log scale</button></div>'
         '<div id="hist" class="hist"></div><div id="hist-tip" class="sk-tip" style="display:none"></div></section>'
         f'<section class="block" id="datasets"><h2>Datasets <span class="count" id="ds-n">{len(rows)} datasets</span></h2>'
         '<p class="lede">Input counts include declared queued inputs. Cells out shows the latest output count; kept is out / in. Click a column header to sort.</p>'
