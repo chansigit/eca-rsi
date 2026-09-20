@@ -255,20 +255,22 @@ def test_a_running_round_shows_the_stage_subtotal_and_the_trend_marks_it_unsettl
     trend = index.round_trend([index.unit_state(unit)])
     assert [(p['n'], p['settled']) for p in trend] == [(1, True), (2, False)]
     svg = index.sparkline(trend)
-    assert svg.count('class="sp ') == 2 and 'class="sp failed"' in svg   # 22 % is over 3 %
+    assert svg.count('class="sp ') == 2 and 'class="sp band-high"' in svg   # 22 % is over 3 %
     assert svg.count('class="sp-hit"') == 2                              # one pointer target per round
     # the target carries the reading and is followed by its dot, so CSS can grow the one hovered
-    assert svg.index('class="sp-hit"') < svg.index('class="sp failed"')
+    assert svg.index('class="sp-hit"') < svg.index('class="sp band-high"')
     assert 'cursor:help' not in index.CSS                                # a ? over the number, not the number
     assert 'circle.sp{pointer-events:none' in index.CSS and 'circle.sp-hit:hover+circle.sp{r:4}' in index.CSS
-    assert 'class="sp released open"' in svg                             # 1.43 % is under 1.5 %: green, still removing
+    assert 'class="sp band-good open"' in svg                            # 1.43 % is under 1.5 %: green, still removing
     assert 'round 2: 1.43% removed so far' in svg
     assert index.sparkline([]) == '<span class="muted">–</span>'
     # above the ceiling every point sits on the top edge, and the tooltip still tells the truth
     big = index.sparkline([{'n': 1, 'frac': .36, 'settled': True}, {'n': 2, 'frac': .12, 'settled': True},
                            {'n': 3, 'frac': .009, 'settled': True}])
-    assert big.count('cy="3.0" r="2.6"') == 2 and 'cx="3.0"' in big and 'cx="14.0"' in big and 'round 1: 36.00% removed' in big and 'class="sp released"' in big
-    assert (index.trend_band(0.0099), index.trend_band(0.02), index.trend_band(0.05)) == ('released', 'running', 'failed')
+    assert big.count('cy="3.0" r="2.6"') == 2 and 'cx="3.0"' in big and 'cx="14.0"' in big and 'round 1: 36.00% removed' in big and 'class="sp band-good"' in big
+    assert (index.trend_band(0.0099), index.trend_band(0.02), index.trend_band(0.05)) == ('band-good', 'band-watch', 'band-high')
+    # a band grades one round; it must not be the class that colours a dataset's lifecycle pill
+    assert 'released' not in svg and '.released{--st:var(--done)' in index.CSS
 
 
 def test_a_short_run_is_drawn_short(tmp_path):
@@ -300,3 +302,39 @@ def test_a_round_knows_its_input_before_cross_sample_restates_it(tmp_path):
     # a first round reads it from per-sample, which is the only thing published before it
     (unit / 'rounds' / 'round01' / 'publication.json').unlink()
     assert [(r['n'], r.get('n_in')) for r in index._gen2_rounds(unit)] == [(1, 90), (2, 90), (3, 90)]
+
+
+def test_the_sparkline_is_washed_in_the_colours_of_its_own_rounds(tmp_path):
+    """Under the line, a horizontal ramp whose stops sit beneath their own point -- so the tint
+    between two rounds is the blend of the two -- masked by a vertical fade that empties
+    downward. Ids come from the path, so neighbouring rows never collide."""
+    pts = [{'n': 1, 'frac': .30, 'settled': True}, {'n': 2, 'frac': .02, 'settled': True},
+           {'n': 3, 'frac': .009, 'settled': False}]
+    svg = index.sparkline(pts)
+    uid = re.search(r'id="c([0-9a-f]{8})"', svg).group(1)
+    assert f'id="f{uid}"' in svg and f'id="m{uid}"' in svg          # one ramp, one fade, one mask
+    assert svg.count(f'url(#c{uid})') == 1 and svg.count(f'url(#m{uid})') == 1
+    # one stop per round, in the round's own band colour, at the round's own x
+    assert [s for s in re.findall(r'stop-color:var\((--[a-z]+)\)', svg)] == ['--bad', '--run', '--ok']
+    assert 'offset="0.0000"' in svg and f'offset="{(14 - 3) / 102:.4f}"' in svg
+    assert 'stop-opacity=".55"' in svg and 'stop-opacity="0"' in svg  # opaque on top, empty below
+    assert svg.index('class="sp-area"') < svg.index('class="sp-line"')  # the wash sits under the line
+    assert '.sp-area{pointer-events:none}' in index.CSS               # and never swallows a hover
+    assert index.sparkline([pts[0]]).count('class="sp-area"') == 0     # one round is a dot, not an area
+    # two charts with the same shape share one definition; different ones do not collide
+    assert index.sparkline(pts) == svg and uid not in index.sparkline(pts[:2])
+
+
+def test_a_point_hands_its_reading_to_a_tooltip_the_page_draws_itself(tmp_path):
+    """The chart is 84 px wide in the overview: too small to letter inside, and the browser's own
+    <title> tooltip waits about a second and is lost on the slightest movement, which at an 8 px
+    spacing means it never arrives. The page reads that same <title> and shows it at once."""
+    svg = index.sparkline([{'n': 2, 'frac': .0143, 'settled': False}])
+    assert '<title>round 2: 1.43% removed so far' in svg      # still the one source of the reading
+    js = index.SPARK_JS
+    assert 'closest("circle.sp-hit")' in js and 'querySelector("title")' in js
+    assert 'tip.classList.add("on")' in js and 'tip.classList.remove("on")' in js
+    assert 'd.textContent = s; return d.innerHTML' in js      # the reading is escaped, never parsed
+    assert '.sp-tip{position:fixed' in index.CSS and '.sp-tip.on{display:block}' in index.CSS
+    assert 'role="img"' not in svg                            # it is no longer opaque to the pointer
+    assert index.SPARK_JS in serve._home_html({})

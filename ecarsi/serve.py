@@ -469,15 +469,26 @@ class StateCache:
 
 
 NAV_CSS = """
-html,body{height:100%}body{display:flex;overflow:hidden}
+html,body{height:100%}body{display:flex;flex-direction:column;overflow:hidden}
+.below{flex:1;display:flex;min-height:0}
+/* the application bar: identity on the left, the sections on the right */
+.tb{display:flex;align-items:center;gap:var(--s2);padding:0 var(--s2);min-height:3rem;
+ background:var(--card);border-bottom:1px solid var(--line-strong);flex:none}
+.tb-brand{display:inline-flex;align-items:center;color:inherit;text-decoration:none;margin-right:auto}
+.tb-brand b{font-size:var(--t5)}.tb-brand .logo{font-size:var(--t6);margin-right:.4em}
+.tb-brand:hover b{color:var(--accent)}
+.tb-nav{display:flex;align-items:center;gap:4px}
+.tb-link{font:inherit;font-size:var(--t3);font-weight:600;color:var(--muted);text-decoration:none;
+ background:none;border:0;cursor:pointer;padding:6px 12px;border-radius:var(--r);white-space:nowrap}
+.tb-link:hover{background:var(--none-bg);color:var(--ink)}
+.tb-link.active{background:var(--accent-bg);color:var(--accent-ink)}
 aside.sb{width:360px;flex:0 0 360px;background:var(--card);border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0;position:relative}
 .sb-resizer{position:absolute;top:0;right:-3px;width:6px;height:100%;cursor:col-resize;z-index:6}
 .sb-resizer:hover,.sb-resizer:active{background:var(--accent);opacity:.3}
 .sb-head{padding:var(--s2) var(--s2) var(--s1);display:flex;flex-direction:column;gap:var(--s1);border-bottom:1px solid var(--line)}
 .sb-head .brand{display:flex;align-items:center;justify-content:space-between;gap:var(--s1)}
-.sb-head .brand b{font-size:var(--t5)}.sb-head .brand small{color:var(--muted);font-size:var(--t3);font-weight:400;margin-left:.4em}
-.sb-head .brand .logo{font-size:var(--t6);margin-right:.35em}
-.sb-head .brand a{color:inherit;text-decoration:none;display:inline-flex;align-items:center}.sb-head .brand a:hover b{color:var(--accent)}
+.sb-head .sb-title{font-size:var(--t3);font-weight:650;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.sb-head .sb-title small{font-size:var(--t3);font-weight:400;margin-left:.5em;text-transform:none;letter-spacing:0}
 .sb-head input[type=search]{width:100%;font:inherit;font-size:var(--t3);padding:8px 12px;border:1px solid var(--line-strong);border-radius:var(--r);background:var(--card)}
 .sb-head .sort-row{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s1) var(--s2);font-size:var(--t3);color:var(--muted)}
 .sb-head .sort-row .ctl{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
@@ -491,13 +502,10 @@ details.group>summary .gn .st{display:inline-flex;align-items:center;gap:.35em}
 .items{padding-left:var(--s1)}
 .item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:var(--r);color:var(--ink);text-decoration:none;font-size:var(--t3)}
 .item:hover{background:var(--none-bg)}.item.active{background:var(--accent-bg);color:var(--accent-ink);font-weight:600}
-#models-item{border:0;font-family:inherit;text-align:left;cursor:pointer;background:none}
-#models-item.active{background:var(--accent-bg)}#models-item:hover{background:var(--none-bg)}
 .item .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .item .cells{color:var(--st,var(--muted));font-variant-numeric:tabular-nums;font-size:var(--t2);white-space:nowrap}
 .item input.sel{margin:0;flex:0 0 auto;opacity:0;transition:opacity .1s}
 .item:hover input.sel,aside.selecting input.sel,.item input.sel:checked{opacity:1}
-.home-item{margin:var(--s1) var(--s2) 0}
 .sb-foot{padding:var(--s1) var(--s2) var(--s2);border-top:1px solid var(--line);display:flex;flex-direction:column;gap:var(--s1)}
 .sb-foot .row{display:flex;gap:var(--s1)}
 .sb-foot .reg{font:var(--t1) var(--mono);color:var(--muted);word-break:break-all}
@@ -594,10 +602,24 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
         "Absolute path on the server host; a raw eca-pp <code>standardize/</code> dir or a bare h5ad is not bindable."
     )
     empty_note = '<p class="muted" style="padding:8px">nothing bound yet</p>'
+    # The three destinations are the whole application; the sidebar below is one of them --
+    # the dataset picker, and every control in it (filter, sorts, bind, registry path) serves
+    # only that. Keeping them in one column read as an undifferentiated stack, and collapsing
+    # the sidebar took the brand and the navigation away with the list.
+    topbar = (
+        '<header class="tb" id="tb">'
+        f'<a class="tb-brand" id="brand" href="/_home" title="overview">{logo()}<b>{APP}</b></a>'
+        '<nav class="tb-nav" aria-label="sections">'
+        '<a class="tb-link" id="home-item" href="/_home" data-name="__home__">Overview</a>'
+        + ('<a class="tb-link" id="control-item" href="/_control/" data-name="_control"'
+           ' title="Temporal, warm pool and bridge of the run directory">Control plane</a>' if control else '')
+        + '<button class="tb-link" id="models-item" title="Primary and fallback model inventory">Agent Bridge</button>'
+        '</nav></header>'
+    )
     sidebar = (
         '<aside class="sb" id="sb" aria-label="datasets"><div class="sb-resizer" id="sb-resizer" title="drag to resize"></div>'
         '<div class="sb-head">'
-        f'<div class="brand"><a id="brand" href="/_home" title="overview">{logo()}<b>{APP}</b><small><span id="nav-n">{len(items)}</span> datasets</small></a>'
+        f'<div class="brand"><span class="sb-title">Datasets<small><span id="nav-n">{len(items)}</span> bound</small></span>'
         '<button class="icon" id="sb-toggle" title="hide sidebar" aria-label="hide sidebar">&#9776;</button></div>'
         '<input id="nav-q" type="search" placeholder="Filter datasets…" aria-label="filter datasets" autocomplete="off">'
         '<div class="sort-row"><span class="ctl"><label for="nav-sort">sort</label><select id="nav-sort">'
@@ -608,11 +630,6 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
         + ''.join(f'<option value="{cls}">{label}</option>' for cls, label in DATASET_STATES)
         + '</select></span></div>'
         "</div>"
-        '<a class="item home-item" id="home-item" href="/_home" data-name="__home__">'
-        '<span class="nm"><b>Overview</b> · all datasets</span></a>'
-        + ('<a class="item home-item" id="control-item" href="/_control/" data-name="_control" title="Temporal, warm pool and bridge of the run directory">'
-           '<span class="nm"><b>Control plane</b></span></a>' if control else '')
-        + '<button class="item home-item" id="models-item" title="Primary and fallback model inventory"><span class="nm"><b>Agent Bridge</b></span></button>'
         f'<div class="sb-list" id="sb-list">{rows or empty_note}</div>'
         '<div class="sb-foot">'
         '<div class="row"><button id="bind-open" class="btn plain">+ Bind…</button><button id="unbind-go" class="btn danger" disabled>Unbind…</button></div>'
@@ -648,7 +665,7 @@ def _navigator_html(items: dict[str, Path], registry_path: Path, state=_dataset_
     return (
         '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
         f'<meta name="viewport" content="width=device-width,initial-scale=1"><title>{APP} · ECA-RSI</title>{FAVICON}'
-        f"<style>{index.CSS}{NAV_CSS}{LOGO_CSS}{model_web.CSS}</style></head><body>{sidebar}{main}"
+        f"<style>{index.CSS}{NAV_CSS}{LOGO_CSS}{model_web.CSS}</style></head><body>{topbar}<div class='below'>{sidebar}{main}</div>"
         f"<script>{model_web.JS}</script><script>{NAV_JS}</script></body></html>"
     )
 
@@ -663,10 +680,10 @@ HOME_CSS = ("td.nw{white-space:nowrap}#ds-table td{padding:7px 8px}#ds-table .pi
             "@media(max-width:700px){.cell-glance{grid-template-columns:repeat(2,minmax(0,1fr))}}"
             ".hist{position:relative;margin-top:var(--s1)}.hist-svg{display:block;width:100%;height:auto}"
             ".hist-svg .grid{stroke:var(--line);stroke-width:1}.hist-svg .tick{font-size:11px;fill:var(--muted)}"
-            ".hist-svg .ser{fill:none;stroke-width:2.25;stroke-linejoin:round}.hist-svg .ser.in{stroke:var(--muted)}.hist-svg .ser.rel{stroke:var(--ok)}"
+            ".hist-svg .ser{fill:none;stroke-width:2.25;stroke-linejoin:round}.hist-svg .ser.in{stroke:var(--muted)}.hist-svg .ser.rel{stroke:var(--done)}"
             ".hist-svg .cross{stroke:var(--accent);stroke-width:1;stroke-dasharray:3 3}.hist-svg .zoom{fill:var(--accent);opacity:.15}.hist-svg .hit{cursor:crosshair}"
             ".hist-legend{display:flex;gap:var(--s3);font-size:var(--t3);color:var(--muted);margin-top:4px}.hist-legend i{display:inline-block;width:18px;height:3px;vertical-align:middle;margin-right:6px}"
-            ".hist-legend i.in{background:var(--muted)}.hist-legend i.rel{background:var(--ok)}"
+            ".hist-legend i.in{background:var(--muted)}.hist-legend i.rel{background:var(--done)}"
             ".hist-range button{font:inherit;font-size:var(--t2);padding:3px 10px;border:1px solid var(--line-strong);background:var(--card);color:var(--ink);border-radius:999px;cursor:pointer}"
             ".hist-range button.on{background:var(--accent-bg);color:var(--accent-ink);border-color:var(--accent)}")
 
@@ -922,7 +939,7 @@ def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
         f"{table}</section>"
         f'<footer>rendered {time.strftime("%Y-%m-%d %H:%M:%S")} by {APP} (ecarsi serve) from the registry · reload for the current state</footer>'
         f"</main><script>const HISTORY_DATA = {json.dumps(history)};</script>"
-        f"<script>{HOME_JS}</script><script>{HISTORY_JS}</script></body></html>"
+        f"<script>{HOME_JS}</script><script>{HISTORY_JS}</script><script>{index.SPARK_JS}</script></body></html>"
     )
 
 

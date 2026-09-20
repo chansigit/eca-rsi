@@ -16,6 +16,7 @@ it finishes, so a directory that is only copied around still has them.
 from __future__ import annotations
 
 import csv
+import hashlib
 import html as _h
 import json
 import os
@@ -31,6 +32,12 @@ CSS = """
 :root{color-scheme:light;--bg:#f4efe4;--card:#fbf8f1;--ink:#3b3a33;--ink-soft:#4e4b42;--muted:#6f6a5e;--line:#e3dccb;--line-strong:#cbc2ad;
  --accent:#2a7f8f;--accent-ink:#1f6472;--accent-bg:#e2eeee;
  --ok:#3d7a4a;--ok-bg:#e3eedf;--run:#a1651a;--run-bg:#f6e9d3;--bad:#a63d3d;--bad-bg:#f5e0dc;--none:#6f6a5e;--none-bg:#ece6d8;
+ /* Two palettes, deliberately separate. --ok/--run/--bad above are a *judgement*: green is good,
+    amber is worth a look, red is bad -- confidence, inclusion, how well a round converged. The
+    four below are a run's *lifecycle*, where finished is not "good" and running is not "warning".
+    Sharing one set made a high-confidence badge and a released dataset the same green. */
+ --done:#38618c;--done-bg:#e0e8f2;--live:#3d7a4a;--live-bg:#e3eedf;
+ --fail:#a63d3d;--fail-bg:#f5e0dc;--wait:#8a6d1f;--wait-bg:#f4ecd4;
  --row-alt:#f7f3ea;--row-hover:#ece9dd;--tip-bg:#2c2a25;--tip-ink:#f4efe4;--tip-muted:#b9b3a5;--plot:#fff;
  --t1:.75rem;--t2:.8125rem;--t3:.875rem;--t4:1rem;--t5:1.125rem;--t6:1.25rem;--t7:1.5rem;--t8:1.875rem;
  --s1:8px;--s2:16px;--s3:24px;--s4:32px;--s5:48px;--r:4px;
@@ -43,6 +50,8 @@ CSS = """
 @media (prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#1e2124;--card:#272b30;--ink:#d8d4c8;--ink-soft:#c5c0b4;--muted:#a09a8c;--line:#3a3f45;--line-strong:#4d535b;
  --accent:#6fb3c9;--accent-ink:#8fc7d8;--accent-bg:#233740;
  --ok:#7fc28b;--ok-bg:#243a2a;--run:#d9a441;--run-bg:#3d3320;--bad:#e07070;--bad-bg:#432727;--none:#a09a8c;--none-bg:#31363c;
+ --done:#7aa8d4;--done-bg:#22303f;--live:#7fc28b;--live-bg:#243a2a;
+ --fail:#e07070;--fail-bg:#432727;--wait:#d2b45e;--wait-bg:#38321f;
  --row-alt:#2b3035;--row-hover:#333940;--tip-bg:#e9e4d8;--tip-ink:#1e2124;--tip-muted:#5b564c;--paper-light:rgba(187,155,102,.035);--glint:rgba(255,246,220,.035);--shade:rgba(0,0,0,.14)}}
 *{box-sizing:border-box}
 html{font-size:16px}
@@ -59,11 +68,17 @@ p{margin:0 0 var(--s2)}
 main.page{max-width:1200px;margin:0 auto;padding:var(--s3) var(--s3) var(--s5)}
 .crumb{color:var(--muted);font-size:var(--t3);margin-bottom:var(--s1)}.crumb a{color:var(--muted)}
 .muted{color:var(--muted)}.num{font-variant-numeric:tabular-nums}
-/* status: one set of colours for pills, dots, table cells and review groups */
-.released,.include{--st:var(--ok);--st-bg:var(--ok-bg)}
-.running,.tone-warn{--st:var(--run);--st-bg:var(--run-bg)}
-.failed,.exclude,.tone-bad{--st:var(--bad);--st-bg:var(--bad-bg)}
-.neutral,.queued,.paused,.empty-sample,.tone-none{--st:var(--none);--st-bg:var(--none-bg)}
+/* status: one set of colours for pills, dots, table cells and review groups.
+   Lifecycle first -- finished is blue because it is an end state, not a grade. */
+.released{--st:var(--done);--st-bg:var(--done-bg)}
+.running{--st:var(--live);--st-bg:var(--live-bg)}
+.failed{--st:var(--fail);--st-bg:var(--fail-bg)}
+.queued,.paused{--st:var(--wait);--st-bg:var(--wait-bg)}
+/* then judgement, which keeps the older green/amber/red reading */
+.include,.band-good{--st:var(--ok);--st-bg:var(--ok-bg)}
+.tone-warn,.band-watch{--st:var(--run);--st-bg:var(--run-bg)}
+.exclude,.tone-bad,.band-high{--st:var(--bad);--st-bg:var(--bad-bg)}
+.neutral,.empty-sample,.tone-none{--st:var(--none);--st-bg:var(--none-bg)}
 .tone-info{--st:var(--accent);--st-bg:var(--accent-bg)}
 .pill{display:inline-flex;align-items:center;gap:.45em;padding:.1em .7em .1em .6em;border-radius:999px;font-size:var(--t3);font-weight:600;
  line-height:1.6;white-space:nowrap;vertical-align:middle;color:var(--st,var(--none));background:var(--st-bg,var(--none-bg))}
@@ -75,6 +90,14 @@ main.page{max-width:1200px;margin:0 auto;padding:var(--s3) var(--s3) var(--s5)}
 .spark{display:block;background:color-mix(in srgb,var(--none-bg) 55%,transparent);
  border:1px solid var(--line);border-radius:var(--r);padding:1px}
 .sp-line{fill:none;stroke:var(--line);stroke-width:1.5;stroke-linejoin:round}
+.sp-area{pointer-events:none}
+/* the reading for the point under the pointer. The chart is 84 px wide on the overview, far too
+   small to letter inside, and the browser's own <title> tooltip waits about a second and is lost
+   on the slightest movement -- at an 8 px spacing that means it effectively never appears. */
+.sp-tip{position:fixed;z-index:60;pointer-events:none;display:none;max-width:28ch;
+ padding:.25em .6em;border-radius:var(--r);font:var(--t2) var(--sans);line-height:1.5;
+ background:var(--tip-bg);color:var(--tip-ink);box-shadow:0 2px 10px var(--shade)}
+.sp-tip.on{display:block}.sp-tip .q{color:var(--tip-muted)}
 circle.sp{fill:var(--st,var(--none));stroke:none}
 circle.sp.open{fill:var(--card);stroke:var(--st,var(--none));stroke-width:1.6}
 /* the pointer target: transparent but hit-testable (fill:none would not be). No cursor change --
@@ -950,11 +973,15 @@ def _stalled(cls: str, stage: str, updated: float | None) -> tuple[str, str]:
 
 # Where a round's removal sits: the rule releases below 1 % (round_policy.RELEASE_FRAC) and calls
 # three rounds under 2 % a plateau, so a run is doing well well before it stops.
-TREND_BANDS = ((0.015, "released"), (0.03, "running"))   # under 1.5 % green, under 3 % amber, else red
+# A band is a judgement on one round, not a lifecycle state, so it has its own class names:
+# reusing .released/.running here tied the dot's colour to whatever a dataset pill happened to be.
+TREND_BANDS = ((0.015, "band-good"), (0.03, "band-watch"))   # under 1.5 % green, under 3 % amber, else red
+# The same three colours the dots get, as variables the SVG gradient can read.
+BAND_INK = {"band-good": "--ok", "band-watch": "--run", "band-high": "--bad"}
 
 
 def trend_band(frac: float) -> str:
-    return next((cls for edge, cls in TREND_BANDS if frac < edge), "failed")
+    return next((cls for edge, cls in TREND_BANDS if frac < edge), "band-high")
 
 
 def round_trend(states: list[dict]) -> list[dict]:
@@ -1020,6 +1047,22 @@ def sparkline(points: list[dict], width: int = 108, height: int = 22) -> str:
     x = lambda i: 3 + i * step
     y = lambda f: height - 3 - (height - 6) * (min(f, top) / top)
     path = " ".join(("M" if i == 0 else "L") + f"{x(i):.1f} {y(p['frac']):.1f}" for i, p in enumerate(points))
+    # The area under the line, washed in the colours of the rounds above it: a horizontal ramp
+    # whose stops sit under their own point, so the tint between two rounds is the blend of the
+    # two, faded out downward. Ids are derived from the path so two identical charts share one
+    # definition and nothing collides with a neighbouring row.
+    uid = hashlib.md5(path.encode()).hexdigest()[:8]
+    ramp = "".join(f'<stop offset="{(x(i) - 3) / max(width - 6, 1):.4f}" '
+                   f'style="stop-color:var({BAND_INK[trend_band(p["frac"])]})"/>' for i, p in enumerate(points))
+    high = min(y(p["frac"]) for p in points)
+    fade = (f'<linearGradient id="f{uid}" gradientUnits="userSpaceOnUse" x1="0" y1="{high:.1f}" x2="0" y2="{height - 3}">'
+            '<stop offset="0" stop-color="#fff" stop-opacity=".55"/>'
+            '<stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>')
+    area = (f'{path} L{x(len(points) - 1):.1f} {height - 3} L{x(0):.1f} {height - 3} Z'
+            if len(points) > 1 else "")
+    defs = (f'<defs><linearGradient id="c{uid}" x1="0" y1="0" x2="1" y2="0">{ramp}</linearGradient>{fade}'
+            f'<mask id="m{uid}"><rect width="{width}" height="{height}" fill="url(#f{uid})"/></mask></defs>')
+    wash = f'<path d="{area}" fill="url(#c{uid})" mask="url(#m{uid})" class="sp-area"/>' if area else ""
     # A 2.6 px dot is hard to point at, so each round gets a wide invisible target carrying the
     # reading, with its own dot drawn immediately after it -- the pair lets CSS grow the dot the
     # pointer is over (`circle.sp-hit:hover + circle.sp`) without any script.
@@ -1031,9 +1074,36 @@ def sparkline(points: list[dict], width: int = 108, height: int = 22) -> str:
           f'class="sp {trend_band(p["frac"])}' + ('"' if p["settled"] else ' open"') + "/>"
         for i, p in enumerate(points))
     last = points[-1]
-    return (f'<svg class="spark" viewBox="0 0 {width} {height}" width="{width}" height="{height}" role="img" '
-            f'aria-label="removal per round, last {100 * last["frac"]:.2f}%">'
+    return (f'<svg class="spark" viewBox="0 0 {width} {height}" width="{width}" height="{height}" '
+            f'aria-label="removal per round, last {100 * last["frac"]:.2f}%">{defs}{wash}'
             f'<path d="{path}" class="sp-line"/>{marks}</svg>')
+
+
+SPARK_JS = r"""
+// One delegated listener for every sparkline on the page: the point's own <title> is the text,
+// so the chart stays the single source of the reading and works without script for a screen
+// reader, while a pointer gets it at once instead of after the browser's tooltip delay.
+(function(){
+  var tip = document.createElement("div"); tip.className = "sp-tip"; document.body.appendChild(tip);
+  function place(ev){ var pad = 12, w = tip.offsetWidth, h = tip.offsetHeight;
+    var x = ev.clientX + pad, y = ev.clientY - h - pad;
+    if (x + w > innerWidth - 4) x = ev.clientX - w - pad;
+    if (y < 4) y = ev.clientY + pad;
+    tip.style.left = x + "px"; tip.style.top = y + "px"; }
+  document.addEventListener("mouseover", function(ev){
+    var hit = ev.target.closest && ev.target.closest("circle.sp-hit"); if (!hit) return;
+    var t = hit.querySelector("title"); if (!t) return;
+    var text = t.textContent, cut = text.indexOf(" so far");
+    tip.innerHTML = cut < 0 ? esc(text)
+      : esc(text.slice(0, cut)) + '<span class="q">' + esc(text.slice(cut)) + "</span>";
+    tip.classList.add("on"); place(ev);
+  });
+  document.addEventListener("mousemove", function(ev){ if (tip.classList.contains("on")) place(ev); });
+  document.addEventListener("mouseout", function(ev){
+    if (ev.target.closest && ev.target.closest("circle.sp-hit")) tip.classList.remove("on"); });
+  function esc(s){ var d = document.createElement("span"); d.textContent = s; return d.innerHTML; }
+})();
+"""
 
 
 def _hero(s_cls: str, s_stage: str, title: str, crumb: str = "", sub: str = "", facts=(), next_: str = "") -> str:

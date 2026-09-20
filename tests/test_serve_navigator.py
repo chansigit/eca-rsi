@@ -19,7 +19,7 @@ def test_groups_collapsed_with_tallies_and_species(tmp_path):
     assert serve.group_tally({"released": 2, "running": 1, "neutral": 1, "failed": 1}) in html
     assert 'data-species="mm"' in html and 'data-species="hs"' in html
     assert '<select id="nav-sp"><option value="">all</option>' in html
-    assert '<a id="brand" href="/_home"' in html and 'brand.addEventListener("click"' in serve.NAV_JS
+    assert '<a class="tb-brand" id="brand" href="/_home"' in html and 'brand.addEventListener("click"' in serve.NAV_JS
     assert '<option value="running">Running</option>' in html
     assert '<option value="queued">Queued</option>' in html
     assert '<option value="working">' not in html
@@ -33,7 +33,7 @@ def test_group_tally_drops_zero_parts():
                                                                f'<span class="st neutral" title="Not started">{dot}1</span>')
     assert serve.group_tally({}) == ""
     # the state's colour comes from the page palette (index.CSS .released/.running/\u2026), not from a glyph
-    assert ".released,.include{--st:var(--ok)" in index.CSS and ".pill::before,.dot{" in index.CSS
+    assert ".released{--st:var(--done)" in index.CSS and ".pill::before,.dot{" in index.CSS
 
 
 def test_sidebar_counts_read_in_thousands_and_say_whether_they_are_final(tmp_path):
