@@ -69,6 +69,12 @@ main.page{max-width:1200px;margin:0 auto;padding:var(--s3) var(--s3) var(--s5)}
  line-height:1.6;white-space:nowrap;vertical-align:middle;color:var(--st,var(--none));background:var(--st-bg,var(--none-bg))}
 .pill::before,.dot{content:"";display:inline-block;width:.5rem;height:.5rem;border-radius:50%;background:var(--st,var(--none));flex:none}
 .st{color:var(--st,var(--none));font-weight:600}
+/* convergence sparkline: colour is absolute (see TREND_BANDS), a hollow point is still removing */
+.spark{display:block;overflow:visible}
+.sp-line{fill:none;stroke:var(--line);stroke-width:1.5;stroke-linejoin:round}
+circle.sp{fill:var(--st,var(--none));stroke:none}
+circle.sp.open{fill:var(--card);stroke:var(--st,var(--none));stroke-width:1.6}
+.sofar{margin-left:.4em;font-size:.85em;font-weight:400;color:var(--muted)}
 /* paper chapters: ink headings and neutral rules, no accent rails */
 .hero{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:var(--s3);margin-bottom:var(--s3)}
 .hero .title{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap}
@@ -570,6 +576,12 @@ def _gen2_rounds(unit: Path) -> list[dict]:
                            else "cross-sample" if (rdir / L.GEN2_CROSS).is_dir() else "starting")
             if cross:
                 row["n_in"] = cross.get("n_input")
+                # The round's own number arrives only when it ends. Cross-sample publishes its
+                # half as soon as it is done, which is a subtotal, not a forecast: on this batch
+                # cross-sample removed 61 cells of a round that went on to remove thousands.
+                if cross.get("n_removed") is not None and cross.get("n_input"):
+                    row["partial"] = {"stage": "cross-sample", "removed": cross["n_removed"],
+                                      "frac": cross["n_removed"] / cross["n_input"]}
         out.append(row)
     return out
 
@@ -700,7 +712,12 @@ def _gen2_unit_body(unit: Path, s: dict, base: str = "") -> str:
                         f'<td class="reason">{e(str(r.get("reason") or ""))}</td>'
                         f'<td class="num">{elapsed}</td><td>{links}</td></tr>')
         else:
-            rows.append(f'<tr><td class="num">{r["n"]}</td><td class="num">{_n(r.get("n_in"))}</td><td></td><td></td><td></td>'
+            part = r.get("partial")
+            so_far = (f'<td class="num">{_n(part["removed"])}</td>'
+                      f'<td class="num">{100 * part["frac"]:.2f}%<span class="sofar" '
+                      f'title="{e(part["stage"])} only; the round is still removing">so far</span></td>'
+                      if part else "<td></td><td></td>")
+            rows.append(f'<tr><td class="num">{r["n"]}</td><td class="num">{_n(r.get("n_in"))}</td><td></td>{so_far}'
                         f'<td><span class="pill running">running</span></td>'
                         f'<td class="reason st running">{e(str(r["step"] or ""))}</td>'
                         f'<td class="num">{elapsed}</td><td>{links}</td></tr>')
@@ -909,6 +926,31 @@ def _stalled(cls: str, stage: str, updated: float | None) -> tuple[str, str]:
     return "failed", f"stopped · {stage}"
 
 
+# Where a round's removal sits: the rule releases below 1 % (round_policy.RELEASE_FRAC) and calls
+# three rounds under 2 % a plateau, so a run is doing well well before it stops.
+TREND_BANDS = ((0.015, "released"), (0.03, "running"))   # under 1.5 % green, under 3 % amber, else red
+
+
+def trend_band(frac: float) -> str:
+    return next((cls for edge, cls in TREND_BANDS if frac < edge), "failed")
+
+
+def round_trend(states: list[dict]) -> list[dict]:
+    """One point per round: how much of what entered it the round removed. A settled point is a
+    finished round; an unsettled one is the part a running round has published so far and will
+    grow. The unit with the most rounds speaks for a dataset -- the others are shorter runs of
+    the same decision, and a mean would hide the one still removing."""
+    rounds = max((s.get("rounds") or [] for s in states), key=len, default=[])
+    points = []
+    for r in rounds:
+        stats, partial = r.get("stats"), r.get("partial")
+        if stats and stats.get("frac") is not None:
+            points.append({"n": r["n"], "frac": stats["frac"], "settled": True})
+        elif partial:
+            points.append({"n": r["n"], "frac": partial["frac"], "settled": False})
+    return points
+
+
 def dataset_state(root: Path, states: list[dict] | None = None) -> dict:
     """Aggregate of a run root (or a unit bound on its own) for the fleet
     pages; `states` = unit_state() per unit when the caller already has them."""
@@ -933,8 +975,28 @@ def dataset_state(root: Path, states: list[dict] | None = None) -> dict:
             "final_cells": sum(final) if final else None, "rounds": max((len(s["rounds"]) for s in states), default=0),
             "species": ", ".join(sorted({str(s["species"]) for s in states if s["species"]})),
             "finished": max(fin) if fin and released == len(states) else None,
-            "updated": updated, "stage": stage, "cls": cls,
+            "updated": updated, "stage": stage, "cls": cls, "trend": round_trend(states),
             "awaiting_start": False}
+
+
+def sparkline(points: list[dict], width: int = 108, height: int = 22) -> str:
+    """Per-round removal as a share of what entered the round, oldest left. The scale is the run's
+    own worst round, so the shape shows whether it is settling; the colour is absolute, so two runs
+    can be compared at a glance. A hollow point is a round still removing."""
+    if not points:
+        return '<span class="muted">–</span>'
+    top = max(max(p["frac"] for p in points), 0.03)
+    x = (lambda i: 3 + i * (width - 6) / max(len(points) - 1, 1)) if len(points) > 1 else (lambda i: width / 2)
+    y = lambda f: height - 3 - (height - 6) * (f / top)
+    path = " ".join(("M" if i == 0 else "L") + f"{x(i):.1f} {y(p['frac']):.1f}" for i, p in enumerate(points))
+    dots = "".join(
+        f'<circle cx="{x(i):.1f}" cy="{y(p["frac"]):.1f}" r="2.6" class="sp {trend_band(p["frac"])}'
+        + ('"' if p["settled"] else ' open"') + f'><title>round {p["n"]}: {100 * p["frac"]:.2f}%'
+        + ("" if p["settled"] else " so far") + "</title></circle>" for i, p in enumerate(points))
+    last = points[-1]
+    return (f'<svg class="spark" viewBox="0 0 {width} {height}" width="{width}" height="{height}" role="img" '
+            f'aria-label="removal per round, last {100 * last["frac"]:.2f}%">'
+            f'<path d="{path}" class="sp-line"/>{dots}</svg>')
 
 
 def _hero(s_cls: str, s_stage: str, title: str, crumb: str = "", sub: str = "", facts=(), next_: str = "") -> str:

@@ -822,6 +822,7 @@ def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
         coll = colls[name]
         short = name[len(coll) + 1:] if coll and name.startswith(coll + "-") else name  # the collection has its own column
         kept = 100 * s["final_cells"] / s["n_input"] if s["n_input"] and s["final_cells"] is not None else None
+        trend = s.get("trend") or []     # from the cached state: the fleet page never reads disk
         rows.append(
             f'<tr data-text="{e((name + " " + coll + " " + s["species"] + " " + s["stage"]).lower())}">'
             f'<td><a href="/{e(name)}/" title="{e(name)}"><b>{e(short)}</b></a></td><td class="nw">{e(coll)}</td><td>{e(s["species"])}</td>'
@@ -829,13 +830,16 @@ def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
             f'<td class="num" data-v="{s["final_cells"] or 0}">{index._n(s["final_cells"])}</td>'
             f'<td class="num" data-v="{kept if kept is not None else -1}">{f"{kept:.0f}%" if kept is not None else ""}</td>'
             f'<td class="num" data-v="{s["rounds"]}">{s["rounds"] or ""}</td>'
+            # sorts on the newest round's removal: the column asks "is this one settling?"
+            f'<td data-v="{(trend[-1]["frac"] if trend else 1):.6f}">{index.sparkline(trend)}</td>'
             f'<td data-v="{rank.get(s["cls"], 9)}"><span class="pill {e(s["cls"])}">{e(s["stage"])}</span></td>'
             f'<td class="num nw" data-v="{s["updated"] or 0}">{index._when(s["updated"])}</td></tr>')
     def th(t, num=False):
         attrs = ' class="r" data-num' if num else ""
         return f'<th{attrs} aria-sort="none"><button type="button">{t}</button></th>'
     table = ('<div class="wrap"><table id="ds-table"><thead><tr>' + th("dataset") + th("collection") + th("species")
-             + th("cells in", True) + th("cells out", True) + th("kept", True) + th("rounds", True) + th("status", True) + th("last updated", True)
+             + th("cells in", True) + th("cells out", True) + th("kept", True) + th("rounds", True)
+             + th("convergence", True) + th("status", True) + th("last updated", True)
              + f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div>' if rows
              else '<p class="empty">No dataset is bound yet. Use <b>+ Bind…</b> in the sidebar or <code>eca-rsi serve scan-add</code> on the server host.</p>')
     return (

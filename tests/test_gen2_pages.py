@@ -231,3 +231,31 @@ def test_a_resumed_unit_is_not_still_failed_from_the_attempt_before(tmp_path):
     os.utime(resumed, (later, later))
     state = index.unit_state(unit)
     assert state['stage_class'] == 'running' and 'failed' not in state['stage']
+
+
+def test_a_running_round_shows_the_stage_subtotal_and_the_trend_marks_it_unsettled(tmp_path):
+    """Cross-sample publishes its half of a round long before the round ends. It is shown as a
+    subtotal -- labelled, and hollow in the sparkline -- never as the round's removal: on the
+    chondrocyte batch cross-sample removed 61 cells of a round that went on to remove 3,239."""
+    root = tmp_path / 'run'
+    gen2_run(root, released=False)
+    unit = root / 'units' / 'u'
+    save(unit / 'rounds' / 'round02' / '02-cross-sample' / 'publication.json',
+         {'state': 'complete', 'n_input': 70, 'n_survived': 69, 'n_removed': 1})
+
+    rounds = index._gen2_rounds(unit)
+    assert rounds[0]['stats']['frac'] == pytest.approx(0.22)      # round 1 finished
+    assert rounds[1]['stats'] is None and rounds[1]['partial']['stage'] == 'cross-sample'
+    assert rounds[1]['partial'] == {'stage': 'cross-sample', 'removed': 1, 'frac': pytest.approx(1 / 70)}
+
+    body = index.render_unit(unit)
+    assert '>1</td>' in body and '1.43%' in body and 'so far' in body
+
+    trend = index.round_trend([index.unit_state(unit)])
+    assert [(p['n'], p['settled']) for p in trend] == [(1, True), (2, False)]
+    svg = index.sparkline(trend)
+    assert svg.count('<circle') == 2 and 'class="sp failed"' in svg      # 22 % is over 3 %
+    assert 'class="sp released open"' in svg                             # 1.43 % is under 1.5 %: green, still removing
+    assert 'round 2: 1.43% so far' in svg
+    assert index.sparkline([]) == '<span class="muted">–</span>'
+    assert (index.trend_band(0.0099), index.trend_band(0.02), index.trend_band(0.05)) == ('released', 'running', 'failed')
