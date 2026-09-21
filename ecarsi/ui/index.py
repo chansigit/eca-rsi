@@ -566,10 +566,19 @@ def _epoch(ts: str) -> float:
     return time.mktime(time.strptime(ts, "%Y-%m-%d %H:%M:%S"))
 
 
-def log_events(log: list[tuple[str, str]]) -> dict:
+def log_events(log: list[tuple[str, str]], unit: Path | None = None, n_input: int | None = None) -> dict:
     """When cells entered and left a unit, as (epoch seconds, cells): the first
     'organize: N cells' line and the last 'release ... final_cells=N' line.
-    Derived, never recorded: what is on disk now is the whole history."""
+    Derived, never recorded: what is on disk now is the whole history.
+
+    The log is not the only record of the arrival, and it is not always intact.
+    `mca3.0/PeripheralBlood` organized at 21:19 on 2026-09-05 and its unit log opens an
+    hour later on 'persample complete' -- a restart rebuilt the log, and a resume does not
+    re-announce an organize step it is skipping. The dataset then had no arrival at all and
+    dropped out of the fleet's cells-over-time chart. So fall back to what organize actually
+    left on disk: its manifest's mtime, paired with the unit's own input count, which is how
+    a generation-2 unit reports the same event. One arrival per unit either way, so a
+    multi-unit run still sums to its own total rather than counting the dataset twice."""
     org = rel = None
     for ts, event in log:
         m = _EVENT_ORGANIZE.match(event)
@@ -578,6 +587,10 @@ def log_events(log: list[tuple[str, str]]) -> dict:
         m = _EVENT_RELEASE.match(event)
         if m:
             rel = (_epoch(ts), int(m.group(1)))
+    if org is None and unit is not None and n_input:
+        manifest = L.organize_manifest(unit.parent.parent)
+        if manifest.is_file():
+            org = (manifest.stat().st_mtime, int(n_input))
     return {"organize": org, "release": rel}
 
 
@@ -904,7 +917,8 @@ def unit_state(unit: Path) -> dict:
             "persample": ps, "rounds": rounds, "released": released, "stage": stage, "stage_class": cls,
             "last_event": f"{last[0]} {last[1]}" if last else "", "final_cells": final_cells,
             "output_h5ad": output_h5ad, "output_note": output_note,
-            "sample_decisions": dec_rows, "forced": _forced(rounds), "events": log_events(log)}
+            "sample_decisions": dec_rows, "forced": _forced(rounds),
+            "events": log_events(log, unit, im.get("n_cells"))}
 
 
 def _forced(rounds: list[dict]) -> bool:
@@ -1033,7 +1047,15 @@ def dataset_state(root: Path, states: list[dict] | None = None) -> dict:
         # A unit held by loop_control stops the dataset too, but it is waiting on a person.
         stage, cls = (states[0]["stage"] if len(states) == 1 else "paused"), "paused"
     else:
-        stage, cls = (states[0]["stage"] if len(states) == 1 else f"{released}/{len(states)} released"), "running"
+        # A multi-unit run that is working said "0/3 released", which reads as a finished run
+        # that released nothing -- the running colour was the only hint it was alive, and on a
+        # page of 290 rows nobody reads the colour before the words. Name the work instead: with
+        # nothing released yet the release fraction carries no information at all, so drop it.
+        running = sum(1 for s in states if s["stage_class"] == "running")
+        stage = (states[0]["stage"] if len(states) == 1
+                 else f"{running}/{len(states)} units running" if not released
+                 else f"{released}/{len(states)} released, {running} running")
+        cls = "running"
     fin = [s["finished"] for s in states if s.get("finished")]
     events = {k: [s["events"][k] for s in states if s.get("events") and s["events"][k]] for k in ("organize", "release")}
     updated = state_mtime(root)

@@ -54,3 +54,33 @@ def test_persample_success_line_is_not_a_failure(tmp_path):
     assert unit_state(unit)["stage_class"] != "failed"
     (unit / L.PROGRESS).write_text("2026-09-07 12:38:29 persample failed: 2 experiments; 1 failed\n")
     assert unit_state(unit)["stage_class"] == "failed"
+
+
+def test_a_unit_whose_log_lost_its_head_still_reports_when_cells_arrived(tmp_path):
+    """The fleet's cells-over-time chart reads one arrival per unit. mca3.0/PeripheralBlood
+    had none: it organized at 21:19 and a restart rebuilt its log starting an hour later on
+    'persample complete', and a resume never re-announces an organize step it is skipping.
+    The dataset silently left the chart. Organize's own manifest is the other record of the
+    same event, so the arrival is recovered from it -- and a unit that still has its log line
+    must keep using the line, which is the more precise of the two."""
+    root = tmp_path / "run"
+    unit = root / L.UNITS / "blood"
+    unit.mkdir(parents=True)
+    L.input_manifest(unit).parent.mkdir(parents=True, exist_ok=True)
+    L.input_manifest(unit).write_text(json.dumps({"n_cells": 7095, "species": "human"}))
+    (unit / L.PROGRESS).write_text("2026-09-05 22:23:11 persample complete: 6 experiments; 0 failed\n")
+
+    assert unit_state(unit)["events"]["organize"] is None, "no manifest yet, so nothing to fall back to"
+
+    manifest = L.organize_manifest(root)
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(json.dumps({"units": []}))
+    recovered = unit_state(unit)["events"]["organize"]
+    assert recovered == (manifest.stat().st_mtime, 7095)
+
+    # A log that does carry the line wins: it is the moment, not the file's mtime.
+    (unit / L.PROGRESS).write_text(
+        "2026-09-05 22:07:11 organize: 58695 cells from ['Lung']\n"
+        "2026-09-05 22:23:11 persample complete: 6 experiments; 0 failed\n")
+    stamp, cells = unit_state(unit)["events"]["organize"]
+    assert cells == 58695 and stamp != manifest.stat().st_mtime
