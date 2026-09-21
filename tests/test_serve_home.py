@@ -107,18 +107,37 @@ def test_a_wrapped_status_is_a_label_not_a_capsule():
     assert "border-radius:999px" in index.CSS   # the capsule stays right everywhere it fits
 
 
-def test_the_curve_is_shorter_says_less_and_can_be_read_on_a_log_axis():
-    """Four sentences of caveat above a 280 px chart buried the one thing it shows. The detail
-    is still there, behind a disclosure; the axis is switchable because datasets on this fleet
-    differ by three orders of magnitude and the small ones sit on the floor of a linear one."""
+def test_the_curve_is_shorter_says_less_and_can_be_spaced_by_age():
+    """Four sentences of caveat above a 280 px chart buried the one thing it shows, so the detail
+    moved behind a disclosure. The switchable axis is TIME: weeks of history in which the
+    interesting part is the last few hours, which a clock axis renders as a sliver."""
     html = _home_html({})
     assert 'id="hist-more">What is counted?</a>' in html
     assert '<p class="lede" id="hist-detail" hidden>' in html
     assert "queued inputs are shown separately as Cells awaiting start" not in html.split('id="hist-detail"')[0]
-    assert '<button type="button" id="hist-log" aria-pressed="false">log scale</button>' in html
+    assert 'id="hist-log" aria-pressed="false" title="space by age instead of by clock' in html
+    assert ">log time</button>" in html
     js = serve.HISTORY_JS
     assert "const W = 960, H = 200," in js and "H = 280" not in js       # shorter
-    assert "let logY = false;" in js                                      # linear until asked
-    assert "Math.log10(Math.max(v, 1)) / lg" in js                        # no log of zero
-    assert "for (let d = 0; Math.pow(10, d) <= top; d++) yt.push(Math.pow(10, d));" in js
-    assert 'logBtn.setAttribute("aria-pressed", String(logY))' in js
+    assert "let logT = false;" in js and "logY" not in js                # time, not cells
+    # age from the right edge, and log(1 + age) so that "now" is a position rather than a pole
+    assert "const pos = t => logT ? 1 - Math.log(1 + Math.max(t1 - t, 0)) / lgT" in js
+    assert "const un = f => logT ? t1 + 1 - Math.exp((1 - f) * lgT)" in js
+    assert "return un((px - L) / (W - L - R));" in js                    # hover inverts the same map
+    assert 'xl = t => ageLabel(Math.round(t1 - t));' in js               # ticks read "6h", "2d"
+    assert 'logBtn.setAttribute("aria-pressed", String(logT))' in js
+
+
+def test_log_time_maps_both_ends_exactly_and_round_trips():
+    """A hover reads a moment back out of a pixel, so the forward and inverse maps have to agree;
+    and the two ends must land on the frame, not near it."""
+    import math
+    span = 30 * 86400
+    t1 = 1_000_000_000.0
+    lgT = math.log(1 + span)
+    pos = lambda t: 1 - math.log(1 + max(t1 - t, 0)) / lgT
+    un = lambda f: t1 + 1 - math.exp((1 - f) * lgT)
+    assert pos(t1) == pytest.approx(1) and pos(t1 - span) == pytest.approx(0)
+    for age in (0, 3600, 86400, 7 * 86400, span):
+        assert un(pos(t1 - age)) == pytest.approx(t1 - age, abs=1)
+    assert pos(t1 - 3600) > 0.4     # the last hour takes most of the right half
