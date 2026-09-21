@@ -60,11 +60,20 @@ request only on matching runtime capacity. Numba caches are separated by runtime
 fingerprint. This does not package mutable application source automatically;
 operations must also declare source/input hashes.
 
-The 2026-09-14 per-sample trial uses `rsi-cpu-20260914.sif`: scientific packages
+The 2026-09-14 per-sample trial used `rsi-cpu-20260914.sif`: scientific packages
 and OSP live under `/opt/rsi-python`, with package versions and source hashes in
 `/opt/rsi-runtime.json`. Compute no longer reads the external `dl2025` package
-directory. Bridge and Coordinator control environments are still separate and
-have not yet been packaged into this science image.
+directory.
+
+Since `rsi-science-20260915-1.sif` the control environment is in the same image,
+under `/opt/rsi-control` (temporalio, openai-agents, agent-harness-bridge), and
+the science tree carries the GPU stack (cudf/cuml, cupy) as well as the CPU one.
+A pool therefore declares **one** runtime for every worker it has, GPU or not —
+`pool/config.json` has a single `runtime` block, and `PYTHONPATH` is
+`/opt/rsi-control:/opt/rsi-python`. There is no second GPU image to keep in step,
+which is the point: the 2026-09-21 mismatch (an image carrying msp/zmip that
+claimed the checkout's version numbers while eleven files differed) can only
+happen once per image, not once per image per accelerator.
 
 Start these foreground processes in separate terminals. Select CPU IDs from
 `os.sched_getaffinity(0)` and memory from your actual available allocation:

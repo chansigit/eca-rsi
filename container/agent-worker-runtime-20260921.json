@@ -42,5 +42,5 @@
     ],
     "version": "Python 3.12.14"
   },
-  "note": "rsi-science-20260921-1 = 20260917-1 with msp @ 386ff27 and zmip @ 8aa16a9, both byte-identical to their checkout mains (msp 21 files, zmip 14, osp 12 unchanged); built by containers/build-20260921-1.sh. The image it replaces carried the same version numbers (msp 0.5.2, zmip 0.3.9) with 11 files different -- the mismatch that kept zmip's _proposal fix undeployed. Not yet configured on any pool."
+  "note": "rsi-science-20260921-1 = 20260917-1 with msp @ 386ff27 and zmip @ 8aa16a9, both byte-identical to their checkout mains (msp 21 files, zmip 14, osp 12 unchanged); built by containers/build-20260921-1.sh. The image it replaces carried the same version numbers (msp 0.5.2, zmip 0.3.9) with 11 files different -- the mismatch that kept zmip's _proposal fix undeployed. Configured as the runtime of the gen2-acceptance pool on 2026-09-21; one runtime serves every worker, GPU included, because this image carries the GPU stack (cudf/cuml 25.12, cupy 13.6) and the control stack (/opt/rsi-control) alongside the CPU science tree."
 }

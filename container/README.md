@@ -165,7 +165,21 @@ undeployed and kept `test_zoomin_v2` red in the suite. Equal versions are not eq
 
 [agent-worker-runtime-20260921.json](agent-worker-runtime-20260921.json) is its runtime record; enable it on a pool
 with `configure-runtime` (the `runtime` sub-object) run inside the image. Changing the image changes the runtime
-digest, so this is batch-boundary work: results already computed keep their original runtime identity.
+digest, so this is batch-boundary work: results already computed keep their original runtime identity. It has been
+the acceptance pool's runtime since 2026-09-21.
+
+**One image serves every worker, GPU included.** A pool's `config.json` holds a single `runtime`, and this image
+carries both stacks: the science tree has NumPy 2.2.6 / SciPy 1.16.3 / scanpy 1.12.4 *and* cudf/cuml 25.12 with
+cupy 13.6, while `/opt/rsi-control` has temporalio 1.32, openai-agents 0.22 and agent-harness-bridge 0.2.14. So
+there is no separate GPU image to fall behind — which matters, because falling behind is exactly the failure this
+image was built to fix, and a second accelerator-specific image would double the chance of it. The two host venvs
+`venvs/eca-ct` (NumPy 2.5.3) and `venvs/eca-ct-gpu` (NumPy 2.4.6) are generation-1 leftovers on a different
+numerical stack: `eca-ct` still runs Periscope, which is presentation and outside the identity hash, and
+`eca-ct-gpu` has no consumer left. Neither is on any generation-2 compute path.
+
+What this does **not** settle is whether the GPU is worth using. RAPIDS is installed and importable; no run has
+measured a speed-up, and nothing in the scheduler steers GPU-suited work to a GPU worker. That is a measurement,
+not a build.
 
 
 ## Testing that the plane is pluggable at both ends (eca-rsi#13)
