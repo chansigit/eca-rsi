@@ -8,7 +8,7 @@ Two interpreters see different halves of the suite; between them the whole suite
     apptainer exec --cleanenv --bind /scratch,/oak,/home \
       --env PYTHONPATH=$PWD:/opt/rsi-control:/opt/rsi-python:/tmp/pytest-only \
       --env PYTHONNOUSERSITE=1 --env "ECA_SIBLINGS=$S/msp:$S/osp:$S/zmip" \
-      /scratch/users/chensj16/containers/rsi-science-20260917-1.sif \
+      /scratch/users/chensj16/containers/rsi-science-20260921-1.sif \
       /usr/local/bin/python3 -m pytest -q --continue-on-collection-errors tests
 
     # installed venv: the identity tests need package metadata for ecarsi
@@ -27,13 +27,15 @@ Expected failures in the image run:
 | test | why |
 |---|---|
 | `test_temporal_service.py::test_coordinator_reconnects_without_resubmitting_work` | timing test against a local Temporal server; times out under load, passes when the node is idle |
-| `test_zoomin_v2.py::test_zoom_handoffs_and_exact_global_conservation` | `KeyError: 'clusters'` from `/opt/rsi-python/zmip/report.py` — the kernel **baked into the image**, which predates zmip `8aa16a9` (`_proposal`, reading either session contract). The checkout has the fix; the image does not |
 
 **Only `ecarsi` comes from the checkout.** `PYTHONPATH` puts `$PWD` first, but `msp` / `osp` / `zmip`
 resolve to `/opt/rsi-python` inside the image — and so does the warm pool at run time, whose runtime
 pythonpath is `[<eca-rsi worktree>, /opt/rsi-control, /opt/rsi-python]`. A kernel fix is therefore
 **not deployed by committing it**: the image has to be rebuilt, or the checkout put ahead of
 `/opt/rsi-python`. Both change the runtime digest, so both are batch-boundary work.
+`rsi-science-20260921-1.sif` is the first image whose msp/zmip are byte-identical to their checkouts;
+its predecessor carried the same version numbers with eleven files different, which is what kept
+`test_zoomin_v2` red. Equal versions are not equal code — compare `/opt/rsi-runtime.json` digests.
 
 `ECA_SIBLINGS` is a colon-separated list of checkout directories, each named after its package.
 Without it `test_harness_sync.py` cannot find the kernels next to a worktree. It does **not** put

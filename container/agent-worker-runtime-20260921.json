@@ -1,0 +1,46 @@
+{
+  "base_science_image": {
+    "path": "/scratch/users/chensj16/containers/rsi-science-20260917-1.sif",
+    "sha256": "ff8a9e9b6c81bdf8e4524c6cd8b02ddddc931f8c4e2284562917737ad62cf1a5"
+  },
+  "control_dependencies": {
+    "path": "/scratch/users/chensj16/containers/rsi-control-20260915-1.sif",
+    "sha256": "a1917b629890caccd5ab982f64143ea4cbb68e3fd487f9f1a3266c6455dd6183"
+  },
+  "runtime": {
+    "command": [
+      "/usr/local/bin/python3.12"
+    ],
+    "files": {
+      "/opt/rsi-runtime.json": "95a7569139aa06ff9a1c38aa04cae2ef2fbb2e2df7383db825a540660ce7cd9f",
+      "/usr/local/bin/python3.12": "0e6475dfda68a9b2d93501449fc47593ca169010e8f4881577b97463fd0c1263"
+    },
+    "image": {
+      "path": "/scratch/users/chensj16/containers/rsi-science-20260921-1.sif",
+      "sha256": "8c5032cb0f951bfa0bb533fb9c3b9225c67cc51e443d3345195e3361798588ee"
+    },
+    "imports": [
+      "osp",
+      "osp.annotate",
+      "scanpy",
+      "igraph",
+      "leidenalg",
+      "ecarsi.stages.persample",
+      "msp",
+      "msp.integrate",
+      "msp.evidence",
+      "ecarsi.stages.crosssample",
+      "zmip.scheduled",
+      "ecarsi.stages.zoomin",
+      "agents",
+      "ecarsi.agent.dispatch"
+    ],
+    "pythonpath": [
+      "/scratch/users/chensj16/worktrees/eca-rsi-gen2",
+      "/opt/rsi-control",
+      "/opt/rsi-python"
+    ],
+    "version": "Python 3.12.14"
+  },
+  "note": "rsi-science-20260921-1 = 20260917-1 with msp @ 386ff27 and zmip @ 8aa16a9, both byte-identical to their checkout mains (msp 21 files, zmip 14, osp 12 unchanged); built by containers/build-20260921-1.sh. The image it replaces carried the same version numbers (msp 0.5.2, zmip 0.3.9) with 11 files different -- the mismatch that kept zmip's _proposal fix undeployed. Not yet configured on any pool."
+}

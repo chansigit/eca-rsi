@@ -12,7 +12,10 @@ allocation without using a host Python environment.
 
 To rebuild, extract both recorded source images with `apptainer build --sandbox`,
 copy the control image's `/opt/rsi-control` into the science sandbox, and pack it
-with `LC_ALL=C LANG=C apptainer build --mksquashfs-args '-processors 2'`.
+with `LC_ALL=C LANG=C apptainer build` — **no `--mksquashfs-args`**: passing
+`-processors N` makes apptainer 1.4 / mksquashfs 4.7.5 die with SIGSEGV right after
+"Creating SIF file…" (2026-09-21, both 4 and 2 processors, while the same mksquashfs
+run by hand on the same sandbox succeeds). Apptainer parallelises on its own.
 Record the resulting SIF hash. Run `configure-runtime` inside that image before
 rejoining idle workers with `add-worker`; running tasks retain their original
 runtime identity. Workers load model credentials from user shell configuration
@@ -41,7 +44,7 @@ apptainer exec --cleanenv --bind "$PWD,$BUILD_ROOT,$(dirname "$BRIDGE_WHEEL")" \
 apptainer exec --cleanenv --bind "$BUILD_ROOT,$(dirname "$BRIDGE_WHEEL")" \
   "$BASE_SIF" python3 -m pip install --no-deps \
   --target "$BUILD_ROOT/opt/rsi-control" "$BRIDGE_WHEEL"
-apptainer build --mksquashfs-args '-processors 2' "$CONTROL_SIF" "$BUILD_ROOT"
+apptainer build "$CONTROL_SIF" "$BUILD_ROOT"   # no --mksquashfs-args; see the note above
 ```
 
 Build timestamps can change the resulting SIF hash; record the new artifact's hash
@@ -147,4 +150,20 @@ in three minutes; the script that did it is kept next to the images as `build-20
 [agent-worker-runtime-20260917-osp017.json](agent-worker-runtime-20260917-osp017.json) is its runtime record; enable it
 on a pool with `configure-runtime` (the `runtime` sub-object of that file) run inside the image. Per-sample results of
 datasets already past their per-sample stage do not change.
+
+## Science image 20260921-1 (msp and zmip synced to their checkouts)
+
+`rsi-science-20260921-1.sif` is `rsi-science-20260917-1.sif` with `/opt/rsi-python/{msp,zmip}` replaced by the
+checkout mains (msp `386ff27`, zmip `8aa16a9`); osp is unchanged. Same recipe; the script that did it is kept next to the images as `build-20260921-1.sh`, ~10 minutes.
+
+Why it was needed: **committing a kernel fix does not deploy it.** The pool's runtime pythonpath is
+`[<eca-rsi worktree>, /opt/rsi-control, /opt/rsi-python]`, so only `ecarsi` comes from a checkout — and the
+image's msp/zmip carried the *same version numbers* as the checkouts (0.5.2, 0.3.9) while 11 source files
+differed and `msp/agent_data.py` was missing entirely. That is how zmip `8aa16a9` (`report._proposal`) stayed
+undeployed and kept `test_zoomin_v2` red in the suite. Equal versions are not equal code; the manifest's
+`msp_source` / `zmip_source` digests in `/opt/rsi-runtime.json` are what to compare.
+
+[agent-worker-runtime-20260921.json](agent-worker-runtime-20260921.json) is its runtime record; enable it on a pool
+with `configure-runtime` (the `runtime` sub-object) run inside the image. Changing the image changes the runtime
+digest, so this is batch-boundary work: results already computed keep their original runtime identity.
 
