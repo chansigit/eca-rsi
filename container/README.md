@@ -182,6 +182,37 @@ measured a speed-up, and nothing in the scheduler steers GPU-suited work to a GP
 not a build.
 
 
+## Which images to keep, and why there are ever several (2026-09-21)
+
+A SIF has no layers and must not be edited in place — its sha256 is in `runtime.image.sha256`, so patching one
+would invalidate every stage verifying against it. "Change the image" therefore always means "write another
+3.68 GB file", which is how 2026-09-15 produced nine science images between 01:03 and 16:26. Those were nine
+attempts at one build, not nine designs, and they are retired in `containers/_retired-20260921/`.
+
+Three are kept:
+
+| image | why |
+|---|---|
+| `rsi-science-20260921-1.sif` | the runtime of every pool |
+| `rsi-science-20260917-1.sif` | 98 % of the finished 28-dataset batch's requests pin it |
+| `rsi-science-20260915-8.sif` | the other 2 % — that batch's earliest per-sample requests |
+
+The last two are kept for one reason: the twelve released datasets record those digests in their runtime
+identity, and the image files are the only artefacts that can recompute them byte-for-byte. It is all or
+nothing — drop either and the batch stops being reproducible. Resuming a *failed* dataset does not need them
+(`resume-dataset` opens new stages on the current runtime); only `warm_pool retry` of an individual old request
+does, because it deliberately reruns on the original image so the result matches its siblings.
+
+**Retire both when reproducing that batch stops mattering** (owner's call, deferred 2026-09-21). They live on
+SCRATCH, which purges at 90 days without a content write, so archiving them properly means moving them to OAK —
+blocked while OAK sits at 95 %.
+
+`rsi-control-20260915-1.sif` is a strict subset of the science image (same Python, same `/opt/rsi-control`), and
+is separate on purpose: the control plane is not in any run identity, so it can be patched without minting a new
+3.68 GB compute image. `python312-slim.sif` is a generation-1 base that only Periscope's host venv still uses;
+it can go once Periscope runs on the science image.
+
+
 ## Testing that the plane is pluggable at both ends (eca-rsi#13)
 
 [pluggability-test.sh](pluggability-test.sh) runs one step of the test: snapshot, kill, snapshot,
