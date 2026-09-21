@@ -53,6 +53,7 @@ def test_coordinator_reconnects_without_resubmitting_work(monkeypatch):
         entered = asyncio.Event()
         connected = []
         stopped = []
+        slots = []
 
         def discover(root):
             return dict(generation=generation, endpoint=generation)
@@ -60,8 +61,11 @@ def test_coordinator_reconnects_without_resubmitting_work(monkeypatch):
         async def connect(address):
             return address
 
-        async def worker(client, queue, workflow_slots):
-            assert workflow_slots == 3
+        async def worker(client, queue, workflow_slots, activity_slots=None):
+            # Signature follows run_worker's. When activity_slots was added, this fake kept three
+            # parameters: every call raised TypeError, follow_service died holding it, and the
+            # test reported only "entered never set" -- read for days as a timing flake.
+            slots.append((workflow_slots, activity_slots))
             connected.append(client)
             entered.set()
             try:
@@ -70,6 +74,20 @@ def test_coordinator_reconnects_without_resubmitting_work(monkeypatch):
                 stopped.append(client)
 
         real_wait = asyncio.wait
+
+        async def reached(event):
+            """Wait for the follower, but surface its exception instead of a bare timeout."""
+            waiter = asyncio.ensure_future(event.wait())
+            # real_wait, not asyncio.wait: the coordinator's copy is patched to return at once.
+            done, _ = await real_wait([waiter, following], timeout=30,
+                                      return_when=asyncio.FIRST_COMPLETED)
+            if following in done:
+                waiter.cancel()
+                await following      # re-raises whatever killed the follower
+                raise AssertionError('follow_service returned without reconnecting')
+            if waiter not in done:
+                waiter.cancel()
+                raise AssertionError('follow_service did not connect within 30 s')
 
         async def fast_wait(tasks, *, timeout):
             return await real_wait(tasks, timeout=0.01)
@@ -80,11 +98,12 @@ def test_coordinator_reconnects_without_resubmitting_work(monkeypatch):
         monkeypatch.setattr(coordinator.asyncio, 'wait', fast_wait)
         following = asyncio.create_task(coordinator.follow_service('shared', 'queue', 3))
         try:
-            await asyncio.wait_for(entered.wait(), 1)
+            await reached(entered)
             entered.clear()
             generation = 'second'
-            await asyncio.wait_for(entered.wait(), 1)
+            await reached(entered)
             assert connected == ['first', 'second']
+            assert slots == [(3, None), (3, None)], 'both workers get the slots they were asked for'
             assert stopped == ['first']
         finally:
             following.cancel()

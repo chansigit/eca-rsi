@@ -22,11 +22,8 @@ Neither the image nor the venv needs `distributed`: generation 2 schedules throu
 `MSP_COMPUTE_ENDPOINT=local` in every task it runs, so nothing the workers execute imports dask. The gen-1
 Dask pool and its tests were removed in 0.3.2; msp's own dask endpoints remain an optional extra it does not install.
 
-Expected failures in the image run:
+Expected failures in the image run: none.
 
-| test | why |
-|---|---|
-| `test_temporal_service.py::test_coordinator_reconnects_without_resubmitting_work` | timing test against a local Temporal server; times out under load, passes when the node is idle |
 
 **Only `ecarsi` comes from the checkout.** `PYTHONPATH` puts `$PWD` first, but `msp` / `osp` / `zmip`
 resolve to `/opt/rsi-python` inside the image — and so does the warm pool at run time, whose runtime
