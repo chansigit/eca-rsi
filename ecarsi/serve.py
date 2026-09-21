@@ -1378,13 +1378,18 @@ def _informative(d: Path) -> list[str]:
     return [c for c in d.parts[1:] if c not in GENERIC_DIR_NAMES] or [d.name]
 
 
-def _is_auto(name: str, path: Path) -> bool:
-    """Would this function have produced `name` for `path` at some depth? A
-    name already qualified once (mca1.1-Bladder) has to stay recognisable as
-    ours, or the next batch to arrive reads it as a hand-picked name and helps
-    itself to the bare one — the very order-dependence #11 is about."""
+def _auto_depth(name: str, path: Path) -> int | None:
+    """How many components of `path` this function used to make `name`, or None
+    if it never would have. A name already qualified once (mca1.1-Bladder) has
+    to stay recognisable as ours, or the next batch to arrive reads it as a
+    hand-picked name and helps itself to the bare one — the very
+    order-dependence #11 is about. The depth is what keeps requalification
+    one-way: an entry may gain a component when a new collision demands it,
+    never lose one because the collision that caused it is no longer in this
+    batch. (Measured 2026-09-21: recomputing from scratch would have renamed
+    298 of 459 live entries, every one of them to something *shorter*.)"""
     comps = _informative(path)
-    return any(name == "-".join(comps[-k:]) for k in range(1, len(comps) + 1))
+    return next((k for k in range(1, len(comps) + 1) if name == "-".join(comps[-k:])), None)
 
 
 def _scan_names(dirs: list[Path], taken: dict[str, Path]) -> dict[Path, str]:
@@ -1406,17 +1411,25 @@ def _scan_names(dirs: list[Path], taken: dict[str, Path]) -> dict[Path, str]:
     """
     comps: dict[Path, list[str]] = {}
     fixed: dict[str, Path] = {}
+    floor: dict[Path, int] = {}
     for name_, path in taken.items():
         if path in dirs or path in comps:
             continue
-        if _is_auto(name_, path):
-            comps[path] = _informative(path)
-        else:
+        held = _auto_depth(name_, path)
+        if held is None:
             fixed[name_] = path
+        else:
+            comps[path], floor[path] = _informative(path), held
     for d in dirs:
         comps[d] = _informative(d)
     order = list(comps)
-    depth = {d: 1 for d in order}
+    # Sharing a last component is what makes a bare name ambiguous, whatever the others are
+    # called right now. Keying off the current names instead would let a third collection walk
+    # in and take `/Bladder/` simply because the two incumbents had already been qualified.
+    shared = {c for c in (comps[d][-1] for d in order)
+              if sum(comps[d][-1] == c for d in order) > 1}
+    depth = {d: min(max(floor.get(d, 1), 2 if comps[d][-1] in shared else 1), len(comps[d]))
+             for d in order}
     name = lambda d: "-".join(comps[d][-depth[d] :])
     while True:
         by: dict[str, list[Path]] = {}

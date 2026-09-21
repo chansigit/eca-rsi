@@ -45,3 +45,17 @@ def test_a_deliberate_name_is_never_renamed():
 def test_a_lone_dataset_still_gets_the_short_name():
     only = paths("mca1.1")
     assert _scan_names(only, {}) == {only[0]: "Bladder"}
+
+
+def test_an_existing_name_is_never_shortened():
+    """Requalification is one-way. Recomputing depth from scratch would have renamed 298 of the
+    459 live entries, every one to something shorter -- churn and dead links for no collision."""
+    qualified = paths("3ca")[0]
+    names = _scan_names([], {"3ca-Bladder": qualified})
+    assert names[qualified] == "3ca-Bladder"
+
+
+def test_a_settled_registry_proposes_no_renames():
+    a, b = paths("mca1.1")[0], paths("mca3.0")[0]
+    settled = {"mca1.1-Bladder": a, "mca3.0-Bladder": b}
+    assert _scan_names([], settled) == {a: "mca1.1-Bladder", b: "mca3.0-Bladder"}
