@@ -574,8 +574,14 @@ def worker_rows(pool, hq, now):
 async def temporal_view(service_root, now):
     from datetime import datetime, timedelta, timezone
     from temporalio.client import Client
+    from temporalio.runtime import Runtime, TelemetryConfig
     from .control.temporal import endpoint
-    client = await Client.connect(endpoint(service_root)['endpoint'])
+    # This is a read-only client that exits as soon as it has its counts. The SDK's optional
+    # heartbeat thread has nothing to report for it and can race the native runtime's teardown,
+    # which segfaults the process after it has already printed everything -- rare, and invisible
+    # except as a non-zero exit. `control.coordinator` disables it for the same reason.
+    client = await Client.connect(endpoint(service_root)['endpoint'],
+                                  runtime=Runtime(telemetry=TelemetryConfig(), worker_heartbeat_interval=None))
     counts = {}
     for state in ('Running', 'Completed', 'Failed', 'Terminated'):
         counts[state.lower()] = sum([1 async for _ in client.list_workflows(

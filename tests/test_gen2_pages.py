@@ -1,4 +1,5 @@
 """Periscope reads both generations: gen-2 state comes from publications, not progress.log."""
+import inspect
 import json
 import os
 import re
@@ -338,3 +339,15 @@ def test_a_point_hands_its_reading_to_a_tooltip_the_page_draws_itself(tmp_path):
     assert '.sp-tip{position:fixed' in index.CSS and '.sp-tip.on{display:block}' in index.CSS
     assert 'role="img"' not in svg                            # it is no longer opaque to the pointer
     assert index.SPARK_JS in serve._home_html({})
+
+
+def test_the_read_only_temporal_client_does_not_race_its_own_teardown():
+    """`observatory status` connects, counts workflows and exits. The SDK's heartbeat thread has
+    nothing to report for a client with no worker and can race the native runtime's teardown --
+    a segfault after every line has already been printed, visible only as a non-zero exit.
+    Seen once on 2026-09-20 in about thirty report runs. coordinator already guards this."""
+    from ecarsi import observatory
+    from ecarsi.control import coordinator
+    for source in (inspect.getsource(observatory.temporal_view),
+                   inspect.getsource(coordinator.main)):
+        assert 'Runtime(telemetry=TelemetryConfig(), worker_heartbeat_interval=None)' in source
