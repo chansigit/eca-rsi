@@ -159,7 +159,9 @@ and agent-requested subclustering before final publication. Model waits held no
 Pool resources. Final H5AD identities, annotation columns, sample coverage and
 cell-exclusion conservation were verified. The three-node pool uses the same
 CPU/GPU scientific image; this small batch does not measure large-dataset
-throughput or GPU speedup. Cross-sample remains unimplemented in v2.
+throughput or GPU speedup. Cross-sample was unimplemented when this was written; it shipped as `control/crosssample.py` +
+`stages/crosssample.py` (see CROSSSAMPLE_V2_ACCEPTANCE.md). This paragraph is the record of the
+per-sample acceptance run, not a current statement of scope.
 
 The report is `workflow-acceptance.json` and the final publication is
 `persample-prostate/publication.json`, under

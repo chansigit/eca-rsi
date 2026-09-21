@@ -1,6 +1,9 @@
 # Zoom-in lineage annotation
 
-Design prompt, not yet connected to the runtime. Prepend the Prompt section of ../02-cross-sample/precomputed-deg-prompt.md. The host supplies the lineage-specific evidence manifest, accepted lineage plan, cell-ID mapping and cross-tabulation between resolutions, previous labels, foreign-lineage scores, separate type/quality submission schemas, and available tools. The current single-key submission and recovery contract must be adapted before using this prompt.
+Design draft. The prompt the runtime sends is `ecarsi/prompts/zoomin-annotation.md` (plus
+`zoomin-annotation-checklist-v4.md`). The caveat that once stood here -- that the single-key
+submission contract had to be adapted first -- is settled: `stages/zoomin.py` submits through
+separate `submit_types` and `submit_quality`, and the session completes on the quality proposal.
 
 ## Prompt
 

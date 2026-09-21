@@ -103,15 +103,16 @@ Tabula Sapiens / Uterus        uterus           21357    15%     10  22.2 3.8 10
 Tabula Sapiens / Vasculature   vasculature      40511    13%     10  11.2 6.5 6.5 4.7 2.6 2.2 4.0 7.1 3   20469   51%  FORCED FORCED: safety cap 10 rounds reached | inspect_flag=370 low_confidence=94 lineage_skipped=32 removed=12 annotation_boundary=11 plan_warning=2 convergence=1
 ```
 
-## 5. What this suggests (for decision, not yet applied)
+## 5. What this suggests (decided 2026-09-20 unless marked open)
 
-1. **Removal budget instead of a round cap.** 13 of 28 units hit the 10-round safety cap removing 2–7 % per round. The
-   gen-1 design already states the policy ("删除预算越线不停机, 转保守: 边缘删除降级为 flag"); the loop does not implement it.
-   Candidate: after round 3 (or once cumulative post-QC removal passes ~25 %), removals with confidence below high become
-   flags (`needs_review`), not deletions; convergence then arrives by construction.
-2. **fragment_qc needs a ceiling.** It is a host rule, not a model judgment, and it is the single largest sink. Candidate:
-   per-round fragment removal capped at a few percent of the lineage, and fragments re-evaluated only when their parent
-   cluster changed.
+1. ~~**Removal budget instead of a round cap.**~~ **Rejected by the owner, 2026-09-20.** Cumulative removal across
+   rounds is not treated as a risk: "sun 的数据垃圾的要命! 多删点数据不用大惊小怪". The per-round rule in
+   `round_policy` is the only gate, and the safety cap stays a cap rather than becoming a budget. The gen-1 design
+   sentence this proposal leaned on is primitive-branch history, not mainline policy (CLAUDE.md says so now).
+   Recorded here so it is not re-proposed: 13 of 28 units hitting the cap is an accepted outcome, not a defect.
+2. ~~**fragment_qc needs a ceiling.**~~ **Rejected with the same decision** — it is the largest sink precisely because
+   the data needs it. Open only as a *reporting* question: the ledger should keep making clear how much of a round was
+   fragment_qc rather than model judgment, which it already does.
 3. **Coarse labels should carry over.** The type session should start from the previous round's labels and change one only
    with stated evidence; synonyms must be normalised before comparison. A label-stability term could join the stop rule
    (cells removed < 1 % *and* coarse labels changed < 5 %).

@@ -1,6 +1,7 @@
 # Zoom-in lineage planning
 
-Design prompt, not yet connected to the runtime. The host supplies the plan schema, coarse labels and counts, configured minimum size, neighbor/PAGA summaries, UMAP-island evidence, species context, and submit_plan tool.
+Design draft. The prompt the runtime actually sends is `ecarsi/prompts/zoomin-plan.md` (plus
+`zoomin-plan-checklist-v4.md`); read that one before changing behaviour. Kept for the reasoning. The host supplies the plan schema, coarse labels and counts, configured minimum size, neighbor/PAGA summaries, UMAP-island evidence, species context, and submit_plan tool.
 
 ## Prompt
 
