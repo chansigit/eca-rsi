@@ -167,3 +167,39 @@ undeployed and kept `test_zoomin_v2` red in the suite. Equal versions are not eq
 with `configure-runtime` (the `runtime` sub-object) run inside the image. Changing the image changes the runtime
 digest, so this is batch-boundary work: results already computed keep their original runtime identity.
 
+
+## Testing that the plane is pluggable at both ends (eca-rsi#13)
+
+[pluggability-test.sh](pluggability-test.sh) runs one step of the test: snapshot, kill, snapshot,
+compare. A snapshot records, per pool request, its attempt directories (the resubmission evidence),
+its receipt state, and the sha256 of every `publication.json`; `compare` prints what moved between
+two of them. Point `B` at a **disposable** plane — the test SIGKILLs PostgreSQL, so it must never
+be aimed at one holding real history:
+
+```bash
+export B=$SCRATCH/eca-runs/pluggability-<date> PY=$SCRATCH/venvs/eca-ct/python
+bash container/pluggability-test.sh snapshot before
+bash container/pluggability-test.sh kill-plane        # or kill-coordinators
+bash container/pluggability-test.sh start-plane
+bash container/pluggability-test.sh compare before after
+```
+
+Setting one up: copy `control-plane.sh` into the new run directory with its own `TEMPORAL_PORT`,
+`DATABASE_PORT`, `UI_PORT`, `OBSERVATORY_PORT` and `TASK_QUEUE`, then `warm_pool init` +
+`configure-runtime`, `agent init` for the bridge, and borrow workers with `add-worker`. A Slurm
+allocation can host only one pool worker at a time (`~/.cache/ecarsi-pool/<host>/allocation-<job>.lock`),
+so a node has to leave its old pool before it can join the test one.
+
+Two things the 2026-09-21 run established that are worth knowing before repeating it:
+
+- **Killing the leader disturbs nothing.** Stage programs run in the pool and dispatch their own
+  sub-requests; the coordinator only opens stages and decides rounds. With the whole plane
+  SIGKILLed — Temporal, PostgreSQL, coordinators, scheduler and bridge — every in-flight task ran
+  to completion, PostgreSQL recovered from the dirty shutdown by itself, `owner.lock` did not block
+  the restart, and nothing was resubmitted or recomputed.
+- **Destroying a worker is not the same as losing its allocation.** `backend.allocation_ended()`
+  declares a task lost only once the Slurm grant is over (`expires_at` + 300 s), because while the
+  grant lives a worker may still rejoin and reconcile. Kill the worker process and the request sits
+  in `unknown_external_result` until someone rejoins that host — which then writes a retryable
+  `WorkerLost` receipt and the session continues. Testing the expiry path needs a sacrificial
+  allocation.
