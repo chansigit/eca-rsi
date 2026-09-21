@@ -1374,6 +1374,19 @@ GENERIC_DIR_NAMES = {
 }
 
 
+def _informative(d: Path) -> list[str]:
+    return [c for c in d.parts[1:] if c not in GENERIC_DIR_NAMES] or [d.name]
+
+
+def _is_auto(name: str, path: Path) -> bool:
+    """Would this function have produced `name` for `path` at some depth? A
+    name already qualified once (mca1.1-Bladder) has to stay recognisable as
+    ours, or the next batch to arrive reads it as a hand-picked name and helps
+    itself to the bare one — the very order-dependence #11 is about."""
+    comps = _informative(path)
+    return any(name == "-".join(comps[-k:]) for k in range(1, len(comps) + 1))
+
+
 def _scan_names(dirs: list[Path], taken: dict[str, Path]) -> dict[Path, str]:
     """Names for a batch of scanned dirs. Path components that carry no
     information (rsi, eca-pp, units, ...) are dropped; each dir starts with
@@ -1381,26 +1394,43 @@ def _scan_names(dirs: list[Path], taken: dict[str, Path]) -> dict[Path, str]:
     within the batch or with an existing entry for another path — is
     qualified by one more component, symmetrically (Brain across three
     collections becomes mca1.1-Brain / mca2.0-Brain / mca3.0-Brain, not
-    Brain / Brain-rsi / eca-pp-Brain)."""
-    comps = {
-        d: [c for c in d.parts[1:] if c not in GENERIC_DIR_NAMES] or [d.name]
-        for d in dirs
-    }
-    depth = {d: 1 for d in dirs}
+    Brain / Brain-rsi / eca-pp-Brain).
+
+    Already-registered dirs that still carry their bare auto-name take part in
+    the resolution, so the result does not depend on the order scan-add was
+    run in: whoever arrived first does not get to keep `/Bladder/` while every
+    other collection is qualified (eca-rsi#11). A bookmarked bare URL then
+    stops resolving instead of quietly pointing at another batch's data. A name
+    this function would never produce is a deliberate `--name` and is left
+    alone — it only bars others from taking it. The caller applies the renames.
+    """
+    comps: dict[Path, list[str]] = {}
+    fixed: dict[str, Path] = {}
+    for name_, path in taken.items():
+        if path in dirs or path in comps:
+            continue
+        if _is_auto(name_, path):
+            comps[path] = _informative(path)
+        else:
+            fixed[name_] = path
+    for d in dirs:
+        comps[d] = _informative(d)
+    order = list(comps)
+    depth = {d: 1 for d in order}
     name = lambda d: "-".join(comps[d][-depth[d] :])
     while True:
         by: dict[str, list[Path]] = {}
-        for d in dirs:
+        for d in order:
             by.setdefault(name(d), []).append(d)
         clash = [
             d
             for n, ds in by.items()
             for d in ds
-            if len(ds) > 1 or (n in taken and taken[n] != d)
+            if len(ds) > 1 or (n in fixed and fixed[n] != d)
         ]
         clash = [d for d in clash if depth[d] < len(comps[d])]  # can't qualify further
         if not clash:
-            return {d: name(d) for d in dirs}
+            return {d: name(d) for d in order}
         for d in clash:
             depth[d] += 1
 
@@ -1434,6 +1464,11 @@ def cmd_scan_add(args: argparse.Namespace) -> int:
     else:
         names = _scan_names(new, taken)
     plan = [(names[d], d) for d in new]
+    renames = [
+        (old, names[p], p)
+        for old, p in sorted(taken.items())
+        if p in names and p not in new and names[p] != old
+    ]
     for d in skipped:
         print(f"  skip   {d}  (not an organize root / unit)")
     if not plan:
@@ -1441,6 +1476,16 @@ def cmd_scan_add(args: argparse.Namespace) -> int:
             f"[serve] nothing new to add ({len(matches)} matched, {len(skipped)} skipped, {len(matches) - len(skipped)} already in)"
         )
         return 0
+    for old, new_name, d in renames:
+        if args.dry_run:
+            print(f"  would  {old:24s} -> {new_name}  (bare name is now ambiguous)")
+            continue
+        try:
+            reg.bind(new_name, d)
+            reg.unbind([old])
+            print(f"  renamed {old:23s} -> {new_name}")
+        except (ValueError, OSError) as e:
+            print(f"  FAILED rename {old} -> {new_name}  ({e})")
     n_ok = 0
     for name, d in plan:
         if args.dry_run:
@@ -1453,7 +1498,7 @@ def cmd_scan_add(args: argparse.Namespace) -> int:
         except (ValueError, OSError) as e:
             print(f"  FAILED {name:24s} {d}  ({e})")
     if args.dry_run:
-        print(f"[serve] dry run: {len(plan)} to add, {len(skipped)} skipped")
+        print(f"[serve] dry run: {len(plan)} to add, {len(renames)} to rename, {len(skipped)} skipped")
         return 0
     print(f"[serve] added {n_ok}/{len(plan)}, {len(skipped)} skipped -> {reg.path}")
     return 0 if n_ok == len(plan) else 1
