@@ -57,7 +57,7 @@ def test_a_control_moves_the_limit_and_a_pause_outranks_a_release(tmp_path):
     # only the four decision limits are overridable; the rest of the file is about stopping
     control(unit, pause_after_stage='zoomin')
     assert round_policy.resolve(admitted, read()) == admitted
-    assert read() == {'pause_after_stage': 'zoomin'}      # read, so the caller can say it cannot obey
+    assert read() == {'pause_after_stage': 'zoomin'}      # honoured between stages, not here
 
 
 def test_the_activity_uses_that_one_decision_and_stops_the_workflow_with_it():
@@ -67,7 +67,6 @@ def test_the_activity_uses_that_one_decision_and_stops_the_workflow_with_it():
     assert 'decide_with_control(n, stats, spec[\'round_policy\'], control)' in source
     assert "resolve(spec['round_policy'], control)" in source
     assert 'read_control(unit_root, on_error=notes.append)' in source
-    assert "pause_after_stage is not supported" in source      # said out loud, not half-applied
     assert "result['paused'] = reason" in source
     assert "raise ApplicationError(progress['paused'], non_retryable=True)" in source
     # the round itself still publishes, with its policy and the control it obeyed
@@ -87,3 +86,27 @@ def test_a_paused_unit_reads_as_held_not_broken(tmp_path):
     assert state['stage'].startswith('paused — loop_control stopped the unit after round 2')
     assert index.dataset_state(root)['cls'] == 'paused'
     assert '.queued,.paused{--st:var(--wait)' in index.CSS      # held, in the waiting colour
+
+
+def test_pause_after_stage_stops_between_stages(tmp_path):
+    """Generation 1 stops at safe_point("crosssample") / safe_point("zoomin"): after the stage's
+    own outputs land, before the next stage starts and before the round is decided. A child
+    workflow finishing is that same point, so the durable plane can honour the file after all --
+    it just needs the file read in an activity, and the stop to be a non-retryable failure."""
+    from ecarsi.control.dataset import dataset_step
+    unit_root = tmp_path / 'units' / 'u'
+    unit_root.mkdir(parents=True)
+    spec, unit = {'output_root': str(tmp_path)}, {'name': 'u'}
+    step = lambda stage: dataset_step('pause-after-stage', [spec, unit, stage])
+
+    assert step('crosssample') is None and step('zoomin') is None      # no file, no pause
+    (unit_root / 'loop_control.json').write_text('{"pause_after_stage": "crosssample"}')
+    assert step('zoomin') is None, 'only the named stage pauses'
+    reason = step('crosssample')
+    assert reason.startswith('PAUSED: loop_control stopped the unit after crosssample')
+    assert 'clear pause_after_stage' in reason, 'the way out is in the message'
+
+    source = (Path(__file__).parent.parent / 'ecarsi' / 'control' / 'dataset.py').read_text()
+    assert source.count("await pause_if_asked(spec, unit, ") == 2      # after each stage, both rounds
+    assert "workflow.patched('pause-after-stage-v1')" in source        # falsy for histories without it
+    assert 'raise ApplicationError(reason, non_retryable=True)' in source

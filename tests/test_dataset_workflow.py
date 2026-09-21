@@ -127,6 +127,8 @@ def test_unit_waits_for_accepted_pool_release_before_completing(monkeypatch):
             return {'id': 'ledger', 'output': 'ledger.json'}
         if action == 'round-ledger-published':
             return 'ledger'
+        if action == 'pause-after-stage':
+            return None                      # nothing in loop_control.json asks for a stop
         assert action == 'released' and args == ['unit.json', 'result.json']
     async def child(*args, **kwargs):
         return 'stage.json'

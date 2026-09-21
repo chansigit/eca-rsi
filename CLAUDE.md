@@ -225,7 +225,9 @@ ecarsi/observatory.py   控制面监视器（2026-09-18 起并入 Periscope：`e
   一起写进该轮 `publication.json` 的 `policy` / `control`。`pause: true` 或 `stop_after_round: N`
   **优先于 release**：该轮照常发布（含 ledger），下一轮不开，unit workflow 以 `PAUSED: …` 非重试失败告终
   ——这正是 `resume-dataset <run_id> --reason …` 已有的续跑契约，等价于第一代的退出码 3。清掉控制项再 resume。
-  `pause_after_stage` 第二代**不支持**（阶段是子 workflow），会记进 `control_notes` 并打印，不静默忽略。
+  `pause_after_stage: crosssample|zoomin` 第二代也生效（2026-09-21）：子 workflow 完成就是第一代
+  `safe_point("crosssample")` / `safe_point("zoomin")` 的那个安全点——该阶段产物已落盘、下一阶段未开、本轮未结算。
+  同样以 `PAUSED: …` 非重试失败告终，`resume-dataset` 续跑；恢复前要清掉控制项，否则下一轮原地再停。
   Periscope 把 `PAUSED` 与真失败区分开：状态色是等待色（`--wait`）而非失败红。
 - 第一代的 batch 准入（`eca-rsi batch`、节点代理、OSP compute-ahead、driver 内存租借）随 0.3.0 留在树里但不再维护；第二代数据集由控制面准入。
 

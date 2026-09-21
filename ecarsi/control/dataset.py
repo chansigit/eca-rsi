@@ -349,6 +349,18 @@ def dataset_step(action, args):
         else:
             raise ValueError('Unknown dataset stage')
         return validated(settings, validate)
+    if action == 'pause-after-stage':
+        # Generation 1 stops at harness_bridge's safe_point("crosssample") / safe_point("zoomin"):
+        # after the stage's own outputs are on disk, before the next stage starts and before the
+        # round is decided. Here the stage is a child workflow, so its completion is that same
+        # safe point -- the check just has to be an activity, because reading the file is I/O.
+        from ..round_policy import read_control
+        spec, unit, stage = args
+        control = read_control(Path(spec['output_root']) / 'units' / unit['name'])
+        if control.get('pause_after_stage') != stage:
+            return None
+        return (f'PAUSED: loop_control stopped the unit after {stage}; clear pause_after_stage '
+                'and resume the dataset to continue')
     if action == 'round':
         from ..round_policy import decide_with_control, read_control, resolve
         spec, unit, progress, cross_path, zoom_path = args
@@ -370,11 +382,6 @@ def dataset_step(action, args):
         notes = []
         control = read_control(unit_root, on_error=notes.append)
         policy = resolve(spec['round_policy'], control)
-        if control.get('pause_after_stage'):
-            # Generation 1 could stop between stages because it drove them in one process. Here a
-            # stage is a child workflow; say so rather than silently honouring only half the file.
-            notes.append('pause_after_stage is not supported by the durable control plane '
-                         '(stages are child workflows); use pause or stop_after_round')
         decision, reason = decide_with_control(n, stats, spec['round_policy'], control)
         stats[-1].update(decision=decision, reason=reason)
         directory = unit_root / 'rounds' / f'round{n:02d}'
@@ -443,6 +450,16 @@ def dataset_step(action, args):
     raise ValueError('Unknown dataset operation')
 
 
+async def pause_if_asked(spec, unit, stage):
+    """Stop the unit between stages, the way generation 1's safe_point does. Failing
+    non-retryably is how a unit holds without releasing and stays resumable: the same
+    contract `resume-dataset` already serves. Clear the control before resuming, or the
+    next round pauses at the same place again."""
+    reason = await call(dataset_step, 'pause-after-stage', [spec, unit, stage])
+    if reason:
+        raise ApplicationError(reason, non_retryable=True)
+
+
 @workflow.defn
 class AnalysisUnitWorkflow:
     @workflow.query
@@ -468,8 +485,12 @@ class AnalysisUnitWorkflow:
         number = len(progress['stats']) + 1
         self._stage = f'round {number}: cross-sample'
         cross = await execute('cross_sample', progress['input'], number, CrosssampleWorkflow.run, 'cross-sample/')
+        if workflow.patched('pause-after-stage-v1'):
+            await pause_if_asked(spec, unit, 'crosssample')
         self._stage = f'round {number}: zoom-in'
         zoom = await execute('zoom_in', cross, number, ZoominWorkflow.run, 'zoom-in/')
+        if workflow.patched('pause-after-stage-v1'):
+            await pause_if_asked(spec, unit, 'zoomin')
         progress = await call(dataset_step, 'round', [spec, unit, progress, cross, zoom])
         if workflow.patched('round-ledger-v1'):
             # The round's own Sankey and ledger, the way generation 1 published them: a
