@@ -73,7 +73,7 @@ def spec(**extra):
 
 @pytest.fixture(autouse=True)
 def fast(monkeypatch):
-    monkeypatch.setattr("ecarsi.index.write_all", lambda *args: None)
+    monkeypatch.setattr("ecarsi.ui.index.write_all", lambda *args: None)
     monkeypatch.setattr("ecarsi.agent_retry.MAX_ATTEMPTS", 1)
     monkeypatch.delenv("MSP_BATCH_COL", raising=False)
 

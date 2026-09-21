@@ -8,9 +8,9 @@ import subprocess
 import pytest
 
 from ecarsi import layout as L
-from ecarsi.index import (CSS, SANKEY_JS, UMAP_JS, collection_of, dataset_state, display_name, render_root,
+from ecarsi.ui.index import (CSS, SANKEY_JS, UMAP_JS, collection_of, dataset_state, display_name, render_root,
                           render_unit, write_all)
-from ecarsi.serve import HOME_JS, NAV_JS, _home_html, _navigator_html
+from ecarsi.ui.serve import HOME_JS, NAV_JS, _home_html, _navigator_html
 
 UMAP = {"n": 2, "n_total": 2, "x": [0, 65535], "y": [0, 65535], "extra": {},
         "layers": {"coarse": {"column": "zmip_ann_coarse", "labels": ["T", "B"], "colors": ["#111", "#222"], "counts": [1, 1], "idx": [0, 1]},
@@ -122,7 +122,7 @@ def test_running_unit_shows_cells_now_and_the_running_round(tmp_path):
 
 def test_events_and_history_come_from_the_log(tmp_path):
     import time
-    from ecarsi.serve import fleet_history, history_at
+    from ecarsi.ui.serve import fleet_history, history_at
     root, unit = make_run(tmp_path)
     st = dataset_state(root)
     t_org, t_rel = (time.mktime(time.strptime(s, "%Y-%m-%d %H:%M:%S")) for s in ("2026-09-06 10:00:00", "2026-09-06 12:30:00"))

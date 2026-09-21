@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from ecarsi import index, layout as L, serve
+from ecarsi import layout as L
+from ecarsi.ui import index, serve
 
 
 def save(path: Path, value):

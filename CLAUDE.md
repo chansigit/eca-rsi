@@ -192,8 +192,11 @@ python -m pytest -q tests/test_downstream.py tests/test_downstream_state.py test
 - **本目录是开发目录:运行产物一律放仓库外**(workdir 指到如
   `$SCRATCH/eca-runs/<数据集名>`),输入数据也不进本仓库。
 - **批次跑着时四个主 checkout 的包目录是只读的**(`chmod -R a-w projects/{eca-rsi/ecarsi,osp/osp,msp/msp,zmip/zmip}`,2026-09-07 起):
-  `runtime_identity()` / `downstream.runtime()` 哈希包内全部 .py/.md/.json(含 serve.py 这类与计算无关的文件),主 checkout 上任何改动都会让
+  `runtime_identity()` / `downstream.runtime()` 哈希包内全部 .py/.md/.json,主 checkout 上任何改动都会让
   正在 verify 的阶段失败(tome E9.5 round 3 zoomin 因此重算过)。改代码走 worktree + PYTHONPATH,批次结束再 `chmod -R u+w` 并合并。
+  **例外:`ecarsi/ui/`(serve / index / umapdata)不进哈希**(2026-09-21,eca-rsi#10):展示代码不影响任何计算,
+  改页面不该让在跑的阶段作废——那正是 2026-09-07 两次重算的原因。`run_state.PRESENTATION` 是这条规则,
+  按目录而非文件清单;`ecarsi/{serve,index,umapdata}.py` 只剩 shim,保住 `python -m ecarsi.serve` 这个拼写(部署脚本在用)。
 
 ## 第二代：durable 控制面（分支 `gen2` 2026-09-17 起，2026-09-18 合入 main；细节见 [docs-gen2/ARCHITECTURE.md](docs-gen2/ARCHITECTURE.md)）
 

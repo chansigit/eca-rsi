@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 from functools import partial
 
-from ecarsi import serve
+from ecarsi.ui import serve
 from ecarsi.observatory import INDEX_HORIZON, ControlPlane
 from ecarsi.warm_pool.state import save
 

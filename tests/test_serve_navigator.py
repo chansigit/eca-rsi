@@ -2,7 +2,7 @@
 tallies, a species filter, and the fields the filter JS reads."""
 from pathlib import Path
 
-from ecarsi import index, serve
+from ecarsi.ui import index, serve
 
 
 def _state(p: Path) -> dict:

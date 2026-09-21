@@ -84,7 +84,7 @@ def test_settings_http_admin_gate_and_no_secret_echo(tmp_path, monkeypatch):
     import urllib.request
     import urllib.error
     from functools import partial
-    from ecarsi import serve
+    from ecarsi.ui import serve
     catalog = tmp_path / 'models.json'
     catalog.write_text(json.dumps({'models': []}))
     token = 't' * 40

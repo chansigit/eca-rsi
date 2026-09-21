@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from ecarsi import serve
+from ecarsi.ui import serve
 
 
 class _Reg:

@@ -199,7 +199,7 @@ def publish(unit_ref):
     """Commit once. A retry validates the existing receipt and never reruns science."""
     from ..release_state import publication, recover
     from ..ledger import sankey_data
-    from ..umapdata import write_umap_json
+    from ..ui.umapdata import write_umap_json
     from ..review import to_json, to_markdown
     root = Path(unit_ref['path']).parent
     with lock(root / 'release.lock'):

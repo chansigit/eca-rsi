@@ -66,7 +66,7 @@ from . import cost, crosssample, mirror, prune, review, zoomin
 from . import downstream as D
 from . import layout as L
 from . import release_state as R
-from .index import fmt_elapsed, read_stats, write_all
+from .ui.index import fmt_elapsed, read_stats, write_all
 from .ledger import run_ledger
 from .run_state import file_identity, read_json, write_json
 
@@ -193,7 +193,7 @@ def _write_release(unit: Path, rounds: list[Path], stats: list[dict], forced: bo
         src = L.ledger_dir(last) / name
         if src.is_file():
             shutil.copy2(src, rel / name)
-    from .umapdata import write_umap_json
+    from .ui.umapdata import write_umap_json
 
     write_umap_json(final, rel / "umap.json")
     items = review.collect(unit, rounds, stats, forced)

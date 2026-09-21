@@ -188,7 +188,13 @@ class HyperQueue:
         self.config = read(self.root / "config.json")
         self.command = [self.config["hq"], "--server-dir", str(self.root / "hq"), "--output-mode", "json"]
         self.finished = {}
-        self.settled = set()  # succeeded/cancelled folders: nothing can change them, not even a retry
+        # Succeeded/cancelled folders: nothing can change them, not even a retry. That makes the
+        # set a durable fact rather than a cache, and the reason to keep it across restarts: a
+        # fresh scheduler otherwise stats request.json for every folder in the pool before it can
+        # dispatch anything. On 2026-09-20 that cold reconcile ran 33 minutes over 91,856 folders
+        # and delayed 21 tasks, 5 of them by 1061 s -- paid on every handover of the control plane.
+        self.settled = {(name, ino) for name, ino in read(self.root / "settled.json", [])}
+        self._saved = len(self.settled)
 
     def call(self, *args):
         result = subprocess.run(self.command + list(args), stdin=subprocess.DEVNULL,
@@ -196,6 +202,15 @@ class HyperQueue:
         if result.returncode:
             raise RuntimeError(result.stderr[-1500:] or result.stdout[-1500:])
         return json.loads(result.stdout) if result.stdout.strip() else None
+
+    def _persist_settled(self):
+        """One write per tick that adds settled requests, none when nothing settles. The file is
+        advisory: a stale or missing entry costs one extra stat, a wrong one cannot skip work that
+        is not already sealed, because only a receipt puts a folder in here."""
+        if len(self.settled) == self._saved:
+            return
+        save(self.root / "settled.json", sorted(self.settled))
+        self._saved = len(self.settled)
 
     def dispatch(self, info):
         jobs = self.call("job", "list", "--all")
@@ -299,6 +314,7 @@ class HyperQueue:
                     submissions.append((folder, ("job", "submit-file", str(path))))
                 else:
                     submissions.append((folder, tuple(args)))
+        self._persist_settled()
         if forgettable:
             # The receipt is the record; HQ's copy only makes `job list --all` grow with history.
             try:

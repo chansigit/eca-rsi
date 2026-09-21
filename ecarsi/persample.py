@@ -457,7 +457,7 @@ def _run(args, unit, h5ad, out, bare):
     _write_review(unit, out, man, bare)
     if not bare:
         L.log_event(unit, f"persample {man['state']}: {len(entries)} experiments; {len(man['failed_samples'])} failed")
-        from .index import write_all
+        from .ui.index import write_all
         write_all(unit)
     print(f"[persample] {man['state']}: {len(entries)} samples; failures={man['failed_samples']}")
     return 1 if failed or missing else 0
@@ -466,7 +466,7 @@ def _run(args, unit, h5ad, out, bare):
 def _pages(unit: Path) -> None:
     """Landing pages (+ mirror) after each sample; a page problem must not stop the pool."""
     try:
-        from .index import write_all
+        from .ui.index import write_all
         write_all(unit)
     except Exception as exc:
         print(f"[persample] landing page not updated: {exc}", flush=True)

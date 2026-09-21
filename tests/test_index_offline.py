@@ -2,7 +2,7 @@
 import json
 from html.parser import HTMLParser
 
-from ecarsi.index import render_unit
+from ecarsi.ui.index import render_unit
 
 
 class Scripts(HTMLParser):

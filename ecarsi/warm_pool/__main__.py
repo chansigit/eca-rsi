@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 from .backend import check_hq, check_runtime, join, serve
-from .state import cancel, digest, file_digest, lock, pool_root, read, retry, save, status, submit, sync_directory
+from .state import archive, cancel, digest, file_digest, lock, pool_root, read, retry, save, status, submit, sync_directory
 
 
 def configure_runtime(root, runtime):
@@ -90,6 +90,10 @@ def main(argv=None):
     repetition.add_argument("--memory-mb", type=int, help="raise the budget of an attempt that exceeded its RSS watchdog")
     repetition.add_argument("--timeout-seconds", type=int, help="raise the time limit of an attempt that reached its deadline")
     repetition.add_argument("--without-gpu", action="store_true", help="run a preferred-GPU request on CPUs after it exceeded its GPU memory budget")
+    removal = commands.add_parser("archive", help="move a published run's settled requests out of the pool")
+    removal.add_argument("run", nargs="+", help="run id or dataset id; a request belongs by its spec.trace")
+    removal.add_argument("--into", type=Path, help="destination; default <pool>/../archived-requests/released-<stamp>")
+    removal.add_argument("--dry-run", action="store_true")
     a = p.parse_args(argv)
     if a.command == "init":
         result = initialize(a.root, a.hq, a.runtime)
@@ -114,6 +118,10 @@ def main(argv=None):
             return 0  # The remote command already printed its result.
     elif a.command == "submit":
         result = submit(a.root, read(a.spec))
+    elif a.command == "archive":
+        result = archive(a.root, a.run, destination=a.into, dry_run=a.dry_run,
+                         on_progress=lambda seen, hit: print(f"[archive] {seen} scanned, {hit} matched",
+                                                             file=sys.stderr, flush=True))
     elif a.command == "cancel":
         result = cancel(a.root, a.request_id)
     elif a.command == "retry":

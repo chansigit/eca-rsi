@@ -147,7 +147,7 @@ def main(argv: list[str]) -> int:
                             raise ValueError(f"unit manifest changed: {unit}")
                         verify_snapshots(L.input_manifest(unit).parent, read_json(L.input_manifest(unit)))
                     print("[organize] all planned units verified; resuming")
-                    from .index import write_all
+                    from .ui.index import write_all
                     write_all(out_root)
                     return 0
             else:

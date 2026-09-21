@@ -6,7 +6,7 @@ order silently moved a bookmarked link to another batch's data.
 """
 from pathlib import Path
 
-from ecarsi.serve import _scan_names
+from ecarsi.ui.serve import _scan_names
 
 
 def paths(*specs: str) -> list[Path]:

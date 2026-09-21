@@ -14,6 +14,7 @@ from pathlib import Path
 
 from . import layout as L
 from .run_state import (
+    _presentation,
     developer_mode,
     digest,
     file_identity,
@@ -65,7 +66,8 @@ def runtime(kernel):
         root = Path(spec.origin).parent
         sources[name] = {'digest': digest({  # content only; path/commit go to provenance
             str(p.relative_to(root)): file_identity(p) for p in sorted(root.rglob('*'))
-            if p.suffix in {'.py', '.md', '.json'} and '__pycache__' not in p.parts})}
+            if p.suffix in {'.py', '.md', '.json'} and '__pycache__' not in p.parts
+            and not _presentation(p, root)})}
     packages = {}
     for name in ('msp-sc', 'zmip', 'standissect-lite', 'harmonypy',
                  'scanpy', 'anndata', 'numpy', 'scipy', 'pandas', 'h5py', 'numba',

@@ -51,7 +51,7 @@ def plan_file(path, names=("A",), split=False):
 
 @pytest.fixture(autouse=True)
 def no_index(monkeypatch):
-    monkeypatch.setattr("ecarsi.index.write_all", lambda *args: None)
+    monkeypatch.setattr("ecarsi.ui.index.write_all", lambda *args: None)
 
 
 def organize_two(tmp_path):
@@ -299,7 +299,7 @@ def test_front_bridge_identity():
 
 
 def test_unit_page_renders_before_and_after_front_review(tmp_path):
-    from ecarsi.index import render_unit
+    from ecarsi.ui.index import render_unit
     unit = organize_two(tmp_path)
     assert "test-unit" in render_unit(unit)
     write_json(L.persample_root(unit) / "needs_review.json", {

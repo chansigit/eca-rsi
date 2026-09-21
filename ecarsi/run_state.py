@@ -72,6 +72,19 @@ def developer_mode() -> bool:
     return os.environ.get("ECA_RSI_DEVELOPER_MODE", "0").strip() == "1"
 
 
+#: Subpackages that render results rather than produce them. Excluded from the
+#: identity digest so a stylesheet edit cannot invalidate a stage that is
+#: verifying at that second -- which cost two recomputations on 2026-09-07 and
+#: has kept four checkouts read-only for the length of every batch since
+#: (eca-rsi#10). A directory, not a file list: the rule stays one line, and
+#: anything added to it is presentation by construction.
+PRESENTATION = ("ui",)
+
+
+def _presentation(path: Path, root: Path) -> bool:
+    return path.relative_to(root).parts[0] in PRESENTATION
+
+
 def runtime_identity() -> dict:
     """No kernel imports: also runs in OSP_PYTHON before any analysis."""
     import importlib.metadata
@@ -90,7 +103,8 @@ def runtime_identity() -> dict:
         if spec is None or spec.origin is None:
             raise RuntimeError(f"{module} is not installed in {sys.executable}")
         folder = Path(spec.origin).parent
-        files = sorted(p for p in folder.rglob("*") if p.suffix in (".py", ".md", ".json") and "__pycache__" not in p.parts)
+        files = sorted(p for p in folder.rglob("*") if p.suffix in (".py", ".md", ".json")
+                       and "__pycache__" not in p.parts and not _presentation(p, folder))
         source = digest({str(p.relative_to(folder)): file_identity(p) for p in files})
         # content only: the checkout path and git commit are provenance (see
         # source_provenance), not identity — a doc-only commit or the same

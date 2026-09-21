@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from ecarsi import index, round_policy
+from ecarsi import round_policy
+from ecarsi.ui import index
 
 
 def control(unit: Path, **values):

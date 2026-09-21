@@ -297,3 +297,64 @@ def immutable(path, value):
         if old is None:
             save(path, value)
     return reference(path)
+
+
+def archive(root, runs, destination=None, dry_run=False, on_progress=None):
+    """Move every settled request of the named runs out of the pool.
+
+    A request folder is not a log of what ran: `<attempt>/outputs/` holds the computed
+    artefacts themselves, and a dataset's publications reference them by absolute path
+    and digest. Moving them is therefore safe only once a run is published -- the light
+    artefacts are copied into the round directories by then (see control/artifacts.py),
+    and the matrices are in `release/`. What it does give up is reopening that run:
+    `verified(reference(path))` will no longer find its inputs.
+
+    Requests are named after a stage (`<dataset>-<hash>.<kind>-<hash>`), a session
+    (`cross-<hash>.tool-<hash>`) or nothing at all (`agent-<hash>`), so membership comes
+    from `spec.trace`, which every request carries. That means reading one small file per
+    folder, paced: an unpaced walk of this directory stalled the control node's Lustre
+    client on 2026-09-17 and failed three healthy datasets.
+    """
+    root = pool_root(root)
+    runs = set(runs)
+    if not runs:
+        raise ValueError("Name the runs to archive; this command never guesses")
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    destination = Path(destination) if destination else root.parent / "archived-requests" / ("released-" + stamp)
+    moved, kept, unsettled, reads = [], 0, [], 0
+    for entry in sorted(os.scandir(root / "requests"), key=lambda e: e.name):
+        reads += 1
+        if reads > 500:
+            time.sleep(0.01)   # ponytail: same crude cap as the observatory walk
+        if on_progress and reads % 5000 == 0:
+            on_progress(reads, len(moved))
+        folder = Path(entry.path)
+        request = read(folder / "request.json")
+        if request is None:
+            continue
+        trace = request["spec"].get("trace") or {}
+        workflow = str(trace.get("workflow_id", ""))
+        if not any(workflow.split("/")[-1].startswith(run) or trace.get("dataset_id") == run for run in runs):
+            kept += 1
+            continue
+        state = status(root, entry.name)["state"]
+        if state not in {"succeeded", "complete", "cancelled", "failed"}:
+            unsettled.append((entry.name, state))
+            continue
+        moved.append(entry.name)
+    # Decide over the whole pool before moving anything: a live request found late must not
+    # leave the ones scanned before it already gone.
+    if unsettled:
+        raise ValueError(f"{len(unsettled)} request(s) of these runs are still live, "
+                         f"first: {unsettled[0]}; archive only a finished run")
+    if not dry_run and moved:
+        (destination / "requests").mkdir(mode=0o700, parents=True, exist_ok=True)
+        for name in moved:
+            (root / "requests" / name).rename(destination / "requests" / name)
+    manifest = dict(archived_at=stamp, runs=sorted(runs), pool=str(root),
+                    destination=str(destination), requests=moved, retained=kept, dry_run=dry_run)
+    if not dry_run and moved:
+        save(destination / "manifest.json", manifest)
+        settled = [pair for pair in read(root / "settled.json", []) if pair[0] not in set(moved)]
+        save(root / "settled.json", settled)
+    return manifest

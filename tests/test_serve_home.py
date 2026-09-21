@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from ecarsi import serve
-from ecarsi.serve import NAV_JS, _home_html, _navigator_html
+from ecarsi.ui import serve
+from ecarsi.ui.serve import NAV_JS, _home_html, _navigator_html
 
 
 @pytest.mark.parametrize('count,display', [(9_999_999, '9,999,999'), (10_000_000, '10.00 M'), (12_345_678, '12.35 M')])
 def test_cell_row_compacts_inputs_but_keeps_releases_exact(monkeypatch, count, display):
-    from ecarsi import serve
+    from ecarsi.ui import serve
     monkeypatch.setattr(serve, 'fleet_totals', lambda _: dict(cells_in=count, cells_queued=count,
         cells_released=count, kept=None, undated_input=0))
     html = _home_html({})
@@ -38,7 +38,7 @@ def test_navigator_includes_home_item_and_sort_control():
 
 
 def test_cells_cards_use_history_not_queued_inputs_or_partial_output():
-    from ecarsi.serve import fleet_history, fleet_totals, history_at
+    from ecarsi.ui.serve import fleet_history, fleet_totals, history_at
     def state(cls, n, final, org=(), rel=()):
         return dict(cls=cls, n_input=n, final_cells=final, species="mouse",
                     events=dict(organize=list(org), release=list(rel)))
@@ -70,7 +70,7 @@ def test_nav_js_is_syntactically_valid(tmp_path):
 
 def test_access_log_names_the_tunnel_visitor(capsys):
     """Behind ngrok the socket peer is 127.0.0.1; the log must show X-Forwarded-For and the UA."""
-    from ecarsi.serve import Handler
+    from ecarsi.ui.serve import Handler
 
     class Fake:
         headers = {"X-Forwarded-For": "203.0.113.9, 127.0.0.1", "User-Agent": "TestBrowser/1.0"}
@@ -103,7 +103,7 @@ def test_a_wrapped_status_is_a_label_not_a_capsule():
     assert "#ds-table .pill{white-space:normal;line-height:1.35;max-width:18ch;" in css
     assert "border-radius:var(--r);padding:.25em .6em;align-items:flex-start}" in css
     assert "#ds-table .pill::before{margin-top:.42em}" in css
-    from ecarsi import index
+    from ecarsi.ui import index
     assert "border-radius:999px" in index.CSS   # the capsule stays right everywhere it fits
 
 

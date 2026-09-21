@@ -300,7 +300,7 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
 
     global_manifest["state"] = "complete"
     write_json(gm, global_manifest)
-    from .index import write_all
+    from .ui.index import write_all
 
     write_all(out_root)
     print(f"[done] {len(plan['analysis_units'])} analysis unit(s); manifest at {gm}")

@@ -9,7 +9,7 @@ import pytest
 
 from ecarsi import layout as L
 from ecarsi import mirror
-from ecarsi.index import render_root, render_unit, write_all
+from ecarsi.ui.index import render_root, render_unit, write_all
 
 BIG = b"0" * (mirror.LIGHT_CSV_MAX + 1)
 
