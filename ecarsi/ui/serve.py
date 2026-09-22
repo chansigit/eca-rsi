@@ -447,22 +447,36 @@ class StateCache:
                 self._save_lock.release()
         return st
 
-    def refresh(self) -> None:
+    SETTLED = frozenset({"released"})   # the one state whose files will not move again
+    FULL_EVERY = 10                     # sweeps between two rereads of the settled majority
+
+    def refresh(self, full: bool = True) -> None:
         roots = set(self._registry.snapshot().values())
+        if not full:
+            # A released dataset is finished: rereading 270 of them is what pushes the handful that
+            # are actually running out to a multi-minute refresh, which is exactly the lag people
+            # notice. Reread the unsettled ones every sweep and the rest occasionally, in case one
+            # was reopened or arrived while this process was not looking.
+            with self._lock:
+                settled = {root for root, (_, st) in self._states.items() if st.get("cls") in self.SETTLED}
+            roots = {root for root in roots if root not in settled} or roots
         # Bound filesystem work independently of the number of browser requests.
         with ThreadPoolExecutor(max_workers=4, thread_name_prefix='dataset-warmer') as workers:
             list(workers.map(self._put, roots))
         with self._lock:
-            for gone in set(self._states) - roots:
+            live = set(self._registry.snapshot().values())
+            for gone in set(self._states) - live:
                 del self._states[gone]
 
     def start(self) -> None:
         def loop():
+            sweep = 0
             while True:
                 try:
-                    self.refresh()
+                    self.refresh(full=sweep % self.FULL_EVERY == 0)
                 except Exception as e:
                     sys.stderr.write(f"[serve] state warmer: {e}\n")
+                sweep += 1
                 time.sleep(self._ttl)
 
         threading.Thread(target=loop, daemon=True, name="state-warmer").start()

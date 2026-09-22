@@ -237,3 +237,25 @@ def test_dataset_state_carries_each_unit_as_its_own_row(tmp_path):
     assert only["stage"] == state["stage"] and only["n_input"] == state["n_input"]
     assert only["updated"] is not None            # the unit's own clock, not the dataset's
     assert all(not isinstance(v, Path) for v in only.values())   # the state cache is JSON on disk
+
+
+def test_a_working_stage_moves_the_clock_before_it_publishes(tmp_path):
+    """A stage writes its publication only when it ends. Per-sample can run for an hour, and a
+    cross-sample session for hundreds of model turns, while the page reports the run as last touched
+    at the previous stage boundary. The stage directory's own mtime moves with every agent folder it
+    creates, so the clock follows the work instead of the milestones."""
+    import os
+    from ecarsi.ui.index import state_mtime
+    root = tmp_path / "run"
+    unit = root / L.UNITS / "organ"
+    (root / L.GEN2_ORGANIZE).mkdir(parents=True)
+    (root / L.GEN2_ORGANIZE / L.GEN2_PUBLICATION).write_text("{}")
+    persample = unit / L.GEN2_PERSAMPLE
+    persample.mkdir(parents=True)
+    old = 1_000_000.0
+    for p in (root / L.GEN2_ORGANIZE / L.GEN2_PUBLICATION, root / L.GEN2_ORGANIZE, persample, unit, root):
+        os.utime(p, (old, old))
+    assert state_mtime(root) == old and state_mtime(unit) == old
+    (persample / "agent-0001").mkdir()          # the stage starts working: no publication yet
+    assert state_mtime(root) > old, "a busy per-sample stage still read as idle from the dataset"
+    assert state_mtime(unit) > old, "a unit row had no clock of its own"

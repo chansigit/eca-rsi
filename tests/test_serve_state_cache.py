@@ -102,3 +102,35 @@ def test_rendered_pages_are_gzipped_when_accepted(tmp_path):
             assert r.headers.get("Content-Encoding") is None and b"Periscope" in r.read()
     finally:
         httpd.shutdown(); httpd.server_close()
+
+
+def test_a_quick_sweep_rereads_the_running_datasets_and_leaves_the_finished_ones(tmp_path, monkeypatch):
+    """Rereading every released dataset each cycle is what pushed the few that are still running out
+    to a multi-minute refresh -- the lag people see on the overview. Quick sweeps touch the unsettled
+    ones; a full sweep still comes round for the rest, so a reopened or newly bound run is not lost."""
+    states = {"run": {"stage": "per-sample", "cls": "running"}, "done": {"stage": "released", "cls": "released"}}
+    calls = []
+    monkeypatch.setattr(serve, "_dataset_state",
+                        lambda root: calls.append(root) or dict(states[root.name]))
+    run, done = tmp_path / "run", tmp_path / "done"
+    cache = serve.StateCache(_Reg({"run": run, "done": done}), ttl=60)
+    cache.refresh()                                   # first sweep is full: both read
+    assert sorted(calls) == sorted([done, run])
+    calls.clear()
+    cache.refresh(full=False)
+    assert calls == [run], "a quick sweep must skip the finished datasets and reread the running one"
+    calls.clear()
+    cache.refresh(full=True)
+    assert sorted(calls) == sorted([done, run])
+
+
+def test_a_quick_sweep_with_nothing_running_still_reads_something(tmp_path, monkeypatch):
+    """Every dataset settled: skipping all of them would freeze the cache against a reopened run."""
+    monkeypatch.setattr(serve, "_dataset_state", lambda root: {"stage": "released", "cls": "released"})
+    done = tmp_path / "done"
+    cache = serve.StateCache(_Reg({"done": done}), ttl=60)
+    cache.refresh()
+    seen = []
+    monkeypatch.setattr(serve, "_dataset_state", lambda root: seen.append(root) or {"stage": "released", "cls": "released"})
+    cache.refresh(full=False)
+    assert seen == [done]

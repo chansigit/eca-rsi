@@ -1422,12 +1422,27 @@ STATE_GLOBS = (L.PROGRESS, f"{L.UNITS}/*/{L.PROGRESS}", f"{L.ORGANIZE}/{L.MANIFE
                # long round still moves the clock
                f"{L.UNITS}/*/{L.ROUNDS}/*/*/{L.GEN2_PUBLICATION}",
                f"{L.UNITS}/*/{L.GEN2_PERSAMPLE}/{L.GEN2_PUBLICATION}", f"{L.RELEASE}/receipt.json",
-               f"{L.UNITS}/*/{L.RELEASE}/receipt.json")
+               f"{L.UNITS}/*/{L.RELEASE}/receipt.json",
+               # the same gen-2 publications seen from a unit directory, for the fleet table's unit
+               # rows: without these a unit has no clock at all (they cost nothing at dataset level,
+               # where a dataset root has no rounds/ of its own)
+               f"{L.ROUNDS}/*/{L.GEN2_PUBLICATION}", f"{L.ROUNDS}/*/*/{L.GEN2_PUBLICATION}",
+               f"{L.GEN2_PERSAMPLE}/{L.GEN2_PUBLICATION}")
+
+# A stage publishes only when it ends, so a unit can spend an hour in per-sample, or a cross-sample
+# session hundreds of model turns, without one glob above matching: the page then reports the run as
+# last touched at the previous stage boundary (2026-09-21: a unit writing agent state every few
+# seconds read as 13 minutes idle). A directory's mtime moves as soon as an entry is created in it,
+# which a working stage does constantly, and one stat per stage directory is cheap where a walk over
+# its thousands of agent files would not be.
+STATE_DIRS = (L.GEN2_PERSAMPLE, f"{L.ROUNDS}/*", f"{L.ROUNDS}/*/*",
+              f"{L.UNITS}/*/{L.GEN2_PERSAMPLE}", f"{L.UNITS}/*/{L.ROUNDS}/*", f"{L.UNITS}/*/{L.ROUNDS}/*/*",
+              L.GEN2_ORGANIZE, L.PERSAMPLE, f"{L.UNITS}/*/{L.PERSAMPLE}")
 
 
 def state_mtime(d: Path) -> float | None:
     ts = []
-    for g in STATE_GLOBS:
+    for g in STATE_GLOBS + STATE_DIRS:
         for p in d.glob(g):
             try:
                 ts.append(p.stat().st_mtime)
