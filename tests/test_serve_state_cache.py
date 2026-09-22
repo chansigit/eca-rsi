@@ -230,37 +230,48 @@ def test_a_run_the_control_plane_publishes_is_a_row_without_being_registered(tmp
     """The coordinator and the monitor disagreed about what the fleet was: a dataset submitted ten
     minutes earlier was absent from the page until someone ran scan-add by hand (2026-09-22). The
     plane now publishes each run's output_root from the spec it was started with, and the registry
-    merges those runs under the file and the command line -- so a submitted dataset is a row at once,
-    a registered name keeps its own path, and a run whose directory is gone contributes nothing."""
+    merges those runs under the file and the command line.
+
+    But "everything the plane ever owned" is not the fleet: the first cut of this put 31 dead runs
+    back on the page in one refresh. A run is a row while it runs and for a day after it closes,
+    unless a later run of the same dataset has superseded it; a registered name keeps its own path;
+    a run whose directory is gone, and a publisher that has gone quiet, contribute nothing."""
     import json
     import time
     from ecarsi.ui.serve import ControlVerdicts, Registry
 
-    published_dir = tmp_path / "runs" / "mouse-pansci-duodenum_Prkdc-c"
-    published_dir.mkdir(parents=True)
+    now = time.time()
+    runs = tmp_path / "runs"
+    for name in ("duodenum-c", "duodenum-b", "duodenum", "adrenal", "blood", "kim2020"):
+        (runs / name).mkdir(parents=True)
     registered_dir = tmp_path / "elsewhere" / "kim2020"
     registered_dir.mkdir(parents=True)
     status = tmp_path / "fleet-status.json"
-    status.write_text(json.dumps({"generated_at": time.time(), "workflows": {
-        "dataset/mouse-pansci-duodenum-prkdc-c": {"kind": "DatasetWorkflow", "status": "RUNNING",
-                                                  "output_root": str(published_dir)},
-        "dataset/mouse-pansci-duodenum-prkdc-c/unit-0": {"kind": "AnalysisUnitWorkflow", "status": "RUNNING",
-                                                         "output_root": str(published_dir)},   # units are not rows
-        "dataset/kim2020": {"kind": "DatasetWorkflow", "status": "RUNNING",
-                            "output_root": str(tmp_path / "runs" / "kim2020")},                # registered under another path
-        "dataset/gone": {"kind": "DatasetWorkflow", "status": "FAILED",
-                         "output_root": str(tmp_path / "runs" / "gone")},                      # directory does not exist
+    def wf(name, state, started, closed=None, dataset=None):
+        return {"kind": "DatasetWorkflow", "status": state, "started": started, "closed": closed,
+                "dataset_id": dataset or name, "output_root": str(runs / name)}
+    status.write_text(json.dumps({"generated_at": now, "workflows": {
+        "dataset/duodenum-c": wf("duodenum-c", "RUNNING", now - 600, dataset="Duodenum"),        # running: a row
+        "dataset/duodenum-b": wf("duodenum-b", "FAILED", now - 7200, now - 3600, "Duodenum"),   # superseded by -c: not a row
+        "dataset/duodenum":   wf("duodenum", "FAILED", now - 90000, now - 86000, "Duodenum"),  # superseded and stale
+        "dataset/adrenal":    wf("adrenal", "FAILED", now - 7200, now - 1800),                  # failed an hour ago: a row
+        "dataset/blood":      wf("blood", "FAILED", now - 5 * 86400, now - 4 * 86400),          # failed four days ago: history
+        "dataset/kim2020":    wf("kim2020", "RUNNING", now - 60),                               # registered under another path
+        "dataset/gone":       {**wf("gone", "RUNNING", now - 60), "output_root": str(runs / "gone")},  # no directory
+        "dataset/duodenum-c/unit-0": {"kind": "AnalysisUnitWorkflow", "status": "RUNNING",
+                                      "started": now - 500, "output_root": str(runs / "duodenum-c")},  # units are not rows
     }}))
     verdicts = ControlVerdicts(status)
-    assert verdicts.runs() == {"mouse-pansci-duodenum_Prkdc-c": published_dir}
+    assert verdicts.runs() == {"duodenum-c": runs / "duodenum-c", "adrenal": runs / "adrenal",
+                               "kim2020": runs / "kim2020"}
 
     reg_file = tmp_path / "registry.json"
     reg_file.write_text(json.dumps({"kim2020": str(registered_dir)}))
     registry = Registry(reg_file, published=verdicts.runs)
     items = registry.snapshot()
-    assert items["mouse-pansci-duodenum_Prkdc-c"] == published_dir       # on the page, nobody registered it
-    assert items["kim2020"] == registered_dir                           # the registry's own path wins
-    assert "gone" not in items and "unit-0" not in "".join(items)
+    assert items["duodenum-c"] == runs / "duodenum-c"     # on the page, nobody registered it
+    assert items["kim2020"] == registered_dir             # the registry's own path wins
+    assert set(items) == {"duodenum-c", "adrenal", "kim2020"}
 
     # A publisher that has gone quiet stops adding rows; the file's rows remain.
     status.write_text(json.dumps({"generated_at": 0.0, "workflows": {}}))

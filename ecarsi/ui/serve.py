@@ -426,6 +426,7 @@ class ControlVerdicts:
     and a missing one simply leaves the disk-derived row alone."""
 
     FRESH = 120.0     # a publisher that has not written for this long is not speaking for the fleet
+    RECENT = 86400.0  # a closed run stays on the page this long, unless registered or superseded
 
     def __init__(self, path: Path | None):
         self._path, self._mtime, self._data = path, None, {}
@@ -472,11 +473,28 @@ class ControlVerdicts:
         it. Superseded runs whose directories are gone, or a silent publisher, contribute nothing."""
         if not self.live():
             return {}
+        datasets = [r for r in (self._data.get("workflows") or {}).values() if r.get("kind") == "DatasetWorkflow"]
+        # A run is fleet while it runs, and for a day after it closes -- long enough for a failure
+        # to be seen, not long enough for last week's to keep the table. And never once the same
+        # dataset has been started again: a resubmission supersedes what it replaced. The first
+        # version of this rule bound everything the plane had ever owned and put 31 dead runs back
+        # on the page in one refresh, fifteen of them "failed" (2026-09-22).
+        newest = {}
+        for r in datasets:
+            key = r.get("dataset_id")
+            if key and r.get("started", 0) > newest.get(key, 0):
+                newest[key] = r["started"]
         out = {}
-        for record in (self._data.get("workflows") or {}).values():
-            root = record.get("output_root")
-            if record.get("kind") == "DatasetWorkflow" and root and Path(root).is_dir():
-                out[Path(root).name] = Path(root)
+        for r in datasets:
+            root = r.get("output_root")
+            if not root or not Path(root).is_dir():
+                continue
+            if r.get("status") != "RUNNING":
+                closed = r.get("closed") or 0
+                superseded = r.get("started", 0) < newest.get(r.get("dataset_id"), 0)
+                if superseded or time.time() - closed > self.RECENT:
+                    continue
+            out[Path(root).name] = Path(root)
         return out
 
 
