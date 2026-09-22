@@ -221,3 +221,19 @@ def test_the_umap_surface_belongs_to_the_page_in_both_themes():
     assert 'theme("--umap-dim"), blank = theme("--umap-blank")' in js
     assert "0xffeae6e3" not in js and "0xffbbbbbb" not in js      # nothing baked light any more
     assert "getComputedStyle(document.documentElement).getPropertyValue(name)" in js
+
+
+def test_dataset_state_carries_each_unit_as_its_own_row(tmp_path):
+    """The fleet table reads these; computing them here costs nothing because dataset_state already
+    has every unit state in hand, and keeps the page off the disk."""
+    from pathlib import Path
+    from ecarsi.ui.index import round_trend, unit_state
+    root, unit = make_run(tmp_path)
+    rows = dataset_state(root)["unit_rows"]
+    assert [r["name"] for r in rows] == [unit.name]
+    only = rows[0]
+    state = unit_state(unit)
+    assert only["trend"] == round_trend([state]) and only["rounds"] == len(state["rounds"])
+    assert only["stage"] == state["stage"] and only["n_input"] == state["n_input"]
+    assert only["updated"] is not None            # the unit's own clock, not the dataset's
+    assert all(not isinstance(v, Path) for v in only.values())   # the state cache is JSON on disk

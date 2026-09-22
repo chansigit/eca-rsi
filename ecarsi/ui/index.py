@@ -1065,7 +1065,19 @@ def dataset_state(root: Path, states: list[dict] | None = None) -> dict:
             "species": ", ".join(sorted({str(s["species"]) for s in states if s["species"]})),
             "finished": max(fin) if fin and released == len(states) else None,
             "updated": updated, "stage": stage, "cls": cls, "trend": round_trend(states),
-            "awaiting_start": False}
+            "unit_rows": [unit_row(s) for s in states], "awaiting_start": False}
+
+
+def unit_row(state: dict) -> dict:
+    """One analysis unit as the fleet table sees it: its own rounds, its own clock. The dataset
+    aggregate cannot carry these -- a dataset's trend was the longest unit's curve standing in for
+    every unit, and its stage was a count of how many were running."""
+    updated = state_mtime(state["dir"])
+    cls, stage = _stalled(state["stage_class"], state["stage"], updated)
+    return {"name": state["name"], "stage": stage, "cls": cls, "released": state["released"],
+            "n_input": state["n_input"], "final_cells": state["final_cells"],
+            "rounds": len(state["rounds"]), "trend": round_trend([state]),
+            "species": str(state["species"] or ""), "updated": updated}
 
 
 TREND_CEILING = 0.10   # a first round often removes 20-36 %; drawn to scale it flattens the rest

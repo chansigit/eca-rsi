@@ -22,6 +22,43 @@ def test_cell_row_compacts_inputs_but_keeps_releases_exact(monkeypatch, count, d
     assert f'data-stat="cells-released"><span class="v">{count:,}</span>' in row
 
 
+def test_the_overview_gives_every_unit_its_own_row_and_its_own_curve(tmp_path):
+    """A unit is what runs rounds, so it is the row. The dataset aggregate used to stand in for all
+    of them: the sparkline was the longest unit's curve and the status was a count of the running
+    ones, which says nothing about the unit that is still removing."""
+    state = lambda _root: dict(  # noqa: E731 - the page's only disk access, stubbed
+        units=2, released=0, n_input=300, final_cells=None, rounds=3, species="mouse", finished=None,
+        updated=200.0, events={"organize": [], "release": []}, stage="1/2 units running", cls="running",
+        collection="coll", trend=[{"n": 1, "frac": 0.2, "settled": True}], unit_rows=[
+            dict(name="liver", stage="round 1 · cross-sample", cls="running", released=False, n_input=100,
+                 final_cells=None, rounds=1, species="mouse", updated=100.0,
+                 trend=[{"n": 1, "frac": 0.02, "settled": True}]),
+            dict(name="spleen", stage="round 3 · zoom-in", cls="running", released=False, n_input=200,
+                 final_cells=None, rounds=3, species="mouse", updated=200.0,
+                 trend=[{"n": i, "frac": 0.2, "settled": True} for i in (1, 2, 3)])])
+    html = _home_html({"coll-Organ": tmp_path}, state=state)
+    body = html.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+    assert body.count("<tr ") == 2 and "2 units" in html
+    assert '<td class="nw unit">liver</td>' in body and '<td class="nw unit">spleen</td>' in body
+    liver, spleen = body.split('<tr ')[1], body.split('<tr ')[2]
+    assert "round 1 · cross-sample" in liver and "round 3 · zoom-in" in spleen
+    # two circles per round (dot plus its halo): one round for liver, three for spleen
+    assert liver.count("<circle") == 2 and spleen.count("<circle") == 6
+    assert '1/2 units running' not in body                                # no aggregate row survives
+    assert liver.count('href="/coll-Organ/"') == 1                        # the dataset is still the link
+
+
+def test_a_dataset_with_no_unit_yet_still_gets_a_row(tmp_path):
+    """Organize has not run, or the cached summary predates unit rows: the dataset aggregate is all
+    there is, and an empty fleet page would be worse than one row with a blank unit."""
+    state = lambda _root: dict(  # noqa: E731
+        units=0, released=0, n_input=None, final_cells=None, rounds=0, species="", finished=None,
+        updated=None, events={"organize": [], "release": []}, stage="Not started", cls="neutral",
+        collection="coll", trend=[])
+    body = _home_html({"coll-Organ": tmp_path}, state=state).split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+    assert body.count("<tr ") == 1 and '<td class="nw unit"></td>' in body and "Not started" in body
+
+
 def test_home_html_renders_stats_and_no_dataset_frame():
     html = _home_html({})
     assert "<title>Periscope — overview</title>" in html
@@ -88,11 +125,12 @@ def test_the_overview_table_fits_without_a_horizontal_scrollbar(tmp_path):
     free-text columns are capped, so the numbers, the sparkline and the status share one screen."""
     css = serve.HOME_CSS
     assert "#ds-table td:first-child{max-width:24ch}" in css          # dataset name
-    assert "#ds-table td:nth-child(2){max-width:14ch" in css          # collection
-    assert "#ds-table td:nth-child(3){max-width:8ch}" in css          # species
+    assert "#ds-table td.unit{max-width:16ch" in css                  # unit name
+    assert "#ds-table td:nth-child(3){max-width:14ch" in css          # collection
+    assert "#ds-table td:nth-child(4){max-width:8ch}" in css          # species
     assert "#ds-table .spark{width:84px}" in css and "max-width:18ch" in css
-    assert 'index._n(s["n_input"])' not in inspect.getsource(serve._home_html)   # thousands, not raw
-    assert 'index._k(s["n_input"])' in inspect.getsource(serve._home_html)
+    assert 'index._n(u["n_input"])' not in inspect.getsource(serve._home_html)   # thousands, not raw
+    assert 'index._k(u["n_input"])' in inspect.getsource(serve._home_html)
 
 
 def test_a_wrapped_status_is_a_label_not_a_capsule():

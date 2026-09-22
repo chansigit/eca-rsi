@@ -680,8 +680,9 @@ HOME_CSS = ("td.nw{white-space:nowrap}#ds-table td{padding:7px 8px}"
             # ten columns is a lot of table: the long text ones are capped so the numbers,
             # the sparkline and the status stay on one screen instead of behind a scrollbar.
             "#ds-table{table-layout:auto;width:100%}#ds-table th,#ds-table td{overflow-wrap:anywhere}"
-            "#ds-table td:first-child{max-width:24ch}#ds-table td:nth-child(2){max-width:14ch;white-space:normal}"
-            "#ds-table td:nth-child(3){max-width:8ch}#ds-table .spark{width:84px}"
+            "#ds-table td:first-child{max-width:24ch}#ds-table td.unit{max-width:16ch;white-space:normal;color:var(--muted)}"
+            "#ds-table td:nth-child(3){max-width:14ch;white-space:normal}"
+            "#ds-table td:nth-child(4){max-width:8ch}#ds-table .spark{width:84px}"
             ".cell-glance{grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1.5fr) minmax(0,1.1fr)}.cell-glance .v{white-space:nowrap}"
             "@media(max-width:700px){.cell-glance{grid-template-columns:repeat(2,minmax(0,1fr))}}"
             ".hist{position:relative;margin-top:var(--s1)}.hist-svg{display:block;width:100%;height:auto}"
@@ -861,7 +862,7 @@ HOME_JS = r"""
   const body = table.tBodies[0], rows = [...body.rows];
   function filter(){ const t = q.value.trim().toLowerCase(); let k = 0;
     for (const r of rows) { const hit = !t || r.dataset.text.includes(t); r.hidden = !hit; k += hit; }
-    n.textContent = (t ? k + " of " + rows.length : rows.length) + " datasets"; }
+    n.textContent = (t ? k + " of " + rows.length : rows.length) + " units"; }
   q.addEventListener("input", filter); filter();
   // sortable columns: click a header; numbers start descending, text ascending; click again to flip
   const ths = [...table.tHead.rows[0].cells]; let col = -1, asc = true;
@@ -916,22 +917,31 @@ def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
     for name, (s, p) in sorted(states.items()):
         coll = colls[name]
         short = name[len(coll) + 1:] if coll and name.startswith(coll + "-") else name  # the collection has its own column
-        kept = 100 * s["final_cells"] / s["n_input"] if s["n_input"] and s["final_cells"] is not None else None
-        trend = s.get("trend") or []     # from the cached state: the fleet page never reads disk
-        rows.append(
-            f'<tr data-text="{e((name + " " + coll + " " + s["species"] + " " + s["stage"]).lower())}">'
-            f'<td><a href="/{e(name)}/" title="{e(name)}"><b>{e(short)}</b></a></td><td class="nw">{e(coll)}</td><td>{e(s["species"])}</td>'
-            f'<td class="num" data-v="{s["n_input"] or 0}">{index._k(s["n_input"])}</td>'
-            f'<td class="num" data-v="{s["final_cells"] or 0}">{index._k(s["final_cells"])}</td>'
-            f'<td class="num" data-v="{kept if kept is not None else -1}">{f"{kept:.0f}%" if kept is not None else ""}</td>'
-            f'<td class="num" data-v="{s["rounds"]}">{s["rounds"] or ""}</td>'
-            f'<td>{index.sparkline(trend)}</td>'
-            f'<td data-v="{rank.get(s["cls"], 9)}"><span class="pill {e(s["cls"])}">{e(s["stage"])}</span></td>'
-            f'<td class="num nw" data-v="{s["updated"] or 0}">{index._when(s["updated"])}</td></tr>')
+        # One row per analysis unit: a unit is what actually runs rounds, so it is the only row that
+        # can carry an honest convergence curve and status. A dataset that has not organized yet has
+        # no unit, and a state cached before this column existed has no unit_rows; both fall back to
+        # the dataset aggregate so the fleet page never goes blank while the cache warms.
+        units = s.get("unit_rows") or [dict(name="", stage=s["stage"], cls=s["cls"], n_input=s["n_input"],
+                                            final_cells=s["final_cells"], rounds=s["rounds"],
+                                            trend=s.get("trend") or [], species=s["species"], updated=s["updated"])]
+        for u in units:
+            kept = 100 * u["final_cells"] / u["n_input"] if u["n_input"] and u["final_cells"] is not None else None
+            species = u.get("species") or s["species"]
+            rows.append(
+                f'<tr data-text="{e((name + " " + u["name"] + " " + coll + " " + species + " " + u["stage"]).lower())}">'
+                f'<td><a href="/{e(name)}/" title="{e(name)}"><b>{e(short)}</b></a></td>'
+                f'<td class="nw unit">{e(u["name"])}</td><td class="nw">{e(coll)}</td><td>{e(species)}</td>'
+                f'<td class="num" data-v="{u["n_input"] or 0}">{index._k(u["n_input"])}</td>'
+                f'<td class="num" data-v="{u["final_cells"] or 0}">{index._k(u["final_cells"])}</td>'
+                f'<td class="num" data-v="{kept if kept is not None else -1}">{f"{kept:.0f}%" if kept is not None else ""}</td>'
+                f'<td class="num" data-v="{u["rounds"]}">{u["rounds"] or ""}</td>'
+                f'<td>{index.sparkline(u["trend"])}</td>'
+                f'<td data-v="{rank.get(u["cls"], 9)}"><span class="pill {e(u["cls"])}">{e(u["stage"])}</span></td>'
+                f'<td class="num nw" data-v="{u["updated"] or 0}">{index._when(u["updated"])}</td></tr>')
     def th(t, num=False):
         attrs = ' class="r" data-num' if num else ""
         return f'<th{attrs} aria-sort="none"><button type="button">{t}</button></th>'
-    table = ('<div class="wrap"><table id="ds-table"><thead><tr>' + th("dataset") + th("collection") + th("species")
+    table = ('<div class="wrap"><table id="ds-table"><thead><tr>' + th("dataset") + th("unit") + th("collection") + th("species")
              + th("cells in", True) + th("cells out", True) + th("kept", True) + th("rounds", True)
              # not sortable: the shape is the point, and one number cannot stand for it
              + '<th class="r">convergence</th>' + th("status", True) + th("last updated", True)
@@ -964,7 +974,7 @@ def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
         # Off by default: on it, equal horizontal distances are no longer equal durations.
         '<span class="sep"></span><button type="button" id="hist-log" aria-pressed="false" title="space by age instead of by clock, so the newest hours get most of the width">log time</button></div>'
         '<div id="hist" class="hist"></div><div id="hist-tip" class="sk-tip" style="display:none"></div></section>'
-        f'<section class="block" id="datasets"><h2>Datasets <span class="count" id="ds-n">{len(rows)} datasets</span></h2>'
+        f'<section class="block" id="datasets"><h2>Datasets <span class="count" id="ds-n">{len(rows)} units</span></h2>'
         '<p class="lede">Input counts include declared queued inputs. Cells out shows the latest output count; kept is out / in. Click a column header to sort.</p>'
         '<div class="toolbar"><label for="ds-q">Filter</label><input id="ds-q" type="search" placeholder="name, collection, species, status…" autocomplete="off"></div>'
         f"{table}</section>"
