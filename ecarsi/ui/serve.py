@@ -403,6 +403,80 @@ def _dataset_state(root: Path) -> dict:
         return {**blank, "stage": f"unreadable: {e}", "cls": "failed"}
 
 
+TERMINAL = {"FAILED": ("failed", "failed"), "TERMINATED": ("failed", "terminated"),
+            "TIMED_OUT": ("failed", "timed out"), "CANCELED": ("failed", "cancelled"),
+            "CANCELLED": ("failed", "cancelled"), "COMPLETED": ("released", "completed")}
+
+
+class ControlVerdicts:
+    """What the control plane says about each run, read from the file it publishes.
+
+    The fleet table is derived from the files stages write, which is as current as the last stage
+    boundary and no more: a run that died inside Temporal writing nothing reads as running until the
+    twelve-hour staleness rule notices, and a run just resumed reads as failed until its next
+    publication. The control plane knows now, so it publishes what it knows and this reads it. The
+    file carries the time it was written: a stale publisher is visible rather than silently believed,
+    and a missing one simply leaves the disk-derived row alone."""
+
+    FRESH = 120.0     # a publisher that has not written for this long is not speaking for the fleet
+
+    def __init__(self, path: Path | None):
+        self._path, self._mtime, self._data = path, None, {}
+
+    def _load(self) -> None:
+        if self._path is None:
+            return
+        try:
+            mtime = self._path.stat().st_mtime
+        except OSError:
+            self._data = {}
+            return
+        if mtime == self._mtime:
+            return
+        try:
+            self._data = json.loads(self._path.read_text())
+        except (OSError, ValueError):
+            return          # a half-written file is never seen (the publisher renames), so this is corruption: keep the last good one
+        self._mtime = mtime
+
+    def age(self) -> float | None:
+        self._load()
+        at = self._data.get("generated_at")
+        return None if at is None else max(0.0, time.time() - at)
+
+    def live(self) -> bool:
+        age = self.age()
+        return age is not None and age <= self.FRESH
+
+    def of(self, run_id: str, unit: str = "") -> dict | None:
+        """The verdict on a run, or on one of its units when the control plane names that unit."""
+        if not run_id or not self.live():
+            return None
+        workflows = self._data.get("workflows") or {}
+        return workflows.get(f"dataset/{run_id}{unit}")
+
+
+def reconcile(row: dict, verdict: dict | None) -> dict:
+    """The control plane's verdict wins over what the files imply, and says so.
+
+    Only the verdict changes: the stage text stays, because 'per-sample running' is still what the
+    run was last seen doing and the verdict cannot say it. A run the control plane calls finished is
+    not running whatever its files suggest, and one it calls running is not failed however old its
+    last publication is."""
+    if not verdict:
+        return row
+    status = verdict.get("status", "")
+    if status == "RUNNING":
+        if row["cls"] in {"failed", "paused"} or row["cls"] == "neutral":
+            return {**row, "cls": "running", "stage": row["stage"], "live": "running"}
+        return {**row, "live": "running"}
+    cls, word = TERMINAL.get(status, ("", ""))
+    if not cls or row["cls"] == cls:
+        return {**row, "live": word or status.lower()}
+    stage = f"{word} · last seen {row['stage']}" if row["cls"] == "running" else word
+    return {**row, "cls": cls, "stage": stage, "live": word}
+
+
 class StateCache:
     """Fleet requests only read memory, including during a slow storage refresh."""
 
@@ -895,7 +969,7 @@ HOME_JS = r"""
 """
 
 
-def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
+def _home_html(items: dict[str, Path], state=_dataset_state, verdicts: "ControlVerdicts | None" = None) -> str:
     """Overview: what this site is, fleet numbers, and a filterable, sortable
     table of every dataset. This is the page `/` opens."""
     import time
@@ -909,6 +983,15 @@ def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
         oldest = index._when(min(known)) if known else 'not yet available'
         freshness = (f'<p class="muted" role="status">Dataset summaries: {len(known)} / {len(cached)} loaded. '
                      f'Oldest refresh: {oldest}. Showing the last available data while refreshing in the background.</p>')
+    if verdicts is not None:
+        # Say which clock the status column is on. A reader who cannot tell a live verdict from a
+        # guess made out of file dates has no way to catch the page being wrong, which is how a
+        # dataset sat here reading "running" for hours after it died.
+        age = verdicts.age()
+        source = (f'status from the control plane, {int(age)}s old' if verdicts.live() and age is not None
+                  else 'status inferred from files: the control plane is not publishing'
+                  if age is None else f'status inferred from files: the control plane last published {index._when(time.time() - age)}')
+        freshness += f'<p class="muted" role="status">Run status: {e(source)}.</p>'
     by = lambda c: sum(1 for s, _ in states.values() if s["cls"] == c)  # noqa: E731
     history = fleet_history(states)
     totals = fleet_totals(history)
@@ -938,6 +1021,11 @@ def _home_html(items: dict[str, Path], state=_dataset_state) -> str:
         units = s.get("unit_rows") or [dict(name="", stage=s["stage"], cls=s["cls"], n_input=s["n_input"],
                                             final_cells=s["final_cells"], rounds=s["rounds"],
                                             trend=s.get("trend") or [], species=s["species"], updated=s["updated"])]
+        # The control plane names units by index, which no name on disk carries, so its verdict on
+        # the run stands for every unit of that run: a dataset it calls finished has no running unit
+        # whatever the files say, and one it calls running has no failed unit.
+        verdict = verdicts.of(s.get("run_id", "")) if verdicts else None
+        units = [reconcile(u, verdict) for u in units]
         for u in units:
             kept = 100 * u["final_cells"] / u["n_input"] if u["n_input"] and u["final_cells"] is not None else None
             species = u.get("species") or s["species"]
@@ -1027,9 +1115,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     reads them fresh on every call, not cached from __init__)."""
 
     def __init__(self, *a, registry: Registry, auth: str | None = None, states: StateCache | None = None,
-                 control=None, **kw):
+                 control=None, verdicts: "ControlVerdicts | None" = None, **kw):
         self._registry = registry
         self._control = control  # observatory.ControlPlane behind /_control/ when serve got --control-plane
+        self._verdicts = verdicts  # the control plane's published run statuses, when it publishes them
         self._auth = auth  # "user:pass" -> HTTP basic auth enforced here, on every request; None = open
         self._state = states.get if states else _dataset_state  # fleet pages: cached states when a warmer runs
         self._states = states
@@ -1193,7 +1282,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     return self._json(400, {"error": str(e)})
             return self._json(404, {"error": "Not found"})
         if raw == "/_home":
-            return self._html(_home_html(self._items(), self._state))
+            return self._html(_home_html(self._items(), self._state, self._verdicts))
         if raw == "/_history.json":  # the curve's data; ?at=YYYY-MM-DDTHH:MM (or epoch) reads it at one moment
             hist = fleet_history({n: (self._state(p), p) for n, p in self._items().items()})
             at = urllib.parse.parse_qs(self.path.partition("?")[2]).get("at")
@@ -1331,15 +1420,18 @@ def cmd_serve(args: argparse.Namespace) -> int:
     cache_key = hashlib.sha256(str(reg_path).encode()).hexdigest()[:16]
     states = StateCache(registry, cache_file=Path.home()/'.cache/ecarsi-periscope'/f'{cache_key}.json')
     states.start()
-    control = None
+    control, verdicts = None, ControlVerdicts(None)
     if args.control_plane:
         from ..observatory import ControlPlane
         base = Path(args.control_plane).expanduser().resolve()
         control = ControlPlane(base, pool_root=Path(args.control_pool_root or base / 'pool'),
                                bridge_root=Path(args.control_bridge_root or base / 'bridge'),
                                temporal_service_root=Path(args.control_temporal_root or base / 'durable-control')).start()
+        # container/fleet-status.py publishes this beside the run; absent, the page says so and
+        # falls back to what the files imply.
+        verdicts = ControlVerdicts(base / 'fleet-status.json')
     httpd = http.server.ThreadingHTTPServer(
-        (args.bind, args.port), partial(Handler, registry=registry, auth=args.auth, states=states, control=control)
+        (args.bind, args.port), partial(Handler, registry=registry, auth=args.auth, states=states, control=control, verdicts=verdicts)
     )
     print(
         f"[serve] {APP} on http://{args.bind}:{args.port}/  ({len(items)} dataset(s); registry {reg_path}"

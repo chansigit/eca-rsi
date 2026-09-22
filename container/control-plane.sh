@@ -26,6 +26,7 @@ PY=(apptainer exec --cleanenv --bind "$BINDS" --env LC_ALL=C --env LANG=C
 pattern() { case $1 in temporal) echo "ecarsi.control.temporal --root $CONTROL";; scheduler) echo "ecarsi.warm_pool --root $POOL scheduler";;
     bridge) echo "ecarsi.agent serve $BRIDGE";; coordinators) echo "ecarsi.control --service-root $CONTROL .*worker";;
     observatory) echo "ecarsi.serve --registry $BASE/periscope-registry.json";;   # the registry path, not --control-plane: another Periscope may serve the same run directory
+    fleet-status) echo "fleet-status.py --service-root $CONTROL";;
     keeper) echo "worker-keeper.sh $POOL";; esac; }
 # Skip container wrappers, interactive `bash -c` shells and this script's own subshells: a shell whose
 # command text merely mentions a component (an editor, a heredoc) must never count as, or be killed as, that component.
@@ -45,6 +46,7 @@ start() {
             "${PY[@]}" -m ecarsi.control --service-root "$CONTROL" --task-queue "$TASK_QUEUE" worker --workflow-slots 2; done ;;
     observatory) launch observatory env PYTHONPATH="$CODE" "$HOSTPY" -m ecarsi.serve --registry "$BASE/periscope-registry.json" --control-plane "$BASE" \
         --control-pool-root "$POOL" --control-bridge-root "$BRIDGE" --control-temporal-root "$CONTROL" --bind "$HOST_IP" --port "${OBSERVATORY_PORT:-8765}" ;;
+    fleet-status) launch fleet-status "${PY[@]}" "$CODE/container/fleet-status.py" --service-root "$CONTROL" --out "$BASE/fleet-status.json" ;;
     keeper) launch worker-keeper env CODE="$CODE" HOSTPY="$HOSTPY" "$CODE/container/worker-keeper.sh" "$POOL" ;;
   esac
 }
@@ -52,10 +54,10 @@ stop() {
   pids "$1" | while read -r p; do kill -TERM "$p" 2>/dev/null; done
   for _ in $(seq 20); do pids "$1" | grep -q . || return 0; sleep 1; done; echo "warning: $1 still running"
 }
-status() { for c in temporal scheduler bridge coordinators observatory keeper; do printf '%-13s %s\n' "$c" "$(n=$(pids "$c" | wc -l); [ "$n" -gt 0 ] && echo "running ($n proc)" || echo stopped)"; done; }
+status() { for c in temporal scheduler bridge coordinators observatory fleet-status keeper; do printf '%-13s %s\n' "$c" "$(n=$(pids "$c" | wc -l); [ "$n" -gt 0 ] && echo "running ($n proc)" || echo stopped)"; done; }
 
 cmd=${1:-status}; shift || true
-comps=("$@"); [ ${#comps[@]} -eq 0 ] && comps=(temporal scheduler bridge coordinators observatory keeper)
+comps=("$@"); [ ${#comps[@]} -eq 0 ] && comps=(temporal scheduler bridge coordinators observatory fleet-status keeper)
 case $cmd in
   start) for c in "${comps[@]}"; do start "$c"; done; sleep 2; status ;;
   stop) for c in "${comps[@]}"; do stop "$c"; done; status ;;

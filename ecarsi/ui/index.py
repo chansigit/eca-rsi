@@ -1065,7 +1065,17 @@ def dataset_state(root: Path, states: list[dict] | None = None) -> dict:
             "species": ", ".join(sorted({str(s["species"]) for s in states if s["species"]})),
             "finished": max(fin) if fin and released == len(states) else None,
             "updated": updated, "stage": stage, "cls": cls, "trend": round_trend(states),
-            "unit_rows": [unit_row(s) for s in states], "awaiting_start": False}
+            "unit_rows": [unit_row(s) for s in states], "run_id": run_id(root),
+            "awaiting_start": False}
+
+
+def run_id(root: Path) -> str:
+    """The control plane's name for this run, from the spec it was submitted with. It is the only
+    key that ties a directory on disk to a workflow, and so the only way the fleet table can ask the
+    control plane what it thinks of a run rather than inferring it from files. Empty for generation
+    one, which has no control plane to ask."""
+    spec = _json(root / L.GEN2_SPEC, {})
+    return str(spec.get("run_id") or "")
 
 
 def unit_row(state: dict) -> dict:

@@ -134,3 +134,60 @@ def test_a_quick_sweep_with_nothing_running_still_reads_something(tmp_path, monk
     monkeypatch.setattr(serve, "_dataset_state", lambda root: seen.append(root) or {"stage": "released", "cls": "released"})
     cache.refresh(full=False)
     assert seen == [done]
+
+
+def _published(tmp_path, workflows, age=0.0):
+    import json, time
+    p = tmp_path / "fleet-status.json"
+    p.write_text(json.dumps({"generated_at": time.time() - age, "workflows": workflows}))
+    return serve.ControlVerdicts(p)
+
+
+def test_the_control_plane_verdict_overrides_what_the_files_imply(tmp_path):
+    """Files say per-sample running because that is the last thing that published. The control plane
+    knows the run died; the row must follow the control plane and keep the last seen stage as detail."""
+    v = _published(tmp_path, {"dataset/run-a": {"status": "FAILED", "started": 1.0, "closed": 2.0}})
+    row = dict(name="u", stage="per-sample running", cls="running")
+    out = serve.reconcile(row, v.of("run-a"))
+    assert out["cls"] == "failed" and out["live"] == "failed"
+    assert out["stage"] == "failed · last seen per-sample running"
+
+
+def test_a_resumed_run_stops_reading_as_failed_before_it_publishes_again(tmp_path):
+    """The other direction: the files still hold the old failure, the control plane has it running."""
+    v = _published(tmp_path, {"dataset/run-a": {"status": "RUNNING", "started": 1.0, "closed": None}})
+    out = serve.reconcile(dict(name="u", stage="failed — round 1", cls="failed"), v.of("run-a"))
+    assert out["cls"] == "running" and out["live"] == "running"
+
+
+def test_a_stale_or_missing_publisher_leaves_the_row_alone_and_says_so(tmp_path):
+    """A monitor that stopped writing must not keep answering for the fleet."""
+    stale = _published(tmp_path, {"dataset/run-a": {"status": "FAILED", "started": 1.0, "closed": 2.0}},
+                       age=serve.ControlVerdicts.FRESH + 60)
+    assert stale.of("run-a") is None and not stale.live() and stale.age() > serve.ControlVerdicts.FRESH
+    row = dict(name="u", stage="per-sample running", cls="running")
+    assert serve.reconcile(row, stale.of("run-a")) == row
+    absent = serve.ControlVerdicts(tmp_path / "nope.json")
+    assert absent.age() is None and absent.of("run-a") is None
+    assert serve.ControlVerdicts(None).of("run-a") is None
+
+
+def test_a_generation_one_run_has_no_run_id_and_is_never_reconciled(tmp_path):
+    v = _published(tmp_path, {"dataset/run-a": {"status": "FAILED", "started": 1.0, "closed": 2.0}})
+    assert v.of("") is None
+
+
+def test_the_page_names_the_clock_its_status_column_is_on(tmp_path, monkeypatch):
+    monkeypatch.setattr(serve, "_dataset_state", lambda root: dict(
+        units=1, released=0, n_input=10, final_cells=None, rounds=1, species="mouse", finished=None,
+        updated=1.0, events={"organize": [], "release": []}, stage="per-sample running", cls="running",
+        collection="coll", trend=[], run_id="run-a",
+        unit_rows=[dict(name="u", stage="per-sample running", cls="running", released=False, n_input=10,
+                        final_cells=None, rounds=1, species="mouse", updated=1.0, trend=[])]))
+    v = _published(tmp_path, {"dataset/run-a": {"status": "FAILED", "started": 1.0, "closed": 2.0}})
+    html = serve._home_html({"coll-Organ": tmp_path}, state=serve._dataset_state, verdicts=v)
+    assert "status from the control plane" in html
+    body = html.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+    assert "failed · last seen per-sample running" in body
+    plain = serve._home_html({"coll-Organ": tmp_path}, state=serve._dataset_state)
+    assert "Run status:" not in plain and "per-sample running" in plain   # no control plane, no claim
