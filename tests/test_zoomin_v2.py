@@ -111,7 +111,8 @@ def test_zoom_handoffs_and_exact_global_conservation(tmp_path):
         assert registered['completion_tool']==('submit_plan' if kind=='plan' else 'submit_quality')
         names=[t['name'] for t in registered['tools']]
         assert 'finalize_annotation' not in names and 'Required order' in registered['prompt']
-        assert all(t['parameters']==NO_ARGUMENTS for t in registered['tools'] if t['name'] in {'list_evidence','annotation_status'})
+        assert all(t['parameters']==NO_ARGUMENTS for t in registered['tools'] if t['name']=='annotation_status')
+        assert next(t['parameters'] for t in registered['tools'] if t['name']=='list_evidence')=={'type':'object','properties':{'offset':{'type':'integer','minimum':0}},'required':['offset'],'additionalProperties':False}
         assert ('Pending type clusters' in registered['prompt'])==(kind=='lineage')
         reads={t['name'] for t in registered['tools'] if t.get('read_only')}
         assert {'read_evidence','list_evidence'}<=reads and ('annotation_status' in reads)==(kind=='lineage') and registered['completion_tool'] not in reads

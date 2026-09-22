@@ -7,7 +7,7 @@ from pathlib import Path
 
 from ..warm_pool.state import immutable, reference, verified
 from . import PROMPTS
-from .contract import (LOOKUP_NOTE, NO_ARGUMENTS, checklist, deg_lookup_schema, evidence_paths, json_hint,
+from .contract import (LOOKUP_NOTE, NO_ARGUMENTS, checklist, deg_lookup_schema, evidence_page, evidence_paths, json_hint,
                        lookup_arguments, proposal as parse_proposal, schema)
 from .crosssample import artifact, publish_bundle, deg, assemble
 from .persample import check_bundle, sealed
@@ -256,7 +256,7 @@ def agent_spec(spec, evidence, kind, parent):
     from msp.evidence import DEG_TOOL_DOC, DEG_SQL_DOC
     bundle = verified(evidence)
     props = {
-        'list_evidence': (NO_ARGUMENTS, 'List every evidence path (the prompt already lists them).', False),
+        'list_evidence': (schema({'offset': {'type': 'integer', 'minimum': 0}}), 'List evidence paths (the prompt already lists the first ones). Follow next_offset until null.', False),
         'read_evidence': (schema({'path': {'type':'string'}, 'offset': {'type':'integer','minimum':0}}), 'Read an assigned figure or 16000 characters of text.', True)}
     if kind == 'plan':
         prompt = PROMPTS.joinpath('zoomin-plan.md').read_text()
@@ -411,7 +411,8 @@ def tool(name, state_path, args_path, destination):
     response = {}
     try:
         if name == 'list_evidence':
-            response.update(content=evidence_paths(bundle), next_offset=None)
+            page, nxt = evidence_page(evidence_paths(bundle), args.get('offset') or 0)
+            response.update(content=page, next_offset=nxt)
         elif name == 'read_evidence':
             path = artifact(bundle, args['path'])
             if path.suffix == '.png':

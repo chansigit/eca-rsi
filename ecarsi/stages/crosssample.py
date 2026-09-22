@@ -8,7 +8,7 @@ import shutil
 
 from ..warm_pool.state import immutable, reference, verified
 from . import PROMPTS
-from .contract import (LOOKUP_NOTE, NO_ARGUMENTS, checklist, deg_lookup_schema, evidence_paths, json_hint,
+from .contract import (LOOKUP_NOTE, NO_ARGUMENTS, checklist, deg_lookup_schema, evidence_page, evidence_paths, json_hint,
                        lookup_arguments, proposal as parse_proposal, schema)
 from .persample import check_bundle, sealed
 from ..warm_pool.state import digest, read, save
@@ -301,7 +301,7 @@ def agent_spec(spec, evidence_ref, phase, parent, types_ref=None):
             prompt+='\nUse type_context for preserved type entries outside your assignment; do not resubmit them.'
         if types_ref:prompt+='\nRead the accepted type labels with type_context before assessing quality.'
         prompt+='\n\n'+inline_context(bundle)
-    props['list_evidence']=(NO_ARGUMENTS,'List every evidence path (the prompt already lists them).',False)
+    props['list_evidence']=(schema({'offset':{'type':'integer','minimum':0}}),'List evidence paths (the prompt already lists the first ones). Follow next_offset until null.',False)
     prompt+='\nUse worker tools for all evidence. Read figures and use the database before submission. Finish by calling submit_decision; no local execution is available.'
     prompt+='\n\n'+checklist('crosssample-inclusion' if phase=='inclusion' else 'crosssample-annotation')
     state=immutable(Path(spec['output_root'])/f'{phase}-{evidence_ref["sha256"][:12]}-state.json',dict(evidence=evidence_ref,phase=phase,types=types_ref,read=[],lookups=[],qc=False))
@@ -379,7 +379,9 @@ def tool(name,state_path,args_path,destination):
                 response['content']=text;response['next_offset']=nxt
             else:raise ValueError('Use registered matrix/database tools for this artifact')
             state['read']=sorted(set(state['read'])|{args['path']})
-        elif name=='list_evidence':response.update(content=evidence_paths(bundle),next_offset=None)
+        elif name=='list_evidence':
+            page,nxt=evidence_page(evidence_paths(bundle),args.get('offset') or 0)
+            response.update(content=page,next_offset=nxt)
         elif name=='sample_inventory':
             offset=args['offset'];sample=bundle['samples'][offset]
             response.update(content=sample,figures=[n for n in bundle['files'] if n.startswith(sample['sample']+'/')],next_offset=offset+1 if offset+1<len(bundle['samples']) else None)

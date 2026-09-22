@@ -51,9 +51,36 @@ def test_agent_tools_have_valid_worker_contracts(tmp_path):
         assert all(t['args'][1]=='ecarsi.stages.crosssample' for t in session['tools'])
         assert ('deg_sql' in [t['name'] for t in session['tools']])==(phase!='inclusion')
         assert 'Required order' in session['prompt'] and ('Evidence files' in session['prompt'])==(phase!='inclusion')
-        assert all(t['parameters']==NO_ARGUMENTS for t in session['tools'] if t['name'] in {'list_evidence','type_context'})
+        assert all(t['parameters']==NO_ARGUMENTS for t in session['tools'] if t['name']=='type_context')
+        assert next(t['parameters'] for t in session['tools'] if t['name']=='list_evidence')=={'type':'object','properties':{'offset':{'type':'integer','minimum':0}},'required':['offset'],'additionalProperties':False}
         reads={t['name'] for t in session['tools'] if t.get('read_only')}
         assert {'read_evidence','list_evidence'}<=reads and not any(n.startswith('submit') for n in reads)
+
+
+def test_list_evidence_pages_a_large_bundle_without_dropping_or_oversizing_a_page(tmp_path):
+    """2026-09-21: a unit that had run many rounds accumulated 5,278 evidence paths; list_evidence
+    returned them all in one call, a 534 KB result that exceeded the agent session's 256 KB tool-result
+    cap and killed the dataset. Every page must stay well under that cap and no path may be skipped or
+    repeated (the earlier, reverted pagination attempt used a fixed page count and dropped the tail)."""
+    from ecarsi.stages.crosssample import tool
+    from ecarsi.stages.contract import evidence_paths
+    files={f'a/figures/f{i}.png':{} for i in range(3000)}
+    evidence=immutable(tmp_path/'evidence.json',dict(samples=[{'sample':'a'}],files=files,type_scope=['0'],type_entries={}))
+    state=immutable(tmp_path/'state.json',dict(evidence=evidence,phase='inclusion',read=[],lookups=[],qc=False))
+    seen=[];offset=0
+    for i in range(20):
+        args=tmp_path/f'args{i}.json';save(args,{'offset':offset})
+        destination=tmp_path/f'call{i}';destination.mkdir()
+        tool('list_evidence',state['path'],args,destination)
+        response=read(destination/'result.json')
+        assert not response.get('is_error')
+        assert len(json.dumps(response).encode())<262144
+        seen.extend(response['content'])
+        if response['next_offset'] is None:break
+        offset=response['next_offset']
+    else:
+        pytest.fail('list_evidence did not terminate within 20 pages')
+    assert seen==evidence_paths(verified(evidence))
 
 
 def test_overlapping_removals_count_once_and_mismatched_decisions_fail(tmp_path,monkeypatch):

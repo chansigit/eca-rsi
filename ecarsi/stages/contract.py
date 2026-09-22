@@ -1,9 +1,14 @@
 """What every stage program shows the model (protocol v4, 2026-09-17) and how it reads the model's calls.
 
 Same numerics as before, fewer turns: the prompt already holds what list_evidence (and, for zoom-in,
-annotation_status) would answer at turn 0, so the first turn can read evidence; those tools stay,
-take no arguments and return everything in one call (a bundle has about 60 paths; paging cost a
-turn per page and a fixed page count in the checklist skipped the 61st path in 62 sessions).
+annotation_status) would answer at turn 0, so the first turn can read evidence; those tools stay and
+take no required arguments. list_evidence pages by offset/next_offset like read_evidence and
+sample_inventory (2026-09-21: a bundle was assumed to hold about 60 paths, but a unit that has run
+many rounds/restarts can accumulate thousands, and returning them all in one call hit the tool-result
+size cap and killed the dataset non-retryably); annotation_status still returns everything in one call.
+An earlier pagination attempt used a fixed page count from the checklist prompt text and silently
+skipped the 61st path in 62 sessions -- next_offset here is computed from the actual list each call,
+the same mechanism read_evidence and sample_inventory already use without that failure mode.
 deg_lookup asks for cluster or gene with optional thresholds, as its documentation already said.
 A proposal with a stray trailing quote or fence is parsed anyway (Eye 2026-09-17: one }]}" was
 rejected 25 times in a row, 167k tokens each). Measured 2026-09-16 over 6 h: 64 % of
@@ -96,3 +101,15 @@ def checklist(name):
 
 def evidence_paths(bundle):
     return [n for n in bundle['files'] if not n.startswith('deg_input/') and not n.endswith('.h5ad')]
+
+
+EVIDENCE_PAGE = 400  # paths per list_evidence call; a unit that has run many rounds/restarts can
+                      # accumulate thousands of evidence files, well past the "about 60" this module
+                      # once assumed (2026-09-21: a 256 KB tool-result cap rejected a 5,278-path,
+                      # 534 KB single-call listing outright and killed the whole dataset).
+
+
+def evidence_page(paths, offset):
+    page = paths[offset:offset + EVIDENCE_PAGE]
+    more = offset + len(page)
+    return page, more if more < len(paths) else None
