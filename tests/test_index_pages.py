@@ -239,11 +239,16 @@ def test_dataset_state_carries_each_unit_as_its_own_row(tmp_path):
     assert all(not isinstance(v, Path) for v in only.values())   # the state cache is JSON on disk
 
 
-def test_a_working_stage_moves_the_clock_before_it_publishes(tmp_path):
-    """A stage writes its publication only when it ends. Per-sample can run for an hour, and a
-    cross-sample session for hundreds of model turns, while the page reports the run as last touched
-    at the previous stage boundary. The stage directory's own mtime moves with every agent folder it
-    creates, so the clock follows the work instead of the milestones."""
+def test_the_file_clock_does_not_invent_freshness_a_mirror_would_fake(tmp_path):
+    """Directory mtimes were used here to make the clock follow work rather than milestones, and
+    withdrawn: `ecarsi.mirror` copy2s files, preserving their mtime, but mkdirs the directories, so
+    on a mirror every directory is as new as the last sync and a run dead for a week read as fresh --
+    on exactly the copy the mirror exists to serve.
+
+    So a stage working without publishing does not move this clock, and must not: this clock only
+    ever means "when did this run last write something". That a run is nonetheless alive is the
+    control plane's verdict to give (ui/serve.ControlVerdicts), from a record that carries its own
+    observation time, and no filesystem signal can stand in for it."""
     import os
     from ecarsi.ui.index import state_mtime
     root = tmp_path / "run"
@@ -255,7 +260,10 @@ def test_a_working_stage_moves_the_clock_before_it_publishes(tmp_path):
     old = 1_000_000.0
     for p in (root / L.GEN2_ORGANIZE / L.GEN2_PUBLICATION, root / L.GEN2_ORGANIZE, persample, unit, root):
         os.utime(p, (old, old))
-    assert state_mtime(root) == old and state_mtime(unit) == old
+    assert state_mtime(root) == old
+
     (persample / "agent-0001").mkdir()          # the stage starts working: no publication yet
-    assert state_mtime(root) > old, "a busy per-sample stage still read as idle from the dataset"
-    assert state_mtime(unit) > old, "a unit row had no clock of its own"
+    assert state_mtime(root) == old, "a directory appearing is not the run writing state"
+
+    (persample / L.GEN2_PUBLICATION).write_text("{}")   # the stage finishes and publishes
+    assert state_mtime(root) > old and state_mtime(unit) > old

@@ -1454,14 +1454,17 @@ STATE_GLOBS = (L.PROGRESS, f"{L.UNITS}/*/{L.PROGRESS}", f"{L.ORGANIZE}/{L.MANIFE
 # seconds read as 13 minutes idle). A directory's mtime moves as soon as an entry is created in it,
 # which a working stage does constantly, and one stat per stage directory is cheap where a walk over
 # its thousands of agent files would not be.
-STATE_DIRS = (L.GEN2_PERSAMPLE, f"{L.ROUNDS}/*", f"{L.ROUNDS}/*/*",
-              f"{L.UNITS}/*/{L.GEN2_PERSAMPLE}", f"{L.UNITS}/*/{L.ROUNDS}/*", f"{L.UNITS}/*/{L.ROUNDS}/*/*",
-              L.GEN2_ORGANIZE, L.PERSAMPLE, f"{L.UNITS}/*/{L.PERSAMPLE}")
+# Directory mtimes were tried here as a proxy for "work is happening" and withdrawn (2026-09-22).
+# `ecarsi.mirror` copies files with copy2, preserving their mtime, but creates the directories with
+# mkdir -- so every directory in a mirror is as new as the last sync, and a run dead for a week read
+# as fresh on exactly the copy the mirror exists to serve. A long per-sample really can write nothing
+# into the run directory for half an hour; that gap is answered by the control plane's verdict, which
+# knows the run is alive, and not by a filesystem signal that cannot tell work from a copy.
 
 
 def state_mtime(d: Path) -> float | None:
     ts = []
-    for g in STATE_GLOBS + STATE_DIRS:
+    for g in STATE_GLOBS:
         for p in d.glob(g):
             try:
                 ts.append(p.stat().st_mtime)

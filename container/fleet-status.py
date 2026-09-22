@@ -63,6 +63,32 @@ def publish(path: Path, payload: dict) -> None:
             os.unlink(tmp)
 
 
+def service_record(service_root: Path) -> dict:
+    """Where this plane's Temporal is and whether its UI is answering.
+
+    The monitor used to find this out for itself: resolve the endpoint, then open a socket to the UI
+    port. Both halves were wrong. The control plane owns the fact, so it publishes it, and a page
+    that cannot open a socket cannot be made to open one in a loop against the node running the
+    coordinators (tests/test_monitor_isolation.py)."""
+    import socket
+
+    from ecarsi.control.temporal import endpoint
+
+    record = {"source": "PostgreSQL on shared storage", "ui": False, "ui_port": 0, "endpoint": None}
+    try:
+        service = endpoint(str(service_root))
+    except (ConnectionError, OSError, ValueError) as exc:
+        return dict(record, error=f"{type(exc).__name__}: {exc}")
+    record.update(endpoint=service["endpoint"], ui_port=service["ui_port"], service=service)
+    host = service["endpoint"].rsplit(":", 1)[0]
+    try:
+        with socket.create_connection((host, service["ui_port"]), timeout=0.2):
+            record["ui"] = True
+    except OSError:
+        pass
+    return record
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--service-root", type=Path, required=True)
@@ -82,7 +108,7 @@ async def main() -> int:
                 client = await Client.connect(endpoint(str(args.service_root))["endpoint"])
             workflows = await collect(client)
             publish(args.out, {"generated_at": started, "took_s": round(time.time() - started, 3),
-                               "workflows": workflows})
+                               "workflows": workflows, "service": service_record(args.service_root)})
         except Exception as exc:  # noqa: BLE001 - a monitor must outlive a restart of what it watches
             client = None
             sys.stderr.write(f"[fleet-status] {type(exc).__name__}: {exc}\n")
