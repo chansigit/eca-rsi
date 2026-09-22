@@ -70,6 +70,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 
+from typing import Callable
 from . import index
 from .. import layout as L
 
@@ -99,9 +100,14 @@ class Registry:
     bind/unbind. `extra` are per-process additions (serve's positional
     dirs) that are never written to the file."""
 
-    def __init__(self, path: Path, extra: dict[str, Path] | None = None) -> None:
+    def __init__(self, path: Path, extra: dict[str, Path] | None = None,
+                 published: "Callable[[], dict[str, Path]] | None" = None) -> None:
         self.path = Path(path)
         self._extra = dict(extra or {})
+        # Runs the control plane publishes about itself (ControlVerdicts.runs): a dataset is on the
+        # page from the moment it is submitted, with nobody registering anything. Lowest priority --
+        # a name in the file or on the command line keeps its own path.
+        self._published = published or (lambda: {})
         self._file: dict[str, Path] = {}
         self._stamp: tuple | None = None
         self._lock = threading.Lock()
@@ -149,6 +155,7 @@ class Registry:
         with self._lock:
             self._load_if_changed()
             return {
+                **self._published(),
                 **self._file,
                 **self._extra,
             }  # this process's own dirs win on a name clash
@@ -159,7 +166,7 @@ class Registry:
     def cached_snapshot(self) -> dict[str, Path]:
         # Readers never wait on filesystem I/O under the registry write lock.
         # _file is replaced atomically, not modified in place.
-        return {**self._file, **self._extra}
+        return {**self._published(), **self._file, **self._extra}
 
     def start(self) -> None:
         def refresh():
@@ -454,6 +461,23 @@ class ControlVerdicts:
             return None
         workflows = self._data.get("workflows") or {}
         return workflows.get(f"dataset/{run_id}{unit}")
+
+    def runs(self) -> dict[str, Path]:
+        """Every dataset run the control plane owns, by the directory it publishes for it.
+
+        The fleet table used to list only what the registry named, so a dataset the coordinator had
+        been running for ten minutes was invisible until someone ran scan-add: the two disagreed
+        about what the fleet even was (2026-09-22). The plane publishes each run's output_root from
+        the spec it was started with; a directory that exists is a row, named as scan-add would name
+        it. Superseded runs whose directories are gone, or a silent publisher, contribute nothing."""
+        if not self.live():
+            return {}
+        out = {}
+        for record in (self._data.get("workflows") or {}).values():
+            root = record.get("output_root")
+            if record.get("kind") == "DatasetWorkflow" and root and Path(root).is_dir():
+                out[Path(root).name] = Path(root)
+        return out
 
 
 def reconcile(row: dict, verdict: dict | None, precise: bool = True) -> dict:
@@ -1423,12 +1447,6 @@ def cmd_serve(args: argparse.Namespace) -> int:
             )
             return 2
         extra[p.name] = p
-    registry = Registry(reg_path, extra)
-    items = registry.snapshot()
-    registry.start()
-    cache_key = hashlib.sha256(str(reg_path).encode()).hexdigest()[:16]
-    states = StateCache(registry, cache_file=Path.home()/'.cache/ecarsi-periscope'/f'{cache_key}.json')
-    states.start()
     control, verdicts = None, ControlVerdicts(None)
     if args.control_plane:
         from ..observatory import ControlPlane
@@ -1439,6 +1457,14 @@ def cmd_serve(args: argparse.Namespace) -> int:
         # container/fleet-status.py publishes this beside the run; absent, the page says so and
         # falls back to what the files imply.
         verdicts = ControlVerdicts(base / 'fleet-status.json')
+    # The plane's own list of runs is the third source of rows, under the file and the command line:
+    # a submitted dataset is on the page at once, and nobody registers anything by hand.
+    registry = Registry(reg_path, extra, published=verdicts.runs)
+    items = registry.snapshot()
+    registry.start()
+    cache_key = hashlib.sha256(str(reg_path).encode()).hexdigest()[:16]
+    states = StateCache(registry, cache_file=Path.home()/'.cache/ecarsi-periscope'/f'{cache_key}.json')
+    states.start()
     httpd = http.server.ThreadingHTTPServer(
         (args.bind, args.port), partial(Handler, registry=registry, auth=args.auth, states=states, control=control, verdicts=verdicts)
     )

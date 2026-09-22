@@ -673,7 +673,7 @@ def _gen2_unit_state(unit: Path) -> dict:
         if newest > dataset_path.stat().st_mtime:
             failure = None
     if released:
-        stage, cls = f"released after {len(rounds)} round(s)", "released"
+        stage, cls = "released", "released"
     elif failure and str(failure.get("error", "")).startswith("PAUSED"):
         # A unit stopped by loop_control fails its workflow so it stays resumable; that is a
         # held run waiting on a person, not a broken one.
@@ -878,7 +878,7 @@ def unit_state(unit: Path) -> dict:
     elif last and last[1].startswith("paused by loop_control"):
         stage, cls = f"paused after round {len(rounds)} (loop_control.json) — re-run to continue", "running"
     elif released and (not rounds or rounds[-1]["decision"] is not None):
-        stage, cls = f"released after {len(rounds)} round(s)", "released"
+        stage, cls = "released", "released"
     elif rounds and rounds[-1]["decision"] is None:
         stage, cls = f"round {rounds[-1]['n']} · {rounds[-1]['step']}", "running"
     elif rounds:

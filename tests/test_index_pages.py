@@ -71,7 +71,7 @@ def test_unit_page_glance_files_and_section_explanations(tmp_path):
     root, unit = make_run(tmp_path)
     html = render_unit(unit, "coll-Organ")
     assert '<main class="page">' in html and '<header class="hero">' in html
-    assert 'class="pill released"' in html and "released after 1 round(s)" in html
+    assert 'class="pill released"' in html and ">released<" in html and "after 1 round" not in html   # rounds have their own column
     # at a glance: seven number cards
     glance = html[html.index('<div class="glance">'):html.index('<nav class="jump"')]
     for k in ("input cells", "final cells", "removed overall", "rounds", "coarse / fine labels", "samples done", "needs review"):

@@ -224,3 +224,45 @@ def test_a_run_verdict_may_close_a_unit_row_but_never_reopen_one(tmp_path):
     done = _published(tmp_path, {"dataset/r": {"status": "COMPLETED", "started": 1.0, "closed": 2.0}})
     out = serve.reconcile(dict(name="u", stage="per-sample running", cls="running"), done.of("r"), precise=False)
     assert out["cls"] == "released" and out["live"] == "completed"
+
+
+def test_a_run_the_control_plane_publishes_is_a_row_without_being_registered(tmp_path):
+    """The coordinator and the monitor disagreed about what the fleet was: a dataset submitted ten
+    minutes earlier was absent from the page until someone ran scan-add by hand (2026-09-22). The
+    plane now publishes each run's output_root from the spec it was started with, and the registry
+    merges those runs under the file and the command line -- so a submitted dataset is a row at once,
+    a registered name keeps its own path, and a run whose directory is gone contributes nothing."""
+    import json
+    import time
+    from ecarsi.ui.serve import ControlVerdicts, Registry
+
+    published_dir = tmp_path / "runs" / "mouse-pansci-duodenum_Prkdc-c"
+    published_dir.mkdir(parents=True)
+    registered_dir = tmp_path / "elsewhere" / "kim2020"
+    registered_dir.mkdir(parents=True)
+    status = tmp_path / "fleet-status.json"
+    status.write_text(json.dumps({"generated_at": time.time(), "workflows": {
+        "dataset/mouse-pansci-duodenum-prkdc-c": {"kind": "DatasetWorkflow", "status": "RUNNING",
+                                                  "output_root": str(published_dir)},
+        "dataset/mouse-pansci-duodenum-prkdc-c/unit-0": {"kind": "AnalysisUnitWorkflow", "status": "RUNNING",
+                                                         "output_root": str(published_dir)},   # units are not rows
+        "dataset/kim2020": {"kind": "DatasetWorkflow", "status": "RUNNING",
+                            "output_root": str(tmp_path / "runs" / "kim2020")},                # registered under another path
+        "dataset/gone": {"kind": "DatasetWorkflow", "status": "FAILED",
+                         "output_root": str(tmp_path / "runs" / "gone")},                      # directory does not exist
+    }}))
+    verdicts = ControlVerdicts(status)
+    assert verdicts.runs() == {"mouse-pansci-duodenum_Prkdc-c": published_dir}
+
+    reg_file = tmp_path / "registry.json"
+    reg_file.write_text(json.dumps({"kim2020": str(registered_dir)}))
+    registry = Registry(reg_file, published=verdicts.runs)
+    items = registry.snapshot()
+    assert items["mouse-pansci-duodenum_Prkdc-c"] == published_dir       # on the page, nobody registered it
+    assert items["kim2020"] == registered_dir                           # the registry's own path wins
+    assert "gone" not in items and "unit-0" not in "".join(items)
+
+    # A publisher that has gone quiet stops adding rows; the file's rows remain.
+    status.write_text(json.dumps({"generated_at": 0.0, "workflows": {}}))
+    verdicts._mtime = None
+    assert set(registry.snapshot()) == {"kim2020"}

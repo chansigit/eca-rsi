@@ -26,7 +26,29 @@ from pathlib import Path
 KINDS = ("DatasetWorkflow", "AnalysisUnitWorkflow")
 
 
-async def collect(client) -> dict:
+async def where(client, workflow_id: str, cache: dict) -> dict:
+    """Where a dataset run lives on disk, from the spec the workflow was started with.
+
+    Periscope only showed a run once somebody registered its directory by hand, so a dataset the
+    control plane had owned for ten minutes was still absent from the page -- the coordinator and the
+    monitor knew different fleets (2026-09-22). The spec is the first event of the workflow's own
+    history, so the plane can publish the path along with the verdict and nothing needs registering.
+    Read once per workflow id: the spec never changes after submission."""
+    if workflow_id not in cache:
+        cache[workflow_id] = {}
+        try:
+            history = await client.get_workflow_handle(workflow_id).fetch_history()
+            started = history.events[0].workflow_execution_started_event_attributes
+            spec = (await client.data_converter.decode(started.input.payloads))[0]
+            if isinstance(spec, dict):
+                cache[workflow_id] = {"output_root": spec.get("output_root"),
+                                      "dataset_id": spec.get("dataset_id")}
+        except Exception as exc:  # noqa: BLE001 - a run with an unreadable spec still gets its verdict
+            sys.stderr.write(f"[fleet-status] spec of {workflow_id}: {type(exc).__name__}: {exc}\n")
+    return cache[workflow_id]
+
+
+async def collect(client, specs: dict | None = None) -> dict:
     """The newest execution of each workflow id. A resumed dataset and a workflow that continued as
     new both leave older executions behind, and listing returns them in no particular order, so the
     latest start wins: reporting a superseded FAILED over the RUNNING that replaced it is precisely
@@ -44,6 +66,8 @@ async def collect(client) -> dict:
                 "started": started,
                 "closed": wf.close_time.timestamp() if wf.close_time else None,
             }
+            if kind == "DatasetWorkflow" and specs is not None:
+                out[wf.id].update(await where(client, wf.id, specs))
     return out
 
 
@@ -100,13 +124,13 @@ async def main() -> int:
     from temporalio.client import Client
     from ecarsi.control.temporal import endpoint
 
-    client = None
+    client, specs = None, {}
     while True:
         started = time.time()
         try:
             if client is None:
                 client = await Client.connect(endpoint(str(args.service_root))["endpoint"])
-            workflows = await collect(client)
+            workflows = await collect(client, specs)
             publish(args.out, {"generated_at": started, "took_s": round(time.time() - started, 3),
                                "workflows": workflows, "service": service_record(args.service_root)})
         except Exception as exc:  # noqa: BLE001 - a monitor must outlive a restart of what it watches
