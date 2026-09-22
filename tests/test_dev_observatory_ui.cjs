@@ -6,23 +6,29 @@ const html = fs.readFileSync(require('node:path').join(__dirname, '../ecarsi/obs
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1].replace(/refresh\(\); setInterval\(refresh,10000\);/, '');
 const elements = new Map();
 const element = id => {
-  if (!elements.has(id)) elements.set(id, {value: '', hidden: false, listeners: {},
-    querySelector: () => null, classList: {remove() {}}, addEventListener(name, fn) { this.listeners[name] = fn; }});
+  if (!elements.has(id)) elements.set(id, {value: '', hidden: false, listeners: {}, textContent: '',
+    checked: false, dataset: {}, classList: {remove() {}, add() {}, toggle() {}},
+    querySelector: () => null, querySelectorAll: () => [], setAttribute() {}, removeAttribute() {},
+    addEventListener(name, fn) { this.listeners[name] = fn; }});
   return elements.get(id);
 };
 const context = vm.createContext({
-  document: {getElementById: element, querySelector: () => ({addEventListener() {}})},
-  window: {addEventListener() {}}, Date, Map, URLSearchParams, setTimeout: () => 1, clearTimeout() {},
+  document: {getElementById: element, querySelector: () => ({addEventListener() {}}),
+             querySelectorAll: () => []},
+  window: {addEventListener() {}}, Date, Map, Set, URLSearchParams, JSON, Math, Number, String, Array,
+  location: {hash: ''}, history: {replaceState() {}}, localStorage: {getItem: () => null, setItem() {}},
+  setTimeout: () => 1, clearTimeout() {},
 });
 vm.runInContext(script, context);
 element("timeline-view").value="workers";
-const now = Date.now() / 1000;
-const original = {since: now - 3600, until: now};
-const zoomed = context.zoomWindow(original, .25, -100);
-assert(zoomed.until - zoomed.since < 3600);
-assert(Math.abs(zoomed.since + (zoomed.until - zoomed.since) * .25 - (original.since + 900)) < .01);
-const widest = context.zoomWindow({since: now - 80000, until: now}, .5, 500);
-assert(Math.abs(widest.until - widest.since - 86400) < .01);
+
+// The wheel is the vertical scroll and nothing else: a zoom handler on the same surface made the
+// two gestures fight, and the page is no longer an archive to zoom around in.
+assert.equal(element('timeline').listeners.wheel, undefined);
+assert.equal(context.zoomWindow, undefined);
+assert.equal(vm.runInContext('JSON.stringify(SPANS)', context), '[900,3600,14400]');
+assert.equal(vm.runInContext('view.span', context), 3600);
+assert.equal(vm.runInContext('typeof timeAtFraction', context), 'undefined');
 
 const task = (id, start) => ({id, service: 'pool', operation: 'compute', worker_id: 'worker-a',
   submitted_at: start - 100, started_at: start, finished_at: start + 200, state: 'succeeded',
@@ -33,31 +39,30 @@ context.renderTimeline({since: 0, until: 600, tasks: [task('a', 100), task('b', 
     gpu_percent: null, gpu_memory_percent: null, samples: 1}], source: 'test'});
 const chart = element('timeline').innerHTML;
 assert.equal((chart.match(/data-group="worker-a"/g)||[]).length, 1);
-assert(chart.includes('Peak: 2 concurrent tasks'));
-assert(chart.includes('data-slot="1"'));
-assert(!chart.includes('timeline-spark'));
-assert(!chart.includes(' · lane '));
-assert(chart.includes('data-tip-title="a" data-tip-step="compute"'));
-assert(!chart.includes('>compute</span>'));
-assert(!chart.includes('Unit: compute'));
-assert(!chart.includes('timeline-queue'));
-assert(element('timeline-note').textContent.includes('started-task queue time is in task details'));
-let prevented = false;
-element('timeline').listeners.wheel({target: {closest: () => ({getBoundingClientRect: () => ({left: 0, width: 100})})},
-  clientX: 25, deltaY: -100, preventDefault() { prevented = true; }});
-assert(prevented);
-assert.equal(element('timeline-range').value, 'custom');
-assert.equal(element('timeline-from').hidden, false);
-context.resetTimelineView();
-assert.equal(element('timeline-range').value, 'auto');
-assert.equal(element('timeline-from').hidden, true);
-const fitted = context.latestActivityWindow([
-  {started_at: 100, finished_at: 150}, {started_at: 200, finished_at: 250},
-  {started_at: 1000, finished_at: 1040}, {started_at: 1080, finished_at: 1120},
-], 2000);
-assert(fitted.since < 1000 && fitted.since > 900);
-assert(fitted.until > 1120 && fitted.until < 1200);
-assert.equal(Math.round(fitted.until-fitted.since), 139);
+// Collapsed by default: one fixed-height load strip, no per-task node, no stack of slots.
+assert(chart.includes('class="timeline-track load"'));
+assert(chart.includes('height:30px'));
+assert(!chart.includes('top:41px'));   // no second stacked slot: the lane never grows
+assert(!chart.includes('timeline-bar'));
+assert(chart.includes('peak 2 · 0 running · 2 finished'));
+assert(chart.includes('class="load-seg"'));
+assert(element('timeline-note').textContent.includes("tasks-<day>.jsonl"));
+
+// The sweep: two tasks overlapping in the middle give 1, 2, 1 concurrent.
+const segments = vm.runInContext('loadSegments', context)([{task: task('a', 100)}, {task: task('b', 150)}], 0, 600, 600);
+assert.equal(JSON.stringify(segments.map(s => [s.a, s.b, s.n])), '[[100,150,1],[150,300,2],[300,350,1]]');
+// Equal-count, same-dataset neighbours merge instead of becoming two nodes.
+const one = task('a', 100);
+assert.equal(vm.runInContext('loadSegments', context)([{task: one}, {task: {...one, id: 'a2'}}], 0, 600, 600).length, 1);
+
+// Clicking a lane opens that worker's individual bars, and only that worker's.
+element('timeline').listeners.click({target: {closest: sel => sel === '[data-worker]' ? {dataset: {worker: 'worker-a'}} : null}});
+const opened = element('timeline').innerHTML;
+assert(opened.includes('top:41px'));   // expanded: the second concurrent task gets its own slot
+assert(opened.includes('data-tip-title="a" data-tip-step="compute"'));
+assert(opened.includes('Duration: 200.0 s'));
+element('timeline').listeners.click({target: {closest: sel => sel === '[data-worker]' ? {dataset: {worker: 'worker-a'}} : null}});
+assert(!element('timeline').innerHTML.includes('top:41px'));
 
 context.renderTimeline({since: 0, until: 600, total: 4, resources: [], source: 'test', tasks: [
   {...task('legacy-a', 100), worker_id: null, host: 'node-a', cpu_ids: [7]},
@@ -66,14 +71,17 @@ context.renderTimeline({since: 0, until: 600, total: 4, resources: [], source: '
 ]});
 const labels = element('timeline').innerHTML;
 assert.equal((labels.match(/data-group="node-a"/g)||[]).length,1);
-assert(labels.includes('Peak: 2 concurrent tasks'));
+assert(labels.includes('peak 2 ·'));
 assert(!labels.includes('node-a · CPU'));
-assert(labels.includes('CPU affinity: logical IDs 7'));
 assert.equal((labels.match(/data-group="Agent Bridge"/g)||[]).length,1);
-assert(labels.includes('Peak: 2 concurrent requests'));
+assert(labels.includes('data-worker="Agent Bridge"'));
+// Per-task detail is behind the lane, not in it: a worker keyed by host expands the same way.
+element('timeline').listeners.click({target:{closest:sel=>sel==='[data-worker]'?{dataset:{worker:'node-a'}}:null}});
+assert(element('timeline').innerHTML.includes('CPU affinity: logical IDs 7'));
+element('timeline').listeners.click({target:{closest:sel=>sel==='[data-worker]'?{dataset:{worker:'node-a'}}:null}});
 assert(!labels.includes(' · calls '));
 
-// A custom window extending into the future must not extend a running task there.
+// A window extending past the clock must not extend a running task there.
 context.Date = class extends Date { static now() { return 200000; } };
 context.renderTimeline({since: 100, until: 400, total: 1, tasks: [
   {...task('live', 150), finished_at: null, state: 'running'},
@@ -190,7 +198,7 @@ assert(element('timeline').innerHTML.includes('2 stage runs'));
 assert(element('timeline').innerHTML.includes('Prepare inputs'));
 assert(element('timeline').innerHTML.includes('Plan experiments'));
 const stepKey=JSON.stringify(['Prostate','organize/second','organize.plan']);
-element('timeline').listeners.click({target:{closest:()=>({dataset:{stepSelect:stepKey}})}});
+element('timeline').listeners.click({target:{closest:sel=>sel==='[data-worker]'?null:{dataset:{stepSelect:stepKey}}}});
 assert.equal(element('flow-detail').hidden,false);
 assert(element('flow-detail').innerHTML.includes('Plan experiments'));
 assert(element('flow-detail').innerHTML.includes('Model call'));

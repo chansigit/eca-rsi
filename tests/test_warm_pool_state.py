@@ -360,3 +360,38 @@ def test_resubmission_that_differs_only_in_packaging_replays_the_saved_request(t
     saved = read(tmp_path / 'requests' / 'run.step-1' / 'request.json')
     assert saved['spec']['memory_mb'] == 64
     assert read(tmp_path / 'requests' / 'run.step-1' / 'resubmitted.json')['spec']['memory_mb'] == 4096
+
+
+def test_a_finished_attempt_is_appended_to_the_worker_task_journal(tmp_path):
+    """Durations must be answerable from a log, not by walking a hundred thousand request folders:
+    that walk is both what made the monitor slow and what stalled a coordinator's Lustre client
+    once. One greppable line per finished attempt, in the executing worker's own daily journal."""
+    import json as _json
+    from ecarsi.warm_pool.worker import journal
+
+    folder = tmp_path / "pool" / "requests" / "req-1"
+    (folder / "attempt-1").mkdir(parents=True)
+    (folder / "attempt-1" / "accepted.json").write_text(
+        _json.dumps({"worker_id": "w-7", "host": "node-3", "started_at": 100.0}))
+    request = {"attempt_id": "attempt-1", "submitted_at": 90.0,
+               "spec": {"request_id": "req-1", "operation_id": "crosssample.integrate", "cpus": 4,
+                        "memory_mb": 8192,
+                        "trace": {"dataset_id": "hcl-AdultLung", "workflow_id": "unit/lung",
+                                  "unit_id": "adult-lung"}}}
+    journal(folder, request, {"state": "succeeded", "started_at": 100.0, "finished_at": 342.5,
+                              "exit_code": 0, "peak_rss_bytes": 1 << 30})
+
+    written = list((tmp_path / "pool" / "workers" / "w-7").glob("tasks-*.jsonl"))
+    assert len(written) == 1
+    line = _json.loads(written[0].read_text().strip())
+    assert line["duration_s"] == 242.5 and line["queue_wait_s"] == 10.0
+    assert line["dataset_id"] == "hcl-AdultLung" and line["worker_id"] == "w-7"
+    assert line["operation"] == "crosssample.integrate" and line["state"] == "succeeded"
+
+    # A second attempt appends; the journal is never rewritten.
+    journal(folder, request, {"state": "failed", "started_at": 400.0, "finished_at": 401.0,
+                              "error": "MemoryError: RSS"})
+    assert len(written[0].read_text().strip().split("\n")) == 2
+
+    # Bookkeeping never decides a task's outcome: a broken record must not raise.
+    journal(folder, {"attempt_id": "attempt-1"}, {})

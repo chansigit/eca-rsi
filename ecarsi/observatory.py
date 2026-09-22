@@ -16,7 +16,13 @@ from .agent import status as bridge_status
 from .warm_pool.state import lock, read, status as pool_status
 
 PAGE = Path(__file__).with_name("observatory.html")
-INDEX_HORIZON = 6 * 3600  # request folders untouched for longer are not read until a wider window asks
+# The monitor answers "are the workers healthy right now", not "how was last week scheduled": every
+# finished attempt is in the worker's own tasks-<day>.jsonl journal, which is where a post-mortem
+# belongs. So the index reaches back a fixed, short distance and forgets what falls out of it --
+# both the folders it stats and the settled rows it keeps. Retaining every request ever seen made
+# each API call walk a hundred thousand rows to answer a one-hour question (2026-09-21).
+MAX_WINDOW = 4 * 3600      # widest window the page may ask for
+INDEX_HORIZON = MAX_WINDOW + 3600  # request folders untouched for longer are neither read nor retained
 
 
 def resource_history(pool: Path, since: float, until: float, cache: dict | None = None) -> list[dict]:
@@ -145,6 +151,24 @@ def task_timeline(pool_rows: list[dict], bridge_rows: list[dict], since: float, 
         pagination = dict(dataset_page=dataset_page, dataset_page_size=10, dataset_total=len(names))
     tasks.sort(key=lambda item: item["submitted_at"])
     total = len(tasks)
+    if dataset_page is None and total > limit:
+        # The worker view asks "is every worker working", so a global cap is the wrong cut: it drops
+        # the oldest tasks, and with them whole lanes, making a busy worker look absent. Cap each lane
+        # instead -- every worker keeps its most recent tasks and no worker disappears.
+        def lane(task):
+            return "Agent Bridge" if task["service"] == "bridge" else task["worker_id"] or task["host"] or "unknown"
+        lanes = {lane(task) for task in tasks}
+        per_lane = max(1, limit // max(1, len(lanes)))
+        counts, retained = {}, []
+        for task in reversed(tasks):
+            key = lane(task)
+            if counts.get(key, 0) < per_lane:
+                retained.append(task)
+                counts[key] = counts.get(key, 0) + 1
+        tasks = list(reversed(retained))
+        return {"tasks": tasks, "total": total, "truncated": True, "lanes": len(lanes),
+                "per_lane": per_lane, "since": since, "until": until,
+                "source": "durable Pool and Bridge request/acceptance/result records"}
     if dataset_page is not None and total > limit:
         # Keep every dataset on the page visible; a busy dataset must not evict
         # its neighbors. Filtering one dataset gives it the full task budget.
@@ -246,9 +270,13 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
     pool_done = cache.setdefault("pool_done", {})
     bridge_done = cache.setdefault("bridge_done", {})
     now = time.time()
-    horizon = cache.get("horizon", INDEX_HORIZON)
+    horizon = INDEX_HORIZON
     cache["indexed_since"] = now - horizon
     pool_stale, bridge_stale = cache.setdefault("pool_stale", {}), cache.setdefault("bridge_stale", {})
+    for settled in (pool_done, bridge_done):
+        for key in [k for k, row in settled.items()
+                    if (row.get("finished_at") or row["submitted_at"]) < now - horizon]:
+            del settled[key]
     reads = 0
 
     def pace():
@@ -386,18 +414,13 @@ class ControlPlane:
         self.temporal_service_root, self.temporal_port, self.temporal_host = temporal_service_root, temporal_port, temporal_host
         self.cache, self.guard = {}, threading.Lock()
 
-    # What a walk accumulates: which folders it has read, which it found too old to read again,
-    # and how far back it reaches. A widening walk needs its own copy of all of it.
-    INDEX = ("pool_done", "bridge_done", "pool_stale", "bridge_stale", "resource_files",
-             "worker_tails", "horizon", "indexed_since")
-
     def _snapshot(self, cache=None):
         return snapshot(self.root, self.temporal_port, self.temporal_host,
                         self.cache if cache is None else cache,
                         self.pool_root, self.bridge_root, self.temporal_service_root)
 
     def start(self):
-        """Warm the index in the background: the first walk over every saved request takes minutes on
+        """Warm the index in the background: the first listing of the request folders takes a while on
         Lustre, and a page load must not look like an outage meanwhile."""
         def warm():
             try:
@@ -407,28 +430,6 @@ class ControlPlane:
                 print(f"control plane warm-up skipped: {exc}", flush=True)
         threading.Thread(target=warm, daemon=True).start()
         return self
-
-    def _widen(self, horizon):
-        """Reach back `horizon` seconds, reading every request folder that far back. On a cold
-        Lustre client that is tens of minutes, so it walks a private copy of the index and adopts
-        it only when finished: the two-second refresh keeps running against the narrow index
-        meanwhile. It used to share the index, which meant a page asking for a week of history
-        froze the live worker list for as long as the week took to read (2026-09-20)."""
-        import copy
-
-        with self.guard:
-            private = {k: copy.deepcopy(self.cache[k]) for k in self.INDEX if k in self.cache}
-        private["horizon"] = max(private.get("horizon", INDEX_HORIZON), horizon)
-        try:
-            built = self._snapshot(private)
-        except Exception as exc:  # noqa: BLE001 - the page keeps its last records
-            print(f"control plane widening skipped: {exc}", flush=True)
-            built = None
-        with self.guard:
-            if built is not None:                      # the wider index replaces the narrow one
-                self.cache.update(private)
-                self.cache["snapshot"], self.cache["snapshot_at"] = built, time.monotonic()
-            self.cache.pop("walk", None)
 
     @staticmethod
     def page() -> bytes:
@@ -443,15 +444,10 @@ class ControlPlane:
         dataset_page = int(query["dataset_page"][0]) if "dataset_page" in query else None
         dataset = query.get("dataset", [""])[0]
         timeline = name == "timeline"
-        if timeline and (not 0 < until - since <= 7 * 86400 or not 1 <= limit <= 5000 or len(dataset) > 256):
-            raise ValueError("choose a time window of at most 7 days and limit up to 5000")
+        if timeline and (not 0 < until - since <= MAX_WINDOW or not 1 <= limit <= 5000 or len(dataset) > 256):
+            raise ValueError(f"choose a time window of at most {MAX_WINDOW // 3600} hours and limit up to 5000; "
+                             "older work is in each worker's tasks-<day>.jsonl journal")
         with self.guard:
-            if timeline and since < cache.get("indexed_since", 0) and not cache.get("walk"):
-                # A window older than the index widens the horizon to reach it; the folders it
-                # uncovers are read in the background, on its own copy of the index, while the
-                # page keeps reporting live state from the narrow one.
-                cache["walk"] = threading.Thread(target=self._widen, args=(time.time() - since + 3600,), daemon=True)
-                cache["walk"].start()
             if time.monotonic() - cache.get("snapshot_at", 0) >= 2:
                 cache["snapshot"], cache["snapshot_at"] = self._snapshot(), time.monotonic()
             data = cache["snapshot"]
@@ -461,7 +457,6 @@ class ControlPlane:
                     Path(self.pool_root) if self.pool_root else self.root / "pool", since, until,
                     cache.setdefault("resource_files", {})), since, until)
                 result["indexed_since"] = cache.get("indexed_since")
-                result["indexing"] = bool(cache.get("walk"))
                 return result
             data = dict(data)
             rows = data["pool_requests"] + data["bridge_requests"]

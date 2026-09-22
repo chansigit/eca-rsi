@@ -112,8 +112,16 @@
 .timeline-spans button.on { background:#2d5046; color:#fff; }
 #timeline-live { border:1px solid #d9d2c2; border-radius:6px; background:#fff; padding:4px 9px; font-size:12px; cursor:pointer; }
 #timeline-live.on { border-color:#a4514e; color:#a4514e; font-weight:650; }
-.timeline-select { position:absolute; top:0; bottom:0; background:#2d504633; border:1px solid #2d5046; pointer-events:none; z-index:3; }
-.timeline-track,.timeline-flow { will-change:transform; }
+/* Collapsed lane: a load strip, not a stack. No shadow, no transition, no per-task node. */
+.timeline-track.load { background:none; border-bottom:1px solid #f1eee6; cursor:pointer; }
+.load-seg { position:absolute; bottom:4px; border-radius:1px; opacity:.85; }
+.load-fail { position:absolute; top:2px; bottom:2px; width:2px; margin-left:-1px; background:#a4514e; }
+.lane-toggle { border:0; background:none; padding:0; font:inherit; font-weight:650; cursor:pointer; text-align:left; width:100%; color:inherit; }
+.lane-toggle .caret { display:inline-block; width:12px; color:var(--muted); }
+.timeline-row.open { background:#fbf9f4; }
+.timeline-label small em { color:#a4514e; font-style:normal; font-weight:650; }
+/* No will-change here any more: it was for the pan gesture, and a promoted layer per lane costs
+   more than it saves once the lanes are static. */
 .timeline-failures { position:relative; font-size:12px; }
 .timeline-failures summary { cursor:pointer; }
 .timeline-failures ul { position:absolute; right:0; z-index:6; margin:4px 0 0; padding:6px; list-style:none; background:#fff; border:1px solid #d9d2c2; border-radius:6px; box-shadow:0 6px 18px #0002; max-height:320px; overflow:auto; min-width:320px; }
@@ -199,7 +207,7 @@
 <body>
 <main>
   <header><div class="brand">RSI <small>v2 / development observatory</small></div><div class="meta"><span><i class="live-dot"></i> Read-only</span><span id="updated">Connecting…</span></div></header>
-  <section class="panel" style="margin-bottom:20px"><div class="panel-head"><div><h2>Worker timeline</h2><div class="sub">One lane per worker: what it ran, for which dataset, when. Opens on the whole recorded history with the last minutes stretched (log time) and the right edge following the clock. Stacked bars are concurrent tasks; hover a bar for the task; Datasets shows stage runs and their handoffs.</div></div><span class="status off" id="timeline-state">Loading</span></div><div class="timeline-controls"><select id="timeline-view" aria-label="Timeline view"><option value="workers" selected>Workers</option><option value="datasets">Datasets</option></select><span class="timeline-spans" role="group" aria-label="Window"><button type="button" data-span="3600">1h</button><button type="button" data-span="14400">4h</button><button type="button" data-span="86400">24h</button><button type="button" data-span="all" class="on">All</button></span><button type="button" id="timeline-live" class="on" title="The right edge follows the clock; pan or zoom into the past to pause">● LIVE</button><label class="timeline-log-toggle" title="Compress the distant past and stretch the last minutes"><input type="checkbox" id="timeline-log" checked> Log time</label><input id="timeline-dataset" type="search" placeholder="Filter dataset…" aria-label="Filter dataset"><details class="timeline-failures"><summary>Recent failures <span id="failure-count"></span></summary><ul id="failure-list"></ul></details></div><div class="timeline-legend"><span>One color per dataset</span><span><i class="model-key"></i>Model call</span><span><i class="compute-key"></i>Worker task</span><span><i style="background:transparent;border:2px solid #a4514e"></i>Failed task</span><span>Drag to pan · Wheel to zoom · Drag on the axis to select · Click a bar for its run · Double-click to reset the view</span></div><div class="flow-layout" id="flow-layout"><div class="timeline-wrap" id="flow-scroll"><div class="timeline" id="timeline" aria-busy="true"><div class="timeline-skeleton" aria-hidden="true"><div class="timeline-skeleton-row"><i style="width:60%"></i><b style="left:4%;width:22%"></b><b style="left:38%;width:30%"></b></div><div class="timeline-skeleton-row"><i style="width:45%"></i><b style="left:10%;width:35%"></b><b style="left:60%;width:18%"></b></div><div class="timeline-skeleton-row"><i style="width:70%"></i><b style="left:2%;width:12%"></b><b style="left:26%;width:44%"></b></div><div class="timeline-skeleton-row"><i style="width:50%"></i><b style="left:30%;width:26%"></b><b style="left:70%;width:20%"></b></div></div></div></div><aside id="flow-detail" class="flow-detail" aria-label="Selected step details" hidden></aside></div><div id="flow-pages" class="flow-pages"></div><div class="note" id="timeline-note"></div></section>
+  <section class="panel" style="margin-bottom:20px"><div class="panel-head"><div><h2>Worker timeline</h2><div class="sub">Is every worker working? One fixed-height lane per worker showing how busy it has been over the last hour — height is concurrent tasks, colour is the dataset, red ticks are failures. Click a lane to open its individual tasks. This window is the recent past only; every finished task's duration is in that worker's <code>tasks-&lt;day&gt;.jsonl</code> journal, which is where a post-mortem belongs.</div></div><span class="status off" id="timeline-state">Loading</span></div><div class="timeline-controls"><select id="timeline-view" aria-label="Timeline view"><option value="workers" selected>Workers</option><option value="datasets">Datasets</option></select><span class="timeline-spans" role="group" aria-label="Window"><button type="button" data-span="900">15m</button><button type="button" data-span="3600" class="on">1h</button><button type="button" data-span="14400">4h</button></span><label class="timeline-log-toggle" title="Compress the older part of the window and stretch the last minutes"><input type="checkbox" id="timeline-log"> Log time</label><input id="timeline-dataset" type="search" placeholder="Filter dataset…" aria-label="Filter dataset"><details class="timeline-failures"><summary>Recent failures <span id="failure-count"></span></summary><ul id="failure-list"></ul></details></div><div class="timeline-legend"><span>One color per dataset</span><span><i class="model-key"></i>Model call</span><span><i class="compute-key"></i>Worker task</span><span><i style="background:transparent;border:2px solid #a4514e"></i>Failed task</span><span>Click a lane to expand its tasks · the wheel only scrolls</span></div><div class="flow-layout" id="flow-layout"><div class="timeline-wrap" id="flow-scroll"><div class="timeline" id="timeline" aria-busy="true"><div class="timeline-skeleton" aria-hidden="true"><div class="timeline-skeleton-row"><i style="width:60%"></i><b style="left:4%;width:22%"></b><b style="left:38%;width:30%"></b></div><div class="timeline-skeleton-row"><i style="width:45%"></i><b style="left:10%;width:35%"></b><b style="left:60%;width:18%"></b></div><div class="timeline-skeleton-row"><i style="width:70%"></i><b style="left:2%;width:12%"></b><b style="left:26%;width:44%"></b></div><div class="timeline-skeleton-row"><i style="width:50%"></i><b style="left:30%;width:26%"></b><b style="left:70%;width:20%"></b></div></div></div></div><aside id="flow-detail" class="flow-detail" aria-label="Selected step details" hidden></aside></div><div id="flow-pages" class="flow-pages"></div><div class="note" id="timeline-note"></div></section>
   <section class="panel" id="compute-pool" style="margin-bottom:20px">
     <div class="panel-head"><div><h2>Compute Warm Pool</h2></div><span id="compute-pool-state" class="status off">Checking</span></div>
     <p id="compute-pool-summary" class="sub"></p>
@@ -250,32 +258,19 @@ $('timeline').addEventListener('focusout',()=>{ hideTimelineTip(); highlightFlow
 $('timeline').addEventListener('keydown',event=>{ if (event.key==='Escape') hideTimelineTip(); });
 document.querySelector('.timeline-wrap').addEventListener('scroll',hideTimelineTip);
 window.addEventListener('scroll',hideTimelineTip,{passive:true});
-// The window is either live (right edge = now, a chosen span or everything recorded) or fixed (after a
-// pan, zoom, selection or a click on a run). Stored in the hash so a reload or a shared link keeps it.
-const view={span:'all',live:true,since:null,until:null};
-let currentTimelineWindow=null, zoomTimer;
-const MAX_SPAN=604800;
-function windowNow() {
-  const now=Date.now()/1000;
-  if (view.live) return {since:now-(view.span==='all'?MAX_SPAN:Number(view.span)),until:now};
-  return {since:view.since,until:view.until};
-}
-function setWindow(w) {
-  const now=Date.now()/1000, since=Math.max(now-MAX_SPAN,Math.min(w.since,w.until-30));
-  const until=Math.min(now,Math.max(w.until,since+30));   // a pan past the 7-day cap must not invert the window
-  if (until>=now-2 && view.span==='all' && since<=now-MAX_SPAN+1) { view.live=true; }
-  else if (until>=now-2) { view.live=true; view.span=Math.round(until-since); }
-  else { view.live=false; view.since=since; view.until=until; }
-  syncControls(); writeHash();
-}
+// The window is always the last `span` seconds, ending now. It used to be freely pannable and
+// zoomable over seven days, which made the wheel mean two contradictory things (zoom the time axis /
+// scroll the lanes) and made the page an archive of scheduling history. Durations of finished tasks
+// live in each worker's tasks-<day>.jsonl journal; this page only answers "right now".
+const SPANS=[900,3600,14400];
+const view={span:3600};
+let currentTimelineWindow=null;
+function windowNow() { const now=Date.now()/1000; return {since:now-view.span,until:now}; }
 function syncControls() {
-  for (const b of document.querySelectorAll('.timeline-spans button')) b.classList.toggle('on',view.live&&String(view.span)===b.dataset.span);
-  const live=$('timeline-live'); live.classList.toggle('on',view.live); live.textContent=view.live?'● LIVE':'Now ↦';
-  live.title=view.live?'The right edge follows the clock; pan or zoom into the past to pause':'Back to the present, keeping the current span';
+  for (const b of document.querySelectorAll('.timeline-spans button')) b.classList.toggle('on',String(view.span)===b.dataset.span);
 }
 function writeHash() {
-  const h=new URLSearchParams({view:$('timeline-view').value,log:$('timeline-log').checked?'1':'0'});
-  if (view.live) h.set('span',String(view.span)); else { h.set('since',String(Math.round(view.since))); h.set('until',String(Math.round(view.until))); }
+  const h=new URLSearchParams({view:$('timeline-view').value,log:$('timeline-log').checked?'1':'0',span:String(view.span)});
   const dataset=$('timeline-dataset').value.trim(); if (dataset) h.set('dataset',dataset);
   history.replaceState(null,'','#'+h);
 }
@@ -284,9 +279,7 @@ function readHash() {
   if (h.get('view')==='datasets') $('timeline-view').value='datasets';
   if (h.has('log')) $('timeline-log').checked=h.get('log')==='1';
   if (h.get('dataset')) $('timeline-dataset').value=h.get('dataset');
-  const since=Number(h.get('since')), until=Number(h.get('until'));
-  if (since&&until&&until>since) { view.live=false; view.since=since; view.until=until; }
-  else if (h.get('span')) { view.live=true; view.span=h.get('span')==='all'?'all':Number(h.get('span'))||'all'; }
+  if (SPANS.includes(Number(h.get('span')))) view.span=Number(h.get('span'));
   syncControls();
 }
 const localTime=seconds=>{ const d=new Date(seconds*1000); return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16); };
@@ -296,19 +289,6 @@ function timeScale(from,to) {
   if (!$('timeline-log').checked) return t=>100*(t-from)/span;
   const k=Math.log1p(span/LOG_TAU);
   return t=>100*(1-Math.log1p(Math.max(0,Math.min(span,to-t))/LOG_TAU)/k);
-}
-function timeAtFraction(from,to,fraction) {  // inverse of timeScale, for the zoom anchor
-  const span=Math.max(1,to-from);
-  if (!$('timeline-log').checked) return from+span*fraction;
-  return to-LOG_TAU*Math.expm1((1-fraction)*Math.log1p(span/LOG_TAU));
-}
-function zoomWindow(window,fraction,deltaY) {
-  const span=window.until-window.since;
-  const next=Math.max(30,Math.min(604800,span*Math.exp(Math.max(-500,Math.min(500,deltaY))*.002)));
-  const anchor=timeAtFraction(window.since,window.until,fraction);
-  fraction=(anchor-window.since)/span;
-  const until=Math.min(Date.now()/1000,anchor+next*(1-fraction));
-  return {since:until-next,until};
 }
 const datasetColors=new Map();
 try {
@@ -397,137 +377,35 @@ function drawFlow(edges) {
 }
 let flowResizeTimer;
 window.addEventListener('resize',()=>{ clearTimeout(flowResizeTimer); flowResizeTimer=setTimeout(()=>drawFlow(currentFlowEdges),100); });
-$('timeline').addEventListener('wheel',event=>{
-  if (event.ctrlKey||event.metaKey||event.shiftKey) return;
-  const track=event.target.closest?.('.timeline-track,.timeline-scale');
-  if (!track || !currentTimelineWindow) return;
-  event.preventDefault();
-  const rect=track.getBoundingClientRect();
-  setWindow(zoomWindow(currentTimelineWindow,Math.max(0,Math.min(1,(event.clientX-rect.left)/rect.width)),event.deltaY));
-  navigated();
-},{passive:false});
-function displayWindow() {
-  return !view.live && Number.isFinite(view.since) ? {since:view.since,until:view.until}
-       : fullTimeline?.framed || windowNow();
-}
+// No wheel handler: the wheel scrolls the lanes and nothing else. It used to zoom the time axis,
+// which fought the vertical scroll on the same gesture over the same surface (2026-09-21).
 function renderWindow() {
-  // Zoom and pan redraw from the tasks already in the browser — a fetch per wheel notch made every
-  // notch cost a server walk. The window is only re-fetched when the loaded set cannot answer it.
   if (!fullTimeline) return;
-  const {since,until}=displayWindow();
-  const tasks=fullTimeline.tasks.filter(t=>t.submitted_at<=until && (t.finished_at??Infinity)>=since);
-  const resources=(fullTimeline.resources||[]).filter(r=>r.observed_at>=since && r.observed_at<=until);
-  const data={...fullTimeline,since,until,tasks,resources,total:tasks.length,
-              truncated:fullTimeline.truncated && tasks.length<fullTimeline.total};
-  renderTimeline(data); renderResourceHistory(data);
-}
-function needsFetch() {
-  if (!loaded) return true;
-  const {since,until}=displayWindow();
-  return since<loaded.since-1 || until>loaded.until+1 || loaded.truncated;
-}
-function navigated() {  // after a zoom, pan, selection or framing
-  renderWindow();
-  clearTimeout(zoomTimer);
-  if (needsFetch()) zoomTimer=setTimeout(refresh,400);
-}
-function resetTimelineView() {
-  // Double-click is the way back to the page as it opens: whole history, live, worker lanes, log time,
-  // no dataset filter and nothing expanded or selected.
-  view.live=true; view.span='all';
-  $('timeline-view').value='workers'; $('timeline-log').checked=true; $('timeline-dataset').value='';
-  selectedStep=null; detailLimit=80; datasetPage=0; expandedRuns.clear(); collapsedDatasets.clear();
-  syncControls(); writeHash();
-}
-// Drag on a track pans; drag on the axis selects a window; a click on a bar frames its stage run.
-(function(){
-  const root=$('timeline'); let drag=null;
-  root.addEventListener('pointerdown',event=>{
-    if (event.button!==0 || !currentTimelineWindow) return;
-    const scale=event.target.closest?.('.timeline-scale'), track=event.target.closest?.('.timeline-track');
-    const surface=scale||track; if (!surface) return;
-    const rect=surface.getBoundingClientRect();
-    drag={mode:scale?'select':'pan',x0:event.clientX,rect,moved:false,box:null};
-    root.setPointerCapture(event.pointerId);
-  });
-  root.addEventListener('pointermove',event=>{
-    if (!drag) return;
-    const dx=event.clientX-drag.x0; if (Math.abs(dx)>3) drag.moved=true; if (!drag.moved) return;
-    if (drag.mode==='pan') { for (const t of root.querySelectorAll('.timeline-track,.timeline-flow')) t.style.transform=`translateX(${dx}px)`; }
-    else {
-      if (!drag.box) { drag.box=document.createElement('div'); drag.box.className='timeline-select'; root.appendChild(drag.box); }
-      const left=Math.min(event.clientX,drag.x0)-root.getBoundingClientRect().left;
-      drag.box.style.left=left+'px'; drag.box.style.width=Math.abs(dx)+'px';
-    }
-  });
-  const finish=event=>{
-    if (!drag) return;
-    const d=drag; drag=null; d.box?.remove();
-    for (const t of root.querySelectorAll('.timeline-track,.timeline-flow')) t.style.transform='';
-    const {since,until}=currentTimelineWindow, f=x=>Math.max(0,Math.min(1,(x-d.rect.left)/d.rect.width));
-    if (!d.moved) {
-      if (event.detail>1) return;   // the second click of a double-click resets the view; do not frame a run
-      const bar=event.target.closest?.('.timeline-bar[data-workflow]');
-      if (bar && ($('timeline-view').value||'workers')==='workers') frameWorkflow(bar.dataset.workflow);
-      return;
-    }
-    if (d.mode==='pan') {
-      const shift=timeAtFraction(since,until,f(d.x0))-timeAtFraction(since,until,f(event.clientX));
-      setWindow({since:since+shift,until:until+shift});
-    } else {
-      const a=timeAtFraction(since,until,f(Math.min(d.x0,event.clientX))), b=timeAtFraction(since,until,f(Math.max(d.x0,event.clientX)));
-      if (b-a>=30) setWindow({since:a,until:b});
-    }
-    navigated();
-  };
-  root.addEventListener('pointerup',finish); root.addEventListener('pointercancel',()=>{ if(drag){drag.box?.remove();drag=null;for(const t of root.querySelectorAll('.timeline-track,.timeline-flow'))t.style.transform='';} });
-})();
-function frameActivity(timeline,earliest) {
-  // Empty time is not information. A live window ends at the clock, so an idle pool would squeeze a
-  // whole batch into the left edge while the blank present takes the screen; the axis stops shortly
-  // after the last task instead (and says how long it has been idle). A running task holds the edge
-  // at now, and an explicitly chosen window is left exactly as asked.
-  const tasks=timeline.tasks||[];
-  if (!tasks.length || !view.live) return;
-  if (Number.isFinite(earliest)) {
-    const first=Math.min(...tasks.map(t=>t.submitted_at),earliest);
-    if (Number.isFinite(first)) timeline.since=Math.max(timeline.since,Math.min(first-60,timeline.until-600));
-  }
-  if (tasks.some(t=>!t.finished_at)) return;   // still working: the present is the interesting part
-  const last=Math.max(...tasks.map(t=>t.finished_at));
-  const idle=timeline.until-last;
-  if (idle<60) return;
-  timeline.idle_seconds=idle;
-  // A log axis magnifies the right edge, so the margin after the last task must stay seconds wide there;
-  // a linear axis can afford a proportional one.
-  timeline.until=last+Math.min(idle,$('timeline-log').checked?30:Math.max(30,(last-timeline.since)*.02));
+  renderTimeline(fullTimeline); renderResourceHistory(fullTimeline);
 }
 function idleNote(data) {
-  return data.idle_seconds?` Nothing has run for ${duration(data.idle_seconds)}; the axis ends after the last task instead of at the clock.`:'';
-}
-function frameWorkflow(workflowId) {
-  const now=Date.now()/1000, tasks=(fullTimeline?.tasks||[]).filter(t=>t.trace?.workflow_id===workflowId);
-  if (!tasks.length) return;
-  const since=Math.min(...tasks.map(t=>t.started_at||t.submitted_at)), until=Math.max(...tasks.map(t=>t.finished_at||now));
-  const pad=Math.max(30,(until-since)*.05);
-  setWindow({since:since-pad,until:until+pad}); navigated();
+  const last=Math.max(0,...(data.tasks||[]).filter(t=>t.finished_at).map(t=>t.finished_at));
+  if (!last || (data.tasks||[]).some(t=>t.started_at&&!t.finished_at)) return '';
+  const idle=data.until-last;
+  return idle>60?` Nothing has finished for ${duration(idle)}.`:'';
 }
 function renderFailures(items) {
   const list=$('failure-list'); $('failure-count').textContent=items.length?`(${items.length})`:'';
   list.innerHTML=items.length?items.map((f,i)=>`<li><button type="button" data-failure="${i}"><time>${esc(when(f.at))}</time> ${esc(f.dataset||'—')} · ${esc(f.operation||f.id)}<small>${esc(f.id)}</small></button></li>`).join(''):'<li class="empty">None in the last 24 hours</li>';
   list.onclick=event=>{
     const button=event.target.closest?.('[data-failure]'); if (!button) return;
-    const f=items[Number(button.dataset.failure)], now=Date.now()/1000;
+    // Filter to the dataset and open the narrowest window that still contains the failure. One older
+    // than the widest window cannot be shown here at all; its record is in the worker's journal.
+    const f=items[Number(button.dataset.failure)], age=Date.now()/1000-f.at;
     $('timeline-dataset').value=f.dataset||''; $('timeline-view').value='workers';
-    setWindow({since:f.at-1800,until:Math.min(now,f.at+300)}); navigated();
+    view.span=SPANS.find(s=>s>age+60)||SPANS[SPANS.length-1];
+    expandedWorkers.clear(); syncControls(); writeHash(); refresh();
   };
 }
-$('timeline').addEventListener('dblclick',event=>{ event.preventDefault(); resetTimelineView(); navigated(); refresh(); });
-document.querySelector('.timeline-spans').addEventListener('click',event=>{ const b=event.target.closest?.('[data-span]'); if(!b)return; view.live=true; view.span=b.dataset.span==='all'?'all':Number(b.dataset.span); syncControls(); writeHash(); refresh(); });
-$('timeline-live').addEventListener('click',()=>{ if (!view.live) { const span=view.until-view.since; view.live=true; view.span=span>=MAX_SPAN-60?'all':Math.round(span); } syncControls(); writeHash(); refresh(); });
+document.querySelector('.timeline-spans').addEventListener('click',event=>{ const b=event.target.closest?.('[data-span]'); if(!b)return; view.span=Number(b.dataset.span); syncControls(); writeHash(); refresh(); });
 let datasetTimer; $('timeline-dataset').addEventListener('input',()=>{ clearTimeout(datasetTimer); datasetTimer=setTimeout(()=>{ datasetPage=0; writeHash(); refresh(); },400); });
-let timelineData=null, fullTimeline=null, loaded=null, selectedStep=null, datasetPage=0, detailLimit=80;
-const expandedRuns=new Set(), collapsedDatasets=new Set();
+let timelineData=null, fullTimeline=null, selectedStep=null, datasetPage=0, detailLimit=80;
+const expandedRuns=new Set(), collapsedDatasets=new Set(), expandedWorkers=new Set();
 let initializedFlow=false;
 const stageNames={'organize':'Organize','persample':'Per-sample','per-sample':'Per-sample','cross-sample':'Cross-sample','zoom-in':'Zoom-in','dataset':'Release'};
 const operationNames={'prepare':'Prepare inputs','plan':'Plan experiments','execute':'Build analysis units','partition':'Partition samples','compute':'Compute','compute-round':'Integrate & embed','inspect':'Inspect inputs','deg':'Differential expression','assemble':'Assemble evidence','type':'Type annotation','type.prepare':'Prepare type annotation','quality':'Quality review','quality.prepare':'Prepare quality review','finalize':'Publish results','subset':'Prepare lineages','markers':'Prepare markers','plan.prepare':'Prepare planning evidence','lineage.prepare':'Prepare annotation evidence','lineage':'Annotate & review lineage','apply':'Apply decisions','merge':'Merge lineages','release':'Final release'};
@@ -644,13 +522,17 @@ function renderTimeline(data) {
   } else renderDatasetTimeline(data);
 }
 $('timeline-view').addEventListener('change',()=>{datasetPage=0;renderWindow();refresh();});
-try { if (localStorage.getItem('observatory.logTime')==='0') $('timeline-log').checked=false; } catch (e) {}
+// Linear is now the default: over an hour, a log axis makes a five-minute task look wider than a
+// half-hour one, and comparing durations is most of what "is this worker healthy" means.
+try { const saved=localStorage.getItem('observatory.logTime'); if (saved!==null) $('timeline-log').checked=saved==='1'; } catch (e) {}
 $('timeline-log').addEventListener('change',()=>{
   try { localStorage.setItem('observatory.logTime',$('timeline-log').checked?'1':'0'); } catch (e) {}
   writeHash(); renderWindow();
 });
 $('timeline-view').addEventListener('change',writeHash);
 $('timeline').addEventListener('click',event=>{
+  const lane=event.target.closest?.('[data-worker]');
+  if (lane) { const key=lane.dataset.worker; expandedWorkers.has(key)?expandedWorkers.delete(key):expandedWorkers.add(key); renderTimeline(timelineData); return; }
   const target=event.target.closest?.('[data-dataset-toggle],[data-run-toggle],[data-step-select]');if(!target)return;
   if(target.dataset.datasetToggle!==undefined) { const key=target.dataset.datasetToggle;collapsedDatasets.has(key)?collapsedDatasets.delete(key):collapsedDatasets.add(key); }
   else if(target.dataset.runToggle!==undefined) { const key=target.dataset.runToggle;expandedRuns.has(key)?expandedRuns.delete(key):expandedRuns.add(key); }
@@ -663,6 +545,71 @@ $('flow-detail').addEventListener('click',event=>{
   if(event.target.closest?.('[data-more-detail]')){detailLimit+=80;renderStepDetail();}
 });
 
+// One lane per worker, one fixed height, whatever the concurrency. Lanes used to grow with peak
+// concurrency (33 px per stacked slot), so a worker running 32 tasks was a 1,000 px row and the
+// fleet took many screens to scroll past -- while the question the page answers is "is this worker
+// working", which one glance at a load strip settles. The individual bars are still there, one
+// worker at a time, behind a click.
+const LANE_HEIGHT=30, MIN_SEGMENT=0.35;   // % of track width below which segments are merged
+function taskBody(t,bridge,parentsByChild,now) {
+  const body=[`Workflow: ${t.trace.workflow_id||'—'}`,
+    `Task: ${t.id}`,`Operation: ${t.operation}`,`Service: ${t.service}`,
+    `Worker: ${t.worker_id||t.host||'Unassigned'}`,`State: ${t.state}`,
+    `Submitted: ${when(t.submitted_at)}`,`Started: ${when(t.started_at)}`,
+    `Finished: ${t.finished_at?when(t.finished_at):'Running'}`,
+    `Duration: ${((t.finished_at||now)-t.started_at).toFixed(1)} s`,
+    `Queue wait: ${(t.started_at-t.submitted_at).toFixed(1)} s`];
+  if (bridge) body.push(t.operation==='agent.turn'?'Span: model turn; worker tool execution is shown separately':'Span: legacy planning session, including harness waits; not individual HTTP calls');
+  if (t.trace.sample_id) body.push(`Sample: ${t.trace.sample_id}`);
+  if (t.cpus) body.push(`Reserved: ${t.cpus} CPUs · ${t.memory_mb} MiB RAM`);
+  if (t.compute_backend) body.push(`Compute backend: ${t.compute_backend}`);
+  if (t.gpu_ids?.length) body.push(`GPU: ${t.gpu_ids.join(', ')}`);
+  if (t.cpu_ids?.length) body.push(`CPU affinity: logical IDs ${t.cpu_ids.join(', ')}`);
+  if (t.model?.model) body.push(`Model: ${t.model.model}`);
+  if (parentsByChild.has(taskKey(t))) body.push(`Upstream: ${parentsByChild.get(taskKey(t)).join(', ')}`);
+  if (t.trace_source!=='explicit') body.push(`Identity: ${t.trace_source}`);
+  return body.join('\n');
+}
+function loadSegments(items,from,to,now) {
+  // A sweep over start/end events: each segment is a stretch of constant concurrency. Adjacent
+  // segments that agree on count and dataset merge, and anything narrower than a third of a percent
+  // of the track is folded into its neighbour -- a lane is a few dozen nodes, not a few thousand.
+  const events=[];
+  for (const {task:t} of items) {
+    const a=Math.max(from,t.started_at), b=Math.min(to,t.finished_at||now);
+    if (b>a) { events.push({at:a,delta:1,task:t}); events.push({at:b,delta:-1,task:t}); }
+  }
+  events.sort((x,y)=>x.at-y.at||y.delta-x.delta);
+  const raw=[]; let live=0, previous=null, newest=null;
+  for (const event of events) {
+    if (previous!==null && event.at>previous && live>0) raw.push({a:previous,b:event.at,n:live,task:newest});
+    live+=event.delta;
+    if (event.delta>0) newest=event.task;
+    previous=event.at;
+  }
+  const merged=[];
+  for (const segment of raw) {
+    const last=merged[merged.length-1];
+    if (last && last.b>=segment.a-.001 && last.n===segment.n &&
+        last.task.trace.dataset_id===segment.task.trace.dataset_id) last.b=segment.b;
+    else merged.push({...segment});
+  }
+  return merged;
+}
+function loadStrip(items,from,to,pos,peak,now) {
+  const segments=loadSegments(items,from,to,now);
+  const wide=[];
+  for (const segment of segments) {
+    const left=pos(segment.a), width=pos(segment.b)-left, last=wide[wide.length-1];
+    if (width<MIN_SEGMENT && last && left-(last.left+last.width)<MIN_SEGMENT) {
+      last.width=left+width-last.left; last.n=Math.max(last.n,segment.n);
+    } else wide.push({left,width:Math.max(width,.12),n:segment.n,task:segment.task});
+  }
+  return wide.map(s=>{
+    const height=Math.round(6+16*Math.min(1,s.n/Math.max(1,peak)));
+    return `<i class="load-seg" style="left:${s.left}%;width:${s.width}%;height:${height}px;background:${datasetColor(s.task.trace.dataset_id)}" data-tip-title="${esc(s.task.trace.dataset_id)}" data-tip-body="${esc(`${s.n} concurrent task${s.n===1?'':'s'}\n${when(s.a)} → ${when(s.b)}\nLatest here: ${s.task.operation}\nClick the lane for its individual tasks`)}"></i>`;
+  }).join('');
+}
 function renderWorkerTimeline(data) {
   hideTimelineTip();
   activeWorkflow=null;
@@ -670,9 +617,8 @@ function renderWorkerTimeline(data) {
   const from=data.since, to=data.until, pos=timeScale(from,to);
   currentTimelineWindow={since:from,until:to};
   const tasks=(data.tasks||[]).filter(t=>t.started_at).sort((a,b)=>a.started_at-b.started_at);
-  const flowEdges=buildFlowEdges(data.tasks||[]);
   const parentsByChild=new Map();
-  for (const edge of flowEdges) parentsByChild.set(taskKey(edge.child),[...(parentsByChild.get(taskKey(edge.child))||[]),`${edge.parent.id} (${edge.source})`]);
+  for (const edge of buildFlowEdges(data.tasks||[])) parentsByChild.set(taskKey(edge.child),[...(parentsByChild.get(taskKey(edge.child))||[]),`${edge.parent.id} (${edge.source})`]);
   const groups=new Map(), now=Date.now()/1000;
   for (const task of tasks) {
     const base=task.service==='bridge'?'Agent Bridge':task.worker_id||task.host||'Pool worker unknown';
@@ -684,40 +630,36 @@ function renderWorkerTimeline(data) {
     group.items.push({task,slot});
   }
   let chart=timelineAxis(from,to,'Worker');
-  const short=name=>String(name||'').split('/').pop().trim()||name;
   for (const group of [...groups.values()].sort((a,b)=>(a.items[0].task.host||a.base).localeCompare(b.items[0].task.host||b.base)||a.base.localeCompare(b.base))) {
     const bridge=group.base==='Agent Bridge';
     const label=bridge?group.base:group.items[0].task.host||group.base;
-    const items=group.items.map(({task:t,slot})=>{
-      const start=Math.max(from,t.started_at), end=Math.min(to,t.finished_at||now);
-      const worker=t.worker_id||t.host||'Unassigned';
-      const waitSeconds=(t.started_at-t.submitted_at).toFixed(1);
-      const body=[`Workflow: ${t.trace.workflow_id||'—'}`,
-        `Task: ${t.id}`,`Operation: ${t.operation}`,`Service: ${t.service}`,`Worker: ${worker}`,`State: ${t.state}`,
-        `Submitted: ${when(t.submitted_at)}`,`Started: ${when(t.started_at)}`,
-        `Finished: ${t.finished_at?when(t.finished_at):'Running'}`,
-        `Duration: ${((t.finished_at||now)-t.started_at).toFixed(1)} s`,`Queue wait: ${waitSeconds} s`];
-      if (bridge) body.push(t.operation==='agent.turn'?'Span: model turn; worker tool execution is shown separately':'Span: legacy planning session, including harness waits; not individual HTTP calls');
-      if (t.trace.sample_id) body.push(`Sample: ${t.trace.sample_id}`);
-      if (t.cpus) body.push(`Reserved: ${t.cpus} CPUs · ${t.memory_mb} MiB RAM`);
-      if (t.compute_backend) body.push(`Compute backend: ${t.compute_backend}`);
-      if (t.gpu_ids?.length) body.push(`GPU: ${t.gpu_ids.join(', ')}`);
-      if (t.cpu_ids?.length) body.push(`CPU affinity: logical IDs ${t.cpu_ids.join(', ')}`);
-      if (t.model?.model) body.push(`Model: ${t.model.model}`);
-      if (parentsByChild.has(taskKey(t))) body.push(`Upstream: ${parentsByChild.get(taskKey(t)).join(', ')}`);
-      if (t.trace_source!=='explicit') body.push(`Identity: ${t.trace_source}`);
-      const width=pos(end)-pos(start);
-      const text=`${short(t.trace.dataset_id)} · ${t.operation==='agent.call'?'model call':bridge?taskName(t):stepName(t)}`;
-      return end>start?`<span class="timeline-bar labelled ${/fail/i.test(t.state)?'failed':t.service}" tabindex="0" style="top:${8+slot*33}px;left:${pos(start)}%;width:${width}%;background:${datasetColor(t.trace.dataset_id)}" data-slot="${slot}" data-task-id="${esc(t.id)}" data-workflow="${esc(t.trace.workflow_id)}" data-tip-title="${esc(t.trace.dataset_id)}" data-tip-step="${esc(t.trace.unit_id||t.operation)}" data-tip-body="${esc(body.join('\n'))}">${esc(text)}</span>`:'';
-    }).join('');
-    const detail=bridge?'Model turns; legacy Organize records cover whole planning sessions. Stacked bars show overlapping requests.':`Worker ${group.base} on ${label}. Stacked bars show concurrent tasks on this worker.`;
-    chart+=`<div class="timeline-row" data-group="${esc(group.base)}"><div class="timeline-label" tabindex="0" data-tip-title="${esc(label)}" data-tip-body="${esc(detail)}">${esc(label)}<small>${bridge?'':esc(String(group.base).replace(label+'-',''))+' · '}Peak: ${group.ends.length} concurrent ${bridge?'requests':'tasks'}</small></div><div class="timeline-track" style="height:${group.ends.length*33+8}px">${items}</div></div>`;
+    const open=expandedWorkers.has(group.base), peak=group.ends.length;
+    const running=group.items.filter(({task:t})=>!t.finished_at).length;
+    const failed=group.items.filter(({task:t})=>/fail/i.test(t.state)).length;
+    let track;
+    if (open) {
+      track=`<div class="timeline-track" style="height:${peak*33+8}px">${group.items.map(({task:t,slot})=>{
+        const start=Math.max(from,t.started_at), end=Math.min(to,t.finished_at||now), width=pos(end)-pos(start);
+        if (end<=start) return '';
+        const text=`${String(t.trace.dataset_id||'').split('/').pop()} · ${t.operation==='agent.call'?'model call':bridge?taskName(t):stepName(t)}`;
+        return `<span class="timeline-bar labelled ${/fail/i.test(t.state)?'failed':t.service}" tabindex="0" style="top:${8+slot*33}px;left:${pos(start)}%;width:${width}%;background:${datasetColor(t.trace.dataset_id)}" data-task-id="${esc(t.id)}" data-workflow="${esc(t.trace.workflow_id)}" data-tip-title="${esc(t.trace.dataset_id)}" data-tip-step="${esc(t.trace.unit_id||t.operation)}" data-tip-body="${esc(taskBody(t,bridge,parentsByChild,now))}">${esc(text)}</span>`;
+      }).join('')}</div>`;
+    } else {
+      const ticks=group.items.filter(({task:t})=>/fail/i.test(t.state)&&t.finished_at)
+        .map(({task:t})=>`<b class="load-fail" style="left:${pos(Math.min(to,t.finished_at))}%" data-tip-title="Failed" data-tip-body="${esc(`${t.trace.dataset_id}\n${t.operation}\n${when(t.finished_at)}`)}"></b>`).join('');
+      track=`<div class="timeline-track load" data-worker="${esc(group.base)}" style="height:${LANE_HEIGHT}px">${loadStrip(group.items,from,to,pos,peak,now)}${ticks}</div>`;
+    }
+    const counts=`${running} running · ${group.items.length-running} finished${failed?` · <em>${failed} failed</em>`:''}`;
+    chart+=`<div class="timeline-row ${open?'open':''}" data-group="${esc(group.base)}"><div class="timeline-label"><button type="button" class="lane-toggle" data-worker="${esc(group.base)}" aria-expanded="${open}" title="${esc(bridge?'Model turns; stacked bars show overlapping requests.':`Worker ${group.base} on ${label}`)}"><span class="caret">${open?'▾':'▸'}</span>${esc(label)}</button><small>${bridge?'':esc(String(group.base).replace(label+'-',''))+' · '}peak ${peak} · ${counts}</small></div>${track}</div>`;
   }
   $('timeline').innerHTML=groups.size?chart:'<div class="empty">No started tasks in this window</div>';
   drawFlow([]);  // handoff ribbons belong to the Datasets view; here they only cross the lanes
   $('timeline-state').textContent=`${data.total} tasks`;
   const queued=(data.tasks||[]).filter(t=>!t.started_at).length;
-  $('timeline-note').textContent=`${tasks.length} started tasks on ${groups.size} lanes in this window; ${queued} waiting to start. ` + `Started-task queue time is in task details. Stacked bars show actual overlap within a group, not fixed execution slots. Model-turn bars exclude worker tool waits; legacy Organize bars cover whole planning sessions. ${data.truncated?'Results capped at 2,000 tasks; narrow the time range or filter a dataset. ':''}Hover a task to isolate its workflow.`+idleNote(data);
+  $('timeline-note').textContent=`${tasks.length} started tasks on ${groups.size} lanes in the last ${duration(to-from)}; ${queued} waiting to start. `
+    + `Lane height is concurrency, not duration; click a lane for its individual tasks. `
+    + `${data.truncated?`Each lane shows its ${data.per_lane} most recent tasks of ${data.total} in the window — no worker is dropped, but a busy lane's older load is not drawn. `:''}`
+    + `Finished-task durations are appended to each worker's tasks-<day>.jsonl journal under pool/workers/.`+idleNote(data);
 }
 function timelineAxis(from,to,label="Worker / service") {
   const clock=t=>new Date(t*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:to-from<600?'2-digit':undefined});
@@ -814,23 +756,20 @@ async function refresh() {
     $('host').textContent = `${d.host} · isolated v2 state`;
     renderComputePool(d);
     renderFailures(d.recent_failures||[]);
-    const dataset=$('timeline-dataset').value.trim();
-    const all=view.live&&view.span==='all', {since,until}=windowNow();
-    if (Number.isFinite(since) && Number.isFinite(until)) {
-      const params=new URLSearchParams({since:String(since),until:String(until),dataset,limit:all?'5000':'2000'});
-      if(($("timeline-view").value||"datasets")==="datasets")params.set("dataset_page",String(datasetPage));
-      const timelineResponse=await fetch('api/timeline?'+params,{cache:'no-store'});
-      if (!timelineResponse.ok) throw new Error(`Timeline HTTP ${timelineResponse.status}`);
-      const timeline=await timelineResponse.json();
-      if (seq!==refreshSeq) return;
-      loaded={since,until,truncated:timeline.truncated};
-      frameActivity(timeline,all?(d.earliest_activity??Infinity):Infinity);
-      timeline.framed={since:timeline.since,until:timeline.until};
-      const {resources,...taskData}=timeline;
-      const signature=JSON.stringify(taskData)+String(view.live?0:view.since)+String(view.live?0:view.until);
-      if (signature!==timelineSignature) { fullTimeline=timeline; renderWindow(); timelineSignature=signature; }
-      if (timeline.indexing) { $('timeline-state').textContent='Indexing older history…'; $('timeline-state').className='status off'; }
-    }
+    const dataset=$('timeline-dataset').value.trim(), {since,until}=windowNow();
+    const params=new URLSearchParams({since:String(since),until:String(until),dataset,limit:'2000'});
+    if(($("timeline-view").value||"datasets")==="datasets")params.set("dataset_page",String(datasetPage));
+    const timelineResponse=await fetch('api/timeline?'+params,{cache:'no-store'});
+    if (!timelineResponse.ok) throw new Error(`Timeline HTTP ${timelineResponse.status}`);
+    const timeline=await timelineResponse.json();
+    if (seq!==refreshSeq) return;
+    // A redraw discards whatever the pointer was on, so an unchanged fleet is left alone. The sliding
+    // window only matters while something is still running: that is what makes a bar grow.
+    const {resources,since:from,until:to,...taskData}=timeline;
+    const running=taskData.tasks.some(t=>t.started_at&&!t.finished_at);
+    const signature=JSON.stringify(taskData)+(running?`${Math.round(from)}-${Math.round(to)}`:'');
+    fullTimeline=timeline;
+    if (signature!==timelineSignature) { renderWindow(); timelineSignature=signature; }
   } catch(e) { if (seq===refreshSeq) $('updated').textContent=`Unavailable: ${e.message}`; }
   finally { if (seq===refreshSeq) setLoading(false); }
 }

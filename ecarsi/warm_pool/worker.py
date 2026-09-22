@@ -1,4 +1,5 @@
 """Bounded command execution whose receipt does not depend on scheduler RPC."""
+import json
 import os
 from pathlib import Path
 import signal
@@ -225,6 +226,45 @@ def execute(root, request_id, attempt_id):
         return 75  # another transport delivery is executing this same attempt
 
 
+def journal(folder, request, receipt):
+    """One line per finished attempt, appended to the executing worker's own daily journal.
+
+    The receipt already holds the timings, but a receipt is one file inside one of a hundred
+    thousand request folders: answering "how long did today's tasks take" from receipts means
+    walking the whole tree, which is both slow and the thing that stalled the coordinators' Lustre
+    client once already. This is the greppable record instead, so the monitor page can stop being
+    the archive and only ever ask about the recent past. Per-worker file, so concurrent executors
+    never append to the same one; best effort, since a task must not fail over its own bookkeeping.
+    """
+    try:
+        accepted = read(folder / request["attempt_id"] / "accepted.json", {})
+        worker_id = accepted.get("worker_id") or accepted.get("host") or "unassigned"
+        spec, trace = request["spec"], request["spec"].get("trace") or {}
+        started, finished = receipt.get("started_at"), receipt.get("finished_at")
+        line = {
+            "request_id": spec["request_id"], "attempt_id": request["attempt_id"],
+            "operation": spec.get("operation_id"), "state": receipt.get("state"),
+            "dataset_id": trace.get("dataset_id"), "workflow_id": trace.get("workflow_id"),
+            "unit_id": trace.get("unit_id"),
+            "worker_id": worker_id, "host": accepted.get("host") or socket.gethostname(),
+            "submitted_at": request.get("submitted_at"), "started_at": started,
+            "finished_at": finished,
+            "duration_s": round(finished - started, 3) if started and finished else None,
+            "queue_wait_s": round(started - request["submitted_at"], 3)
+                            if started and request.get("submitted_at") else None,
+            "exit_code": receipt.get("exit_code"), "error": receipt.get("error"),
+            "cpus": spec.get("cpus"), "memory_mb": spec.get("memory_mb"),
+            "peak_rss_bytes": receipt.get("peak_rss_bytes"), "cpu_seconds": receipt.get("cpu_seconds"),
+        }
+        directory = folder.parent.parent / "workers" / identifier(worker_id)
+        directory.mkdir(parents=True, exist_ok=True)
+        day = time.strftime("%Y-%m-%d", time.gmtime(finished or time.time()))
+        with (directory / f"tasks-{day}.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(line, separators=(",", ":")) + "\n")
+    except Exception as exc:  # noqa: BLE001 - bookkeeping never decides a task's outcome
+        sys.stderr.write(f"task journal skipped: {type(exc).__name__}: {exc}\n")
+
+
 def run(folder, request, ownership):
     spec, runtime = request["spec"], request["runtime"]
     attempt = folder / request["attempt_id"]
@@ -387,6 +427,7 @@ def run(folder, request, ownership):
                     os.fsync(stream.fileno())
         receipt["finished_at"] = time.time()
         save(attempt / "receipt.json", receipt)
+        journal(folder, request, receipt)
 
 
 if __name__ == "__main__":

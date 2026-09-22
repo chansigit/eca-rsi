@@ -198,3 +198,24 @@ def test_token_rows_sum_saved_replies_per_dataset(tmp_path):
     rows = token_rows(bridge)
     assert [(r["run"], r["dataset"], r["turns"], r["tokens_in"], r["tokens_out"]) for r in rows] == [("run-a", "TS / A", 2, 150, 15), ("run-b", "TS / B", 1, 30, 3)]
     assert rows[0]["kinds"] == {"osp": 1, "cross": 1} and "TOTAL" in render_tokens(rows) and "180" in render_tokens(rows)
+
+    def test_a_capped_worker_view_drops_tasks_but_never_a_worker(self):
+        """A global cap cuts the oldest tasks, and with them whole lanes: a worker that finished its
+        last task early in the window vanishes from a page whose only job is to show every worker.
+        Each lane keeps its own most recent share instead."""
+        def task(request_id, worker, start):
+            return {"id": request_id, "operation": "compute", "state": "succeeded", "worker_id": worker,
+                    "host": "node", "submitted_at": start, "started_at": start, "finished_at": start + 1,
+                    "trace": {"workflow_id": "w", "dataset_id": "d", "unit_id": "u"}}
+        rows = [task(f"early-{i}", "quiet", 100 + i) for i in range(2)]
+        rows += [task(f"late-{i}", "busy", 500 + i) for i in range(50)]
+
+        result = task_timeline(rows, [], 0, 1000, limit=10)
+        lanes = {t["worker_id"] for t in result["tasks"]}
+        self.assertEqual(lanes, {"quiet", "busy"})       # the quiet worker survived the cap
+        self.assertEqual(result["total"], 52)
+        self.assertTrue(result["truncated"])
+        self.assertEqual(result["per_lane"], 5)
+        self.assertEqual(sum(t["worker_id"] == "busy" for t in result["tasks"]), 5)
+        self.assertEqual([t["id"] for t in result["tasks"] if t["worker_id"] == "busy"],
+                         [f"late-{i}" for i in range(45, 50)])   # the most recent, not the oldest
