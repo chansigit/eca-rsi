@@ -12,6 +12,14 @@ Guidance:
 
 - Typical names: sample, sample_id, library, orig.ident, batch, channel,
   lane, project, GEM. Names are hints, not proof — judge by the levels.
+- **Not every assay is 10x.** Combinatorial indexing (sci-RNA-seq, PanSci,
+  SPLiT-seq) pools cells from every animal and splits them across plate
+  wells, so there is no GEM well per sample and the well column (often
+  `batch`) is orthogonal to biology. Test the candidate: if each of its
+  levels spans several values of the donor / age / sex / genotype columns,
+  it is a well, not a run — pick the columns that identify the animal.
+  Tells: hundreds of levels of ~100 cells, and names that are a shared
+  prefix plus a consecutive number (`20230626_EXP119_193`, `_194`, …).
 - The run column must assign EVERY cell: a column with `n_na > 0` leaves
   cells outside any sample and is disqualified, however run-like its name
   — prefer a clean full-coverage partition (this is also enforced in

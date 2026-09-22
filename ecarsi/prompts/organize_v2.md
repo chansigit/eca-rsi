@@ -15,3 +15,15 @@ If `sample_id`, `library_plate`, or another explicit sample/library column has
 multiple values, select a defensible partition rather than `confirmed_single`.
 The host will reject an unconfirmed mapping or one that splits any experiment
 between analysis units. Each source must be covered exactly once.
+
+Not every assay is 10x. Combinatorial indexing (sci-RNA-seq, PanSci, SPLiT-seq)
+pools cells from every animal and then distributes them across plate wells, so
+the well or lane column — frequently named `batch` — is a processing artifact
+that carries no biology at all. **Test any candidate before choosing it: if its
+levels each span several values of the donor / age / sex / genotype columns, it
+is a well, not a sample.** A real sample column partitions those covariates; a
+well column is orthogonal to them. Two more tells: hundreds of levels holding a
+hundred cells each, and level names that are a shared prefix plus a consecutive
+number (`20230626_EXP119_193`, `_194`, `_195`). Treating wells as samples runs
+the single-sample pipeline on a random slice of a pooled library, where QC
+thresholds and doublet detection are population statistics computed on nothing.
