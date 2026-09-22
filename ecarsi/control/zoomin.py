@@ -5,7 +5,7 @@ from pathlib import Path
 from temporalio import activity, workflow
 from temporalio.exceptions import ApplicationError
 
-from .persample import await_pool, call
+from .persample import await_pool, call, handoff
 
 
 def validate_spec(spec, *, resume=False):
@@ -61,7 +61,7 @@ def validate_spec(spec, *, resume=False):
 def zoomin_step(action,args):
     from ..warm_pool.state import immutable, reference, verified
     from ..warm_pool.state import digest, submit
-    if action=='read':return verified(reference(args[0]))
+    if action=='read':return handoff(args[0])
     if action=='session':return verified(reference(args[0]))
     if action=='accepted':
         from .persample import sample_step

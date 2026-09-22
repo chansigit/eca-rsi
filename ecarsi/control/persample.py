@@ -219,6 +219,29 @@ def sample_step(action, args):
 
 
 
+def handoff(path):
+    """A stage document as a workflow may hold it: without the per-sample manifest.
+
+    `read` used to return the whole file, and Temporal keeps every activity result in the
+    workflow history and ships it again on every replay. inspected.json carries one entry
+    per sample -- its QC summary and its full annotation proposal -- plus a reference to
+    every figure, so it grows with the sample count: 2 KB for 14 Tabula Sapiens samples,
+    4.3 MB for a 215-sample PanSci dataset. That is over Temporal's payload limit, and two
+    mouse datasets failed at cross-sample on 2026-09-21 with PayloadsTooLarge.
+
+    The workflows never needed any of it. They count the samples and branch on
+    previous_round; every activity that wants the content reads the file itself, by path.
+    So what enters history keeps each sample's name and size and drops the rest. Old
+    histories hold the full document, which is a superset, so replay is unaffected."""
+    from ..warm_pool.state import reference, verified
+    doc = verified(reference(path))
+    if isinstance(doc.get('samples'), list):
+        doc['samples'] = [{k: s[k] for k in ('sample', 'n_cells') if k in s} if isinstance(s, dict) else s
+                          for s in doc['samples']]
+    doc.pop('files', None)
+    return doc
+
+
 async def call(fn, *args):
     from .coordinator import SHORT, activity_retry
     return await workflow.execute_activity(fn, args=args, start_to_close_timeout=SHORT, retry_policy=activity_retry(fn))

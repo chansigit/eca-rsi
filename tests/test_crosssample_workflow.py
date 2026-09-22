@@ -107,3 +107,35 @@ def test_uncertain_observation_waits_for_same_attempt_receipt(tmp_path):
     assert check_bridge(str(tmp_path),'r')['state']=='waiting'
     save(folder/'result.json', dict(state='reply_saved'))
     assert check_bridge(str(tmp_path),'r')['state']=='ready'
+
+
+def test_a_workflow_holds_the_handoff_without_the_sample_manifest(tmp_path):
+    """Two 200-sample PanSci datasets failed at cross-sample with PayloadsTooLarge (2026-09-21):
+    `read` returned the whole inspected.json into Temporal's history, and that file grows with
+    the sample count -- 4.3 MB at 215 samples. The workflow counts samples and reads
+    previous_round; nothing else may cross into history. A 14-sample dataset's file is 2 KB,
+    so the bound below is loose for it and tight only where it matters."""
+    import json
+    from ecarsi.control.zoomin import zoomin_step
+    fat = {'sample': None, 'bundle': {'path': 'p', 'sha256': '0' * 64}, 'n_cells': 100,
+           'qc': {'k' + str(i): float(i) for i in range(40)},
+           'annotation': {'clusters': [{'cluster_id': str(c), 'evidence': 'x' * 400} for c in range(40)]}}
+    doc = {'samples': [{**fat, 'sample': f's{i}'} for i in range(215)],
+           'files': {f's{i}/figures/umap_{j}.png': {'path': 'p', 'sha256': '0' * 64} for i in range(215) for j in range(30)},
+           'empty': [], 'input': {'path': 'p', 'sha256': '0' * 64}, 'n_input': 21500,
+           'spec': {'config': {'tissue': 'liver'}}}
+    path = tmp_path / 'inspected.json'
+    path.write_text(json.dumps(doc))
+    assert path.stat().st_size > 2 * 1024 * 1024, 'the fixture must be over the payload limit'
+
+    for step in (crosssample_step, zoomin_step):
+        held = step('read', [str(path)])
+        assert 'files' not in held
+        assert len(held['samples']) == 215 and held['samples'][7] == {'sample': 's7', 'n_cells': 100}
+        assert held['n_input'] == 21500 and held['spec'] == doc['spec'] and 'previous_round' not in held
+        assert len(json.dumps(held)) < 64 * 1024
+
+    # A later round's document has no sample list at all and passes through unchanged.
+    later = {'previous_round': 1, 'input': doc['input'], 'n_input': 9000, 'spec': doc['spec']}
+    path.write_text(json.dumps(later))
+    assert crosssample_step('read', [str(path)]) == later
