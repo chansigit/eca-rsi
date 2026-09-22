@@ -163,8 +163,15 @@ async def resume_dataset(client, identity, task_queue, reason):
     audit = root / 'recoveries' / (uuid4().hex + '.json')
     audit.parent.mkdir(mode=0o700, exist_ok=True)
     previous_publication = read(root / 'publication.json')
-    previous_publication = immutable(root / ('publication-' + digest(previous_publication) + '.json'),
-                                     previous_publication) if previous_publication is not None else None
+    if previous_publication is not None:
+        # Archived under its own content digest; the live slot is cleared, or the page keeps
+        # reading a superseded failed_units record forever -- a resumed dataset never writes
+        # publication.json again until it finishes, so nothing else would ever clear it
+        # (2026-09-21: two resumed PanSci datasets stayed "failed" on Periscope 40+ minutes
+        # into a clean rerun). The content is not lost, only its old path.
+        previous_publication = immutable(root / ('publication-' + digest(previous_publication) + '.json'),
+                                         previous_publication)
+        (root / 'publication.json').unlink()
     intent = immutable(audit, dict(workflow_id=identity, failed_run_id=info.run_id, reason=reason,
         spec=reference(root / 'spec.json'), previous_publication=previous_publication,
         workflows=sorted(visited), requests=requests))

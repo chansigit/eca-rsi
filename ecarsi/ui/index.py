@@ -1400,6 +1400,11 @@ def render_root(root: Path, name: str | None = None) -> str:
 STATE_GLOBS = (L.PROGRESS, f"{L.UNITS}/*/{L.PROGRESS}", f"{L.ORGANIZE}/{L.MANIFEST}", f"{L.INPUT}/{L.MANIFEST}",
                f"{L.PERSAMPLE}/{L.MANIFEST}", f"{L.PERSAMPLE}/*/{L.RUN_STATE}", f"{L.ROUNDS}/*/{L.MANIFEST}",
                f"{L.ROUNDS}/*/{L.STATS}", f"{L.ROUNDS}/*/{L.DECISION}", f"{L.RELEASE}/summary.json", f"{L.RELEASE}/pruned.json",
+               # spec.json is written once, at submission, before any stage has produced
+               # anything -- the floor that gives a just-queued dataset a "last updated" at all
+               # (2026-09-21: mouse-pansci-lung_WT_p2of5 organized in 21s and spent 30+ min in
+               # per-sample without a single matching glob, so it read as never updated).
+               L.GEN2_SPEC, f"{L.GEN2_ORGANIZE}/{L.GEN2_PUBLICATION}",
                L.GEN2_PUBLICATION, f"{L.UNITS}/*/{L.GEN2_PUBLICATION}", f"{L.UNITS}/*/{L.ROUNDS}/*/{L.GEN2_PUBLICATION}",
                # a round publishes only when it ends; its stages publish as they finish, so a
                # long round still moves the clock

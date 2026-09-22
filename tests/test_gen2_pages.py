@@ -352,3 +352,22 @@ def test_the_read_only_temporal_client_does_not_race_its_own_teardown():
     for source in (inspect.getsource(observatory.temporal_view),
                    inspect.getsource(coordinator.main)):
         assert 'Runtime(telemetry=TelemetryConfig(), worker_heartbeat_interval=None)' in source
+
+
+def test_last_updated_has_a_value_from_submission_through_per_sample(tmp_path):
+    """mouse-pansci-lung_WT_p2of5 organized in 21s and spent 30+ min in per-sample without
+    STATE_GLOBS matching a single file, so it read as never updated (2026-09-21) -- sorting by
+    last-updated put an actively running dataset at the bottom, indistinguishable from one that
+    never started. spec.json is written at submission and is the floor; organize's own
+    publication moves the clock once it finishes, before per-sample has produced anything."""
+    root = tmp_path / 'run'
+    save(root / 'spec.json', {'run_id': 'r', 'dataset_id': 'D'})
+    submitted = index.state_mtime(root)
+    assert submitted is not None, "a just-submitted dataset must already have a last-updated value"
+
+    organized = submitted + 30
+    save(root / '00-organize' / 'publication.json', {'state': 'complete', 'units': [{'name': 'u'}]})
+    os.utime(root / '00-organize' / 'publication.json', (organized, organized))
+    # No units/*/01-per-sample/publication.json yet: per-sample is running, nothing has
+    # finished. The clock must not fall back to None just because that file is absent.
+    assert index.state_mtime(root) == organized

@@ -213,8 +213,12 @@ def test_resume_rejects_unreconciled_requests_and_audits_new_run(tmp_path, monke
     from ecarsi.agent.session import verified
     audit = pool.read(next((tmp_path / 'recoveries').glob('*.started.json')))
     intent = verified(audit['intent'])
-    save(tmp_path / 'publication.json', {'state': 'complete'})
     assert verified(intent['previous_publication']) == failed_publication
+    # The live slot is cleared once its content is safely archived under its own digest, or
+    # Periscope reads the old failed_units record for as long as the resumed run takes to
+    # finish (2026-09-21: two datasets stayed "failed" 40+ minutes into a clean rerun).
+    assert not (tmp_path / 'publication.json').exists()
+    save(tmp_path / 'publication.json', {'state': 'complete'})
 
 
 def test_failed_unit_does_not_cancel_its_running_sibling(monkeypatch):
