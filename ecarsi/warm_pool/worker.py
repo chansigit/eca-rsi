@@ -255,6 +255,11 @@ def journal(folder, request, receipt):
             "exit_code": receipt.get("exit_code"), "error": receipt.get("error"),
             "cpus": spec.get("cpus"), "memory_mb": spec.get("memory_mb"),
             "peak_rss_bytes": receipt.get("peak_rss_bytes"), "cpu_seconds": receipt.get("cpu_seconds"),
+            # What this attempt was actually given, so the line answers on its own and nobody has to
+            # come back to the request folder to find out (ui/records.py).
+            "sample_id": trace.get("sample_id"), "cpu_ids": accepted.get("cpu_ids"),
+            "gpu_ids": accepted.get("gpu_ids") or [],
+            "compute_backend": accepted.get("compute_backend"),
         }
         directory = folder.parent.parent / "workers" / identifier(worker_id)
         directory.mkdir(parents=True, exist_ok=True)

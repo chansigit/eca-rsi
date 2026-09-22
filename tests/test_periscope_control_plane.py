@@ -79,17 +79,13 @@ def test_observatory_cli_no_longer_serves():
     assert 'serve' not in observatory.main.__doc__ if observatory.main.__doc__ else True
 
 
-def test_the_index_forgets_requests_that_fall_out_of_the_window(tmp_path):
-    """Settled rows used to be kept for the life of the process, so every one-hour question was
-    answered by walking every request ever seen -- a hundred thousand of them on a long-lived plane.
-    A row older than the horizon is dropped, and the folder is not re-read to bring it back."""
-    from ecarsi.observatory import snapshot
+def test_the_monitor_needs_no_index_because_it_reads_published_records(tmp_path):
+    """There is no index to grow or forget any more. Settled rows used to be kept for the life of
+    the process -- so a one-hour question walked every request ever seen -- and the cure for that was
+    not a smaller cache but a record the workers write about themselves, keyed by day."""
+    from ecarsi.ui.control import snapshot
     root = run_dir(tmp_path)
     cache = {}
     snapshot(root, temporal_port=0, cache=cache)
-    now = time.time()
-    fresh = {'id': 'fresh', 'submitted_at': now - 60, 'finished_at': now - 30, 'state': 'succeeded'}
-    old = {'id': 'old', 'submitted_at': now - 10 * 86400, 'finished_at': now - 10 * 86400, 'state': 'succeeded'}
-    cache['pool_done'].update({('fresh', 1): fresh, ('old', 2): old})
-    snapshot(root, temporal_port=0, cache=cache)
-    assert [row['id'] for row in cache['pool_done'].values()] == ['fresh']
+    assert "pool_done" not in cache and "pool_stale" not in cache
+    assert set(cache) <= {"journals", "resource_files", "worker_tails", "indexed_since"}

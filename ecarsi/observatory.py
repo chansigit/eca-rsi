@@ -16,7 +16,7 @@ import time
 from .agent import status as bridge_status
 from .warm_pool.state import lock, read, status as pool_status
 # Re-exported so existing callers and tests keep their import path.
-from .ui.control import (INDEX_HORIZON, MAX_WINDOW, ControlPlane, resource_history,  # noqa: F401
+from .ui.control import (MAX_WINDOW, ControlPlane, resource_history,  # noqa: F401
                          snapshot, summarize_resources, task_timeline, worker_inventory)
 
 

@@ -12,20 +12,30 @@ def put(path, value):
 
 
 class ObservatoryTest(unittest.TestCase):
-    def test_failed_requests_are_refreshed_after_audited_recovery(self):
+    def test_every_attempt_of_a_retried_task_is_kept_in_order(self):
+        """The journal is append-only, so a retry does not replace its failure: both lines stay, and
+        the monitor shows the failure that happened as well as the success that followed it."""
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            bridge = root / 'bridge'
-            bridge.mkdir(mode=0o700)
-            put(bridge / 'config.json', {'concurrency': 1})
-            folder = bridge / 'requests/turn'
-            put(folder / 'request.json', {'submitted_at': 1, 'spec': {}})
-            put(folder / 'result.json', {'state': 'failed', 'reason': 'timeout'})
-            cache = {}
-            self.assertEqual(snapshot(root, temporal_port=0, cache=cache)['bridge_requests'][0]['state'], 'failed')
-            from ecarsi.warm_pool.state import digest
-            put(folder / 'state.json', {'state': 'queued', 'retry_of': digest({'state': 'failed', 'reason': 'timeout'})})
-            self.assertEqual(snapshot(root, temporal_port=0, cache=cache)['bridge_requests'][0]['state'], 'queued')
+            pool = Path(directory) / "pool"
+            worker = pool / "workers" / "w-1"
+            worker.mkdir(parents=True)
+            import time as _t
+            from datetime import datetime, timezone
+            now = _t.time()
+            day = datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%d")
+            lines = [
+                {"request_id": "r", "attempt_id": "a1", "operation": "osp.compute", "state": "failed",
+                 "submitted_at": now - 300, "started_at": now - 290, "finished_at": now - 280,
+                 "error": "MemoryError: RSS", "worker_id": "w-1", "dataset_id": "d"},
+                {"request_id": "r", "attempt_id": "a2", "operation": "osp.compute", "state": "succeeded",
+                 "submitted_at": now - 200, "started_at": now - 190, "finished_at": now - 100,
+                 "worker_id": "w-1", "dataset_id": "d"},
+            ]
+            (worker / f"tasks-{day}.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
+
+            rows = snapshot(Path(directory), temporal_port=0)["pool_requests"]
+            self.assertEqual(sorted(r["state"] for r in rows), ["failed", "succeeded"])
+            self.assertEqual({r["id"] for r in rows}, {"r"})
 
     def test_dataset_pages_cover_history_before_task_limit(self):
         rows = [dict(id=f"d{d}-t{t}", operation="organize.prepare", state="succeeded",
@@ -135,32 +145,53 @@ class ObservatoryTest(unittest.TestCase):
                 stream.write(', "host": "node-a", "worker_id": "worker-a"}\n')
             self.assertEqual(len(resource_history(Path(directory), 0, 10, cache)), 2)
 
-    def test_snapshot_is_bounded_to_public_status_fields(self):
+    def test_the_monitor_reads_journals_and_never_the_request_tree(self):
+        """The rule, at the place it is most tempting to break: everything the status shows comes
+        from a record its owner wrote, so `requests/` is never *listed*. (The active index names the few
+        attempts in flight, and those folders are read directly -- bounded by what is running, not by
+        what has ever run.) Listing it cost 142,258 stat calls to find the recent few, 83 seconds on
+        a cold process, on the metadata server the coordinators poll. A prompt in an unlisted tree
+        also cannot leak."""
+        import os as _os
+        import time as _t
+        from datetime import datetime, timezone
+
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            pool = root / "pool"
-            bridge = root / "bridge"
-            pool.mkdir(mode=0o700)
-            bridge.mkdir(mode=0o700)
-            put(pool / "config.json", {"protocol": 1})
+            pool, bridge = root / "pool", root / "bridge"
             put(pool / "scheduler.json", {"state": "stopped", "observed_at": 1})
-            request = pool / "requests/sample.prepare"
-            put(request / "request.json", {"attempt_id": "a", "submitted_at": 2,
-                 "spec": {"request_id": "sample.prepare", "operation_id": "organize.prepare",
-                          "cpus": 1, "memory_mb": 128}})
-            put(request / "a/receipt.json", {"state": "succeeded", "finished_at": 3,
-                                               "peak_rss_bytes": 42})
-            put(bridge / "config.json", {"concurrency": 1})
-            model = bridge / "requests/sample.plan"
-            put(model / "request.json", {"submitted_at": 4, "brief": "private prompt"})
-            put(model / "result.json", {"state": "reply_saved", "response": {
-                "model": {"harness": "openai", "model": "example"},
-                "usage": {"tokens_in": 10, "tokens_out": 5},
-                "transcript": "private transcript"}})
+            put(bridge / "summary.json", {"counts": {"reply_saved": 3}})
+            # A request tree that must never be touched, holding something that must never be shown.
+            put(pool / "requests/sample.prepare/request.json",
+                {"attempt_id": "a", "submitted_at": 2, "spec": {"brief": "private prompt"}})
+            put(bridge / "requests/sample.plan/result.json", {"transcript": "private transcript"})
 
-            result = snapshot(root, temporal_port=0)
+            now = _t.time()
+            day = datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%d")
+            worker = pool / "workers" / "w-1"
+            worker.mkdir(parents=True)
+            (worker / f"tasks-{day}.jsonl").write_text(json.dumps(
+                {"request_id": "sample.prepare", "operation": "organize.prepare", "state": "succeeded",
+                 "submitted_at": now - 60, "started_at": now - 50, "finished_at": now - 40,
+                 "worker_id": "w-1", "host": "node", "dataset_id": "d", "peak_rss_bytes": 42}) + "\n")
+
+            real = _os.scandir
+            walked = []
+
+            def watched(path=".", *args, **kwargs):
+                if "requests" in Path(path).parts:
+                    walked.append(str(path))
+                return real(path, *args, **kwargs)
+
+            _os.scandir = watched
+            try:
+                result = snapshot(root, temporal_port=0)
+            finally:
+                _os.scandir = real
+
+            self.assertEqual(walked, [], f"the request tree was walked: {walked}")
             self.assertEqual(result["pool_requests"][0]["state"], "succeeded")
-            self.assertEqual(result["bridge_requests"][0]["usage"]["tokens_in"], 10)
+            self.assertEqual(result["pool_requests"][0]["peak_rss_bytes"], 42)
             self.assertNotIn("private prompt", json.dumps(result))
             self.assertNotIn("private transcript", json.dumps(result))
 

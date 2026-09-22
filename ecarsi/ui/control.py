@@ -21,7 +21,8 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from ..agent import status as bridge_status
-from ..warm_pool.state import read, status as pool_status
+from . import records
+from ..warm_pool.state import read
 
 PAGE = Path(__file__).with_name("observatory.html")
 # The monitor answers "are the workers healthy right now", not "how was last week scheduled": every
@@ -29,8 +30,7 @@ PAGE = Path(__file__).with_name("observatory.html")
 # belongs. So the index reaches back a fixed, short distance and forgets what falls out of it --
 # both the folders it stats and the settled rows it keeps. Retaining every request ever seen made
 # each API call walk a hundred thousand rows to answer a one-hour question (2026-09-21).
-MAX_WINDOW = 4 * 3600      # widest window the page may ask for
-INDEX_HORIZON = MAX_WINDOW + 3600  # request folders untouched for longer are neither read nor retained
+MAX_WINDOW = 4 * 3600      # widest window the page may ask for, and how far the journals are read back
 
 
 def resource_history(pool: Path, since: float, until: float, cache: dict | None = None) -> list[dict]:
@@ -269,118 +269,27 @@ def worker_inventory(pool: Path, tasks: list[dict], now: float, cache: dict) -> 
 
 def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.0.1",
              cache: dict | None = None, pool_root: Path | None = None,
-             bridge_root: Path | None = None, temporal_service_root: Path | None = None) -> dict:
-    """Read published records; never connect to a scheduler or submit work."""
+             bridge_root: Path | None = None, temporal_service_root: Path | None = None,
+             window: float = MAX_WINDOW) -> dict:
+    """Read what the owners published; derive nothing, connect to nothing.
+
+    Every field here is a file somebody wrote about themselves: the scheduler's own state, the
+    bridge's own summary, each worker's telemetry, task journal and active index, and the control
+    plane's fleet status. Nothing is inferred from a file's mtime or from its absence -- which is
+    what walking the request tree did, 142,258 stat calls to find the recent few, 83 seconds on a
+    cold process, against the metadata server the coordinators depend on (2026-09-22)."""
     root = Path(root)
     pool = Path(pool_root) if pool_root else root / "pool"
     bridge = Path(bridge_root) if bridge_root else root / "bridge"
     cache = cache if cache is not None else {}
-    pool_done = cache.setdefault("pool_done", {})
-    bridge_done = cache.setdefault("bridge_done", {})
     now = time.time()
-    horizon = INDEX_HORIZON
-    cache["indexed_since"] = now - horizon
-    pool_stale, bridge_stale = cache.setdefault("pool_stale", {}), cache.setdefault("bridge_stale", {})
-    for settled in (pool_done, bridge_done):
-        for key in [k for k, row in settled.items()
-                    if (row.get("finished_at") or row["submitted_at"]) < now - horizon]:
-            del settled[key]
-    reads = 0
-
-    def pace():
-        # ponytail: crude rate cap. The warm-up and widening walks share the coordinators' Lustre client;
-        # an unpaced walk over tens of thousands of folders can stall their 30 s polls (2026-09-17).
-        nonlocal reads
-        reads += 1
-        if reads > 500:
-            time.sleep(0.01)
-
-    def recent(entry, stale):
-        """Folder mtime is the last state change; untouched folders beyond the horizon are remembered with
-        that mtime and not stat'ed again, and are read once a wider horizon reaches them."""
-        key = (entry.name, entry.inode())  # a folder re-created under an old name is new
-        mtime = stale.get(key)
-        if mtime is None:
-            try:
-                mtime = entry.stat().st_mtime
-            except OSError:
-                return False
-        if now - mtime > horizon:
-            stale[key] = mtime
-            return False
-        stale.pop(key, None)
-        return True
+    since = now - window
+    cache["indexed_since"] = since
     scheduler = read(pool / "scheduler.json", {})
     bridge_summary = read(bridge / "summary.json", {})
-    pool_rows = []
-    if (pool / "config.json").is_file():
-        # One directory listing per refresh; a settled request is never stat'ed again.
-        for entry in os.scandir(pool / "requests"):
-            if (entry.name, entry.inode()) in pool_done:
-                pool_rows.append(pool_done[(entry.name, entry.inode())])
-                continue
-            if not recent(entry, pool_stale):
-                continue
-            folder = Path(entry.path)
-            if not (folder / "request.json").is_file():
-                continue
-            pace()
-            item = pool_status(pool, folder.name)
-            request = read(folder / "request.json", {})
-            spec = request.get("spec", {})
-            receipt = item.get("receipt") or {}
-            row = {
-                "id": item["request_id"], "operation": item["operation_id"],
-                "trace": spec.get("trace"),
-                "state": item["state"], "cpus": spec.get("cpus"),
-                "memory_mb": spec.get("memory_mb"), "submitted_at": item["submitted_at"],
-                "started_at": receipt.get("started_at") or (item.get("accepted") or {}).get("started_at"),
-                "finished_at": receipt.get("finished_at"),
-                "host": (item.get("accepted") or {}).get("host"),
-                "worker_id": (item.get("accepted") or {}).get("worker_id"),
-                "cpu_ids": (item.get("accepted") or {}).get("cpu_ids"),
-                "gpu_ids": (item.get("accepted") or {}).get("gpu_ids", []),
-                "compute_backend": (item.get("accepted") or {}).get("compute_backend"),
-                "gpu_request": spec.get("gpu"),
-                "peak_rss_bytes": receipt.get("peak_rss_bytes"),
-            }
-            pool_rows.append(row)
-            if row["state"] in {"succeeded", "cancelled"}:  # a failed request can still be retried in place
-                pool_done[(entry.name, entry.inode())] = row
-    bridge_rows = []
-    if (bridge / "config.json").is_file():
-        for entry in os.scandir(bridge / "requests"):
-            if (entry.name, entry.inode()) in bridge_done:
-                bridge_rows.append(bridge_done[(entry.name, entry.inode())])
-                continue
-            if not recent(entry, bridge_stale):
-                continue
-            folder = Path(entry.path)
-            if not (folder / "request.json").is_file():
-                continue
-            pace()
-            item = bridge_status(bridge, folder.name)
-            request = read(folder / "request.json", {})
-            response = item.get("response") or {}
-            row = {
-                "id": folder.name, "state": item["state"],
-                "operation": request.get("spec", {}).get("operation_id"),
-                "trace": request.get("spec", {}).get("trace"),
-                "submitted_at": item["submitted_at"],
-                "started_at": item.get("started_at"),
-                "finished_at": item.get("finished_at"),
-                "model": response.get("model"), "usage": response.get("usage"),
-                "pool_attempts": [a["pool_request_id"] for a in item.get("attempts", [])],
-                "host": (item.get("worker") or {}).get("host"),
-            }
-            bridge_rows.append(row)
-            if row["state"] == "reply_saved":  # a failed turn can still be retried in place
-                bridge_done[(entry.name, entry.inode())] = row
-    pool_by_id = {row["id"]: row for row in pool_rows}
-    for row in bridge_rows:
-        for pool_id in row.get("pool_attempts", []):
-            if pool_id in pool_by_id:
-                pool_by_id[pool_id]["model"] = row["model"]
+    pool_rows = [records.as_timeline_row(row)
+                 for row in records.tasks(pool, since, now, cache.setdefault("journals", {}))]
+    bridge_rows = []          # a model turn executes on a pool worker and is already one of the rows above
     # Where Temporal is and whether its UI answers: published by the control plane, which owns the
     # fact. This used to resolve the endpoint itself and probe the UI port over a socket -- a page
     # opening connections to the node running the coordinators, on every refresh.
@@ -404,9 +313,9 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
 
 
 class ControlPlane:
-    """The control-plane monitor Periscope mounts at /_control/: one paced index of the pool and bridge
-    request folders, refreshed at most every 2 s on demand and widened in the background when a page
-    asks for a window older than the index. Read-only; never connects to a scheduler or submits work."""
+    """The control-plane monitor Periscope mounts at /_control/: published records only, re-read at
+    most every 2 s on demand. It holds no client for anything it watches and opens no connection, so
+    no change to it can reach the computation (tests/test_monitor_isolation.py)."""
 
     def __init__(self, root: Path, pool_root: Path | None = None, bridge_root: Path | None = None,
                  temporal_service_root: Path | None = None, temporal_port: int = 8233, temporal_host: str = "127.0.0.1"):
@@ -420,8 +329,7 @@ class ControlPlane:
                         self.pool_root, self.bridge_root, self.temporal_service_root)
 
     def start(self):
-        """Warm the index in the background: the first listing of the request folders takes a while on
-        Lustre, and a page load must not look like an outage meanwhile."""
+        """Read the records once in the background so the first page load finds them already parsed."""
         def warm():
             try:
                 with self.guard:
