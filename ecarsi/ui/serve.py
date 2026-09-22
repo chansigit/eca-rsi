@@ -923,13 +923,16 @@ HISTORY_JS = r"""
   }
   // -- drawing --
   const W = 960, H = 200, L = 64, R = 16, T = 14, B = 30;
-  let logT = false;
+  let logT = false, showIn = false;
   function draw(){
     cards();
     box.innerHTML = "";
     if (!ev.length) { box.innerHTML = '<p class="empty">nothing to plot — no bound dataset has an organize line in its log</p>'; if (nEl) nEl.textContent = ""; return; }
     const t0 = lo ?? ev[0].t, t1 = hi ?? now(), span = Math.max(t1 - t0, 60);
-    const yraw = Math.max(...ev.filter(e => e.k === "in").map((e, i, a) => a.slice(0, i + 1).reduce((s, x) => s + x.n, 0)), 1);
+    // Only the series actually drawn sets the axis: cells in outpaces cells released enough
+    // that including a hidden "in" curve here would still flatten the one line left on screen.
+    const seriesMax = k => Math.max(...ev.filter(e => e.k === k).map((e, i, a) => a.slice(0, i + 1).reduce((s, x) => s + x.n, 0)), 0);
+    const yraw = Math.max(...(showIn ? ["in", "rel"] : ["rel"]).map(seriesMax), 1);
     const nice = [1, 2, 5, 10, 20, 50, 100, 200, 500].map(m => m * Math.pow(10, Math.floor(Math.log10(yraw)) - 1)).find(s => yraw / s <= 6) || yraw / 4;
     const ymax = Math.ceil(yraw / nice) * nice;
     // Log time reads backwards from the right edge: distance is age, so the newest hours get
@@ -955,11 +958,11 @@ HISTORY_JS = r"""
     box.innerHTML = `<svg class="hist-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="cells in and released over time">
       ${yt.map(v => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text class="tick" x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${fmtN(v)}</text>`).join("")}
       ${xt.map(t => `<text class="tick" x="${x(t)}" y="${H - B + 18}" text-anchor="middle">${xl(t)}</text>`).join("")}
-      <path class="ser in" d="${step("in")}"/><path class="ser rel" d="${step("rel")}"/>
+      ${showIn ? `<path class="ser in" d="${step("in")}"/>` : ""}<path class="ser rel" d="${step("rel")}"/>
       <line class="cross" id="hist-cross" x1="0" x2="0" y1="${T}" y2="${H - B}" style="display:none"/>
       <rect class="zoom" id="hist-zoom" y="${T}" height="${H - T - B}" style="display:none"/>
       <rect class="hit" x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent"/></svg>
-      <div class="hist-legend"><span><i class="in"></i>cells in</span><span><i class="rel"></i>cells released</span>${lo || hi ? '<span class="muted">zoomed · double-click to reset</span>' : ""}</div>`;
+      <div class="hist-legend">${showIn ? '<span><i class="in"></i>cells in</span>' : ""}<span><i class="rel"></i>cells released</span>${lo || hi ? '<span class="muted">zoomed · double-click to reset</span>' : ""}</div>`;
     if (nEl) { const k = totals(t1); nEl.textContent = `${names().length} datasets · ${k.din} started · ${k.drel} released`; }
     const svg = box.querySelector("svg"), hit = svg.querySelector(".hit"), cross = svg.querySelector("#hist-cross"), zoom = svg.querySelector("#hist-zoom");
     const tAt = ev_ => { const r = svg.getBoundingClientRect(); const px = (ev_.clientX - r.left) / r.width * W; return un((px - L) / (W - L - R)); };
@@ -978,6 +981,9 @@ HISTORY_JS = r"""
   const buttons = [...document.querySelectorAll(".hist-range button")];
   function setRange(days){ buttons.forEach(b => b.classList.toggle("on", Number(b.dataset.r) === days)); }
   buttons.forEach(b => b.addEventListener("click", () => { const d = Number(b.dataset.r); lo = d ? now() - d * 86400 : null; hi = null; setRange(d); draw(); }));
+  const showInBtn = document.getElementById("hist-show-in");
+  if (showInBtn) showInBtn.addEventListener("click", () => { showIn = !showIn;
+    showInBtn.classList.toggle("on", showIn); showInBtn.setAttribute("aria-pressed", String(showIn)); draw(); });
   const logBtn = document.getElementById("hist-log");
   if (logBtn) logBtn.addEventListener("click", () => { logT = !logT;
     logBtn.classList.toggle("on", logT); logBtn.setAttribute("aria-pressed", String(logT)); draw(); });
@@ -1125,7 +1131,12 @@ def _home_html(items: dict[str, Path], state=_dataset_state, verdicts: "ControlV
         # A batch is weeks of history in which the interesting part is the last few hours; on a
         # clock axis those hours are a sliver. Log time spaces points by age from the right edge.
         # Off by default: on it, equal horizontal distances are no longer equal durations.
-        '<span class="sep"></span><button type="button" id="hist-log" aria-pressed="false" title="space by age instead of by clock, so the newest hours get most of the width">log time</button></div>'
+        '<span class="sep"></span>'
+        # Cells in climbs far faster than cells released (organize is cheap, release is the
+        # whole loop), so on a shared axis its line dwarfs the released line into a flat
+        # smear near zero. Hidden by default; the released curve is the one worth reading.
+        '<button type="button" id="hist-show-in" aria-pressed="false" title="cells in rises much faster than cells released and compresses it on a shared axis">show cells in</button>'
+        '<button type="button" id="hist-log" aria-pressed="false" title="space by age instead of by clock, so the newest hours get most of the width">log time</button></div>'
         '<div id="hist" class="hist"></div><div id="hist-tip" class="sk-tip" style="display:none"></div></section>'
         f'<section class="block" id="datasets"><h2>Datasets <span class="count" id="ds-n">{len(rows)} units</span></h2>'
         '<p class="lede">Input counts include declared queued inputs. Cells out shows the latest output count; kept is out / in. Click a column header to sort.</p>'

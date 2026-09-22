@@ -155,9 +155,15 @@ def test_the_curve_is_shorter_says_less_and_can_be_spaced_by_age():
     assert "queued inputs are shown separately as Cells awaiting start" not in html.split('id="hist-detail"')[0]
     assert 'id="hist-log" aria-pressed="false" title="space by age instead of by clock' in html
     assert ">log time</button>" in html
+    # cells in climbs far faster than cells released and used to flatten it on a shared axis;
+    # hidden unless the viewer asks, and the axis only scales to whatever curve is on screen
+    assert 'id="hist-show-in" aria-pressed="false"' in html
+    assert ">show cells in</button>" in html
     js = serve.HISTORY_JS
+    assert 'showIn ? `<path class="ser in"' in js                        # curve gated on the toggle
+    assert 'const yraw = Math.max(...(showIn ? ["in", "rel"] : ["rel"]).map(seriesMax), 1);' in js
     assert "const W = 960, H = 200," in js and "H = 280" not in js       # shorter
-    assert "let logT = false;" in js and "logY" not in js                # time, not cells
+    assert "let logT = false, showIn = false;" in js and "logY" not in js  # time, not cells
     # age from the right edge, and log(1 + age) so that "now" is a position rather than a pole
     assert "const pos = t => logT ? 1 - Math.log(1 + Math.max(t1 - t, 0)) / lgT" in js
     assert "const un = f => logT ? t1 + 1 - Math.exp((1 - f) * lgT)" in js
