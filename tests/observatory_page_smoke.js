@@ -1,5 +1,5 @@
 // Smoke-run every render path of observatory.html against a stub DOM. Extract the script FROM DISK first:
-//   python3 -c "import re,pathlib;h=pathlib.Path('ecarsi/observatory.html').read_text();pathlib.Path('/tmp/g2/observatory-inline.js').write_text(chr(10).join(re.findall(r'<script[^>]*>(.*?)</script>',h,flags=re.S)))"
+//   python3 -c "import re,pathlib;h=pathlib.Path('ecarsi/ui/observatory.html').read_text();pathlib.Path('/tmp/g2/observatory-inline.js').write_text(chr(10).join(re.findall(r'<script[^>]*>(.*?)</script>',h,flags=re.S)))"
 const fs=require("fs"); let src=fs.readFileSync("/tmp/g2/observatory-inline.js","utf8");
 // Each element keeps its own value/checked: one shared backing store made the dataset filter
 // overwrite the view select and hid a real bug behind a fake one.

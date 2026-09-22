@@ -372,7 +372,10 @@ class ControlPlane:
             data["pool_succeeded"] = sum(r["state"] == "succeeded" for r in data["pool_requests"])
             data["indexed_since"] = cache.get("indexed_since")
             data["earliest_activity"] = min((r["submitted_at"] for r in rows), default=None)
-            day = time.time() - 86400
+            # The failures the published records cover, which is the snapshot window and not a day:
+            # saying "last 24 hours" over four hours of records is the quiet kind of lie this whole
+            # surface exists to stop. Older failures are in the journals, by day.
+            day = cache.get("indexed_since") or 0
             failed = [dict(id=r["id"], at=r.get("finished_at") or r["submitted_at"], operation=r.get("operation"),
                            dataset=(r.get("trace") or {}).get("dataset_id"), workflow_id=(r.get("trace") or {}).get("workflow_id"))
                       for r in rows if "fail" in str(r.get("state")) and (r.get("finished_at") or r["submitted_at"]) >= day]
