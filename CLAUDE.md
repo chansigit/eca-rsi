@@ -8,10 +8,22 @@ eca-rsi run <eca-pp 输出目录> <root> [--rounds N] [--mirror DIR] [--serve 88
 eca-rsi organize|persample|loop|serve ...                          # 分步,等价 python -m ecarsi.<step>;organize/persample/loop 也收 --mirror DIR
 ```
 
-`run.sh` + `steps/*.md` 是上一代"六步 prompt 循环"(agent 自己写分析代码),完整封存在
-分支 **`primitive`**(原 main;树里的 run.sh / steps 仍在,但不再维护)。下面"上一代"一节是它的记录,
+`run.sh` + `steps/*.md` 是封存的"六步 prompt 循环"(agent 自己写分析代码),完整封存在
+分支 **`primitive`**(原 main;树里的 run.sh / steps 仍在,但不再维护)。下面"封存"几节是它的记录,
 历史任务书不能当作主线的行为保证。当前实现的计算、提交检查、细胞守恒审计和发布判据
 以 `ecarsi/` 及配套内核源码为准；主线没有照搬旧 prompt 的所有删除预算和治理条款。
+
+## 叫法(0.3.2 起统一,别再说"第几代")
+
+同一个包 **ecarsi 0.3.2**,两条执行路径并存,按跑法区分,不是按新旧:
+
+| 叫法 | 是什么 | 入口 | 守卫 |
+|---|---|---|---|
+| **本地路径** | 单数据集,直接起子进程 | `eca-rsi run <目录> <root>` | 比对源码摘要(`runtime_identity()`);`ECA_RSI_DEVELOPER_MODE=1` 关掉的就是这个比对 |
+| **控制面路径** | 批量,Temporal + 暖池 + bridge | `container/control-plane.sh` | 把程序文件按内容钉进每个请求(`spec.inputs` 的 sha256);**developer mode 对它无效** |
+
+两者共用同一套内核(osp / msp / zmip)和同一份 `loop_control.json` 手动挡。
+**第三样东西**是封存在分支 `primitive` 的 prompt 循环,只作历史,不参与上面两条。
 
 ## 主线:ecarsi 包(2026-09-02 由 agent-sdk 分支升格为 main)
 
@@ -149,8 +161,8 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
 - MSP `.msp-state/*-progress.json` 与 ZMIP `.annotation-progress.json` 原子保存 host 接受的提交及分簇；恢复必须核对输入、证据、代码，再过原校验器。
   ZMIP `.zmip-compute.json` 验证并复用未完成 lineage 的整合；上游重算会归档旧注释进度。模型变化可续未完成簇，但不重做已接受决定。
 - `MSP_COMPUTE_ENDPOINT=local|dask-local|dask` 调度 Harmony、图/聚类、DE；ZMIP lineage 复用同一实现。
-  `dask` 连接 `MSP_DASK_SCHEDULER`，`MSP_COMPUTE_GPU=1` 要求 GPU worker；这是 MSP 自己的可选后端，第二代把它钉死在 `local`。
-  第一代的 Dask 池（`ecarsi.pool`、Periscope 的 Warm pool 面板、`compute_policy`、OSP 的 `pool`/`auto` 端点）已于 0.3.2 删除，`pool/slurm.py` 与 `pool/budget.py` 作为仍在用的公共件搬成 `warm_pool/slurm.py` 与 `warm_pool/reservation.py`。暖池仍手动管理，没有自动扩缩容。
+  `dask` 连接 `MSP_DASK_SCHEDULER`，`MSP_COMPUTE_GPU=1` 要求 GPU worker；这是 MSP 自己的可选后端，控制面路径把它钉死在 `local`。
+  0.3.2 之前的 Dask 池（`ecarsi.pool`、Periscope 的 Warm pool 面板、`compute_policy`、OSP 的 `pool`/`auto` 端点）已删除，`pool/slurm.py` 与 `pool/budget.py` 作为仍在用的公共件搬成 `warm_pool/slurm.py` 与 `warm_pool/reservation.py`。暖池仍手动管理，没有自动扩缩容。
 - MSP 相邻 coarse-label pair 必须提交 `boundary_reviews`（证据、uncertain），未解决边界留在 needs_review；
   ZMIP 同岛拆分要求 `shared_island_reviews`。不把缺失 DEG 或固定混合百分比当作强制合并依据。
 - `MSP_BATCH_COL` 可显式选择校正列，完整 OSP 实验内必须只有一个值；默认仍为 `eca_sample_id`，
@@ -198,9 +210,9 @@ python -m pytest -q tests/test_downstream.py tests/test_downstream_state.py test
   改页面不该让在跑的阶段作废——那正是 2026-09-07 两次重算的原因。`run_state.PRESENTATION` 是这条规则,
   按目录而非文件清单;`ecarsi/{serve,index,umapdata}.py` 只剩 shim,保住 `python -m ecarsi.serve` 这个拼写(部署脚本在用)。
 
-## 第二代：durable 控制面（分支 `gen2` 2026-09-17 起，2026-09-18 合入 main；细节见 [docs-gen2/ARCHITECTURE.md](docs-gen2/ARCHITECTURE.md)）
+## 控制面路径：durable 控制面（0.3.1 起在 main，原 `gen2` 分支 2026-09-17 起；细节见 [docs-gen2/ARCHITECTURE.md](docs-gen2/ARCHITECTURE.md)）
 
-同一套内核，包装成 Temporal + HyperQueue + Bridge 的批量系统；第一代模块位置不动，第二代收进子包：
+同一套内核，包装成 Temporal + HyperQueue + Bridge 的批量系统；本地路径的模块位置不动，控制面的代码收进子包：
 
 ```
 ecarsi/control/     Temporal 工作流（coordinator 原 work_coordinator；temporal / dataset / persample / crosssample / zoomin；包本身不引 temporalio）
@@ -216,25 +228,25 @@ ecarsi/observatory.py   控制面监视器（2026-09-18 起并入 Periscope：`e
   `ecarsi.serve --control-plane <run dir>`（Periscope 侧栏多一项 Control plane）；`container/control-plane.sh` 是启动模板，部署副本放运行目录并在那里配路径。
 - 请求按内容 pin 程序文件、按请求 id 回放已存内容：会话在飞时不改 stages / agent/session.py；旧布局的已存请求
   在新布局下不能回放，切换只在没有会话在飞时做（或归档相关请求后 resume）。
-- 第二代的文档在 `docs-gen2/`（AGENT_BRIDGE_V2、WARM_POOL_V2、DURABLE_CONTROL、DATASET_V2 …），`design/` 是设计页。
+- 控制面路径的文档在 `docs-gen2/`（AGENT_BRIDGE_V2、WARM_POOL_V2、DURABLE_CONTROL、DATASET_V2 …），`design/` 是设计页。
 - 控制面节点上不要无节制扫描 pool / bridge 的 requests 目录（会拖垮协调器的 Lustre 客户端）。
 - **会话死亡**（2026-09-18 起）：任何 agent 会话失败先自动重开一次全新会话（`-r2`，同一份证据）；再失败时样本跳过
   （不注释、先验标签 `unannotated`，needs_review `agent_skipped`）或 lineage 跳过（保留 cross-sample 标签，写进 plan reason），
   cross-sample 会话只重开不跳过；跳过的细胞超过该阶段输入的 10%（`SKIPPED_CELL_LIMIT`）整个阶段失败。
   被替代的会话（重开、上下文重置）的请求在 resume 预检中视为 superseded，不再需要手工归档。
-- **手动挡也在第二代生效**（2026-09-20 起）：`round_policy.read_control()` 是两代共用的读取器，
+- **手动挡在控制面路径同样生效**（2026-09-20 起）：`round_policy.read_control()` 是两条路径共用的读取器，
   `control/dataset.py` 的 round 活动在每个轮次边界重读 `<unit>/loop_control.json`，覆盖 spec 里冻结的
   `round_policy`（`cap` / `rounds` / `extra_rounds_after_convergence` / `max_removed`），生效值与原始控制项
   一起写进该轮 `publication.json` 的 `policy` / `control`。`pause: true` 或 `stop_after_round: N`
   **优先于 release**：该轮照常发布（含 ledger），下一轮不开，unit workflow 以 `PAUSED: …` 非重试失败告终
-  ——这正是 `resume-dataset <run_id> --reason …` 已有的续跑契约，等价于第一代的退出码 3。清掉控制项再 resume。
-  `pause_after_stage: crosssample|zoomin` 第二代也生效（2026-09-21）：子 workflow 完成就是第一代
+  ——这正是 `resume-dataset <run_id> --reason …` 已有的续跑契约，等价于本地路径的退出码 3。清掉控制项再 resume。
+  `pause_after_stage: crosssample|zoomin` 在控制面路径也生效（2026-09-21）：子 workflow 完成就是本地路径
   `safe_point("crosssample")` / `safe_point("zoomin")` 的那个安全点——该阶段产物已落盘、下一阶段未开、本轮未结算。
   同样以 `PAUSED: …` 非重试失败告终，`resume-dataset` 续跑；恢复前要清掉控制项，否则下一轮原地再停。
   Periscope 把 `PAUSED` 与真失败区分开：状态色是等待色（`--wait`）而非失败红。
-- 第一代的 batch 准入（`eca-rsi batch`、节点代理、OSP compute-ahead、driver 内存租借）随 0.3.0 留在树里但不再维护；第二代数据集由控制面准入。
+- 0.3.0 之前的 batch 准入（`eca-rsi batch`、节点代理、OSP compute-ahead、driver 内存租借）留在树里但不再维护；控制面路径的数据集由控制面准入。
 
-## 上一代:run.sh 六步循环(分支 primitive;2026-08-25 推倒重做后;总共 ~300 行)
+## 封存(primitive 分支):run.sh 六步循环(分支 primitive;2026-08-25 推倒重做后;总共 ~300 行)
 
 一条命令处理一个装着 h5ad 的文件夹:
 
@@ -275,7 +287,7 @@ ecarsi/observatory.py   控制面监视器（2026-09-18 起并入 Periscope：`e
   label_l2_changed,由 apply 写 stats.txt、runner 中继);apply 另出
   `umap_removed.png`(本轮删除红/保留浅灰,零删除也出全灰图)。
 
-## 上一代设计哲学（仅 primitive 历史）
+## 封存(primitive 分支)：设计哲学
 
 上一版把 compute/apply 写成固定脚本、决策格式定 schema 加 lint,结果六个
 silent bug 全部长在"规格与实现的接缝"上(记录了但没人执行、写了但从未实现)。
@@ -296,7 +308,7 @@ silent bug 全部长在"规格与实现的接缝"上(记录了但没人执行、
   "sun 的数据垃圾的要命! 多删点数据不用大惊小怪")。跨轮累计删除不是风险,
   唯一的闸门是 `round_policy` 的每轮判据。别再把它当待办提出来。
 
-## 上一代运行记录与 backlog（2026-08-25 历史快照）
+## 封存(primitive 分支)：运行记录与 backlog（2026-08-25 快照）
 
 - 两个数据集真实跑通:18_Clayton_2025(1766 细胞,Fable,3 轮收敛;数据
   后因上游丢样本弃用)与 **Fu 2022 半月板(35k 细胞,eca-pp 完整产物,
