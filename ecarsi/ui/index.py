@@ -1065,7 +1065,7 @@ def dataset_state(root: Path, states: list[dict] | None = None) -> dict:
             "species": ", ".join(sorted({str(s["species"]) for s in states if s["species"]})),
             "finished": max(fin) if fin and released == len(states) else None,
             "updated": updated, "stage": stage, "cls": cls, "trend": round_trend(states),
-            "unit_rows": [unit_row(s) for s in states], "run_id": run_id(root),
+            "unit_rows": [unit_row(s, unit_order(root)) for s in states], "run_id": run_id(root),
             "awaiting_start": False}
 
 
@@ -1078,13 +1078,22 @@ def run_id(root: Path) -> str:
     return str(spec.get("run_id") or "")
 
 
-def unit_row(state: dict) -> dict:
+def unit_order(root: Path) -> list:
+    """The plan's unit order, which is the order the control plane numbers its unit workflows in.
+    Without it a unit row can only be told what the control plane thinks of the whole run, which is
+    not the same thing: a run is still running when one of its units has already failed."""
+    plan = _json(root / L.GEN2_ORGANIZE / L.GEN2_PUBLICATION, {})
+    return [str(u.get("name") or "") for u in (plan.get("units") or [])]
+
+
+def unit_row(state: dict, order: list | None = None) -> dict:
     """One analysis unit as the fleet table sees it: its own rounds, its own clock. The dataset
     aggregate cannot carry these -- a dataset's trend was the longest unit's curve standing in for
     every unit, and its stage was a count of how many were running."""
     updated = state_mtime(state["dir"])
     cls, stage = _stalled(state["stage_class"], state["stage"], updated)
-    return {"name": state["name"], "stage": stage, "cls": cls, "released": state["released"],
+    index = (order or []).index(state["name"]) if state["name"] in (order or []) else None
+    return {"name": state["name"], "stage": stage, "cls": cls, "released": state["released"], "index": index,
             "n_input": state["n_input"], "final_cells": state["final_cells"],
             "rounds": len(state["rounds"]), "trend": round_trend([state]),
             "species": str(state["species"] or ""), "updated": updated}

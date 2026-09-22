@@ -456,20 +456,24 @@ class ControlVerdicts:
         return workflows.get(f"dataset/{run_id}{unit}")
 
 
-def reconcile(row: dict, verdict: dict | None) -> dict:
+def reconcile(row: dict, verdict: dict | None, precise: bool = True) -> dict:
     """The control plane's verdict wins over what the files imply, and says so.
 
     Only the verdict changes: the stage text stays, because 'per-sample running' is still what the
     run was last seen doing and the verdict cannot say it. A run the control plane calls finished is
     not running whatever its files suggest, and one it calls running is not failed however old its
-    last publication is."""
+    last publication is.
+
+    `precise` is False when the verdict is the whole run's and the row is one unit of it: a finished
+    run still has no unit running, but a running run says nothing about the unit that already failed
+    inside it, so that direction is left to the files."""
     if not verdict:
         return row
     status = verdict.get("status", "")
     if status == "RUNNING":
-        if row["cls"] in {"failed", "paused"} or row["cls"] == "neutral":
-            return {**row, "cls": "running", "stage": row["stage"], "live": "running"}
-        return {**row, "live": "running"}
+        if precise and row["cls"] in {"failed", "paused", "neutral"}:
+            return {**row, "cls": "running", "live": "running"}
+        return {**row, "live": "running"} if row["cls"] == "running" else row
     cls, word = TERMINAL.get(status, ("", ""))
     if not cls or row["cls"] == cls:
         return {**row, "live": word or status.lower()}
@@ -1021,11 +1025,16 @@ def _home_html(items: dict[str, Path], state=_dataset_state, verdicts: "ControlV
         units = s.get("unit_rows") or [dict(name="", stage=s["stage"], cls=s["cls"], n_input=s["n_input"],
                                             final_cells=s["final_cells"], rounds=s["rounds"],
                                             trend=s.get("trend") or [], species=s["species"], updated=s["updated"])]
-        # The control plane names units by index, which no name on disk carries, so its verdict on
-        # the run stands for every unit of that run: a dataset it calls finished has no running unit
-        # whatever the files say, and one it calls running has no failed unit.
-        verdict = verdicts.of(s.get("run_id", "")) if verdicts else None
-        units = [reconcile(u, verdict) for u in units]
+        # The control plane numbers its unit workflows in plan order, which the organize publication
+        # records, so a unit row usually gets the verdict on that very unit. Where the order is not
+        # on disk the run's own verdict stands in, and then it may only close a row, never reopen it.
+        run = s.get("run_id", "")
+        run_verdict = verdicts.of(run) if verdicts else None
+        rows_out = []
+        for u in units:
+            own = verdicts.of(run, f"/unit-{u['index']}") if verdicts and u.get("index") is not None else None
+            rows_out.append(reconcile(u, own or run_verdict, precise=own is not None))
+        units = rows_out
         for u in units:
             kept = 100 * u["final_cells"] / u["n_input"] if u["n_input"] and u["final_cells"] is not None else None
             species = u.get("species") or s["species"]
