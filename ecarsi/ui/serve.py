@@ -971,7 +971,15 @@ HISTORY_JS = r"""
       tip.style.display = "block"; tip.innerHTML = `<b>${fmtT(t)}</b><br>cells in <b>${k.cin.toLocaleString()}</b> · released <b>${k.rel.toLocaleString()}</b>` +
         (k.cin ? ` · released / in ${(100 * k.rel / k.cin).toFixed(0)}%` : "") + `<br><span class="m">${k.din} started · ${k.drel} released</span>` +
         (k.last ? `<br><span class="m">last: ${k.last.nm} ${k.last.k === "in" ? "started" : "released"} +${k.last.n.toLocaleString()} at ${fmtT(k.last.t).slice(5)}</span>` : "");
-      const bx = box.getBoundingClientRect(); tip.style.left = Math.min(e.clientX - bx.left + 14, bx.width - 300) + "px"; tip.style.top = (e.clientY - bx.top + 14) + "px";
+      // tip is a sibling of box, not a descendant, so it has no positioned ancestor to be
+      // "relative to box" against -- clientX/Y minus box's rect was landing near the top of
+      // the *document* instead of near the cursor. Page coordinates, and above the cursor
+      // (falls below only if the viewport has no room above), like the sibling sk-tips in index.py.
+      const pad = 10;
+      let left = e.pageX - tip.offsetWidth / 2, top = e.pageY - tip.offsetHeight - pad;
+      left = Math.max(window.scrollX + 4, Math.min(left, window.scrollX + window.innerWidth - tip.offsetWidth - 4));
+      if (top < window.scrollY + 4) top = e.pageY + pad;
+      tip.style.left = left + "px"; tip.style.top = top + "px";
       if (drag !== null) { const a = Math.min(x(drag), x(t)), b = Math.max(x(drag), x(t)); zoom.setAttribute("x", a); zoom.setAttribute("width", b - a); zoom.style.display = ""; } });
     hit.addEventListener("mouseleave", () => { tip.style.display = "none"; cross.style.display = "none"; });
     hit.addEventListener("mousedown", e => { drag = tAt(e); e.preventDefault(); });
