@@ -143,6 +143,11 @@ def request_states(pool_root, bridge_root, identities, superseded, sessions):
                     state = 'superseded_session'
                 elif service == 'pool_root' and replaced(root, path.parent.name, bridge_root):
                     state = 'superseded_model_attempt'
+                elif (service == 'pool_root' and state == 'failed' and spec.get('operation_id') != 'agent.call'
+                      and request_session(spec) is not None and inspect(root, path.parent.name)['receipt'].get('retryable') is False):
+                    # A tool call that failed for good is a result its session already consumed; the
+                    # resumed session replays the same transcript and meets the same receipt.
+                    state = 'settled_tool_failure'
                 else:
                     raise ValueError(f'Reconcile {path.parent.name} ({state}) before resume')
             requests.append(dict(service=service, request_id=path.parent.name, state=state))

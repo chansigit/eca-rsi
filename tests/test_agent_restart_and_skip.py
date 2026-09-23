@@ -211,6 +211,10 @@ def test_resume_treats_requests_of_superseded_sessions_as_settled(tmp_path):
         request_states(str(tmp_path / 'pool'), str(tmp_path / 'bridge'), {'persample/r'}, set(), {'osp-a'})
     states = request_states(str(tmp_path / 'pool'), str(tmp_path / 'bridge'), {'persample/r'}, {'osp-a'}, {'osp-a'})
     assert states == [dict(service='pool_root', request_id='osp-a.tool-1', state='superseded_session')]
+    # a tool call that failed for good is a consumed result, not unfinished work
+    save(tmp_path / 'pool/requests/osp-a.tool-1' / task['attempt_id'] / 'receipt.json', {'state': 'failed', 'retryable': False})
+    states = request_states(str(tmp_path / 'pool'), str(tmp_path / 'bridge'), {'persample/r'}, set(), {'osp-a'})
+    assert states == [dict(service='pool_root', request_id='osp-a.tool-1', state='settled_tool_failure')]
 
 
 def test_release_lists_skipped_samples_for_review(tmp_path):
