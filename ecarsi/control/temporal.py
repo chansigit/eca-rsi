@@ -173,6 +173,10 @@ async def serve(args):
                 run(tool + ['update-schema', '-d', args.schema_dir / schema / 'versioned'])
             config = server_config(address, args.port, args.database_port, user, password)
             config['global'] = {'membership': {'maxJoinDuration': '30s', 'broadcastAddress': address}}
+            if args.dynamic_config:
+                # Hot-reloaded server knobs (workflow task timeout, history limits) live with the
+                # deployment, not in this file; the path is only wired in when one is given.
+                config['dynamicConfigClient'] = dict(filepath=str(args.dynamic_config.resolve()), pollInterval='60s')
             save(root / 'server.yaml', config)  # JSON is valid YAML; no templating dependency.
             start([args.temporal_dir / 'temporal-server', '--config-file', root / 'server.yaml',
                    '--allow-no-auth', 'start'], 'temporal')
@@ -235,6 +239,7 @@ def main():
     parser.add_argument('--port', type=int, default=7333)
     parser.add_argument('--database-port', type=int, default=55432)
     parser.add_argument('--ui-port', type=int, default=8333)
+    parser.add_argument('--dynamic-config', type=Path, help='Temporal dynamic-config YAML, re-read by the server every 60 s')
     asyncio.run(serve(parser.parse_args()))
 
 
