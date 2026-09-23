@@ -80,22 +80,53 @@ def request_session(spec):
     return None
 
 
-def request_states(pool_root, bridge_root, identities, superseded):
+SESSION = re.compile(r'(org|osp|cross|zoom)-[0-9a-f]{24}')
+
+
+def sessions_of(root):
+    """Agent session ids of a dataset run: every session leaves directories named after it in the
+    run tree (`03-zoom-in/zoom-…`, `01-per-sample/agent-…/osp-….tool-…`, `00-organize.planning/org-….tool-…`)."""
+    return {m.group(0) for p in Path(root).rglob('*') if (m := SESSION.match(p.name))}
+
+
+def request_states(pool_root, bridge_root, identities, superseded, sessions):
     """Every Pool and Bridge request of these workflows with the state resume records; raises on one
     that neither finished nor was superseded (its session restarted or reset, or a model attempt
-    was replaced)."""
+    was replaced).
+
+    Candidate folders come from their names, the trace still decides: Pool requests are
+    `<stage run_id>.<kind>-…` (organize: `<run_id>-organize.<step>`) or `<session_id>.tool-…`,
+    Bridge requests `<session_id>[-rN|-gN].turn-N`. Reading every request.json instead took the
+    2026-09-23 resume past 17 minutes on a 437k-folder pool, on the control-plane node."""
     from ..warm_pool.state import read, status
     from ..agent import status as bridge_status
     from ..agent.dispatch import completed_replacement
+    runs = {i.split('/')[1] for i in identities if '/' in i}
+    heads = runs | {r + '-organize' for r in runs} | set(sessions)
+
+    def owned(name):
+        return re.sub(r'-[rg]\d+$', '', name.split('.', 1)[0]) in heads
+
+    def folders(root):
+        path = Path(root) / 'requests'
+        return sorted(os.scandir(path), key=lambda e: e.name) if path.is_dir() else []
+    # A model turn runs as a Pool `agent-<digest>` request; only the Bridge folder's state.json
+    # names it, so those candidates come from the owned Bridge folders.
+    attempts = {a['pool_request_id'] for e in folders(bridge_root) if owned(e.name)
+                for a in read(Path(e.path) / 'state.json', {}).get('attempts', [])}
     requests = []
-    for service, root, inspect, allowed in (
-        ('pool_root', pool_root, status, {'queued', 'running', 'succeeded'}),
-        ('bridge_root', bridge_root, bridge_status, {'queued', 'running', 'reply_saved'}),
+    for service, root, inspect, allowed, wanted in (
+        ('pool_root', pool_root, status, {'queued', 'running', 'succeeded'}, lambda n: owned(n) or n in attempts),
+        ('bridge_root', bridge_root, bridge_status, {'queued', 'running', 'reply_saved'}, owned),
     ):
-        for path in sorted((Path(root) / 'requests').glob('*/request.json')):
-            spec = read(path)['spec']
-            if spec.get('trace', {}).get('workflow_id') not in identities:
+        for entry in folders(root):
+            if not wanted(entry.name):
                 continue
+            path = Path(entry.path) / 'request.json'
+            request = read(path)
+            if not request or request['spec'].get('trace', {}).get('workflow_id') not in identities:
+                continue
+            spec = request['spec']
             state = inspect(root, path.parent.name)['state']
             if state not in allowed:
                 if request_session(spec) in superseded:
@@ -158,7 +189,7 @@ async def resume_dataset(client, identity, task_queue, reason):
             if any(stage[key] != spec[key] for key in ('dataset_id', 'pool_root', 'bridge_root')):
                 raise ValueError('Saved stage belongs to another dataset or service')
             identities.add(prefix + stage['run_id'])
-    requests = request_states(spec['pool_root'], spec['bridge_root'], identities, superseded_sessions(root))
+    requests = request_states(spec['pool_root'], spec['bridge_root'], identities, superseded_sessions(root), sessions_of(root))
     from uuid import uuid4
     audit = root / 'recoveries' / (uuid4().hex + '.json')
     audit.parent.mkdir(mode=0o700, exist_ok=True)

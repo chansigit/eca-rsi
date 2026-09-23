@@ -177,7 +177,7 @@ def test_resume_rejects_unreconciled_requests_and_audits_new_run(tmp_path, monke
     save(tmp_path / 'spec.json', spec)
     failed_publication = {'state': 'incomplete', 'failed_units': ['test']}
     save(tmp_path / 'publication.json', failed_publication)
-    request = tmp_path / 'pool/requests/compute/request.json'
+    request = tmp_path / 'pool/requests/test.ledger-1/request.json'   # named `<run_id>.<kind>-…`, as the plane names them
     request.parent.mkdir(parents=True)
     save(request, {'spec': {'trace': {'workflow_id': 'dataset/test'}}})
     class Event:
