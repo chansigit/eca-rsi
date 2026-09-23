@@ -490,9 +490,13 @@ class ControlVerdicts:
             if not root or not Path(root).is_dir():
                 continue
             if r.get("status") != "RUNNING":
-                closed = r.get("closed") or 0
-                superseded = r.get("started", 0) < newest.get(r.get("dataset_id"), 0)
-                if superseded or time.time() - closed > self.RECENT:
+                if r.get("started", 0) < newest.get(r.get("dataset_id"), 0):
+                    continue    # superseded: the dataset was started again
+                # A failure never quietly leaves the table (owner, 2026-09-23: "失败了就是失败了,
+                # 不要隐藏问题"): it stays until a resubmission supersedes it. Completed and
+                # terminated runs still age off after a day -- the released ones are registered
+                # and the killed ones were meant to go.
+                if r.get("status") != "FAILED" and time.time() - (r.get("closed") or 0) > self.RECENT:
                     continue
             out[Path(root).name] = Path(root)
         return out
