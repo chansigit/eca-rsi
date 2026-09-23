@@ -89,6 +89,17 @@ def sessions_of(root):
     return {m.group(0) for p in Path(root).rglob('*') if (m := SESSION.match(p.name))}
 
 
+def replaced(pool_root, request_id, bridge_root):
+    """completed_replacement, accepting a winner whose Pool folder is gone: it raises KeyError only
+    after the Bridge confirmed the reply was saved by that later attempt, and a released run that
+    replayed the same session takes the attempt's folder with it when it is archived."""
+    from ..agent.dispatch import completed_replacement
+    try:
+        return completed_replacement(pool_root, request_id, bridge_root)
+    except KeyError:
+        return True
+
+
 def request_states(pool_root, bridge_root, identities, superseded, sessions):
     """Every Pool and Bridge request of these workflows with the state resume records; raises on one
     that neither finished nor was superseded (its session restarted or reset, or a model attempt
@@ -100,7 +111,6 @@ def request_states(pool_root, bridge_root, identities, superseded, sessions):
     2026-09-23 resume past 17 minutes on a 437k-folder pool, on the control-plane node."""
     from ..warm_pool.state import read, status
     from ..agent import status as bridge_status
-    from ..agent.dispatch import completed_replacement
     runs = {i.split('/')[1] for i in identities if '/' in i}
     heads = runs | {r + '-organize' for r in runs} | set(sessions)
 
@@ -131,7 +141,7 @@ def request_states(pool_root, bridge_root, identities, superseded, sessions):
             if state not in allowed:
                 if request_session(spec) in superseded:
                     state = 'superseded_session'
-                elif service == 'pool_root' and completed_replacement(root, path.parent.name, bridge_root):
+                elif service == 'pool_root' and replaced(root, path.parent.name, bridge_root):
                     state = 'superseded_model_attempt'
                 else:
                     raise ValueError(f'Reconcile {path.parent.name} ({state}) before resume')
