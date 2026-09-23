@@ -334,7 +334,9 @@ def archive(root, runs, destination=None, dry_run=False, on_progress=None):
             continue
         trace = request["spec"].get("trace") or {}
         workflow = str(trace.get("workflow_id", ""))
-        if not any(workflow.split("/")[-1].startswith(run) or trace.get("dataset_id") == run for run in runs):
+        # Exact names only: `startswith(run)` also swallowed the `-b`/`-c` resubmissions of an archived
+        # run (their organize and dataset-level requests), which then could not be resumed (2026-09-23).
+        if not any(workflow.split("/")[-1] in (run, run + "-organize") or trace.get("dataset_id") == run for run in runs):
             kept += 1
             continue
         state = status(root, entry.name)["state"]
