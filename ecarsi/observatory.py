@@ -355,6 +355,63 @@ def render_tokens(rows):
     return "\n".join(lines)
 
 
+def productivity_rows(root, pool_root=None):
+    """What the Operations page shows per node, plus the pool line: earned standard core-hours,
+    tasks done, efficiency (earned / cores x time on duty) and speed (earned / granted), 15 min and 4 h."""
+    from .ui.control import snapshot
+    snap = snapshot(Path(root), pool_root=pool_root)
+    rows = snap["productivity"]
+    pool = {"host": "POOL", "cores": sum(r["cores"] for r in rows)}
+    for name in ("15m", "4h"):
+        earned = sum(r.get("earned_core_hours_" + name) or 0 for r in rows)
+        with_duty = [r for r in rows if r.get("efficiency_" + name) is not None]
+        pool["earned_core_hours_" + name] = earned
+        pool["tasks_done_" + name] = sum(r.get("tasks_done_" + name) or 0 for r in rows)
+        pool["efficiency_" + name] = (sum(r["efficiency_" + name] * r["cores"] for r in with_duty)
+                                      / sum(r["cores"] for r in with_duty)) if with_duty else None
+        pool["speed_" + name] = None
+    pool["tasks_failed_4h"] = sum(r.get("tasks_failed_4h") or 0 for r in rows)
+    return rows + [pool]
+
+
+def render_productivity(rows):
+    fmt = lambda v, w=5: f"{v:{w}.0f}" if isinstance(v, (int, float)) else " " * (w - 1) + "-"
+    lines = [f"node productivity  {time.strftime('%Y-%m-%d %H:%M:%S')}  (efficiency %: earned standard core-hours / cores x time on duty; speed: earned / granted, 1 = pool-typical)",
+             f"{'node':14s} {'cores':>5s} {'eff15m':>6s} {'eff4h':>6s} {'spd15m':>6s} {'spd4h':>6s} {'core-h4h':>8s} {'done15m':>7s} {'done4h':>6s} {'fail4h':>6s}"]
+    for r in rows:
+        speed = lambda v: f"{v:6.2f}" if isinstance(v, (int, float)) else "     -"
+        lines.append(f"{r['host']:14s} {r['cores']:5d} {fmt(r.get('efficiency_15m'), 6)} {fmt(r.get('efficiency_4h'), 6)} "
+                     f"{speed(r.get('speed_15m'))} {speed(r.get('speed_4h'))} {r.get('earned_core_hours_4h', 0):8.1f} "
+                     f"{r.get('tasks_done_15m', 0):7d} {r.get('tasks_done_4h', 0):6d} {r.get('tasks_failed_4h', 0):6d}")
+    return "\n".join(lines)
+
+
+def timeline_rows(root, pool_root=None, hours=1.0, host=None, dataset=None, running=False):
+    from .ui import records
+    pool = Path(pool_root) if pool_root else Path(root) / "pool"
+    now = time.time()
+    rows = [records.as_timeline_row(r) for r in records.tasks(pool, now - hours * 3600, now, {})]
+    if host:
+        rows = [r for r in rows if r.get("host") == host]
+    if dataset:
+        rows = [r for r in rows if dataset in (r["trace"].get("dataset_id") or "")]
+    if running:
+        rows = [r for r in rows if r.get("state") == "running"]
+    return sorted(rows, key=lambda r: r.get("started_at") or r.get("submitted_at") or 0)
+
+
+def render_timeline(rows):
+    clock = lambda t: time.strftime("%H:%M:%S", time.localtime(t)) if t else "   -    "
+    lines = [f"worker timeline  {len(rows)} tasks  (times local)",
+             f"{'started':8s} {'finished':8s} {'dur s':>6s} {'node':11s} {'cpus':>4s} {'state':9s} {'operation':30s} {'dataset':34s} {'request':44s}"]
+    for r in rows:
+        dur = f"{r['finished_at'] - r['started_at']:6.0f}" if r.get("finished_at") and r.get("started_at") else "     -"
+        lines.append(f"{clock(r.get('started_at')):8s} {clock(r.get('finished_at')):8s} {dur} "
+                     f"{(r.get('host') or '-'):11s} {(r.get('cpus') or 0):4d} {(r.get('state') or '-'):9s} "
+                     f"{(r.get('operation') or '')[:30]:30s} {(r['trace'].get('dataset_id') or '')[:34]:34s} {r['id'][:44]}")
+    return "\n".join(lines)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -376,8 +433,26 @@ def main() -> None:
     tok = commands.add_parser("tokens", help="per dataset: model turns and prompt / completion tokens summed over the saved replies")
     tok.add_argument("--bridge-root", type=Path, required=True)
     tok.add_argument("--json", action="store_true")
+    prod = commands.add_parser("productivity", help="the Operations page's node productivity table, from the task journals")
+    prod.add_argument("--root", type=Path, required=True, help="run directory (pool/ and bridge/ under it, or --pool-root)")
+    prod.add_argument("--pool-root", type=Path)
+    prod.add_argument("--json", action="store_true")
+    tl = commands.add_parser("timeline", help="the Operations page's worker timeline as rows: what ran where, when, how long")
+    tl.add_argument("--root", type=Path, required=True)
+    tl.add_argument("--pool-root", type=Path)
+    tl.add_argument("--hours", type=float, default=1.0, help="how far back (journals cover at most 4 h)")
+    tl.add_argument("--host", help="one node only, e.g. sh04-01n20")
+    tl.add_argument("--dataset", help="substring of the dataset id")
+    tl.add_argument("--running", action="store_true", help="only tasks still running")
+    tl.add_argument("--json", action="store_true")
     args = parser.parse_args()
-    if args.command == "tokens":
+    if args.command == "productivity":
+        rows = productivity_rows(args.root, args.pool_root)
+        print(json.dumps(rows, indent=2) if args.json else render_productivity(rows))
+    elif args.command == "timeline":
+        rows = timeline_rows(args.root, args.pool_root, args.hours, args.host, args.dataset, args.running)
+        print(json.dumps(rows, indent=2) if args.json else render_timeline(rows))
+    elif args.command == "tokens":
         rows = token_rows(args.bridge_root)
         print(json.dumps(rows, indent=2) if args.json else render_tokens(rows))
     elif args.command == "releases":

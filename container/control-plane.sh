@@ -77,5 +77,6 @@ case $cmd in
   status) status ;;
   report) (cd /tmp && "${PY[@]}" -m ecarsi.observatory status --root "$BASE" --pool-root "$POOL" --bridge-root "$BRIDGE" --temporal-service-root "$CONTROL" "$@") ;;
   tokens) (cd /tmp && "${PY[@]}" -m ecarsi.observatory tokens --bridge-root "$BRIDGE" "$@") ;;   # per-dataset token totals; one paced walk of the bridge
-  *) echo "usage: $0 start|stop|restart|status [component...] | report [--sessions HOURS] [--json] | tokens [--json]"; exit 2 ;;
+  productivity|timeline) (cd /tmp && "${PY[@]}" -m ecarsi.observatory "$cmd" --root "$BASE" --pool-root "$POOL" "$@") ;;   # the Operations page's tables, on the command line
+  *) echo "usage: $0 start|stop|restart|status [component...] | report [--sessions HOURS] [--json] | tokens [--json] | productivity [--json] | timeline [--hours H] [--host NODE] [--dataset SUBSTR] [--running] [--json]"; exit 2 ;;
 esac

@@ -263,3 +263,23 @@ def test_node_productivity_is_standard_work_from_the_journals():
     # standard cost = mean of 4x60 and 2x180 = 100 core-s per task
     assert (fast["tasks_done_15m"], fast["earned_core_hours_15m"] * 3600) == (4, 400)
     assert round(fast["speed_15m"], 2) == 1.67 and round(slow["speed_15m"], 2) == 0.56
+
+
+def test_productivity_and_timeline_reports_read_the_journals_on_the_command_line(tmp_path):
+    import json, time
+    from ecarsi.observatory import productivity_rows, render_productivity, timeline_rows, render_timeline
+    now = time.time()
+    journal = tmp_path / "pool" / "workers" / "w1"
+    journal.mkdir(parents=True)
+    line = dict(request_id="ds-aaaa.deg-1", attempt_id="a", operation="zoom-in.deg", state="succeeded",
+                dataset_id="ds", workflow_id="zoom-in/ds-aaaa", unit_id="zoom-in.deg", worker_id="w1", host="node1",
+                submitted_at=now - 100, started_at=now - 90, finished_at=now - 30, duration_s=60, cpus=2, memory_mb=64)
+    (journal / time.strftime("tasks-%Y-%m-%d.jsonl", time.gmtime(now))).write_text(json.dumps(line) + "\n")
+    rows = timeline_rows(tmp_path, hours=1)
+    assert [r["id"] for r in rows] == ["ds-aaaa.deg-1"] and rows[0]["host"] == "node1"
+    assert not timeline_rows(tmp_path, hours=1, host="other") and timeline_rows(tmp_path, hours=1, dataset="ds")
+    text = render_timeline(rows)
+    assert "node1" in text and "zoom-in.deg" in text and "    60" in text
+    prod = productivity_rows(tmp_path)
+    assert prod[-1]["host"] == "POOL" and prod[-1]["tasks_done_15m"] == 1
+    assert "node1" in render_productivity(prod) and "POOL" in render_productivity(prod)
