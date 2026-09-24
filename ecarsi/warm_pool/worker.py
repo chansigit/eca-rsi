@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import signal
 import socket
 import subprocess
@@ -26,8 +27,8 @@ def numba_cache(root):
     scanpy's `get._kernels.agg_sum_csr` misses the cache on every call and appends one more
     entry to its index, and each process reads the whole index first: after 7,019 entries on
     sh04-01n17 (2026-09-23) the first aggregate call took 195 s against 1.7 s with an empty
-    cache, which made every DEG there ten times slower. A new generation starts empty; old ones
-    stay on node-local disk until the allocation ends."""
+    cache, which made every DEG there ten times slower. A new generation starts empty; all but the
+    newest three are removed."""
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     generations = sorted(int(e.name[4:]) for e in os.scandir(root) if e.name.startswith("gen-") and e.name[4:].isdigit()) or [0]
     current = root / f"gen-{generations[-1]}"
@@ -38,7 +39,12 @@ def numba_cache(root):
         full = False
     if full:
         current = root / f"gen-{generations[-1] + 1}"
+        generations.append(generations[-1] + 1)
     current.mkdir(mode=0o700, exist_ok=True)
+    # Keep three generations: a task started two rotations ago may still be compiling into its own.
+    # Older ones are never read again; a busy node leaves ~10 GB a day on a shared /tmp otherwise.
+    for old in generations[:-3]:
+        shutil.rmtree(root / f"gen-{old}", ignore_errors=True)
     return current
 
 def identity(pid):

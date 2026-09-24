@@ -107,3 +107,10 @@ def test_numba_cache_rotates_once_an_index_outgrows_the_limit(tmp_path):
     second = numba_cache(tmp_path / "rsi-numba" / "digest")
     assert second.name == "gen-1" and second.is_dir() and not any(second.iterdir())
     assert numba_cache(tmp_path / "rsi-numba" / "digest") == second
+    root = tmp_path / "rsi-numba" / "digest"
+    for n in range(2, 6):          # three more rotations: gen-0 and gen-1 fall out, the newest three stay
+        full = root / f"gen-{n - 1}" / "get_x"
+        full.mkdir(exist_ok=True)
+        (full / "k.nbi").write_bytes(b"x" * (NUMBA_INDEX_LIMIT + 1))
+        numba_cache(root)
+    assert sorted(p.name for p in root.iterdir()) == ["gen-3", "gen-4", "gen-5"]
