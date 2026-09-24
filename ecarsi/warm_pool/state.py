@@ -171,7 +171,7 @@ def validate(spec):
 def submit(root, spec):
     from .budget import measured_ceiling
     root, requested = pool_root(root), validate(spec)
-    spec = measured_ceiling(requested)
+    spec = measured_ceiling(requested, read(root / "config.json", {}).get("ceilings"))
     folder = root / "requests" / spec["request_id"]
     folder.mkdir(mode=0o700, exist_ok=True)
     sync_directory(folder.parent)

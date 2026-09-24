@@ -477,3 +477,16 @@ def test_a_submission_stranded_by_an_earlier_server_generation_is_submitted_agai
     mtime = (folder / 'request.json').stat().st_mtime_ns
     backend.dispatch(dict(server_uid='new', pid=1, start_date='now'))
     assert not any(a[0] == 'submit' for a in calls) and (folder / 'request.json').stat().st_mtime_ns == mtime
+
+
+def test_memory_ceilings_come_from_the_table_and_the_pool_config(tmp_path):
+    from ecarsi.warm_pool.budget import measured_ceiling
+    deg = dict(request_id="d", operation_id="zoom-in.deg", args=["x"], cpus=2, memory_mb=2304, timeout_seconds=10, outputs=["r"])
+    assert measured_ceiling(deg)["memory_mb"] == 1536 and measured_ceiling(deg)["cpus"] == 1
+    assert measured_ceiling(deg, {"zoom-in.deg": 1024})["memory_mb"] == 1024
+    assert measured_ceiling(dict(deg, memory_mb=800), {"zoom-in.deg": 1024})["memory_mb"] == 800  # never raised
+    tmp_path.chmod(0o700)
+    (tmp_path / "requests").mkdir()
+    save(tmp_path / "config.json", {"runtime": {"command": ["/usr/bin/python3"]}, "ceilings": {"zoom-in.deg": 1280}})
+    submit(tmp_path, deg)
+    assert read(tmp_path / "requests/d/request.json")["spec"]["memory_mb"] == 1280

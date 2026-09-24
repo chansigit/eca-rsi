@@ -12,13 +12,19 @@ from .state import digest, read
 # from_deg_buffers). Fixed stage budgets reserved 7x what ran (1,395 vs 199 GiB-hours) and
 # three 24 GiB tool calls filled two nodes. An attempt that still exceeds its ceiling is
 # retried at 2x by check_pool, so a larger dataset costs one short failed attempt.
+# Re-measured 2026-09-24 over the 09-23/24 journals (peak RSS, MiB): zoom-in.deg n=56k p99 1296 /
+# p99.9 2642; cross-sample.deg n=17k p99 2731; deg_lookup / deg_sql / read_evidence max 259 / 259 / 996;
+# check_genes max 3715; zoom-in.assemble max 879; zoom-in.apply max 6489. DEG had no ceiling and asked
+# 2304-2816 MiB each, so a 64-core node with 118 GiB ran 51 of them, and wide 12 GiB tasks waited
+# behind them. A ceiling near p99 costs one retried attempt per hundred; the memory buys the rest.
 MEASURED_CEILING_MB = {
-    'check_genes': 9472, 'check_qc_scores': 9984, 'read_evidence': 3072, 'deg_sql': 1792,
-    'deg_lookup': 1792, 'list_evidence': 5376, 'annotation_status': 5632, 'type_context': 6400,
+    'zoom-in.deg': 1536, 'cross-sample.deg': 3072,
+    'check_genes': 4096, 'check_qc_scores': 4096, 'read_evidence': 1024, 'deg_sql': 512,
+    'deg_lookup': 512, 'list_evidence': 5376, 'annotation_status': 5632, 'type_context': 6400,
     'sample_inventory': 1536, 'submit_quality': 5632, 'submit_decision': 9984,
     'submit_annotation': 4096, 'submit_types': 5632, 'submit_plan': 5632,
-    'subcluster': 6144, 'zoom-in.assemble': 2560,
-    'cross-sample.assemble': 2560, 'zoom-in.apply': 11008, 'persample.partition': 7424,
+    'subcluster': 6144, 'zoom-in.assemble': 1024,
+    'cross-sample.assemble': 2560, 'zoom-in.apply': 7168, 'persample.partition': 7424,
     'zoom-in.lineage.prepare': 1536, 'zoom-in.plan.prepare': 1536,
     'cross-sample.type.prepare': 1536, 'cross-sample.quality.prepare': 1536,
     'cross-sample.inclusion.prepare': 1536, 'inspect_source': 5120, 'organize.prepare': 8192,
@@ -31,9 +37,12 @@ MEASURED_CEILING_MB = {
 MEASURED_CPUS = {'zoom-in.deg': 1, 'cross-sample.deg': 1, 'zoom-in.compute': 2, 'zoom-in.markers': 2}
 
 
-def measured_ceiling(spec):
-    """Cap a fixed stage budget at the measured ceilings; never raise, never touch unknown operations."""
-    memory = min(spec['memory_mb'], MEASURED_CEILING_MB.get(spec.get('operation_id'), spec['memory_mb']))
+def measured_ceiling(spec, ceilings=None):
+    """Cap a fixed stage budget at the measured ceilings; never raise, never touch unknown operations.
+    `ceilings` (pool/config.json "ceilings": {operation: MiB}) overrides the table online, read at
+    every submit, so a pool can be retuned from its own journals without a release or a restart."""
+    table = {**MEASURED_CEILING_MB, **(ceilings or {})}
+    memory = min(spec['memory_mb'], table.get(spec.get('operation_id'), spec['memory_mb']))
     cpus = min(spec['cpus'], MEASURED_CPUS.get(spec.get('operation_id'), spec['cpus']))
     if (memory, cpus) == (spec['memory_mb'], spec['cpus']):
         return spec
