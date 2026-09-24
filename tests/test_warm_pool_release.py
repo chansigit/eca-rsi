@@ -96,3 +96,14 @@ def test_scheduler_uses_a_separate_hq_server_only_while_one_holds_the_lock(tmp_p
                                 f"sys.exit(0 if external_hq_server(Path({str(tmp_path)!r})) else 1)"])
         assert probe.returncode == 0
     assert not external_hq_server(tmp_path)
+
+
+def test_numba_cache_rotates_once_an_index_outgrows_the_limit(tmp_path):
+    from ecarsi.warm_pool.worker import NUMBA_INDEX_LIMIT, numba_cache
+    first = numba_cache(tmp_path / "rsi-numba" / "digest")
+    assert first.name == "gen-0" and numba_cache(tmp_path / "rsi-numba" / "digest") == first
+    (first / "get_x").mkdir()
+    (first / "get_x" / "_kernels.agg_sum_csr-15.py312.nbi").write_bytes(b"x" * (NUMBA_INDEX_LIMIT + 1))
+    second = numba_cache(tmp_path / "rsi-numba" / "digest")
+    assert second.name == "gen-1" and second.is_dir() and not any(second.iterdir())
+    assert numba_cache(tmp_path / "rsi-numba" / "digest") == second

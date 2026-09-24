@@ -16,6 +16,31 @@ GPU_BLIND_LIMIT = 120  # seconds nvidia-smi may keep failing before the attempt 
 from .state import digest, file_digest, identifier, lock, pool_root, read, save, sync_directory
 
 
+
+NUMBA_INDEX_LIMIT = 1 << 20   # ponytail: bytes; rotate on size, not on the (unknown) key that keeps missing
+
+
+def numba_cache(root):
+    """The numba cache directory for this node and runtime, rotated once any index outgrows 1 MiB.
+
+    scanpy's `get._kernels.agg_sum_csr` misses the cache on every call and appends one more
+    entry to its index, and each process reads the whole index first: after 7,019 entries on
+    sh04-01n17 (2026-09-23) the first aggregate call took 195 s against 1.7 s with an empty
+    cache, which made every DEG there ten times slower. A new generation starts empty; old ones
+    stay on node-local disk until the allocation ends."""
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    generations = sorted(int(e.name[4:]) for e in os.scandir(root) if e.name.startswith("gen-") and e.name[4:].isdigit()) or [0]
+    current = root / f"gen-{generations[-1]}"
+    try:
+        full = any(f.name.endswith(".nbi") and f.stat().st_size > NUMBA_INDEX_LIMIT
+                   for d in os.scandir(current) if d.is_dir() for f in os.scandir(d.path))
+    except FileNotFoundError:
+        full = False
+    if full:
+        current = root / f"gen-{generations[-1] + 1}"
+    current.mkdir(mode=0o700, exist_ok=True)
+    return current
+
 def identity(pid):
     try:
         fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
@@ -333,8 +358,7 @@ def run(folder, request, ownership):
         if runtime.get("image"):
             # Node-local, per runtime: the shared Lustre cache corrupted its index
             # under concurrent writers from several nodes. Costs one recompile per node.
-            cache = Path(os.environ.get("L_SCRATCH") or tempfile.gettempdir()) / "rsi-numba" / request["runtime_digest"]
-            cache.mkdir(mode=0o700, parents=True, exist_ok=True)
+            cache = numba_cache(Path(os.environ.get("L_SCRATCH") or tempfile.gettempdir()) / "rsi-numba" / request["runtime_digest"])
             env["NUMBA_CACHE_DIR"] = str(cache)
         with (attempt / "stdout.log").open("ab", buffering=0) as out, (attempt / "stderr.log").open("ab", buffering=0) as err:
             # Publish the process group before permitting numerical code to
