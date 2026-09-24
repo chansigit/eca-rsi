@@ -35,7 +35,7 @@ pids() { pgrep -u "$USER" -f "$(pattern "$1")" | while read -r p; do tr '\0' ' '
 launch() { local name=$1; shift; (cd "$CODE" && exec setsid nohup "$@" >>"$LOGS/$name.log" 2>&1 < /dev/null) & }
 
 start() {
-  pids "$1" | grep -q . && return 0
+  [ "$1" != coordinators ] && pids "$1" | grep -q . && return 0   # coordinators top up to COORDINATORS below
   case $1 in
     temporal) launch temporal "${PY[@]}" -m ecarsi.control.temporal --root "$CONTROL" --postgres-bin "${POSTGRES_BIN:?}" \
         --temporal-dir "${TEMPORAL_DIR:?}" --schema-dir "${SCHEMA_DIR:?}" --bind "$HOST_IP" \
