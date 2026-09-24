@@ -290,7 +290,7 @@ def productivity(tasks: list[dict], cores: dict, now: float) -> list[dict]:
         row = {"host": host, "cores": cores.get(host, 0),
                "tasks_failed_4h": sum(t.get("state") == "failed" and (t.get("finished_at") or 0) >= now - MAX_WINDOW
                                       and t.get("host") == host for t in tasks)}
-        for span, name in ((3600, "1h"), (MAX_WINDOW, "4h")):
+        for span, name in ((900, "15m"), (MAX_WINDOW, "4h")):
             window = [t for t in mine if t["finished_at"] >= now - span]
             earned = sum(standard[kind(t)] for t in window)
             granted = sum((t["finished_at"] - t["started_at"]) * max(t.get("cpus") or 1, 1) for t in window)

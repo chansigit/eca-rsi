@@ -256,10 +256,10 @@ def test_node_productivity_is_standard_work_from_the_journals():
     from ecarsi.ui.control import productivity
     now = 10_000.0
     job = lambda host, secs: dict(host=host, operation="deg", trace={"dataset_id": "d"}, cpus=1, state="succeeded",
-                                  started_at=now - 1800 - secs, finished_at=now - 1800)
+                                  started_at=now - 300 - secs, finished_at=now - 300)
     tasks = [job("fast", 60)] * 4 + [job("slow", 180)] * 2   # same work, slow takes 3x as long
     tasks.append(dict(job("fast", 60), operation="agent.call"))
     fast, slow = productivity(tasks, {"fast": 2, "slow": 2}, now)
     # standard cost = mean of 4x60 and 2x180 = 100 core-s per task
-    assert (fast["tasks_done_1h"], fast["earned_core_hours_1h"] * 3600) == (4, 400)
-    assert round(fast["speed_1h"], 2) == 1.67 and round(slow["speed_1h"], 2) == 0.56
+    assert (fast["tasks_done_15m"], fast["earned_core_hours_15m"] * 3600) == (4, 400)
+    assert round(fast["speed_15m"], 2) == 1.67 and round(slow["speed_15m"], 2) == 0.56

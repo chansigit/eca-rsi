@@ -747,13 +747,13 @@ function renderProductivity(data) {
   const sum=k=>nodes.reduce((a,n)=>a+(n[k]||0),0);
   $('productivity-state').textContent=nodes.length?`${nodes.length} nodes`:'No telemetry';
   $('productivity-state').className=`status ${nodes.length?'ok':'off'}`;
-  $('productivity-summary').innerHTML=[['Pool efficiency · 1 h',pct(mean('efficiency_1h'))],['Pool efficiency · 4 h',pct(mean('efficiency_4h'))],
+  $('productivity-summary').innerHTML=[['Pool efficiency · 15 min',pct(mean('efficiency_15m'))],['Pool efficiency · 4 h',pct(mean('efficiency_4h'))],
     ['Standard core-hours · 4 h',sum('earned_core_hours_4h').toFixed(0)],['Tasks done · 4 h',sum('tasks_done_4h')]]
     .map(([k,v])=>`<div class="metric"><b>${v}</b><span>${k}</span></div>`).join('');
   const bar=x=>Number.isFinite(x)?`<span style="display:inline-block;width:60px;height:8px;background:#e6e1d6;vertical-align:middle;margin-right:6px"><span style="display:block;height:8px;width:${Math.min(100,x)}%;background:${x<30?'#a4514e':x<60?'#ad8651':'#558d78'}"></span></span>${pct(x)}`:'—';
   const speed=x=>Number.isFinite(x)?x.toFixed(2)+'×':'—';
-  $('productivity-table').innerHTML='<tr style="text-align:left"><th>Node</th><th>Cores</th><th>Efficiency 1 h</th><th>Efficiency 4 h</th><th>Speed 1 h</th><th>Speed 4 h</th><th>Standard core-h 4 h</th><th>Tasks done 4 h</th><th>Failed 4 h</th></tr>'+
-    nodes.map(n=>`<tr><td>${esc(n.host)}</td><td>${n.cores||'gone'}</td><td>${bar(n.efficiency_1h)}</td><td>${bar(n.efficiency_4h)}</td><td>${speed(n.speed_1h)}</td><td>${speed(n.speed_4h)}</td><td>${n.earned_core_hours_4h.toFixed(1)}</td><td>${n.tasks_done_4h}</td><td>${n.tasks_failed_4h||''}</td></tr>`).join('');
+  $('productivity-table').innerHTML='<tr style="text-align:left"><th>Node</th><th>Cores</th><th>Efficiency 15 min</th><th>Efficiency 4 h</th><th>Speed 15 min</th><th>Speed 4 h</th><th>Standard core-h 4 h</th><th>Tasks done 4 h</th><th>Failed 4 h</th></tr>'+
+    nodes.map(n=>`<tr><td>${esc(n.host)}</td><td>${n.cores||'gone'}</td><td>${bar(n.efficiency_15m)}</td><td>${bar(n.efficiency_4h)}</td><td>${speed(n.speed_15m)}</td><td>${speed(n.speed_4h)}</td><td>${n.earned_core_hours_4h.toFixed(1)}</td><td>${n.tasks_done_4h}</td><td>${n.tasks_failed_4h||''}</td></tr>`).join('');
 }
 
 function renderAtWork(data) {
