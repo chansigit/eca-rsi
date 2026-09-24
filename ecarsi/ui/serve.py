@@ -517,6 +517,9 @@ def reconcile(row: dict, verdict: dict | None, precise: bool = True) -> dict:
         return row
     status = verdict.get("status", "")
     if status == "RUNNING":
+        if str(row.get("stage", "")).startswith("stopped · "):   # only silence, never a real failure
+            return {**row, "cls": "running", "live": "running",
+                    "stage": "no progress 12h+ · " + row["stage"][len("stopped · "):]}
         if precise and row["cls"] in {"failed", "paused", "neutral"}:
             return {**row, "cls": "running", "live": "running"}
         return {**row, "live": "running"} if row["cls"] == "running" else row
@@ -525,6 +528,16 @@ def reconcile(row: dict, verdict: dict | None, precise: bool = True) -> dict:
         return {**row, "live": word or status.lower()}
     stage = f"{word} · last seen {row['stage']}" if row["cls"] == "running" else word
     return {**row, "cls": cls, "stage": stage, "live": word}
+
+
+def unstale(s: dict, verdicts: "ControlVerdicts | None") -> dict:
+    """A dataset the files call `stopped` (running, silent for STALE_AFTER) that the control plane
+    says is RUNNING is waiting, not dead: a 4-CPU task queued 17 h writes nothing. It stays in the
+    running count, and its stage says how long it has been silent."""
+    verdict = verdicts.of(s.get("run_id", "")) if verdicts and s.get("cls") == "failed" else None
+    if not verdict or verdict.get("status") != "RUNNING" or not str(s.get("stage", "")).startswith("stopped · "):
+        return s
+    return {**s, "cls": "running", "stage": "no progress 12h+ · " + s["stage"][len("stopped · "):]}
 
 
 class StateCache:
@@ -1088,7 +1101,7 @@ def _home_html(items: dict[str, Path], state=_dataset_state, verdicts: "ControlV
     import time
 
     e = _h.escape
-    states = {name: (state(p), p) for name, p in items.items()}
+    states = {name: (unstale(state(p), verdicts), p) for name, p in items.items()}
     cached = [s.get('cached_at') for s, _ in states.values() if 'cached_at' in s]
     freshness = ''
     if cached:
@@ -1411,7 +1424,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if raw == "/_home":
             return self._html(_home_html(self._items(), self._state, self._verdicts))
         if raw == "/_history.json":  # the curve's data; ?at=YYYY-MM-DDTHH:MM (or epoch) reads it at one moment
-            hist = fleet_history({n: (self._state(p), p) for n, p in self._items().items()})
+            hist = fleet_history({n: (unstale(self._state(p), self._verdicts), p) for n, p in self._items().items()})
             at = urllib.parse.parse_qs(self.path.partition("?")[2]).get("at")
             if not at:
                 return self._json(200, hist)

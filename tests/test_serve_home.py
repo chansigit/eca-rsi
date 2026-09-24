@@ -185,3 +185,15 @@ def test_log_time_maps_both_ends_exactly_and_round_trips():
     for age in (0, 3600, 86400, 7 * 86400, span):
         assert un(pos(t1 - age)) == pytest.approx(t1 - age, abs=1)
     assert pos(t1 - 3600) > 0.4     # the last hour takes most of the right half
+
+
+def test_a_silent_run_the_plane_calls_running_is_not_failed():
+    from ecarsi.ui.serve import unstale, reconcile
+    class V:
+        def of(self, run_id, unit=""): return {"status": "RUNNING"} if run_id == "r" else None
+    stale = {"run_id": "r", "cls": "failed", "stage": "stopped · round 3 · cross-sample"}
+    assert unstale(stale, V()) == {**stale, "cls": "running", "stage": "no progress 12h+ · round 3 · cross-sample"}
+    assert unstale({**stale, "run_id": "gone"}, V())["cls"] == "failed"            # no verdict: the files stand
+    assert unstale({**stale, "stage": "failed — boom"}, V())["cls"] == "failed"    # a real failure stays
+    row = reconcile({"cls": "failed", "stage": "stopped · round 2 · zoom-in"}, {"status": "RUNNING"}, precise=False)
+    assert row["cls"] == "running" and row["stage"].startswith("no progress 12h+")
