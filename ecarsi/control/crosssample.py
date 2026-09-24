@@ -5,7 +5,7 @@ from pathlib import Path
 from temporalio import activity, workflow
 from temporalio.exceptions import ApplicationError
 
-from .persample import await_pool, call, handoff
+from .persample import HISTORY_LIMIT, await_pool, call, handoff
 
 
 def validate_spec(spec, *, resume=False):
@@ -186,8 +186,9 @@ class CrosssampleWorkflow:
         return getattr(self, '_stage', 'created')
 
     @workflow.run
-    async def run(self, spec):
-        self._deg_limit = getattr(self, '_deg_limit', spec['max_in_flight_deg'])
+    async def run(self, spec, progress=None):
+        progress = progress or {}  # from continue_as_new: the DEG window
+        self._deg_limit = progress.get('deg_limit') or getattr(self, '_deg_limit', spec['max_in_flight_deg'])
 
         async def run_operation(action, paths, parents, **details):
             request = await call(crosssample_step, action, [spec, dict(paths=paths, **details), parents])
@@ -231,6 +232,10 @@ class CrosssampleWorkflow:
                 for task in sorted(done, key=lambda t: pending[t]):
                     index = pending.pop(task)
                     results[index] = await task
+            if workflow.patched('cross-sample-continue-as-new-v1') and workflow.info().get_current_history_length() > HISTORY_LIMIT:
+                # Nothing is in flight here. A fresh execution re-drives inspection, inclusion and every
+                # comparison from their saved results in a few events each, then carries on.
+                workflow.continue_as_new(args=[spec, dict(deg_limit=self._deg_limit)])
             ordered = [results[i] for i in sorted(results)]
             evidence, evidence_parent = await run_operation('assemble', [prepared] + [r[0] for r in ordered],
                 [parent] + [r[1] for r in ordered])

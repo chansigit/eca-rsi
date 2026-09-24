@@ -6,6 +6,13 @@ from temporalio import activity, workflow
 from temporalio.exceptions import ApplicationError
 
 SKIPPED_CELL_LIMIT = 0.10  # a stage whose skipped samples or lineages hold more of its input cells fails instead
+# Continue as new past this many history events, at a point with nothing in flight. A Zoomin round
+# reached 20-38k events; replaying that after a coordinator restart took 15-60 s against a 10 s
+# workflow task timeout (63 zoom-ins stuck on 2026-09-23), and the cached copy of every such
+# workflow is what filled the coordinators' memory (~50 MB each). Everything a stage does is
+# idempotent -- content-addressed pool requests, saved session turns -- so a continued execution
+# re-drives finished steps in a handful of events each.
+HISTORY_LIMIT = 5000
 
 
 def sample_summary(records, skipped, failed):

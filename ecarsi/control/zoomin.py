@@ -5,7 +5,7 @@ from pathlib import Path
 from temporalio import activity, workflow
 from temporalio.exceptions import ApplicationError
 
-from .persample import await_pool, call, handoff
+from .persample import HISTORY_LIMIT, await_pool, call, handoff
 
 
 def validate_spec(spec, *, resume=False):
@@ -136,10 +136,11 @@ class ZoominWorkflow:
         return getattr(self,'_stage','created')
 
     @workflow.run
-    async def run(self,spec):
+    async def run(self,spec,progress=None):
         from .coordinator import run_agent
         from .persample import SKIPPED_CELL_LIMIT
-        self._deg_limit=getattr(self,'_deg_limit',spec['max_in_flight_deg'])
+        progress=progress or {}  # from continue_as_new: finished lineages and the DEG window
+        self._deg_limit=progress.get('deg_limit') or getattr(self,'_deg_limit',spec['max_in_flight_deg'])
         async def run(action,paths,parents,**details):
             request=await call(zoomin_step,action,[spec,dict(paths=paths,**details),parents])
             return await await_pool(spec,request),request['id']
@@ -186,7 +187,37 @@ class ZoominWorkflow:
                     return dict(skipped=dict(index=index,name=lines[index]['name'],n_cells=lines[index]['n_cells'],error=str(exc)))
                 decision=await call(zoomin_step,'read',[accepted])
                 return await run('apply',[decision['evidence']['path'],accepted],[accepted_parent])
-            if workflow.patched('zoomin-preserve-independent-lineages-v1'):
+            async def windowed():
+                """A bounded window of lineages in flight (sessions included); past HISTORY_LIMIT events no
+                new one starts and, once the window drains, the run continues as new carrying the finished
+                ones, so no round's history outgrows what a coordinator can replay or cache."""
+                done={int(k):v for k,v in progress.get('lineages',{}).items()}
+                remaining=[i for i in chosen if i not in done]
+                window=2*spec['max_in_flight_lineages']
+                running,failures={},[]
+                while remaining or running:
+                    full=workflow.info().get_current_history_length()>HISTORY_LIMIT
+                    while remaining and len(running)<window and not full:
+                        index=remaining.pop(0)
+                        running[asyncio.create_task(lineage(index))]=index
+                    if not running:
+                        await shared
+                        workflow.continue_as_new(args=[spec,dict(lineages={str(k):v for k,v in done.items()},deg_limit=self._deg_limit)])
+                    finished,_=await workflow.wait(list(running),return_when=asyncio.FIRST_COMPLETED)
+                    for task in finished:
+                        index=running.pop(task)
+                        try:
+                            result=task.result()
+                            done[index]=result if isinstance(result,dict) else list(result)
+                        except Exception as exc:  # the round fails once every lineage has settled, as before
+                            failures.append(exc)
+                if failures:
+                    raise ApplicationError(f'{len(failures)} lineages failed; completed lineages retained: {failures[0]}',
+                                           non_retryable=True)
+                return [done[i] for i in chosen]
+            if workflow.patched('zoomin-continue-as-new-v1'):
+                results=await windowed()
+            elif workflow.patched('zoomin-preserve-independent-lineages-v1'):
                 results=await asyncio.gather(*[lineage(i) for i in chosen],return_exceptions=True)
                 failures=[r for r in results if isinstance(r,BaseException)]
                 if failures:
