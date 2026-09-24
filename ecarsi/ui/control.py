@@ -75,15 +75,17 @@ def summarize_resources(rows: list[dict], since: float, until: float) -> list[di
         gpu_used = sum(g.get("memory_used_mb") or 0 for g in gpus)
         gpu_busy = [g["utilization_percent"] for g in gpus
                     if g.get("utilization_percent") is not None]
+        # our Slurm job's memory where the worker reports it; the host's includes other users
+        used, total = ((row["job_memory_used_bytes"], row["job_memory_limit_bytes"]) if row.get("job_memory_limit_bytes")
+                       else (row.get("memory_used_bytes", 0), row.get("memory_total_bytes") or 0))
         values = {
             "cpu_percent": row.get("cpu_percent"),
             "cpu_cores_used": row["cpu_percent"] * len(row.get("cpu_ids", [])) / 100
                 if row.get("cpu_percent") is not None else None,
             "cpu_cores_allocated": len(row.get("cpu_ids", [])),
-            "memory_percent": 100 * row["memory_used_bytes"] / row["memory_total_bytes"]
-                if row.get("memory_total_bytes") else None,
-            "memory_used_gb": row.get("memory_used_bytes", 0) / 2**30,
-            "memory_total_gb": row.get("memory_total_bytes", 0) / 2**30,
+            "memory_percent": 100 * used / total if total else None,
+            "memory_used_gb": used / 2**30,
+            "memory_total_gb": total / 2**30,
             "gpu_percent": sum(gpu_busy) / len(gpu_busy) if gpu_busy else None,
             "gpu_memory_percent": 100 * gpu_used / gpu_total
                 if gpu_total else None,
@@ -247,6 +249,7 @@ def worker_inventory(pool: Path, tasks: list[dict], now: float, cache: dict) -> 
                         "allocation": identity.get("allocation"),
                         "cpus": len(identity.get("cpu_ids", [])),
                         "memory_mb": identity.get("memory_mb"), "reporting": reporting,
+                        "memory_scope": "job" if (latest or {}).get("job_memory_limit_bytes") else "host",
                         "last_seen": last_seen, "current": measurements, "mean_5m": means,
                         "sample_count_5m": len(rows), "tasks": active,
                         "reserved_cpus": sum(t.get("cpus") or 0 for t in active),
@@ -267,38 +270,37 @@ def worker_inventory(pool: Path, tasks: list[dict], now: float, cache: dict) -> 
     return workers + list(historical.values())
 
 
-def productivity(resource_rows: list[dict], tasks: list[dict], now: float) -> list[dict]:
-    """How much work each node did lately, whatever the dataset sizes: measured busy cores over its
-    allocated cores (1 h and 4 h), the core-hours that makes, and the pool tasks it finished."""
-    hosts = {}
-    for row in resource_rows:
-        if row.get("cpu_percent") is None:
-            continue
-        cores = len(row.get("cpu_ids") or [])
-        h = hosts.setdefault(row["host"], {"host": row["host"], "workers": {}, "windows": {}, "gpu": []})
-        if row["observed_at"] >= now - 300:     # the workers it has now, not every one of the 4 h
-            h["workers"][row.get("worker_id")] = cores
-        for span in (3600, MAX_WINDOW):
-            if row["observed_at"] >= now - span:
-                busy, allocated, samples = h["windows"].get(span, (0.0, 0, 0))
-                h["windows"][span] = (busy + row["cpu_percent"] * cores / 100, allocated + cores, samples + 1)
-        busy_gpus = [g["utilization_percent"] for g in row.get("gpus") or [] if g.get("utilization_percent") is not None]
-        if busy_gpus and row["observed_at"] >= now - 3600:
-            h["gpu"].append(sum(busy_gpus) / len(busy_gpus))
+def productivity(tasks: list[dict], cores: dict, now: float) -> list[dict]:
+    """How much work each node did lately, from the task journals alone -- no CPU counters, which on
+    a shared node say nothing about us. Each finished task earns the pool's mean core-seconds for
+    its operation on its dataset (its standard cost), so a node that finishes more, or finishes faster than typical,
+    earns more, whatever the dataset. Efficiency = earned / the node's cores x time on duty; speed =
+    earned / the core-seconds its tasks were actually granted (1 = pool-typical)."""
+    done = [t for t in tasks if t.get("state") == "succeeded" and t.get("started_at") and t.get("finished_at")
+            and t["finished_at"] >= now - MAX_WINDOW and not (t.get("operation") or "").startswith("agent.")]
+    # same operation on the same dataset is the same size of job; across datasets it is not
+    kind = lambda t: (t["operation"], (t.get("trace") or {}).get("dataset_id"))
+    costs = {}
+    for t in done:
+        costs.setdefault(kind(t), []).append((t["finished_at"] - t["started_at"]) * max(t.get("cpus") or 1, 1))
+    standard = {op: sum(v) / len(v) for op, v in costs.items()}   # mean: pool-wide, speed averages to 1
     out = []
-    for host, h in sorted(hosts.items()):
-        rate = {span: 100 * busy / allocated if allocated else None
-                for span, (busy, allocated, _) in h["windows"].items()}
-        busy, _, samples = h["windows"].get(MAX_WINDOW, (0.0, 0, 0))
-        done = [t for t in tasks if t.get("host") == host and t.get("finished_at")
-                and t["finished_at"] >= now - MAX_WINDOW and not (t.get("operation") or "").startswith("agent.")]
-        out.append({"host": host, "cores": sum(h["workers"].values()),
-                    "efficiency_1h": rate.get(3600), "efficiency_4h": rate.get(MAX_WINDOW),
-                    # a sample stands for 30 s of every core it summed
-                    "core_hours_4h": busy * 30 / 3600,
-                    "tasks_done_4h": sum(t.get("state") == "succeeded" for t in done),
-                    "tasks_failed_4h": sum(t.get("state") == "failed" for t in done),
-                    "gpu_percent_1h": sum(h["gpu"]) / len(h["gpu"]) if h["gpu"] else None})
+    for host in sorted({t["host"] for t in done if t.get("host")} | set(cores)):
+        mine = [t for t in done if t.get("host") == host]
+        row = {"host": host, "cores": cores.get(host, 0),
+               "tasks_failed_4h": sum(t.get("state") == "failed" and (t.get("finished_at") or 0) >= now - MAX_WINDOW
+                                      and t.get("host") == host for t in tasks)}
+        for span, name in ((3600, "1h"), (MAX_WINDOW, "4h")):
+            window = [t for t in mine if t["finished_at"] >= now - span]
+            earned = sum(standard[kind(t)] for t in window)
+            granted = sum((t["finished_at"] - t["started_at"]) * max(t.get("cpus") or 1, 1) for t in window)
+            # ponytail: time on duty is from its first task in the window; a node that joined idle reads high
+            first = min((t["started_at"] for t in window), default=now)
+            duty = (now - max(first, now - span)) * row["cores"]
+            row.update({"earned_core_hours_" + name: earned / 3600, "tasks_done_" + name: len(window),
+                        "efficiency_" + name: 100 * earned / duty if duty > 0 else None,
+                        "speed_" + name: earned / granted if granted else None})
+        out.append(row)
     return out
 
 
@@ -334,8 +336,11 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
     temporal_ui = bool(published.get("ui"))
     temporal_port = published.get("ui_port") or 0
     workers = worker_inventory(pool, pool_rows, time.time(), cache)
-    nodes = productivity(resource_history(pool, now - MAX_WINDOW, now, cache.setdefault("resource_files", {})),
-                         pool_rows, now)
+    live = {}
+    for w in workers:
+        if w["reporting"]:
+            live[w["host"]] = live.get(w["host"], 0) + w["cpus"]
+    nodes = productivity(pool_rows, live, now)
     return {
         "generated_at": time.time(), "host": socket.gethostname(),
         "mode": "development / read-only", "temporal_ui": temporal_ui,

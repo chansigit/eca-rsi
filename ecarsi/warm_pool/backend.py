@@ -119,6 +119,20 @@ def gpu_jobfile(request, attempt, name, executor, pythonpath):
     return text
 
 
+def job_memory():
+    """(used, limit) bytes of this Slurm job's memory cgroup: on a shared node the host's
+    /proc/meminfo is mostly other people. Used excludes reclaimable file cache. None off Slurm."""
+    try:
+        path = next(line.split(":", 2)[2] for line in Path("/proc/self/cgroup").read_text().splitlines()
+                    if line.split(":")[1] == "memory")
+        job = Path("/sys/fs/cgroup/memory" + path.split("/step_")[0])
+        stat = dict(line.split() for line in (job / "memory.stat").read_text().splitlines())
+        used = int((job / "memory.usage_in_bytes").read_text()) - int(stat.get("total_inactive_file", 0))
+        return used, int((job / "memory.limit_in_bytes").read_text())
+    except (OSError, StopIteration, IndexError, ValueError):
+        return None, None
+
+
 def resource_sample(cpu_ids, previous=None, gpu_ids=()):
     """Cheap host measurements on a worker's allocated CPUs, every 30 seconds."""
     counters = {}
@@ -149,7 +163,8 @@ def resource_sample(cpu_ids, previous=None, gpu_ids=()):
         pass
     return dict(observed_at=time.time(), host=socket.gethostname().split(".")[0], cpu_ids=cpu_ids,
                 cpu_percent=busy, memory_used_bytes=memory.get("MemTotal", 0) - memory.get("MemAvailable", 0),
-                memory_total_bytes=memory.get("MemTotal"), gpus=gpus), counters
+                memory_total_bytes=memory.get("MemTotal"), gpus=gpus,
+                **dict(zip(("job_memory_used_bytes", "job_memory_limit_bytes"), job_memory()))), counters
 
 
 AGENT_CALL_SHARE = "0.125"  # ponytail: a model turn only waits on HTTP; eight share one core

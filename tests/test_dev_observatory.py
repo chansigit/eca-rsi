@@ -252,13 +252,14 @@ def test_token_rows_sum_saved_replies_per_dataset(tmp_path):
                          [f"late-{i}" for i in range(45, 50)])   # the most recent, not the oldest
 
 
-def test_node_productivity_is_busy_cores_over_allocated_cores():
+def test_node_productivity_is_standard_work_from_the_journals():
     from ecarsi.ui.control import productivity
     now = 10_000.0
-    rows = [dict(host="a", worker_id="w", cpu_ids=[0, 1, 2, 3], cpu_percent=50.0, observed_at=now - 30 * i)
-            for i in range(120)]                      # 1 h of 2 busy cores out of 4
-    tasks = [dict(host="a", finished_at=now - 60, state="succeeded", operation="compute"),
-             dict(host="a", finished_at=now - 60, state="succeeded", operation="agent.call")]
-    (node,) = productivity(rows, tasks, now)
-    assert (node["cores"], node["efficiency_1h"], node["tasks_done_4h"]) == (4, 50.0, 1)
-    assert node["core_hours_4h"] == 2.0
+    job = lambda host, secs: dict(host=host, operation="deg", trace={"dataset_id": "d"}, cpus=1, state="succeeded",
+                                  started_at=now - 1800 - secs, finished_at=now - 1800)
+    tasks = [job("fast", 60)] * 4 + [job("slow", 180)] * 2   # same work, slow takes 3x as long
+    tasks.append(dict(job("fast", 60), operation="agent.call"))
+    fast, slow = productivity(tasks, {"fast": 2, "slow": 2}, now)
+    # standard cost = mean of 4x60 and 2x180 = 100 core-s per task
+    assert (fast["tasks_done_1h"], fast["earned_core_hours_1h"] * 3600) == (4, 400)
+    assert round(fast["speed_1h"], 2) == 1.67 and round(slow["speed_1h"], 2) == 0.56
