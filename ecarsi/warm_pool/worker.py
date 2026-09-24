@@ -366,6 +366,8 @@ def run(folder, request, ownership):
             # under concurrent writers from several nodes. Costs one recompile per node.
             cache = numba_cache(Path(os.environ.get("L_SCRATCH") or tempfile.gettempdir()) / "rsi-numba" / request["runtime_digest"])
             env["NUMBA_CACHE_DIR"] = str(cache)
+            # sitecustomize that makes fast-array-utils' sparse types cacheable (see its docstring)
+            env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(Path(__file__).with_name("numba_site")), env.get("PYTHONPATH")]))
         with (attempt / "stdout.log").open("ab", buffering=0) as out, (attempt / "stderr.log").open("ab", buffering=0) as err:
             # Publish the process group before permitting numerical code to
             # spawn descendants. Parent death before this gate opens runs none.

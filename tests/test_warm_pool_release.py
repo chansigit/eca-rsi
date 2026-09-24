@@ -114,3 +114,20 @@ def test_numba_cache_rotates_once_an_index_outgrows_the_limit(tmp_path):
         (full / "k.nbi").write_bytes(b"x" * (NUMBA_INDEX_LIMIT + 1))
         numba_cache(root)
     assert sorted(p.name for p in root.iterdir()) == ["gen-3", "gen-4", "gen-5"]
+
+
+def test_numba_site_names_fast_array_utils_types_so_pickle_finds_them(tmp_path):
+    import subprocess, sys
+    from pathlib import Path
+    import ecarsi.warm_pool.worker as worker
+    plugin = tmp_path / "fast_array_utils" / "_plugins"
+    plugin.mkdir(parents=True)
+    (tmp_path / "fast_array_utils" / "__init__.py").write_text("")
+    (plugin / "__init__.py").write_text("")
+    (plugin / "numba_sparse.py").write_text("class Base: pass\nTYPES = [type('csr_matrixType', (Base,), {})]\nMODELS = {}\n")
+    site = Path(worker.__file__).with_name("numba_site")
+    probe = ("import pickle, sys; assert 'fast_array_utils' not in sys.modules; "
+             "from fast_array_utils._plugins import numba_sparse as m; t = m.TYPES[0]; "
+             "assert pickle.loads(pickle.dumps(t)) is t")
+    run = subprocess.run([sys.executable, "-c", probe], env={"PYTHONPATH": f"{site}:{tmp_path}"}, capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr

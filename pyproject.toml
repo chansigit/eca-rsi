@@ -37,3 +37,4 @@ packages = ["ecarsi", "ecarsi.warm_pool", "ecarsi.agent", "ecarsi.control", "eca
 
 [tool.setuptools.package-data]
 ecarsi = ["prompts/*.md", "*.html"]
+"ecarsi.warm_pool" = ["numba_site/sitecustomize.py"]
