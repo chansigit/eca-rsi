@@ -77,11 +77,11 @@ def model_health(events, models, active, settings, now=None):
 
 
 def record_event(root, folder, attempt, outcome, *, elapsed=None, model_failure=True, finished_at=None):
-    path = root / "model-events" / (digest([folder.name, attempt["pool_request_id"]]) + ".json")
+    path = root / "model-events" / (digest([folder.name, attempt_key(attempt)]) + ".json")
     existing = read(path)
     if existing:
         return existing
-    event = dict(request_id=folder.name, pool_request_id=attempt["pool_request_id"],
+    event = dict(request_id=folder.name, pool_request_id=attempt.get("pool_request_id"), turn_id=attempt.get("turn_id"),
                  model=attempt["model"], outcome=outcome, model_failure=model_failure,
                  elapsed_seconds=elapsed, finished_at=time.time() if finished_at is None else finished_at)
     save(path, event)
@@ -113,27 +113,57 @@ def _dispatch(root, folder, config, model):
     # The turn's own digest is part of the id: a turn folder re-created under the same name with
     # different content must not replay the earlier reply (eye 2026-09-17: a resumed session replayed
     # 34 archived model replies because the pool replays saved ids).
-    pool_id = "agent-" + digest([str(root), folder.name, request["digest"], number])[:32]
+    identity = digest([str(root), folder.name, request["digest"], number])[:32]
     plan_path = folder / f"dispatch-{number}.json"
     plan = read(plan_path) or dict(request=request, model=model, timeout_seconds=settings["response_timeout_seconds"],
                 cpus=settings["worker_cpus"], memory_mb=settings["worker_memory_mb"],
                 adapter_sha256=archive_adapter(root)["sha256"])
-    if not plan_path.exists() and request['spec']['operation_id'] == 'agent.turn':
+    portable = False
+    if request['spec']['operation_id'] == 'agent.turn':
         session = verified(request['spec']['session'])
-        if session.get('protocol', 1) == 2 and session['adapter_sha256'] != plan['adapter_sha256']:
+        portable = session.get('protocol', 1) >= 2
+        if not plan_path.exists() and portable and session['adapter_sha256'] != plan['adapter_sha256']:
             # Upgrade only the portable transport; original session/tool contracts
             # remain immutable and are validated by their original adapter.
             plan['portable_adapter'] = archive_adapter(root)
     plan_ref = immutable(plan_path, plan)
-    attempt = dict(pool_request_id=pool_id, model=plan["model"], plan=plan_ref, submitted_at=time.time())
+    key = model_key(plan["model"])
+    if portable and runner_ready(root, config, key):
+        attempt = dict(execution="service", turn_id="turn-" + identity, runner=key, model=plan["model"],
+                       plan=plan_ref, submitted_at=time.time())
+    else:
+        attempt = dict(pool_request_id="agent-" + identity, model=plan["model"], plan=plan_ref, submitted_at=time.time())
     attempts.append(attempt)
-    save(folder / "state.json", dict(state, state="running", execution="pool", pool_root=config["pool_root"],
-         started_at=state.get("started_at", time.time()), attempts=attempts))
+    save(folder / "state.json", dict(state, state="running", execution=attempt.get("execution", "pool"),
+         pool_root=config["pool_root"], started_at=state.get("started_at", time.time()), attempts=attempts))
     enqueue(folder, config, attempt)
     return attempt
 
 
+def attempt_key(attempt):
+    return attempt.get("pool_request_id") or attempt["turn_id"]
+
+
+def runner_state(root, key):
+    return read(Path(root) / "runners" / (key + ".json"), {})
+
+
+def runner_ready(root, config, key, now=None):
+    """A resident runner (agent/runner.py) takes this model's turns while its heartbeat is fresh
+    and config["service"]["models"] names the model ("all" or a list of model keys); otherwise,
+    and for legacy sessions, the turn is a pool task as before. Online: read every dispatch."""
+    service = config.get("service") or {}
+    wanted = service.get("models", [])
+    if not (wanted == "all" or key in wanted):
+        return False
+    beat = runner_state(root, key)
+    now = time.time() if now is None else now
+    return bool(beat) and not beat.get("draining") and now - beat.get("observed_at", 0) <= service.get("stale_seconds", 120)
+
+
 def enqueue(folder, config, attempt):
+    if attempt.get("execution") == "service":
+        return enqueue_service(folder, attempt)
     plan = read(attempt["plan"]["path"])
     request = read(folder / "request.json")
     trace = request["spec"].get("trace", {})
@@ -142,6 +172,19 @@ def enqueue(folder, config, attempt):
            cpus=plan["cpus"], memory_mb=plan["memory_mb"],
            timeout_seconds=plan["timeout_seconds"] + 60,
            inputs=[attempt["plan"]], outputs=["result.json"], **({"trace": trace} if trace else {})))
+
+
+def enqueue_service(folder, attempt):
+    """A marker the runner picks up; idempotent, and never re-queued once the turn has started."""
+    root = folder.parent.parent
+    turn_dir = root / "turns" / attempt["turn_id"]
+    if (turn_dir / "started.json").exists() or (turn_dir / "result.json").exists():
+        return
+    marker = root / "runner-queue" / attempt["runner"] / (attempt["turn_id"] + ".json")
+    if not marker.exists():
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        turn_dir.mkdir(parents=True, exist_ok=True)
+        save(marker, dict(request=folder.name, plan=attempt["plan"]["path"], turn_dir=str(turn_dir), queued_at=time.time()))
 
 
 def reconcile_pool(root, folder, config, events):
@@ -155,6 +198,8 @@ def _reconcile_pool(root, folder, config, events):
     from ..warm_pool.state import verified
     state = read(folder / "state.json")
     attempt = state["attempts"][-1]
+    if attempt.get("execution") == "service":
+        return _reconcile_service(root, folder, config, events, state, attempt)
     enqueue(folder, config, attempt)
     current = status(state["pool_root"], attempt["pool_request_id"])
     output_dir = Path(state["pool_root"]) / "requests" / attempt["pool_request_id"] / current["attempt_id"] / "outputs"
@@ -182,13 +227,43 @@ def _reconcile_pool(root, folder, config, events):
     if current["state"] not in {"succeeded", "failed", "cancelled"}:
         from ..warm_pool.state import cancel
         cancel(state["pool_root"], attempt["pool_request_id"])
+    _settle(root, folder, config, events, state, attempt, outcome, response, elapsed,
+            (current["receipt"] or {}).get("finished_at"))
+
+
+def _reconcile_service(root, folder, config, events, state, attempt):
+    """The runner's turn directory plays the pool attempt's part: started.json, then result.json.
+    No result and no runner heartbeat is a lost worker; a started turn past its deadline is a timeout."""
+    enqueue(folder, config, attempt)
+    turn_dir = root / "turns" / attempt["turn_id"]
+    response = read(turn_dir / "result.json")
+    started = read(turn_dir / "started.json", {})
+    beat = runner_state(root, attempt["runner"])
+    stale = time.time() - beat.get("observed_at", 0) > (config.get("service") or {}).get("stale_seconds", 120)
+    elapsed = time.time() - started["started_at"] if started else None
+    outcome = None
+    if response is not None:
+        outcome, elapsed = response["outcome"], response.get("elapsed_seconds", elapsed)
+    elif started and elapsed > settings_timeout(attempt) + 30:
+        outcome = "timeout"
+    elif stale:
+        outcome = "worker_lost"
+    if outcome is None:
+        return
+    (root / "runner-queue" / attempt["runner"] / (attempt["turn_id"] + ".json")).unlink(missing_ok=True)
+    _settle(root, folder, config, events, state, attempt, outcome, response, elapsed, None)
+
+
+def _settle(root, folder, config, events, state, attempt, outcome, response, elapsed, finished_at):
+    from ..warm_pool.state import verified
     model_failure = outcome in {"timeout", "provider_error", "incomplete_submission"}
     event = record_event(root, folder, attempt, outcome, elapsed=elapsed, model_failure=model_failure,
-                         finished_at=(current["receipt"] or {}).get("finished_at"))
-    events[attempt["pool_request_id"]] = event
+                         finished_at=finished_at)
+    events[attempt_key(attempt)] = event
     if outcome == "success":
+        origin = {"pool_request_id": attempt["pool_request_id"]} if "pool_request_id" in attempt else {"turn_id": attempt["turn_id"]}
         save(folder / "result.json", dict(state="reply_saved", finished_at=time.time(),
-             response=response["response"], worker=response["worker"], pool_request_id=attempt["pool_request_id"]))
+             response=response["response"], worker=response["worker"], **origin))
     else:
         # Legacy harnesses may run arbitrary programs; an uncertain legacy call
         # is not equivalent to a tool-free model turn and must not be blindly repeated.
@@ -347,7 +422,7 @@ def serve(root, *, once=False, finished=None):
     root = root_path(root)
     (root / "model-events").mkdir(mode=0o700, exist_ok=True)
     # Read immutable events once per service lifetime; no growing history scan per tick.
-    events = {e["pool_request_id"]: e for p in (root / "model-events").glob("*.json") if (e := read(p))}
+    events = {e.get("pool_request_id") or e.get("turn_id"): e for p in (root / "model-events").glob("*.json") if (e := read(p))}
     # Settled requests are cached by (name, inode): a folder archived and re-created under the
     # same name is new work (Eye turn-0 sat queued for 14 h behind a name-keyed cache, 2026-09-17).
     finished, ordering = ({} if finished is None else finished), {}
@@ -370,7 +445,7 @@ def serve(root, *, once=False, finished=None):
                     continue
                 finished.pop(key, None)
                 state = bridge_status(root, folder.name)
-                if state["state"] == "running" and state.get("execution") == "pool":
+                if state["state"] == "running" and state.get("execution") in {"pool", "service"}:
                     try:
                         reconcile_pool(root, folder, config, events)
                     except (ValueError, KeyError, StopIteration) as exc:
@@ -430,7 +505,8 @@ def serve(root, *, once=False, finished=None):
                  available=max(0, config["concurrency"]-sum(active.values())-legacy_active), dispatch_error=error,
                  dispatch_scan_seconds=time.monotonic()-scanning,
                  models=model_health(events, normalized_models(read(config["catalog"])), active, settings),
-                 routing=settings))
+                 routing=settings, service=config.get("service") or {},
+                 runners={p.stem: read(p) for p in (root / "runners").glob("*.json")} if (root / "runners").is_dir() else {}))
             if once:
                 return
             time.sleep(.5)  # a turn waits half a tick on average before dispatch; the scan itself is ~1 s
@@ -455,11 +531,29 @@ def load_worker_key(model):
 
 
 def execute(plan_path):
+    """Pool-task entry: one process per model turn. The runner (runner.py) calls perform() directly."""
+    asyncio.run(perform(read(plan_path), Path.cwd(), setup=configure))
+
+
+def configure(model, timeout_seconds):
+    """Provider settings are process environment (session.py and the SDK read them): the pool
+    executor sets them per task, a runner once per process, so a runner serves one model."""
+    from ..model_web import PROVIDERS
+    load_worker_key(model)
+    os.environ["OPENAI_AGENTS_REQUEST_TIMEOUT_S"] = str(timeout_seconds)
+    os.environ["AGENT_MODEL_POOL"] = model["harness"] + ":" + model["model"]
+    if model["url"] and model["harness"] in PROVIDERS:
+        os.environ[PROVIDERS[model["harness"]][1]] = model["url"]
+
+
+async def perform(plan, folder, *, setup=None):
+    """Run one planned model turn in `folder`, leaving started.json and result.json there.
+    `setup(model, timeout)` runs after the plan is validated: the pool executor configures its
+    process here (credentials come from the user's shell, so after validation and inside the
+    result's accounting); a runner did it once at start and passes nothing."""
     from . import run_organize, sdk_restore_compat
     from .session import run_turn, validate_turn, pinned_adapter
     from ..warm_pool.state import verified
-    plan = read(plan_path)
-    folder = Path.cwd()
     started = time.time()
     worker = dict(host=socket.gethostname().split(".")[0], pid=os.getpid())
     save(folder / "started.json", dict(started_at=started, worker=worker, model=plan["model"]))
@@ -481,25 +575,20 @@ def execute(plan_path):
                 turn_options['portable_upgrade'] = True
         elif file_digest(Path(__file__).with_name("session.py")) != plan["adapter_sha256"]:
             raise ValueError("Agent adapter changed after dispatch")
-        load_worker_key(plan["model"])
-        os.environ["OPENAI_AGENTS_REQUEST_TIMEOUT_S"] = str(plan["timeout_seconds"])
+        if setup is not None:
+            setup(plan["model"], plan["timeout_seconds"])
         try:
-            if plan["request"]["spec"]["operation_id"] == "agent.turn":
-                legacy = verified(plan["request"]["spec"]["session"]).get("protocol", 1) < 2
+            if spec["operation_id"] == "agent.turn":
+                legacy = session.get("protocol", 1) < 2
                 with sdk_restore_compat(folder) if legacy else nullcontext():
-                    response = asyncio.run(asyncio.wait_for(turn(plan["request"], folder, model=plan["model"], **turn_options),
-                                                           timeout=plan["timeout_seconds"]))
+                    response = await asyncio.wait_for(turn(plan["request"], folder, model=plan["model"], **turn_options),
+                                                      timeout=plan["timeout_seconds"])
             else:
-                from ..model_web import PROVIDERS
-                model = plan["model"]
-                os.environ["AGENT_MODEL_POOL"] = model["harness"] + ":" + model["model"]
-                if model["url"] and model["harness"] in PROVIDERS:
-                    os.environ[PROVIDERS[model["harness"]][1]] = model["url"]
                 response = run_organize(plan["request"], folder=folder)
             outcome = "success"
         except Exception as exc:
             # Model turns cannot execute tools. Failed turn outputs remain fenced
-            # in this Pool attempt, even if a remote model completes later.
+            # in this attempt, even if a remote model completes later.
             error = type(exc).__name__
             saved = read(folder / "turn-response.json")
             if saved is not None:

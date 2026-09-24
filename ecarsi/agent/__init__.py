@@ -185,6 +185,11 @@ def retry_turn(root, request_id, *, reason):
         if state.get('retry_of') == digest(result):
             return status(root, request_id)
         for attempt in state.get('attempts', []):
+            if attempt.get('execution') == 'service':
+                from .dispatch import runner_ready
+                if not (root / 'turns' / attempt['turn_id'] / 'result.json').exists() and runner_ready(root, read(root / 'config.json'), attempt['runner']):
+                    raise ValueError('Prior runner attempt is not terminal: ' + attempt['turn_id'])
+                continue
             current = pool_status(state['pool_root'], attempt['pool_request_id'])
             if current['state'] not in {'succeeded', 'failed', 'cancelled'}:
                 raise ValueError('Prior worker attempt is not terminal: ' + attempt['pool_request_id'])
@@ -204,10 +209,14 @@ def cancel(root, request_id):
         record = status(root, request_id)
         if record["state"] in {"reply_saved", "failed"}:
             return record
-        if record["state"] != "queued" and record.get("execution") != "pool":
+        if record["state"] != "queued" and record.get("execution") not in {"pool", "service"}:
             raise ValueError("Legacy external execution requires explicit reconciliation")
         from ..warm_pool.state import cancel as cancel_pool
         for attempt in record.get("attempts", []):
+            if attempt.get("execution") == "service":
+                # The runner's result, if it still comes, stays fenced in its turn directory.
+                (root / "runner-queue" / attempt["runner"] / (attempt["turn_id"] + ".json")).unlink(missing_ok=True)
+                continue
             try:
                 cancel_pool(record["pool_root"], attempt["pool_request_id"])
             except KeyError:
@@ -421,6 +430,11 @@ def main():
     p.add_argument('root')
     p.add_argument('request_id')
     p.add_argument('--reason', required=True)
+    p = commands.add_parser('runner', help='resident runner for one catalog model (started by runners)')
+    p.add_argument('root')
+    p.add_argument('--model', required=True, help='catalog entry as JSON: harness, model, url')
+    p = commands.add_parser('runners', help='supervise one resident runner per catalog model')
+    p.add_argument('root')
     p = commands.add_parser('retry-turn', help='audit and retry a failed tool-free model request')
     p.add_argument('root')
     p.add_argument('request_id')
@@ -439,6 +453,14 @@ def main():
         serve(args.root)
     elif args.command == "_execute":
         execute(args.root, args.request_id)
+    elif args.command == "runner":
+        import asyncio
+        import json
+        from .runner import serve_runner
+        sys.exit(asyncio.run(serve_runner(args.root, json.loads(args.model))))
+    elif args.command == "runners":
+        from .runner import supervise
+        sys.exit(supervise(args.root))
     elif args.command == 'confirm-stopped':
         import json
         print(json.dumps(confirm_stopped(args.root, args.request_id, reason=args.reason), ensure_ascii=True))

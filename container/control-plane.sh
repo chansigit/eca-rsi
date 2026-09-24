@@ -28,7 +28,7 @@ PY=(apptainer exec --cleanenv --bind "$BINDS" --env LC_ALL=C --env LANG=C
 # Patterns name this run directory's roots, so two control planes on one host never count or kill each other.
 pattern() { case $1 in temporal) echo "ecarsi.control.temporal --root $CONTROL";; scheduler) echo "ecarsi.warm_pool --root $POOL scheduler";;
     hq) echo "ecarsi.warm_pool --root $POOL hq-server";;
-    bridge) echo "ecarsi.agent serve $BRIDGE";; coordinators) echo "ecarsi.control --service-root $CONTROL .*worker";;
+    bridge) echo "ecarsi.agent serve $BRIDGE";; runners) echo "ecarsi.agent runners $BRIDGE";; coordinators) echo "ecarsi.control --service-root $CONTROL .*worker";;
     observatory) echo "ecarsi.serve --registry $BASE/periscope-registry.json";;   # the registry path, not --control-plane: another Periscope may serve the same run directory
     fleet-status) echo "fleet-status.py --service-root $CONTROL";;
     pruner) echo "request-pruner.py --service-root $CONTROL";;
@@ -56,6 +56,7 @@ start() {
     observatory) launch observatory env PYTHONPATH="$CODE" "$HOSTPY" -m ecarsi.serve --registry "$BASE/periscope-registry.json" --control-plane "$BASE" \
         --control-pool-root "$POOL" --control-bridge-root "$BRIDGE" --control-temporal-root "$CONTROL" --bind "$HOST_IP" --port "${OBSERVATORY_PORT:-8765}" ;;
     fleet-status) launch fleet-status "${PY[@]}" "$CODE/container/fleet-status.py" --service-root "$CONTROL" --out "$BASE/fleet-status.json" ;;
+    runners) launch runners "${PY[@]}" -m ecarsi.agent runners "$BRIDGE" ;;
     pruner) launch request-pruner "${PY[@]}" "$CODE/container/request-pruner.py" --service-root "$CONTROL" --pool-root "$POOL" \
         --fleet-status "$BASE/fleet-status.json" --interval "${PRUNE_INTERVAL:-3600}" ;;
     keeper) launch worker-keeper env CODE="$CODE" HOSTPY="$HOSTPY" "$CODE/container/worker-keeper.sh" "$POOL" ;;
@@ -65,10 +66,10 @@ stop() {
   pids "$1" | while read -r p; do kill -TERM "$p" 2>/dev/null; done
   for _ in $(seq 20); do pids "$1" | grep -q . || return 0; sleep 1; done; echo "warning: $1 still running"
 }
-status() { for c in temporal hq scheduler bridge coordinators observatory fleet-status pruner keeper; do printf '%-13s %s\n' "$c" "$(n=$(pids "$c" | wc -l); [ "$n" -gt 0 ] && echo "running ($n proc)" || echo stopped)"; done; }
+status() { for c in temporal hq scheduler bridge runners coordinators observatory fleet-status pruner keeper; do printf '%-13s %s\n' "$c" "$(n=$(pids "$c" | wc -l); [ "$n" -gt 0 ] && echo "running ($n proc)" || echo stopped)"; done; }
 
 cmd=${1:-status}; shift || true
-comps=("$@"); [ ${#comps[@]} -eq 0 ] && comps=(temporal hq scheduler bridge coordinators observatory fleet-status pruner keeper)
+comps=("$@"); [ ${#comps[@]} -eq 0 ] && comps=(temporal hq scheduler bridge runners coordinators observatory fleet-status pruner keeper)
 case $cmd in
   start) for c in "${comps[@]}"; do start "$c"; done; sleep 2; status ;;
   stop) for c in "${comps[@]}"; do stop "$c"; done; status ;;

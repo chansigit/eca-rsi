@@ -123,7 +123,7 @@ def request_states(pool_root, bridge_root, identities, superseded, sessions):
     # A model turn runs as a Pool `agent-<digest>` request; only the Bridge folder's state.json
     # names it, so those candidates come from the owned Bridge folders.
     attempts = {a['pool_request_id'] for e in folders(bridge_root) if owned(e.name)
-                for a in read(Path(e.path) / 'state.json', {}).get('attempts', [])}
+                for a in read(Path(e.path) / 'state.json', {}).get('attempts', []) if a.get('pool_request_id')}
     requests = []
     for service, root, inspect, allowed, wanted in (
         ('pool_root', pool_root, status, {'queued', 'running', 'succeeded'}, lambda n: owned(n) or n in attempts),
