@@ -1,4 +1,4 @@
-from ecarsi.warm_pool.backend import release_plan, worker_capacity
+from ecarsi.warm_pool.backend import cpu_capable, gpu_jobfile, release_plan, worker_capacity
 
 
 def c(key, klass="work", t=0, gpu=False):
@@ -131,3 +131,15 @@ def test_numba_site_names_fast_array_utils_types_so_pickle_finds_them(tmp_path):
              "assert pickle.loads(pickle.dumps(t)) is t")
     run = subprocess.run([sys.executable, "-c", probe], env={"PYTHONPATH": f"{site}:{tmp_path}"}, capture_output=True, text=True)
     assert run.returncode == 0, run.stderr
+
+
+def test_a_task_pinned_to_the_gpu_cannot_use_a_drain(tmp_path):
+    def jobfile(mode):
+        request = dict(spec=dict(request_id='r', cpus=2, memory_mb=12288, time_request_seconds=600,
+                                 gpu=dict(memory_mb=4096, mode=mode)), attempt_id='a', runtime_digest='d')
+        return gpu_jobfile(request, tmp_path / 'requests' / 'r' / 'a', 'rsi.r', '/usr/bin/python3', '')
+    pinned, either = tmp_path / 'pinned.toml', tmp_path / 'either.toml'
+    pinned.write_text(jobfile('required'))   # what a gpu_only release writes: GPU variants only
+    either.write_text(jobfile('preferred'))  # GPU variants plus the plain CPU variant
+    assert not cpu_capable(pinned) and cpu_capable(either)
+    assert cpu_capable(tmp_path / 'absent.toml')  # a CPU task has no job file

@@ -120,6 +120,17 @@ def gpu_jobfile(request, attempt, name, executor, pythonpath):
     return text
 
 
+def cpu_capable(jobfile):
+    """False for a GPU-preferred task the last release pinned to the card: HQ holds its job file's GPU-only
+    variants, so the cores a drain frees cannot run it (2026-09-24 04:00: three such tasks queued behind one
+    long GPU job drained the whole pool for 20 minutes)."""
+    try:
+        text = Path(jobfile).read_text()
+    except OSError:
+        return True
+    return any(line.startswith("resources") and "gpuSlot" not in line for line in text.splitlines())
+
+
 def job_memory():
     """(used, limit) bytes of this Slurm job's memory cgroup: on a shared node the host's
     /proc/meminfo is mostly other people. Used excludes reclaimable file cache. None off Slurm."""
@@ -354,7 +365,7 @@ class HyperQueue:
         save(self.root / "settled.json", sorted(self.settled))
         self._saved = len(self.settled)
 
-    def _release(self, candidates, jobs, aged, gpu_waiting, hq_workers, generation, now):
+    def _release(self, candidates, jobs, aged, gpu_waiting, hq_workers, generation, now, gpu_busy=0):
         cfg = self.release
         if not candidates and not aged:
             self.drain_since = None
@@ -381,8 +392,10 @@ class HyperQueue:
         cap = (max(cfg["backlog_min"], int(total_cpus * cfg["backlog_per_cpu"]))
                + max(0, total_cpus - running))
         gpu_slots = sum(c[2] for c in capacity)
+        # The card's queue is what is waiting plus what is on it now; counting only the waiting ones let a
+        # 20-minute GPU job look like a free card and pinned three tasks behind it (2026-09-24).
         plan = release_plan(candidates, hq_waiting=hq_waiting, cap=cap, draining=draining,
-                            gpu_waiting=gpu_waiting, gpu_slots=gpu_slots,
+                            gpu_waiting=gpu_waiting + gpu_busy, gpu_slots=gpu_slots,
                             gpu_seconds=cfg["gpu_task_seconds"], cpu_seconds=cfg["cpu_task_seconds"])
         by_key = {c["key"]: c for c in candidates}
         submissions = []
@@ -416,7 +429,7 @@ class HyperQueue:
                                   planned=len(plan), skipped=skipped, candidates=len(candidates),
                                   hq_waiting=hq_waiting, backlog_cap=cap, draining=draining, aged=len(aged),
                                   oldest_aged_minutes=round((boost - 1) * 60),
-                                  gpu_slots=gpu_slots, gpu_waiting=gpu_waiting)
+                                  gpu_slots=gpu_slots, gpu_waiting=gpu_waiting, gpu_busy=gpu_busy)
         return submissions
 
     def dispatch(self, info):
@@ -438,7 +451,7 @@ class HyperQueue:
             if not capable:
                 capable.append(model_call_capable(hq_workers()))
             return capable[0]
-        submissions, forgettable, candidates, aged, gpu_waiting = [], [], [], [], 0
+        submissions, forgettable, candidates, aged, gpu_waiting, gpu_busy = [], [], [], [], 0, 0
         # Per dataset: [computing, model turns, queued in HQ, held here] -- what each run is really doing.
         activity = {}
         def tally(request, index):
@@ -516,8 +529,11 @@ class HyperQueue:
                                 and spec["operation_id"] != "agent.call"
                                 and (spec.get("gpu") or {}).get("mode", "preferred") == "preferred"
                                 and any(c[0] >= spec["cpus"] and c[1] >= spec["memory_mb"]
-                                        for c in worker_capacity(hq_workers()))):
+                                        for c in worker_capacity(hq_workers()))
+                                and cpu_capable(attempt / "job.toml")):
                             aged.append((folder.name, now - request["submitted_at"]))
+                    elif state == "running" and accepted and accepted.get("gpu_ids"):
+                        gpu_busy += 1
                     if state != "running" and any(previous.get(k) != v for k, v in record.items() if k != "task_stats"):
                         # Each save is an fsync'd write on Lustre; refreshing observed_at for 150
                         # live jobs every tick cost more than the whole scan. A start needs no
@@ -554,7 +570,7 @@ class HyperQueue:
             self._saved = -1
         self._present = len(present)
         self._persist_settled()
-        submissions = self._release(candidates, jobs, aged, gpu_waiting, hq_workers, generation, now)
+        submissions = self._release(candidates, jobs, aged, gpu_waiting, hq_workers, generation, now, gpu_busy)
         released = {folder.name for folder, *_ in submissions}
         for c in candidates:
             tally(c["request"], 2 if c["folder"].name in released else 3)
