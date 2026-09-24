@@ -182,6 +182,63 @@ def worker_lost_receipt(request, accepted, error):
                 started_at=accepted["started_at"], finished_at=time.time())
 
 
+RELEASE_DEFAULTS = dict(
+    backlog_per_cpu=1 / 3,    # HQ waiting queue kept at ~a third of the pool's CPUs (one tick of starts)
+    backlog_min=16,
+    drain_age_seconds=600,    # a feasible task waiting this long in HQ starts a drain
+    max_drain_seconds=900,    # a drain that has not placed it by then yields for as long again
+    gpu_task_seconds=120,     # typical GPU / CPU run of a GPU-preferred task (2026-09-23: 1.7 vs 3-10 min)
+    cpu_task_seconds=360,
+)
+
+
+def worker_capacity(workers):
+    """Live HQ workers as (cpus, memory_mb, gpu_slots) from `hq worker list` JSON."""
+    out = []
+    for w in workers or []:
+        if w.get("ended"):
+            continue
+        cpus = mem = gpus = 0
+        for r in w["configuration"]["resources"]["resources"]:
+            if r["name"] == "cpus":
+                cpus = len(r.get("values") or [])
+            elif r["name"] == "mem":
+                mem = r.get("size", 0) / 10000
+            elif r["name"].startswith("gpuSlot/"):
+                gpus += len(r.get("values") or []) or 1
+        out.append((cpus, mem, gpus))
+    return out
+
+
+def release_plan(candidates, *, hq_waiting, cap, draining, gpu_waiting, gpu_slots, gpu_seconds, cpu_seconds):
+    """Which held requests go to HQ this tick, and whether a GPU-preferred one goes GPU-only.
+
+    HQ fills a freed core with whatever waiting task fits, so a deep HQ queue of 1-CPU tasks
+    starves every wider one, and HQ task priorities crash 0.26.2. Keeping HQ's queue short and
+    ordering the rest here gives: interactive work first (model calls and session tools, both
+    short and waited on by a model), then FIFO by submission; a drain releases no batch work so cores
+    accumulate for an aged wide task; a GPU-preferred task is pinned to the GPU while the GPU queue
+    ahead of it would clear sooner than a CPU run takes (earliest finish), else it may take either.
+    candidates: dicts with key, klass ('agent'|'tool'|'work'), submitted_at, gpu_preferred."""
+    order = {"agent": 0, "tool": 1, "work": 2}
+    budget = max(0, cap - hq_waiting)
+    plan = []
+    for c in sorted(candidates, key=lambda c: (order[c["klass"]], c["submitted_at"])):
+        if c["klass"] == "agent":
+            plan.append((c["key"], False))
+            continue
+        if c["klass"] == "work":
+            if draining or budget <= 0:
+                continue
+            budget -= 1
+        gpu_only = False
+        if c.get("gpu_preferred") and gpu_slots:
+            gpu_only = gpu_waiting / gpu_slots * gpu_seconds < cpu_seconds
+            gpu_waiting += 1
+        plan.append((c["key"], gpu_only))
+    return plan
+
+
 class HyperQueue:
     def __init__(self, root):
         self.root = pool_root(root)
@@ -195,6 +252,9 @@ class HyperQueue:
         # and delayed 21 tasks, 5 of them by 1061 s -- paid on every handover of the control plane.
         self.settled = {(name, ino) for name, ino in read(self.root / "settled.json", [])}
         self._saved = len(self.settled)
+        self.release = {**RELEASE_DEFAULTS, **self.config.get("release", {})}
+        self.drain_since = self.cooldown_until = None
+        self.release_state = {}
 
     def call(self, *args):
         result = subprocess.run(self.command + list(args), stdin=subprocess.DEVNULL,
@@ -212,12 +272,65 @@ class HyperQueue:
         save(self.root / "settled.json", sorted(self.settled))
         self._saved = len(self.settled)
 
+    def _release(self, candidates, jobs, aged, gpu_waiting, hq_workers, generation, now):
+        cfg = self.release
+        if not candidates and not aged:
+            self.drain_since = None
+            return []
+        capacity = worker_capacity(hq_workers())
+        if aged and not (self.cooldown_until and now < self.cooldown_until):
+            if self.drain_since is None:
+                self.drain_since = now
+            if now - self.drain_since > cfg["max_drain_seconds"]:
+                self.drain_since, self.cooldown_until = None, now + cfg["max_drain_seconds"]
+        else:
+            self.drain_since = None
+        draining = self.drain_since is not None
+        hq_waiting = sum(1 for j in jobs if j["task_stats"]["waiting"])
+        cap = max(cfg["backlog_min"], int(sum(c[0] for c in capacity) * cfg["backlog_per_cpu"]))
+        gpu_slots = sum(c[2] for c in capacity)
+        plan = release_plan(candidates, hq_waiting=hq_waiting, cap=cap, draining=draining,
+                            gpu_waiting=gpu_waiting, gpu_slots=gpu_slots,
+                            gpu_seconds=cfg["gpu_task_seconds"], cpu_seconds=cfg["cpu_task_seconds"])
+        by_key = {c["key"]: c for c in candidates}
+        submissions = []
+        for key, gpu_only in plan:
+            c = by_key[key]
+            folder, attempt, request = c["folder"], c["attempt"], c["request"]
+            with lock(folder / "request.lock"):
+                current = read(folder / "request.json")
+                if (not current or current["attempt_id"] != request["attempt_id"] or read(folder / "cancel.json")
+                        or read(folder / "backend.json", {}).get("state") == "submitting"):
+                    continue
+                save(folder / "backend.json", dict(state="submitting", generation=generation, observed_at=time.time()))
+            if request["spec"].get("gpu"):
+                spec = request["spec"]
+                if gpu_only:
+                    request = dict(request, spec=dict(spec, gpu=dict(spec["gpu"], mode="required")))
+                path = attempt / "job.toml"
+                pythonpath = os.pathsep.join(filter(None, (str(Path(__file__).resolve().parents[2]), os.environ.get("PYTHONPATH", ""))))
+                path.write_text(gpu_jobfile(request, attempt, c["name"], self.config["executor"], pythonpath))
+                submissions.append((folder, ("job", "submit-file", str(path))))
+            else:
+                submissions.append((folder, c["args"]))
+        self.release_state = dict(held=len(candidates) - len(submissions), released=len(submissions),
+                                  hq_waiting=hq_waiting, backlog_cap=cap, draining=draining, aged=len(aged),
+                                  gpu_slots=gpu_slots, gpu_waiting=gpu_waiting)
+        return submissions
+
     def dispatch(self, info):
         jobs = self.call("job", "list", "--all")
         by_name = {j["name"]: j for j in jobs}
         generation = digest({k: info[k] for k in ("server_uid", "pid", "start_date")})
-        live_hosts = None  # HQ worker hostnames, fetched once per tick and only when needed
-        submissions, forgettable = [], []
+        seen = []  # `hq worker list`, fetched once per tick and only when something needs it
+
+        def hq_workers():
+            if not seen:
+                listed = self.call("worker", "list")
+                seen.append(listed if isinstance(listed, list) else [])
+            return seen[0]
+        now = time.time()
+        submissions, forgettable, candidates, aged, gpu_waiting = [], [], [], [], 0
         for entry in sorted(os.scandir(self.root / "requests"), key=lambda e: e.name):
             folder, key = Path(entry.path), (entry.name, entry.inode())
             if key in self.settled:
@@ -267,9 +380,7 @@ class HyperQueue:
                     continue
                 accepted = read(attempt / "accepted.json")
                 if accepted and not (job and (job["task_stats"]["running"] or job["task_stats"]["waiting"])):
-                    if live_hosts is None:
-                        live_hosts = [w["configuration"]["hostname"] for w in self.call("worker", "list") or []
-                                      if not w.get("ended")]
+                    live_hosts = [w["configuration"]["hostname"] for w in hq_workers() if not w.get("ended")]
                     if allocation_ended(self.root, accepted, live_hosts):
                         save(attempt / "receipt.json", worker_lost_receipt(request, accepted,
                              "WorkerLost: the Slurm allocation ended before a completion receipt"))
@@ -280,6 +391,16 @@ class HyperQueue:
                     state = ("running" if counts["running"] else "queued" if counts["waiting"]
                              else "unknown_external_result")
                     record = dict(state=state, job_id=job["id"], generation=generation, task_stats=counts)
+                    spec = request["spec"]
+                    if state == "queued":
+                        gpu_waiting += bool(spec.get("gpu"))
+                        if (previous.get("state") == "queued" and previous.get("generation") == generation
+                                and now - previous.get("observed_at", now) > self.release["drain_age_seconds"]
+                                and spec["operation_id"] != "agent.call"
+                                and (spec.get("gpu") or {}).get("mode", "preferred") == "preferred"
+                                and any(c[0] >= spec["cpus"] and c[1] >= spec["memory_mb"]
+                                        for c in worker_capacity(hq_workers()))):
+                            aged.append(folder.name)
                     if any(previous.get(k) != v for k, v in record.items()):
                         # Each save is an fsync'd write on Lustre; refreshing observed_at
                         # for 150 live jobs every tick cost more than the whole scan.
@@ -293,7 +414,6 @@ class HyperQueue:
                     continue  # reply may have been lost; reconcile by stable job name
                 if read(folder / "cancel.json"):
                     continue
-                save(folder / "backend.json", dict(state="submitting", generation=generation, observed_at=time.time()))
                 spec = request["spec"]
                 cpu_share, runtime_share = hq_shares(spec)
                 # No --priority: HQ 0.26.2 panics in its scheduling solver (workerload.rs:160, index out of
@@ -309,14 +429,13 @@ class HyperQueue:
                             str(Path(__file__).resolve().parents[2]), os.environ.get("PYTHONPATH", "")))),
                         self.config["executor"], "-m", "ecarsi.warm_pool.worker", "execute",
                         str(self.root), spec["request_id"], request["attempt_id"]]
-                if spec.get("gpu"):
-                    path = attempt / "job.toml"
-                    path.write_text(gpu_jobfile(request, attempt, name, self.config["executor"],
-                        os.pathsep.join(filter(None, (str(Path(__file__).resolve().parents[2]), os.environ.get("PYTHONPATH", ""))))))
-                    submissions.append((folder, ("job", "submit-file", str(path))))
-                else:
-                    submissions.append((folder, tuple(args)))
+                klass = ("agent" if spec["operation_id"] == "agent.call" else
+                         "tool" if ".tool-" in spec["request_id"] else "work")
+                candidates.append(dict(key=folder.name, klass=klass, submitted_at=request["submitted_at"],
+                                       gpu_preferred=(spec.get("gpu") or {}).get("mode") == "preferred",
+                                       folder=folder, attempt=attempt, request=request, name=name, args=tuple(args)))
         self._persist_settled()
+        submissions = self._release(candidates, jobs, aged, gpu_waiting, hq_workers, generation, now)
         if forgettable:
             # The receipt is the record; HQ's copy only makes `job list --all` grow with history.
             try:
@@ -382,7 +501,7 @@ def serve(root, host=None):
                         backend.dispatch(info)
                         save(backend.root / "scheduler.json", dict(pid=os.getpid(), host=socket.gethostname(),
                              backend_pid=info["pid"], observed_at=time.time(), state="running",
-                             dispatch_scan_seconds=time.monotonic() - scanning))
+                             dispatch_scan_seconds=time.monotonic() - scanning, release=backend.release_state))
                     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as exc:
                         save(backend.root / "scheduler.json", dict(pid=os.getpid(), host=socket.gethostname(),
                              observed_at=time.time(), state="reconciling", error=str(exc)))
