@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-from .backend import check_hq, check_runtime, join, serve
+from .backend import check_hq, check_runtime, hq_server, join, serve
 from .state import archive, cancel, digest, file_digest, lock, pool_root, read, retry, save, status, submit, sync_directory
 
 
@@ -52,6 +52,8 @@ def main(argv=None):
     runtime.add_argument("spec", type=Path)
     server = commands.add_parser("scheduler")
     server.add_argument("--host")
+    hq = commands.add_parser("hq-server", help="run the HQ server apart from the scheduler, so scheduler restarts keep workers connected")
+    hq.add_argument("--host")
     worker = commands.add_parser("worker")
     worker.add_argument("--cpus", required=True, help="explicit CPU IDs, e.g. 0,1")
     worker.add_argument("--memory-mb", type=int, required=True)
@@ -101,6 +103,8 @@ def main(argv=None):
         result = configure_runtime(a.root, read(a.spec))
     elif a.command == "scheduler":
         return serve(a.root, a.host)
+    elif a.command == "hq-server":
+        return hq_server(a.root, a.host)
     elif a.command == "worker":
         return join(a.root, [int(v) for v in a.cpus.split(",")], a.memory_mb, a.work_dir,
                     a.allocation_profile, a.time_limit_seconds, a.gpu)

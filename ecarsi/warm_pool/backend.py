@@ -538,6 +538,53 @@ class HyperQueue:
                          generation=generation, observed_at=time.time()))
 
 
+def start_hq_server(backend, host, log):
+    return subprocess.Popen(backend.command + ["server", "start", "--host", host or socket.gethostname(),
+                            "--journal", str(backend.root / "journal"), "--journal-flush-period", "1s"],
+                            stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
+                            preexec_fn=parent_death_signal(os.getpid()))
+
+
+def stop_hq_server(server):
+    if server is not None and server.poll() is None:
+        # `hq server stop` cancels worker computations. Dropping this
+        # connection invokes workers' tested finish-running policy.
+        os.killpg(server.pid, signal.SIGKILL)
+        server.wait()
+
+
+def hq_server(root, host=None):
+    """The HQ server on its own, so a scheduler restart does not take it (and every worker's
+    connection) down: on 2026-09-23 each scheduler restart left the bigmem nodes out of the pool
+    for 20+ minutes, their workers in finish-running until their tasks ended. Holding
+    hq-server.lock is how the scheduler knows to use this server rather than start one."""
+    backend = HyperQueue(root)
+    check_hq(backend.config["hq"])
+    stopping = False
+    def stop(*_):
+        nonlocal stopping
+        stopping = True
+    signal.signal(signal.SIGINT, stop)
+    signal.signal(signal.SIGTERM, stop)
+    with lock(backend.root / "hq-server.lock", blocking=False), (backend.root / "hq-server.log").open("a") as log:
+        server = start_hq_server(backend, host, log)
+        try:
+            while not stopping and server.poll() is None:
+                time.sleep(1)
+        finally:
+            stop_hq_server(server)
+        return 0 if stopping else 1
+
+
+def external_hq_server(root):
+    """True while a separate `hq-server` process holds the server."""
+    try:
+        with lock(root / "hq-server.lock", blocking=False):
+            return False
+    except BlockingIOError:
+        return True
+
+
 def serve(root, host=None):
     backend = HyperQueue(root)
     check_hq(backend.config["hq"])
@@ -551,12 +598,10 @@ def serve(root, host=None):
         server = None
         try:
             with (backend.root / "scheduler.log").open("a") as log:
-                server = subprocess.Popen(backend.command + ["server", "start", "--host", host or socket.gethostname(),
-                         "--journal", str(backend.root / "journal"), "--journal-flush-period", "1s"],
-                         stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
-                         preexec_fn=parent_death_signal(os.getpid()))
+                if not external_hq_server(backend.root):
+                    server = start_hq_server(backend, host, log)   # standalone: the server lives and dies with us
                 while not stopping:
-                    if server.poll() is not None:
+                    if server is not None and server.poll() is not None:
                         raise RuntimeError("HQ server exited; see scheduler.log")
                     try:
                         info = backend.call("server", "info")
@@ -564,17 +609,14 @@ def serve(root, host=None):
                         backend.dispatch(info)
                         save(backend.root / "scheduler.json", dict(pid=os.getpid(), host=socket.gethostname(),
                              backend_pid=info["pid"], observed_at=time.time(), state="running",
+                             hq_server="own" if server else "separate",
                              dispatch_scan_seconds=time.monotonic() - scanning, release=backend.release_state, datasets=backend.activity))
                     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as exc:
                         save(backend.root / "scheduler.json", dict(pid=os.getpid(), host=socket.gethostname(),
                              observed_at=time.time(), state="reconciling", error=str(exc)))
                     time.sleep(.2)  # a new request waits half a tick on average before HQ sees it
         finally:
-            if server is not None and server.poll() is None:
-                # `hq server stop` cancels worker computations. Dropping this
-                # connection invokes workers' tested finish-running policy.
-                os.killpg(server.pid, signal.SIGKILL)
-                server.wait()
+            stop_hq_server(server)
             save(backend.root / "scheduler.json", dict(pid=os.getpid(), host=socket.gethostname(),
                  observed_at=time.time(), state="stopped"))
 

@@ -2,7 +2,9 @@
 # Start/stop the v2 control plane on THIS host. The deployed copy lives in the run directory and
 # exports the paths below; everything is idempotent, logs under $BASE/control-logs, and state lives
 # on shared storage, so run it again on a fresh node after an allocation expires.
-#   control-plane.sh start|stop|restart|status [temporal|scheduler|bridge|coordinators|observatory|keeper ...]
+#   control-plane.sh start|stop|restart|status [temporal|hq|scheduler|bridge|coordinators|observatory|keeper ...]
+#   hq is the HyperQueue server on its own: restarting the scheduler then leaves every worker connected.
+#   Without it running the scheduler starts (and on exit kills) a server of its own, as before.
 #   control-plane.sh report [--sessions HOURS] [--json]     # text status of pool, bridge, workers, datasets
 #   control-plane.sh tokens [--json]                        # per-dataset model turns and tokens (after a batch)
 set -u
@@ -25,6 +27,7 @@ PY=(apptainer exec --cleanenv --bind "$BINDS" --env LC_ALL=C --env LANG=C
 
 # Patterns name this run directory's roots, so two control planes on one host never count or kill each other.
 pattern() { case $1 in temporal) echo "ecarsi.control.temporal --root $CONTROL";; scheduler) echo "ecarsi.warm_pool --root $POOL scheduler";;
+    hq) echo "ecarsi.warm_pool --root $POOL hq-server";;
     bridge) echo "ecarsi.agent serve $BRIDGE";; coordinators) echo "ecarsi.control --service-root $CONTROL .*worker";;
     observatory) echo "ecarsi.serve --registry $BASE/periscope-registry.json";;   # the registry path, not --control-plane: another Periscope may serve the same run directory
     fleet-status) echo "fleet-status.py --service-root $CONTROL";;
@@ -41,6 +44,9 @@ start() {
         --temporal-dir "${TEMPORAL_DIR:?}" --schema-dir "${SCHEMA_DIR:?}" --bind "$HOST_IP" \
         ${TEMPORAL_PORT:+--port $TEMPORAL_PORT} ${DATABASE_PORT:+--database-port $DATABASE_PORT} ${UI_PORT:+--ui-port $UI_PORT} \
         ${TEMPORAL_DYNAMIC_CONFIG:+--dynamic-config $TEMPORAL_DYNAMIC_CONFIG} ;;
+    hq) launch hq-server "${PY[@]}" -m ecarsi.warm_pool --root "$POOL" hq-server --host "$(hostname -s)"
+        # the scheduler looks for this lock once, at start: hold it before a scheduler can look
+        for _ in $(seq 60); do flock -n "$POOL/hq-server.lock" true || return 0; sleep 1; done; echo "warning: hq-server did not start" ;;
     scheduler) launch scheduler "${PY[@]}" -m ecarsi.warm_pool --root "$POOL" scheduler --host "$(hostname -s)" ;;
     bridge) launch bridge "${PY[@]}" -m ecarsi.agent serve "$BRIDGE" ;;
     coordinators) local n; n=$(pids coordinators | wc -l)
@@ -56,10 +62,10 @@ stop() {
   pids "$1" | while read -r p; do kill -TERM "$p" 2>/dev/null; done
   for _ in $(seq 20); do pids "$1" | grep -q . || return 0; sleep 1; done; echo "warning: $1 still running"
 }
-status() { for c in temporal scheduler bridge coordinators observatory fleet-status keeper; do printf '%-13s %s\n' "$c" "$(n=$(pids "$c" | wc -l); [ "$n" -gt 0 ] && echo "running ($n proc)" || echo stopped)"; done; }
+status() { for c in temporal hq scheduler bridge coordinators observatory fleet-status keeper; do printf '%-13s %s\n' "$c" "$(n=$(pids "$c" | wc -l); [ "$n" -gt 0 ] && echo "running ($n proc)" || echo stopped)"; done; }
 
 cmd=${1:-status}; shift || true
-comps=("$@"); [ ${#comps[@]} -eq 0 ] && comps=(temporal scheduler bridge coordinators observatory fleet-status keeper)
+comps=("$@"); [ ${#comps[@]} -eq 0 ] && comps=(temporal hq scheduler bridge coordinators observatory fleet-status keeper)
 case $cmd in
   start) for c in "${comps[@]}"; do start "$c"; done; sleep 2; status ;;
   stop) for c in "${comps[@]}"; do stop "$c"; done; status ;;

@@ -82,3 +82,17 @@ def test_release_knobs_follow_config_edits(tmp_path):
     hq._reload_release(); assert hq.release["backlog_per_cpu"] == 1   # unknown knob: keep what is in force
     config.write_text(json.dumps({"release": {"drain_age_seconds": 60}})); os.utime(config, ns=(2, 2))
     hq._reload_release(); assert hq.release["drain_age_seconds"] == 60 and hq.release["backlog_per_cpu"] == 1 / 3
+
+
+def test_scheduler_uses_a_separate_hq_server_only_while_one_holds_the_lock(tmp_path):
+    from ecarsi.warm_pool.backend import external_hq_server
+    from ecarsi.warm_pool.state import lock
+    assert not external_hq_server(tmp_path)
+    with lock(tmp_path / "hq-server.lock"):
+        import subprocess, sys
+        # another process (the hq-server component) holds it: the scheduler must not start its own
+        probe = subprocess.run([sys.executable, "-c", "import sys; from pathlib import Path; "
+                                "from ecarsi.warm_pool.backend import external_hq_server; "
+                                f"sys.exit(0 if external_hq_server(Path({str(tmp_path)!r})) else 1)"])
+        assert probe.returncode == 0
+    assert not external_hq_server(tmp_path)
