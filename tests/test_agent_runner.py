@@ -93,5 +93,9 @@ def test_runner_performs_routed_turns_and_a_lost_runner_falls_back_to_the_pool(t
         assert not (root / 'runner-queue' / key / (lost['turn_id'] + '.json')).exists()
         events = [read(p) for p in (root / 'model-events').glob('*.json')]
         assert sorted(e['outcome'] for e in events) == ['success', 'worker_lost']
+        # The settled-request cache survives a bridge restart: the saved reply is not re-read.
+        cached = {tuple(row[:2]): row[2] for row in read(root / 'finished.json')}
+        assert cached[(first_turn, (root / 'requests' / first_turn).stat().st_ino)] == 'reply_saved'
+        bridge.serve(root, once=True)  # a fresh process would load the same file; the loop keeps it current
     finally:
         server.shutdown()

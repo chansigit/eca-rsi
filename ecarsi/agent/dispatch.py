@@ -425,7 +425,13 @@ def serve(root, *, once=False, finished=None):
     events = {e.get("pool_request_id") or e.get("turn_id"): e for p in (root / "model-events").glob("*.json") if (e := read(p))}
     # Settled requests are cached by (name, inode): a folder archived and re-created under the
     # same name is new work (Eye turn-0 sat queued for 14 h behind a name-keyed cache, 2026-09-17).
+    # The cache is persisted: rebuilding it read two files in each of 78k folders and stalled every
+    # model reply for ~40 min after each bridge restart (2026-09-23/24). Advisory, like the pool's
+    # settled.json -- a stale entry costs one re-read, a reply can only be published from a result.
     finished, ordering = ({} if finished is None else finished), {}
+    if not finished:
+        finished.update({(name, ino): state for name, ino, state in read(root / "finished.json", [])})
+    persisted = len(finished)
     dispatch_count = len(events)
     served = Counter()
     with lock(root / "service.lock", blocking=False):
@@ -507,6 +513,9 @@ def serve(root, *, once=False, finished=None):
                  models=model_health(events, normalized_models(read(config["catalog"])), active, settings),
                  routing=settings, service=config.get("service") or {},
                  runners={p.stem: read(p) for p in (root / "runners").glob("*.json")} if (root / "runners").is_dir() else {}))
+            if len(finished) != persisted:
+                save(root / "finished.json", [[name, ino, state] for (name, ino), state in finished.items()])
+                persisted = len(finished)
             if once:
                 return
             time.sleep(.5)  # a turn waits half a tick on average before dispatch; the scan itself is ~1 s
