@@ -47,12 +47,16 @@ def test_drain_starts_on_an_aged_task_and_yields_after_its_limit():
     hq.release = dict(RELEASE_DEFAULTS, max_drain_seconds=100)
     hq.drain_since = hq.cooldown_until = None
     tick = lambda now, aged: hq._release([], [], aged, 0, lambda: [], "g", now) or hq.release_state
-    tick(0, ["wide"]); assert hq.release_state["draining"]
-    tick(50, ["wide"]); assert hq.drain_since == 0
-    tick(101, ["wide"]); assert not hq.release_state["draining"] and hq.cooldown_until == 201
-    tick(150, ["wide"]); assert not hq.release_state["draining"]   # yielding
-    tick(202, ["wide"]); assert hq.release_state["draining"]       # drains again
+    fresh, old = [("wide", 0)], [("wide", 3 * 3600)]
+    tick(0, fresh); assert hq.release_state["draining"]
+    tick(50, fresh); assert hq.drain_since == 0
+    tick(101, fresh); assert not hq.release_state["draining"] and hq.cooldown_until == 201
+    tick(150, fresh); assert not hq.release_state["draining"]   # yielding
+    tick(202, fresh); assert hq.release_state["draining"]       # drains again
     tick(203, []); assert hq.drain_since is None
+    # a task waiting 3 h: drains 4x as long, yields a quarter as long
+    tick(1000, old); tick(1350, old); assert hq.release_state["draining"]
+    tick(1401, old); assert not hq.release_state["draining"] and hq.cooldown_until == 1401 + 25
 
 
 def test_backlog_cap_fills_idle_cpus_first(tmp_path):

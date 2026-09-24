@@ -303,11 +303,15 @@ class HyperQueue:
             self.drain_since = None
             return []
         capacity = worker_capacity(hq_workers())
+        # Aging: the longer the oldest stuck task has waited since submission, the longer each drain
+        # lasts and the shorter the release gap between drains (x2 / x0.5 at one hour, x6 / x1/6 at
+        # five), so a task that keeps missing its chance gets more of the pool, not the same slice.
+        boost = 1 + max((wait for _, wait in aged), default=0) / 3600
         if aged and not (self.cooldown_until and now < self.cooldown_until):
             if self.drain_since is None:
                 self.drain_since = now
-            if now - self.drain_since > cfg["max_drain_seconds"]:
-                self.drain_since, self.cooldown_until = None, now + cfg["max_drain_seconds"]
+            if now - self.drain_since > cfg["max_drain_seconds"] * boost:
+                self.drain_since, self.cooldown_until = None, now + cfg["max_drain_seconds"] / boost
         else:
             self.drain_since = None
         draining = self.drain_since is not None
@@ -346,6 +350,7 @@ class HyperQueue:
                 submissions.append((folder, c["args"]))
         self.release_state = dict(held=len(candidates) - len(submissions), released=len(submissions),
                                   hq_waiting=hq_waiting, backlog_cap=cap, draining=draining, aged=len(aged),
+                                  oldest_aged_minutes=round((boost - 1) * 60),
                                   gpu_slots=gpu_slots, gpu_waiting=gpu_waiting)
         return submissions
 
@@ -439,7 +444,7 @@ class HyperQueue:
                                 and (spec.get("gpu") or {}).get("mode", "preferred") == "preferred"
                                 and any(c[0] >= spec["cpus"] and c[1] >= spec["memory_mb"]
                                         for c in worker_capacity(hq_workers()))):
-                            aged.append(folder.name)
+                            aged.append((folder.name, now - request["submitted_at"]))
                     if any(previous.get(k) != v for k, v in record.items()):
                         # Each save is an fsync'd write on Lustre; refreshing observed_at
                         # for 150 live jobs every tick cost more than the whole scan.
