@@ -306,6 +306,9 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
         "temporal_service": service,
         "scheduler": scheduler, "bridge_summary": bridge_summary,
         "worker_live_count": sum(w["reporting"] for w in workers), "workers": workers,
+        "running_datasets": sorted({w.get("dataset_id") or k for k, w in
+                                    (read(root / "fleet-status.json", {}).get("workflows") or {}).items()
+                                    if w.get("kind") == "DatasetWorkflow" and w.get("status") == "RUNNING"}),
         "pool_waiting": sum(t["state"] == "queued" for t in pool_rows),
         "pool_requests": sorted(pool_rows, key=lambda x: x["submitted_at"], reverse=True),
         "bridge_requests": sorted(bridge_rows, key=lambda x: x["submitted_at"], reverse=True),

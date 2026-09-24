@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>RSI v2 · Development observatory</title>
+<title>RSI · Operations</title>
 <style>
   :root { color-scheme: light; --paper:#f8f5ed; --sheet:#fffdf8; --ink:#30342f; --muted:#72766e; --line:#ded9ca; --green:#397b62; --amber:#b27b3f; --red:#a4514e; --aqua:#d9ebe6; }
   * { box-sizing:border-box; }
@@ -206,7 +206,9 @@
 </head>
 <body>
 <main>
-  <header><div class="brand">RSI <small>v2 / development observatory</small></div><div class="meta"><span><i class="live-dot"></i> Read-only</span><span id="updated">Connecting…</span></div></header>
+  <header><div class="brand">RSI <small>operations</small></div><div class="meta"><span><i class="live-dot"></i> Read-only</span><span id="updated">Connecting…</span></div></header>
+  <section class="panel" id="at-work" style="margin-bottom:20px"><div class="panel-head"><div><h2>Datasets at work</h2><div class="sub">A running dataset is not necessarily computing. Per the pool scheduler's last tick: <b>computing</b> has a pool task running, <b>model turn</b> only a model call, <b>queued</b> only waits for a pool slot, and <b>between steps</b> has nothing in the pool at all (a workflow step, a retry wait, or stuck).</div></div><span class="status off" id="at-work-state">Loading</span></div>
+    <div id="at-work-summary" class="metrics" style="grid-template-columns:repeat(5,1fr)"></div><details class="sub" style="margin-top:14px"><summary>By dataset</summary><div id="at-work-list"></div></details></section>
   <section class="panel" style="margin-bottom:20px"><div class="panel-head"><div><h2>Worker timeline</h2><div class="sub">Is every worker working? One fixed-height lane per worker showing how busy it has been over the last hour — height is concurrent tasks, colour is the dataset, red ticks are failures. Click a lane to open its individual tasks. This window is the recent past only; every finished task's duration is in that worker's <code>tasks-&lt;day&gt;.jsonl</code> journal, which is where a post-mortem belongs.</div></div><span class="status off" id="timeline-state">Loading</span></div><div class="timeline-controls"><select id="timeline-view" aria-label="Timeline view"><option value="workers" selected>Workers</option><option value="datasets">Datasets</option></select><span class="timeline-spans" role="group" aria-label="Window"><button type="button" data-span="900">15m</button><button type="button" data-span="3600" class="on">1h</button><button type="button" data-span="14400">4h</button></span><label class="timeline-log-toggle" title="Compress the older part of the window and stretch the last minutes"><input type="checkbox" id="timeline-log"> Log time</label><input id="timeline-dataset" type="search" placeholder="Filter dataset…" aria-label="Filter dataset"><details class="timeline-failures"><summary title="Failures the published records cover: the timeline window, not a fixed day. Older ones are in each worker's tasks-&lt;day&gt;.jsonl journal.">Recent failures <span id="failure-count"></span></summary><ul id="failure-list"></ul></details></div><div class="timeline-legend"><span>One color per dataset</span><span><i class="model-key"></i>Model call</span><span><i class="compute-key"></i>Worker task</span><span><i style="background:transparent;border:2px solid #a4514e"></i>Failed task</span><span>Click a lane to expand its tasks · the wheel only scrolls</span></div><div class="flow-layout" id="flow-layout"><div class="timeline-wrap" id="flow-scroll"><div class="timeline" id="timeline" aria-busy="true"><div class="timeline-skeleton" aria-hidden="true"><div class="timeline-skeleton-row"><i style="width:60%"></i><b style="left:4%;width:22%"></b><b style="left:38%;width:30%"></b></div><div class="timeline-skeleton-row"><i style="width:45%"></i><b style="left:10%;width:35%"></b><b style="left:60%;width:18%"></b></div><div class="timeline-skeleton-row"><i style="width:70%"></i><b style="left:2%;width:12%"></b><b style="left:26%;width:44%"></b></div><div class="timeline-skeleton-row"><i style="width:50%"></i><b style="left:30%;width:26%"></b><b style="left:70%;width:20%"></b></div></div></div></div><aside id="flow-detail" class="flow-detail" aria-label="Selected step details" hidden></aside></div><div id="flow-pages" class="flow-pages"></div><div class="note" id="timeline-note"></div></section>
   <section class="panel" id="compute-pool" style="margin-bottom:20px">
     <div class="panel-head"><div><h2>Compute Warm Pool</h2></div><span id="compute-pool-state" class="status off">Checking</span></div>
@@ -737,6 +739,20 @@ function renderComputePool(data) {
   $('pool-history').innerHTML=departed.length?'<ul>'+departed.sort((a,b)=>(b.last_seen||b.last_activity||0)-(a.last_seen||a.last_activity||0)).map(w=>`<li title="${esc(w.worker_id||'Worker ID not recorded')} · Slurm job ${esc(w.slurm_job_id||'not recorded')}">${esc(w.host)} · ${w.history_only?'Last task '+esc(when(w.last_activity)):w.last_seen?'Last seen '+esc(when(w.last_seen)):'No telemetry'}${w.tasks.length?' · '+w.tasks.length+' unresolved tasks':''}</li>`).join('')+'</ul>':'<p class="sub">None</p>';
 }
 
+function renderAtWork(data) {
+  const act=data.scheduler?.datasets||{}, running=data.running_datasets||[];
+  const kind=c=>c[0]?'computing':c[1]?'model turn':(c[2]||c[3])?'queued':'between steps';
+  const rows=running.map(n=>[n,act[n]||[0,0,0,0]]), groups={computing:[],'model turn':[],queued:[],'between steps':[]};
+  for (const r of rows) groups[kind(r[1])].push(r);
+  const stale=data.scheduler?.observed_at?Date.now()/1000-data.scheduler.observed_at:null;
+  $('at-work-state').textContent=stale!==null&&stale<180?'Live':'Scheduler silent';
+  $('at-work-state').className=`status ${stale!==null&&stale<180?'ok':'off'}`;
+  $('at-work-summary').innerHTML=Object.entries(groups).map(([k,v])=>`<div class="metric"><b>${v.length}</b><span>${k}</span></div>`).join('')+`<div class="metric"><b>${running.length}</b><span>running datasets</span></div>`;
+  const cell=c=>`${c[0]} computing · ${c[1]} model · ${c[2]} queued · ${c[3]} held`;
+  $('at-work-list').innerHTML=Object.entries(groups).filter(([,v])=>v.length).map(([k,v])=>`<p><strong>${esc(k)} (${v.length})</strong></p><ul>`+
+    v.sort((a,b)=>a[0].localeCompare(b[0])).map(([n,c])=>`<li>${esc(n)}${k==='between steps'?'':' — '+cell(c)}</li>`).join('')+'</ul>').join('');
+}
+
 let loadingTimer=null;
 function setLoading(on) {
   clearTimeout(loadingTimer); loadingTimer=null;
@@ -755,6 +771,7 @@ async function refresh() {
     $('updated').textContent = `Updated ${when(d.generated_at)}`;
     $('host').textContent = `${d.host} · isolated v2 state`;
     renderComputePool(d);
+    renderAtWork(d);
     renderFailures(d.recent_failures||[]);
     const dataset=$('timeline-dataset').value.trim(), {since,until}=windowNow();
     const params=new URLSearchParams({since:String(since),until:String(until),dataset,limit:'2000'});

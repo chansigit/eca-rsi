@@ -260,7 +260,7 @@ class HyperQueue:
         self._saved = len(self.settled)
         self.release = {**RELEASE_DEFAULTS, **self.config.get("release", {})}
         self.drain_since = self.cooldown_until = None
-        self.release_state = {}
+        self.release_state, self.activity = {}, {}
 
     def call(self, *args):
         result = subprocess.run(self.command + list(args), stdin=subprocess.DEVNULL,
@@ -343,6 +343,11 @@ class HyperQueue:
             return seen[0]
         now = time.time()
         submissions, forgettable, candidates, aged, gpu_waiting = [], [], [], [], 0
+        # Per dataset: [computing, model turns, queued in HQ, held here] -- what each run is really doing.
+        activity = {}
+        def tally(request, index):
+            dataset = (request["spec"].get("trace") or {}).get("dataset_id") or "Unattributed"
+            activity.setdefault(dataset, [0, 0, 0, 0])[index] += 1
         for entry in sorted(os.scandir(self.root / "requests"), key=lambda e: e.name):
             folder, key = Path(entry.path), (entry.name, entry.inode())
             if key in self.settled:
@@ -403,6 +408,8 @@ class HyperQueue:
                     state = ("running" if counts["running"] else "queued" if counts["waiting"]
                              else "unknown_external_result")
                     record = dict(state=state, job_id=job["id"], generation=generation, task_stats=counts)
+                    if state != "unknown_external_result":
+                        tally(request, 2 if state == "queued" else int(request["spec"]["operation_id"] == "agent.call"))
                     spec = request["spec"]
                     if state == "queued":
                         gpu_waiting += bool(spec.get("gpu"))
@@ -448,6 +455,10 @@ class HyperQueue:
                                        folder=folder, attempt=attempt, request=request, name=name, args=tuple(args)))
         self._persist_settled()
         submissions = self._release(candidates, jobs, aged, gpu_waiting, hq_workers, generation, now)
+        released = {folder.name for folder, _ in submissions}
+        for c in candidates:
+            tally(c["request"], 2 if c["folder"].name in released else 3)
+        self.activity = activity
         if forgettable:
             # The receipt is the record; HQ's copy only makes `job list --all` grow with history.
             try:
@@ -513,7 +524,7 @@ def serve(root, host=None):
                         backend.dispatch(info)
                         save(backend.root / "scheduler.json", dict(pid=os.getpid(), host=socket.gethostname(),
                              backend_pid=info["pid"], observed_at=time.time(), state="running",
-                             dispatch_scan_seconds=time.monotonic() - scanning, release=backend.release_state))
+                             dispatch_scan_seconds=time.monotonic() - scanning, release=backend.release_state, datasets=backend.activity))
                     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as exc:
                         save(backend.root / "scheduler.json", dict(pid=os.getpid(), host=socket.gethostname(),
                              observed_at=time.time(), state="reconciling", error=str(exc)))

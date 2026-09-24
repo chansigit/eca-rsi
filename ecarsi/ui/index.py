@@ -625,7 +625,7 @@ def _gen2_rounds(unit: Path) -> list[dict]:
         row = {"n": record.get("round") or L.round_number(rdir), "dir": rdir, "stats": None, "decision": None,
                "step": None, "reason": stats.get("reason", ""),
                "sankey": (rdir / L.LEDGER / "sankey.json").is_file(),
-               "seconds": (finished - started) if started and finished else None,
+               "seconds": (finished - started) if started and finished else None, "finished": finished,
                "msp_report": (rdir / L.GEN2_CROSS / "report.html").is_file(),
                "zmip_report": (rdir / L.GEN2_ZOOM / "report.html").is_file()}
         if stats:
@@ -701,6 +701,8 @@ def _gen2_unit_state(unit: Path) -> dict:
         events["organize"] = (organized.stat().st_mtime, n_input)
     if released and final_cells is not None:
         events["release"] = ((release / "receipt.json").stat().st_mtime, final_cells)
+    # every finished round, dated, with the cells it worked on: the fleet's productivity curve
+    events["rounds"] = [(r["finished"], r["stats"]["n_in"]) for r in done if r["finished"] and r["stats"].get("n_in")]
     return {"name": unit.name, "dir": unit, "generation": 2, "n_input": n_input,
             "species": manifest.get("species") or "",
             "finished": _when(events["release"][0]) if events["release"] else None,
@@ -1058,6 +1060,7 @@ def dataset_state(root: Path, states: list[dict] | None = None) -> dict:
         cls = "running"
     fin = [s["finished"] for s in states if s.get("finished")]
     events = {k: [s["events"][k] for s in states if s.get("events") and s["events"][k]] for k in ("organize", "release")}
+    events["rounds"] = [e for s in states for e in (s.get("events") or {}).get("rounds") or []]
     updated = state_mtime(root)
     cls, stage = _stalled(cls, stage, updated)
     return {"units": len(states), "released": released, "n_input": sum(n_in) if n_in else None, "events": events,
