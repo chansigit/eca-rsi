@@ -284,12 +284,17 @@ def productivity(tasks: list[dict], cores: dict, now: float) -> list[dict]:
     for t in done:
         costs.setdefault(kind(t), []).append((t["finished_at"] - t["started_at"]) * max(t.get("cpus") or 1, 1))
     standard = {op: sum(v) / len(v) for op, v in costs.items()}   # mean: pool-wide, speed averages to 1
+    # A failure counts only when it is the request's last word: a budget kill that check_pool
+    # retried at twice the budget is a receipt, not a failed task (8 such in 30 min on 2026-09-24).
+    last = {}
+    for t in sorted((t for t in tasks if t.get("finished_at")), key=lambda t: t["finished_at"]):
+        last[t.get("id") or t.get("request_id")] = t
+    final_failures = [t for t in last.values() if t.get("state") == "failed" and t["finished_at"] >= now - MAX_WINDOW]
     out = []
     for host in sorted({t["host"] for t in done if t.get("host")} | set(cores)):
         mine = [t for t in done if t.get("host") == host]
         row = {"host": host, "cores": cores.get(host, 0),
-               "tasks_failed_4h": sum(t.get("state") == "failed" and (t.get("finished_at") or 0) >= now - MAX_WINDOW
-                                      and t.get("host") == host for t in tasks)}
+               "tasks_failed_4h": sum(t.get("host") == host for t in final_failures)}
         for span, name in ((900, "15m"), (MAX_WINDOW, "4h")):
             window = [t for t in mine if t["finished_at"] >= now - span]
             earned = sum(standard[kind(t)] for t in window)

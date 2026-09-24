@@ -283,3 +283,15 @@ def test_productivity_and_timeline_reports_read_the_journals_on_the_command_line
     prod = productivity_rows(tmp_path)
     assert prod[-1]["host"] == "POOL" and prod[-1]["tasks_done_15m"] == 1
     assert "node1" in render_productivity(prod) and "POOL" in render_productivity(prod)
+
+
+def test_a_retried_budget_kill_is_not_a_failed_task_on_the_node_table():
+    import time
+    from ecarsi.ui.control import productivity
+    now = time.time()
+    row = lambda rid, state, t: {"id": rid, "operation": "zoom-in.deg", "state": state, "host": "n1", "cpus": 1,
+                                 "started_at": t - 10, "finished_at": t, "trace": {"dataset_id": "ds"}}
+    tasks = [row("deg-1", "failed", now - 300), row("deg-1", "succeeded", now - 100),   # killed, retried, done
+             row("deg-2", "failed", now - 200)]                                          # failed for good
+    table = {r["host"]: r for r in productivity(tasks, {"n1": 8}, now)}
+    assert table["n1"]["tasks_failed_4h"] == 1 and table["n1"]["tasks_done_4h"] == 1
