@@ -33,8 +33,10 @@ def device_shares(gpu):
     return GPU_SHARES_PER_DEVICE if gpu.get("compute_mode") == "Default" else 1
 
 
-def gpu_resources(devices):
-    """Independent device and VRAM pairs, with shared worker CPU/RAM resources."""
+def gpu_resources(devices, host_mb=0):
+    """Independent device and VRAM pairs, plus one host-memory reserve (`gpuHostMB`) shared by the
+    cards that only the GPU alternatives spend: without it 1-CPU work fills the node's RAM and the card idles
+    while GPU-preferred tasks queue (sh04-07n12, 2026-09-23)."""
     if len(devices) > GPU_SLOT_LIMIT:
         raise ValueError(f"this resource protocol supports at most {GPU_SLOT_LIMIT} GPUs per worker")
     resources = []
@@ -42,6 +44,8 @@ def gpu_resources(devices):
         shares = ",".join(f"{gpu['uuid']}#{share}" for share in range(device_shares(gpu)))
         resources += ["--resource", f"gpuSlot/{slot}=[{shares}]",
                       "--resource", f"gpuMemoryMB/{slot}=sum({int(gpu['memory_mb'] * .9)})"]
+    if host_mb:
+        resources += ["--resource", f"gpuHostMB=sum({host_mb})"]
     return resources
 
 
@@ -104,8 +108,9 @@ def gpu_jobfile(request, attempt, name, executor, pythonpath):
     text += "\n".join(k + " = " + json.dumps(v) for k, v in fields.items())
     text += "\nenv = { PYTHONPATH = " + json.dumps(pythonpath) + ', ECA_POOL_GPU_LAYOUT = "slots-v2" }\n'
     resources = {"cpus": spec["cpus"], "mem": spec["memory_mb"], "runtime/" + request["runtime_digest"]: 1}
-    variants = [{**resources, f"gpuSlot/{slot}": 1, f"gpuMemoryMB/{slot}": spec["gpu"]["memory_mb"]}
-                for slot in range(GPU_SLOT_LIMIT)]
+    gpu_side = {k: v for k, v in resources.items() if k != "mem"}
+    variants = [{**gpu_side, f"gpuSlot/{slot}": 1, f"gpuMemoryMB/{slot}": spec["gpu"]["memory_mb"],
+                 "gpuHostMB": spec["memory_mb"]} for slot in range(GPU_SLOT_LIMIT)]
     if spec["gpu"]["mode"] == "preferred":
         variants.append(resources)
     for variant in variants:
@@ -187,6 +192,7 @@ RELEASE_DEFAULTS = dict(
     backlog_min=16,
     drain_age_seconds=600,    # a feasible task waiting this long in HQ starts a drain
     max_drain_seconds=900,    # a drain that has not placed it by then yields for as long again
+    gpu_host_fraction=0.5,    # share of a GPU worker's RAM only GPU tasks may use (shared by its cards)
     gpu_task_seconds=120,     # typical GPU / CPU run of a GPU-preferred task (2026-09-23: 1.7 vs 3-10 min)
     cpu_task_seconds=360,
 )
@@ -603,7 +609,8 @@ def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit
             subprocess.run(runtime["command"] + ["-c", "import cupy as cp,rapids_singlecell; "
                 "assert cp.cuda.runtime.getDeviceCount()==1; assert int(cp.arange(8).sum())==28"],
                 check=True, timeout=60, env=dict(runtime_environment(runtime), CUDA_VISIBLE_DEVICES=gpu_id))
-        device_resources = gpu_resources(gpus)
+        reserve = int(memory_mb * backend.release["gpu_host_fraction"]) if gpus else 0
+        device_resources = gpu_resources(gpus, reserve)
         save(telemetry_dir / "identity.json", worker_identity)
         os.sched_setaffinity(0, set(cpu_ids))
         log = stack.enter_context((work_dir / "worker.log").open("a"))
@@ -645,7 +652,7 @@ def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit
                     lifetime = ["--time-limit", str(remaining) + "s"]
                 proc = subprocess.Popen(backend.command + ["worker", "start", "--manager", "none",
                         "--cpus", "[" + ",".join(map(str, cpu_ids)) + "]", "--detect-resources", "none",
-                        "--resource", f"mem=sum({memory_mb})",
+                        "--resource", f"mem=sum({memory_mb - reserve})",
                         "--resource", f"runtime/{digest(runtime)}=sum({len(cpu_ids)})",
                         "--on-server-lost", "finish-running", "--overview-interval", "30s",
                         "--work-dir", str(work_dir)] + lifetime + device_resources,

@@ -27,6 +27,8 @@ def test_gpu_alternatives_preserve_budget_and_never_use_inherited_visibility(tmp
     assert len(task["request"]) == GPU_SLOT_LIMIT + 1
     assert gpu["resources"]["gpuSlot/0"] == 1 and gpu["resources"]["gpuMemoryMB/0"] == 8192
     assert not any(key.startswith("gpu") for key in cpu["resources"])
+    # host RAM for the GPU alternative comes from the slot's reserve, not the shared pool
+    assert gpu["resources"]["gpuHostMB"] == 4096 and "mem" not in gpu["resources"] and cpu["resources"]["mem"] == 4096
     assert gpu["time_request"] == cpu["time_request"] == "90s"
     assert str(tmp_path) in task["command"]
     monkeypatch.setattr("ecarsi.warm_pool.allocation.gpu_device", lambda _: {"memory_mb": 24576})
@@ -60,6 +62,7 @@ def test_multigpu_memory_is_per_device_and_telemetry_excludes_unallocated_cards(
     assert f'gpuSlot/0={shares("GPU-a1")}' in args and f'gpuSlot/1={shares("GPU-b2")}' in args
     assert "gpuMemoryMB/0=sum(14745)" in args and "gpuMemoryMB/1=sum(44236)" in args
     assert len(args) == 8
+    assert gpu_resources(devices, 1000)[-2:] == ["--resource", "gpuHostMB=sum(1000)"]
     from types import SimpleNamespace
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=
         "GPU-a1, A, 20, 100, 16384\nGPU-b2, B, 40, 200, 49152\nGPU-c3, C, 90, 100, 16384\n"))
