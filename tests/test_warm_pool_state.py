@@ -395,3 +395,31 @@ def test_a_finished_attempt_is_appended_to_the_worker_task_journal(tmp_path):
 
     # Bookkeeping never decides a task's outcome: a broken record must not raise.
     journal(folder, {"attempt_id": "attempt-1"}, {})
+
+
+def test_a_finished_attempt_keeps_no_empty_files(tmp_path, monkeypatch):
+    """18 inodes per request folder were a third of the pool's quota; the empties go."""
+    import os
+    import subprocess
+    import sys
+    from ecarsi.warm_pool.worker import execute
+    tmp_path.chmod(0o700)
+    (tmp_path / "requests").mkdir()
+    version = subprocess.check_output([sys.executable, "--version"], text=True).strip()
+    save(tmp_path / "config.json", {"runtime": {"command": [sys.executable], "version": version, "files": {}}})
+    monkeypatch.setenv("ECA_POOL_WORKER_ID", "test-worker")
+    spec = dict(request_id="slim", operation_id="test.slim", args=["-c", "open('x','w').write('1')"],
+                cpus=len(os.sched_getaffinity(0)), memory_mb=256, timeout_seconds=30, outputs=["x"])
+    attempt = tmp_path / "requests/slim" / submit(tmp_path, spec)["attempt_id"]
+    assert execute(tmp_path, "slim", attempt.name) == 0
+    assert status(tmp_path, "slim")["state"] == "succeeded"
+    assert sorted(p.name for p in attempt.iterdir()) == ["accepted.json", "outputs", "receipt.json"]
+    assert sorted(p.name for p in (tmp_path / "requests/slim").iterdir()) == [attempt.name, "request.json", "request.lock"]
+    # A second delivery of the same attempt is refused on the receipt, not re-run.
+    assert execute(tmp_path, "slim", attempt.name) == 0
+    failing = dict(spec, request_id="noisy", args=["-c", "import sys; sys.exit(3)"])
+    attempt = tmp_path / "requests/noisy" / submit(tmp_path, failing)["attempt_id"]
+    assert execute(tmp_path, "noisy", attempt.name) == 1
+    assert "status 3" in status(tmp_path, "noisy")["receipt"]["error"]
+    assert (attempt / "stderr.log").stat().st_size > 0  # the traceback stays, the empty stdout goes
+    assert not (attempt / "stdout.log").exists() and not (attempt / "usage.json").exists()

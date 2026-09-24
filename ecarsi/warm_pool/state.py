@@ -51,9 +51,32 @@ def sync_directory(path):
 
 @contextmanager
 def lock(path, blocking=True):
-    with Path(path).open("a") as stream:
+    """flock on the file at path, creating it, or on the directory itself when path is one.
+
+    A directory lock costs no inode, but Lustre only enforces it within a node (measured
+    2026-09-24: a directory flock held on one node was granted again on another, a file
+    flock was not), so it fits only same-node arbitration such as an attempt's execution lock.
+    """
+    path = Path(path)
+    if path.is_dir():
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+            yield _Fd(fd)
+        finally:
+            os.close(fd)
+        return
+    with path.open("a") as stream:
         fcntl.flock(stream, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
         yield stream
+
+
+class _Fd:
+    def __init__(self, fd):
+        self._fd = fd
+
+    def fileno(self):
+        return self._fd
 
 
 def identifier(value):

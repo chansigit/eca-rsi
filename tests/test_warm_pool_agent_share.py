@@ -15,6 +15,16 @@ def test_model_turns_ask_for_a_slice_and_compute_for_whole_cores():
     assert 0 < float(AGENT_CALL_SHARE) < 1
 
 
+class _hold:
+    """A live executor holds the attempt directory's flock; flock conflicts across descriptors."""
+    def __init__(self, attempt):
+        self.fd = os.open(attempt, os.O_RDONLY | os.O_DIRECTORY)
+        fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def close(self):
+        os.close(self.fd)
+
+
 def _accepted_attempt(root, name, operation, cpu, ident=None):
     # Two worker directories: this host ran here before, so its index is seeded from the
     # requests rather than assumed empty (a host joining for the first time skips that).
@@ -34,8 +44,7 @@ def test_live_model_turn_neighbour_is_not_pending_for_another_model_turn(tmp_pat
     cpu = sorted(os.sched_getaffinity(0))[0]
     attempt = _accepted_attempt(tmp_path, "turn-a", "agent.call", cpu)
     # A live executor holds the attempt's execution lock; flock conflicts across descriptors.
-    holder = open(attempt / "execution.lock", "w")
-    fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    holder = _hold(attempt)
     try:
         assert reconcile_local(tmp_path, [cpu], shared=True) == []
         assert reconcile_local(tmp_path, [cpu]) == ["turn-a"]
@@ -46,8 +55,7 @@ def test_live_model_turn_neighbour_is_not_pending_for_another_model_turn(tmp_pat
 def test_live_compute_neighbour_still_blocks_a_model_turn(tmp_path):
     cpu = sorted(os.sched_getaffinity(0))[0]
     attempt = _accepted_attempt(tmp_path, "deg-a", "zoom-in.deg", cpu)
-    holder = open(attempt / "execution.lock", "w")
-    fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    holder = _hold(attempt)
     try:
         assert reconcile_local(tmp_path, [cpu], shared=True) == ["deg-a"]
     finally:
@@ -73,8 +81,7 @@ def test_a_host_joining_for_the_first_time_does_not_walk_every_request(tmp_path)
     (tmp_path / "worker-state" / f"{host}-fresh-job").mkdir(parents=True)
     (tmp_path / "cache" / "active" / host).mkdir(parents=True, exist_ok=True)
 
-    holder = open(attempt / "execution.lock", "w")
-    fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    holder = _hold(attempt)
     try:
         assert reconcile_local(tmp_path, [cpu]) == []  # not seeded from the walk
     finally:

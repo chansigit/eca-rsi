@@ -103,7 +103,7 @@ def gpu_jobfile(request, attempt, name, executor, pythonpath):
     command = [executor, "-m", "ecarsi.warm_pool.worker", "execute",
                str(attempt.parent.parent.parent), spec["request_id"], request["attempt_id"]]
     fields = dict(command=command, cwd=str(attempt), pin="taskset", crash_limit="never-restart",
-                  stdout=str(attempt / "hq-%{INSTANCE_ID}.stdout"), stderr=str(attempt / "hq-%{INSTANCE_ID}.stderr"))
+                  stdout="none", stderr="none")  # the executor keeps its own logs beside the receipt
     text = "name = " + json.dumps(name) + "\n[[task]]\n"
     text += "\n".join(k + " = " + json.dumps(v) for k, v in fields.items())
     text += "\nenv = { PYTHONPATH = " + json.dumps(pythonpath) + ', ECA_POOL_GPU_LAYOUT = "slots-v2" }\n'
@@ -482,8 +482,7 @@ class HyperQueue:
                         "--resource", "runtime/" + request["runtime_digest"] + "=" + runtime_share,
                         "--time-request", str(spec["time_request_seconds"]) + "s",
                         "--pin", "taskset", "--crash-limit", "never-restart", "--directives", "off",
-                        "--cwd", str(attempt), "--stdout", str(attempt / "hq-%{INSTANCE_ID}.stdout"),
-                        "--stderr", str(attempt / "hq-%{INSTANCE_ID}.stderr"),
+                        "--cwd", str(attempt), "--stdout", "none", "--stderr", "none",
                         "--env", "PYTHONPATH=" + os.pathsep.join(filter(None, (
                             str(Path(__file__).resolve().parents[2]), os.environ.get("PYTHONPATH", "")))),
                         self.config["executor"], "-m", "ecarsi.warm_pool.worker", "execute",

@@ -165,7 +165,7 @@ def reconcile_local(root, cpu_ids, gpu_ids=(), shared=False):
             continue
         neighbour = shared and request["spec"]["operation_id"] == "agent.call"
         try:
-            with lock(attempt / "execution.lock", blocking=False):
+            with lock(attempt, blocking=False):
                 if read(attempt / "receipt.json"):
                     marker.unlink(missing_ok=True)
                     continue
@@ -246,7 +246,7 @@ def execute(root, request_id, attempt_id):
         raise ValueError("unknown or superseded attempt")
     attempt = folder / attempt_id
     try:
-        with lock(attempt / "execution.lock", blocking=False) as ownership:
+        with lock(attempt, blocking=False) as ownership:  # the directory: same-node scope suffices
             receipt = read(attempt / "receipt.json")
             if receipt:
                 return 0 if receipt["state"] == "succeeded" else 1
@@ -255,6 +255,12 @@ def execute(root, request_id, attempt_id):
             return run(folder, request, ownership)
     except BlockingIOError:
         return 75  # another transport delivery is executing this same attempt
+    except Exception:
+        # HQ keeps no per-task output any more (two empty files per request were a third
+        # of the pool's inodes); an executor that dies outside run() leaves its trace here.
+        with (attempt / "stderr.log").open("a", encoding="utf-8") as stream:
+            traceback.print_exc(file=stream)
+        raise
 
 
 def journal(folder, request, receipt):
@@ -459,11 +465,16 @@ def run(folder, request, ownership):
             proc.wait()
         for name in ("stdout.log", "stderr.log"):
             path = attempt / name
-            if path.exists():
-                with path.open("rb") as stream:
-                    os.fsync(stream.fileno())
+            if not path.exists():
+                continue
+            if path.stat().st_size == 0:  # 99 % of them: an inode each, nothing in it
+                path.unlink()
+                continue
+            with path.open("rb") as stream:
+                os.fsync(stream.fileno())
         receipt["finished_at"] = time.time()
         save(attempt / "receipt.json", receipt)
+        (attempt / "usage.json").unlink(missing_ok=True)  # the receipt carries the peak; status() reads usage only before a receipt exists
         journal(folder, request, receipt)
 
 
