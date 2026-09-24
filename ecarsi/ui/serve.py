@@ -954,11 +954,17 @@ HISTORY_JS = r"""
     const AGES = [0, 3600, 3 * 3600, 6 * 3600, 12 * 3600, 86400, 2 * 86400, 7 * 86400,
                   14 * 86400, 30 * 86400, 90 * 86400, 365 * 86400];
     const ageLabel = a => a === 0 ? "now" : a < 86400 ? `${Math.round(a / 3600)}h` : `${Math.round(a / 86400)}d`;
-    const days = span / 86400, stepS = days > 14 ? 7 * 86400 : days > 3 ? 86400 : days > 0.6 ? 6 * 3600 : 3600;
+    const days = span / 86400, stepS = days > 14 ? 7 * 86400 : days > 2 ? 86400 : days > 0.6 ? 6 * 3600 : 3600;
     let xt, xl;
     if (logT) { xt = AGES.filter(a => a <= span).map(a => t1 - a); xl = t => ageLabel(Math.round(t1 - t)); }
+    else if (stepS >= 86400) {
+      // One tick per local midnight (every 7th beyond two weeks): a day is the unit the batch is
+      // read in, and epoch multiples of 86400 fall at 17:00 here, not at the day boundary.
+      xt = []; const d = new Date(t0 * 1000); d.setHours(0, 0, 0, 0);
+      for (; d.getTime() / 1000 <= t1; d.setDate(d.getDate() + stepS / 86400)) if (d.getTime() / 1000 >= t0) xt.push(d.getTime() / 1000);
+      xl = t => { const d = new Date(t * 1000); return `${d.getMonth() + 1}/${d.getDate()}`; }; }
     else { xt = []; for (let t = Math.ceil(t0 / stepS) * stepS; t <= t1; t += stepS) xt.push(t);
-           xl = t => { const d = new Date(t * 1000); return stepS >= 86400 ? `${d.getMonth() + 1}/${d.getDate()}` : `${String(d.getHours()).padStart(2, "0")}:00`; }; }
+           xl = t => { const d = new Date(t * 1000); return `${String(d.getHours()).padStart(2, "0")}:00`; }; }
     box.innerHTML = `<svg class="hist-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="cells in and released over time">
       ${yt.map(v => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text class="tick" x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${fmtN(v)}</text>`).join("")}
       ${xt.map(t => `<text class="tick" x="${x(t)}" y="${H - B + 18}" text-anchor="middle">${xl(t)}</text>`).join("")}

@@ -98,7 +98,7 @@ def gpu_jobfile(request, attempt, name, executor, pythonpath):
     spec = request["spec"]
     command = [executor, "-m", "ecarsi.warm_pool.worker", "execute",
                str(attempt.parent.parent.parent), spec["request_id"], request["attempt_id"]]
-    fields = dict(command=command, cwd=str(attempt), pin="taskset", crash_limit="never-restart",
+    fields = dict(command=command, cwd=str(attempt), pin="taskset", crash_limit="never-restart", priority=spec["cpus"],
                   stdout=str(attempt / "hq-%{INSTANCE_ID}.stdout"), stderr=str(attempt / "hq-%{INSTANCE_ID}.stderr"))
     text = "name = " + json.dumps(name) + "\n[[task]]\n"
     text += "\n".join(k + " = " + json.dumps(v) for k, v in fields.items())
@@ -296,7 +296,10 @@ class HyperQueue:
                 save(folder / "backend.json", dict(state="submitting", generation=generation, observed_at=time.time()))
                 spec = request["spec"]
                 cpu_share, runtime_share = hq_shares(spec)
-                args = ["submit", "--name", name, "--cpus", cpu_share,
+                # Larger tasks first: a 4-CPU request otherwise starves behind the stream of 1-CPU
+                # DEGs that takes every core the moment it frees (five cross-sample computes waited
+                # 17 h on 2026-09-23 while newer 1- and 2-CPU tasks kept passing them).
+                args = ["submit", "--name", name, "--cpus", cpu_share, "--priority", str(spec["cpus"]),
                         "--resource", "mem=" + str(spec["memory_mb"]),
                         "--resource", "runtime/" + request["runtime_digest"] + "=" + runtime_share,
                         "--time-request", str(spec["time_request_seconds"]) + "s",
