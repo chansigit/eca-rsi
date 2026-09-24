@@ -17,11 +17,11 @@ from .state import digest, file_digest, identifier, lock, pool_root, read, save,
 
 
 
-NUMBA_INDEX_LIMIT = 1 << 20   # ponytail: bytes; rotate on size, not on the (unknown) key that keeps missing
+NUMBA_INDEX_LIMIT = 1 << 18   # ponytail: bytes (~200 entries, ~7 s); rotate on size, not on the (unknown) key that keeps missing
 
 
 def numba_cache(root):
-    """The numba cache directory for this node and runtime, rotated once any index outgrows 1 MiB.
+    """The numba cache directory for this node and runtime, rotated once any index outgrows 256 KiB (an index costs ~26 s per MiB to read).
 
     scanpy's `get._kernels.agg_sum_csr` misses the cache on every call and appends one more
     entry to its index, and each process reads the whole index first: after 7,019 entries on
