@@ -154,6 +154,14 @@ def reassign_items(entry, quality):
     return items
 
 
+def type_proposal(prop):
+    """The per-cluster type decisions of a stage's proposal. Zoom-in stores separate resolution-1 type
+    and resolution-2 quality decisions under `types` / `quality`; a cross-sample inspection proposal is
+    the type proposal itself, even when the agent added a per-cluster `types` list of its own beside
+    `clusters` (2 of 1,338 proposals on 2026-09-24; one failed the release of pansci-lung_WT_p5of5)."""
+    return prop['types'] if isinstance(prop.get('types'), dict) else prop
+
+
 def review_items(unit, exclusions, decisions):
     """Reuse review records; count actual removed cells, not proposed cluster sizes."""
     from ..review import Item, _loop_items, _annotation_items, _mark_recurring
@@ -185,8 +193,7 @@ def review_items(unit, exclusions, decisions):
                 link='cell_exclusions.csv.gz'))
     for entry in decisions:
         prop = entry['value']
-        # Zoom-in stores separate resolution-1 type and resolution-2 quality decisions.
-        typed = prop.get('types', prop)
+        typed = type_proposal(prop)
         if entry['stage'] == 'per-sample':
             typed = {**typed, 'clusters': [{**c, 'cluster_id': c['cluster'],
                 'coarse_label': c.get('label_coarse', ''), 'fine_label': c.get('label_fine', ''),
