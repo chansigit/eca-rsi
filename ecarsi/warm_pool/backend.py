@@ -386,18 +386,23 @@ class HyperQueue:
                             gpu_seconds=cfg["gpu_task_seconds"], cpu_seconds=cfg["cpu_task_seconds"])
         by_key = {c["key"]: c for c in candidates}
         submissions = []
+        skipped = {}  # why a planned request was not submitted this tick; published for the operator
         for key, gpu_only in plan:
             c = by_key[key]
             folder, attempt, request = c["folder"], c["attempt"], c["request"]
             with lock(folder / "request.lock"):
                 current = read(folder / "request.json")
                 previous = observation(folder, current) if current else {}
-                if (not current or current["attempt_id"] != request["attempt_id"] or read(folder / "cancel.json")
-                        or previous.get("state") == "submitting" and previous.get("generation") == generation):
+                reason = ("gone" if not current else "replaced" if current["attempt_id"] != request["attempt_id"]
+                          else "cancelled" if read(folder / "cancel.json")
+                          else "submitting" if previous.get("state") == "submitting" and previous.get("generation") == generation
+                          else None)
+                if reason:
                     # "submitting" from an earlier server generation is a submission that never reached
                     # HQ (the tick died first: 235 requests stranded that way on 2026-09-24 01:06 when
                     # the HQ server was stopped under a running tick); no job carries its name, or the
                     # reconcile above would have kept it out of the candidates. Submit it again.
+                    skipped[reason] = skipped.get(reason, 0) + 1
                     continue
                 observe(folder, current, dict(state="submitting", generation=generation, observed_at=time.time()))
             if request["spec"].get("gpu"):
@@ -411,6 +416,7 @@ class HyperQueue:
             else:
                 submissions.append((folder, c["args"]))
         self.release_state = dict(held=len(candidates) - len(submissions), released=len(submissions),
+                                  planned=len(plan), skipped=skipped, candidates=len(candidates),
                                   hq_waiting=hq_waiting, backlog_cap=cap, draining=draining, aged=len(aged),
                                   oldest_aged_minutes=round((boost - 1) * 60),
                                   gpu_slots=gpu_slots, gpu_waiting=gpu_waiting)
