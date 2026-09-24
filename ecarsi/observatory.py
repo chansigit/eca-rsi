@@ -331,7 +331,9 @@ def token_rows(bridge_root):
         # persample/<run>-<hex20>, cross-sample/<run>-<hex20>, organize/<run>-organize: one row per dataset run
         run = re.sub(r"^[a-z-]+/", "", trace.get("workflow_id") or "?")
         run = re.sub(r"-(organize|[0-9a-f]{20})$", "", run)
-        row = totals.setdefault(run, dict(run=run, dataset=trace.get("dataset_id") or "?", turns=0, tokens_in=0, tokens_out=0,
+        # Keyed by dataset, not by run: a stage workflow id keeps only 20 characters of the run id, so sibling
+        # datasets (pansci-lung_WT_p1of5..p5of5, Azizi2018_breast_10x / _indrop) share one run prefix (2026-09-24).
+        row = totals.setdefault(trace.get("dataset_id") or run, dict(run=run, dataset=trace.get("dataset_id") or "?", turns=0, tokens_in=0, tokens_out=0,
                                           kinds=collections.Counter(), models=collections.Counter()))
         row["turns"] += 1
         row["tokens_in"] += int(usage.get("tokens_in") or 0)
