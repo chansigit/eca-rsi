@@ -957,6 +957,12 @@ HISTORY_JS = r"""
       tip.style.left = Math.max(window.scrollX + 4, e.pageX - tip.offsetWidth / 2) + "px"; tip.style.top = (e.pageY - tip.offsetHeight - 10) + "px"; });
     svg.querySelector(".hit").addEventListener("mouseleave", () => { tip.style.display = "none"; });
   }
+  // Release speed centred on t: cells released in [t - 1.5 d, t + 1.5 d] per day. Near now the
+  // window has no future half, so it divides by the days it actually covers and says so.
+  function rate3d(t){ const a = t - 1.5 * 86400, b = Math.min(t + 1.5 * 86400, now()), days = (b - a) / 86400;
+    let c = 0; for (const e of ev) if (e.k === "rel" && e.t > a && e.t <= b) c += e.n;
+    return `3-day release speed <b>${Math.round(c / days).toLocaleString()}</b> cells/day` +
+      (days < 2.99 ? ` <span class="m">(only ${days.toFixed(1)} d of window so far)</span>` : ""); }
   // -- drawing --
   const W = 960, H = 200, L = 64, R = 16, T = 14, B = 30;
   let logT = false, showIn = false;
@@ -1016,7 +1022,7 @@ HISTORY_JS = r"""
     hit.addEventListener("mousemove", e => {
       const t = Math.min(Math.max(tAt(e), t0), t1), k = totals(t); cross.setAttribute("x1", x(t)); cross.setAttribute("x2", x(t)); cross.style.display = "";
       tip.style.display = "block"; tip.innerHTML = `<b>${fmtT(t)}</b><br>cells in <b>${k.cin.toLocaleString()}</b> · released <b>${k.rel.toLocaleString()}</b>` +
-        (k.cin ? ` · released / in ${(100 * k.rel / k.cin).toFixed(0)}%` : "") + `<br><span class="m">${k.din} started · ${k.drel} released</span>` +
+        (k.cin ? ` · released / in ${(100 * k.rel / k.cin).toFixed(0)}%` : "") + `<br>${rate3d(t)}<br><span class="m">${k.din} started · ${k.drel} released</span>` +
         (k.last ? `<br><span class="m">last: ${k.last.nm} ${k.last.k === "in" ? "started" : "released"} +${k.last.n.toLocaleString()} at ${fmtT(k.last.t).slice(5)}</span>` : "");
       // tip is a sibling of box, not a descendant, so it has no positioned ancestor to be
       // "relative to box" against -- clientX/Y minus box's rect was landing near the top of
