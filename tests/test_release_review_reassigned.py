@@ -1,6 +1,6 @@
 """Zoom-in reassignments reach needs_review from the quality decisions, and the same move in several rounds recurs."""
 from ecarsi.review import _mark_recurring
-from ecarsi.stages.release import reassign_items
+from ecarsi.stages.release import reassign_items, type_proposal
 
 
 def entry(number):
@@ -23,3 +23,12 @@ def test_reassignments_become_review_items_and_recur_across_rounds_despite_diffe
     _mark_recurring(items)
     assert items[0].extra['recurs_in_rounds'] == [6, 7] and items[1].extra['recurs_in_rounds'] == [6, 7]
     assert reassign_items(entry(1), dict(clusters=[dict(cluster_id='1', decisions=[dict(action='remove')])])) == []
+
+
+def test_an_inspection_proposal_with_its_own_types_list_is_still_the_type_proposal():
+    zoom = dict(types=dict(cluster_key='r1', clusters=[dict(cluster_id='0')]), quality=dict(clusters=[]))
+    assert type_proposal(zoom) == zoom['types']
+    inspect = dict(cluster_key='leiden', clusters=[dict(cluster_id='0', action='keep')],
+                   types=[dict(cluster_id='0', action='keep', coarse_label='AT1')])
+    assert type_proposal(inspect) is inspect
+    assert type_proposal(dict(clusters=[])) == dict(clusters=[])
