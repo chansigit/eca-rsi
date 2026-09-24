@@ -258,9 +258,28 @@ class HyperQueue:
         # and delayed 21 tasks, 5 of them by 1061 s -- paid on every handover of the control plane.
         self.settled = {(name, ino) for name, ino in read(self.root / "settled.json", [])}
         self._saved = len(self.settled)
-        self.release = {**RELEASE_DEFAULTS, **self.config.get("release", {})}
+        self.release, self._release_stamp = dict(RELEASE_DEFAULTS), None
+        self._reload_release()
         self.drain_since = self.cooldown_until = None
         self.release_state, self.activity = {}, {}
+
+    def _reload_release(self):
+        """The release knobs are read from config.json whenever it changes, so an operator tunes a
+        live scheduler by editing the file; a restart would cost every busy worker its connection.
+        A file that does not parse, or names an unknown knob, keeps the values in force."""
+        try:
+            stat = os.stat(self.root / "config.json")  # one per tick, not per folder
+        except OSError:
+            return
+        if (stat.st_mtime_ns, stat.st_size) == self._release_stamp:
+            return
+        self._release_stamp = (stat.st_mtime_ns, stat.st_size)
+        try:
+            wanted = {**RELEASE_DEFAULTS, **read(self.root / "config.json").get("release", {})}
+        except (ValueError, AttributeError):
+            return
+        if set(wanted) == set(RELEASE_DEFAULTS) and all(isinstance(v, (int, float)) for v in wanted.values()):
+            self.release = wanted
 
     def call(self, *args):
         result = subprocess.run(self.command + list(args), stdin=subprocess.DEVNULL,
@@ -331,6 +350,7 @@ class HyperQueue:
         return submissions
 
     def dispatch(self, info):
+        self._reload_release()
         jobs = self.call("job", "list", "--all")
         by_name = {j["name"]: j for j in jobs}
         generation = digest({k: info[k] for k in ("server_uid", "pid", "start_date")})

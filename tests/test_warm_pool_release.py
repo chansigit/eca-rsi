@@ -64,3 +64,17 @@ def test_backlog_cap_fills_idle_cpus_first(tmp_path):
     gone = dict(c("x"), folder=tmp_path, attempt=tmp_path, request={})   # request.json vanished: skipped
     hq._release([gone], jobs, [], 0, lambda: [worker], "g", 0)
     assert hq.release_state["backlog_cap"] == 16 + 38   # short queue + the 38 idle CPUs
+
+
+def test_release_knobs_follow_config_edits(tmp_path):
+    import json, os
+    from ecarsi.warm_pool.backend import HyperQueue, RELEASE_DEFAULTS
+    hq = HyperQueue.__new__(HyperQueue)
+    hq.root, hq.release, hq._release_stamp = tmp_path, dict(RELEASE_DEFAULTS), None
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"release": {"backlog_per_cpu": 1}}))
+    hq._reload_release(); assert hq.release["backlog_per_cpu"] == 1
+    config.write_text(json.dumps({"release": {"backlog_per_cpu": 2, "typo": 1}})); os.utime(config, ns=(1, 1))
+    hq._reload_release(); assert hq.release["backlog_per_cpu"] == 1   # unknown knob: keep what is in force
+    config.write_text(json.dumps({"release": {"drain_age_seconds": 60}})); os.utime(config, ns=(2, 2))
+    hq._reload_release(); assert hq.release["drain_age_seconds"] == 60 and hq.release["backlog_per_cpu"] == 1 / 3
