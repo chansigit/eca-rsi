@@ -3,6 +3,7 @@ import argparse
 import base64
 import json
 import os
+import re
 from pathlib import Path
 
 from ..warm_pool.state import immutable, reference, verified
@@ -108,6 +109,50 @@ def numerical_reasons(bundle, data):
             raise ValueError('Numerical removal lacks a supported reason: ' + cell)
         result[cell] = reasons
     return result
+
+
+REASSIGN_OWN_MARKER_FRACTION = 0.5  # a reassigned population may keep at most half of the lineage's own-marker positivity
+
+
+def own_marker_positivity(data, genes, cells=None):
+    """Mean fraction of (cell, marker) pairs with expression > 0 over this lineage's markers present in the matrix."""
+    import scipy.sparse as sp
+    present = [g for g in genes if g in data.var_names]
+    if not present:
+        return None
+    matrix = data[cells if cells is not None else slice(None), present].X
+    matrix = matrix.toarray() if sp.issparse(matrix) else matrix
+    return float((matrix > 0).mean())
+
+
+def previous_reassignment(obs, lineage, target):
+    """The previous round's zoom-in already moved these cells from this lineage to the target and the global
+    round clustered them back here: a population bouncing between two lineages every round."""
+    columns = sorted(c for c in obs.columns if re.fullmatch(r'r\d+_zmip_reassigned_from', c))
+    if not columns or not len(obs):
+        return None
+    prefix = columns[-1][:-len('zmip_reassigned_from')]
+    moved = obs[columns[-1]].astype(str).eq(lineage)
+    if prefix + 'zmip_ann_coarse' in obs:
+        moved &= obs[prefix + 'zmip_ann_coarse'].astype(str).eq(target)
+    share = float(moved.mean())
+    return dict(round=prefix.rstrip('_'), share=round(share, 3), cells=int(moved.sum())) if share >= 0.5 else None
+
+
+def reassign_problem(n_cells, share, core, target, previous):
+    """Why the host refuses a reassignment. A population that still expresses this lineage's own markers while
+    carrying another lineage's is a doublet, not a misassigned clean population (Lee2020 colorectal: 69 T+macrophage
+    doublets were reassigned Myeloid -> T cell in seven consecutive rounds, 2026-09-24)."""
+    if share is None or not core or share < REASSIGN_OWN_MARKER_FRACTION * core:
+        return ''
+    text = (f'Reassignment to {target!r} rejected: these {n_cells} cells still express this lineage\'s own markers '
+            f'({share:.0%} of cell-marker pairs positive; {core:.0%} across the lineage). A population carrying this '
+            f'lineage\'s markers together with another lineage\'s is a doublet, not a misassignment: submit remove with '
+            f'remove_reason "doublet", or keep it in this lineage with evidence.')
+    if previous:
+        text += (f' It was already reassigned from this lineage to {target!r} in {previous["round"]} '
+                 f'({previous["share"]:.0%} of these cells) and clustered back here.')
+    return text
 
 
 def apply_lineage(evidence, decision, destination):
@@ -488,6 +533,21 @@ def tool(name, state_path, args_path, destination):
             data = data_from(bundle);own, other = lineage_labels(bundle)
             proposal = parse_proposal(args)
             proposal['clusters'] = validate_quality(proposal,data.obs,other)
+            name = bundle['lineage']['name']
+            own_markers = verified(bundle['shared'])['markers'].get(name, []) if bundle.get('shared') else []
+            core = own_marker_positivity(data, own_markers)
+            t, q = data.obs[TYPE_KEY].astype(str), data.obs[QUALITY_KEY].astype(str)
+            for group in proposal['clusters']:
+                for entry in group['decisions']:
+                    if entry['action'] != 'reassign':
+                        continue
+                    ids = data.obs.index[q.eq(group['cluster_id']) & t.isin(entry['type_clusters'])]
+                    previous = previous_reassignment(data.obs.loc[ids], name, entry['reassign_to'])
+                    if previous:
+                        entry['recurring'] = previous
+                    problem = reassign_problem(len(ids), own_marker_positivity(data, own_markers, ids), core, entry['reassign_to'], previous)
+                    if problem:
+                        raise ValueError(problem)
             pre = numerical_reasons(bundle,data)
             _, removed, _, _ = apply_decisions(data.obs,state['types'],proposal,own,other,bundle['lineage']['name'],pre)
             from zmip.annotate import REMOVE_BUDGET
