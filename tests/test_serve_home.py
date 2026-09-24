@@ -197,3 +197,18 @@ def test_a_silent_run_the_plane_calls_running_is_not_failed():
     assert unstale({**stale, "stage": "failed — boom"}, V())["cls"] == "failed"    # a real failure stays
     row = reconcile({"cls": "failed", "stage": "stopped · round 2 · zoom-in"}, {"status": "RUNNING"}, precise=False)
     assert row["cls"] == "running" and row["stage"].startswith("no progress 12h+")
+
+
+def test_sidebar_and_overview_agree_on_a_silent_run_the_plane_calls_running(tmp_path):
+    """The sidebar once read raw states while the overview applied unstale: 7 more failed there."""
+    from ecarsi.ui.serve import _home_html, _navigator_html, unstale
+
+    class Verdicts:
+        def of(self, run_id, unit=""):
+            return {"status": "RUNNING"}
+    row = {"units": 1, "released": 0, "n_input": 10, "final_cells": 10, "rounds": 2, "species": "mouse",
+           "finished": None, "updated": 1.0, "events": {"organize": [], "release": []},
+           "stage": "stopped · round 2 · cross-sample", "cls": "failed", "run_id": "r"}
+    state = lambda p: unstale(dict(row), Verdicts())
+    nav = _navigator_html({"x": tmp_path}, tmp_path / "reg.json", state)
+    assert 'data-cls="running"' in nav and 'data-cls="failed"' not in nav

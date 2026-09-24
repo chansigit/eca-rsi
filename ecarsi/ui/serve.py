@@ -1240,7 +1240,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self._control = control  # observatory.ControlPlane behind /_control/ when serve got --control-plane
         self._verdicts = verdicts  # the control plane's published run statuses, when it publishes them
         self._auth = auth  # "user:pass" -> HTTP basic auth enforced here, on every request; None = open
-        self._state = states.get if states else _dataset_state  # fleet pages: cached states when a warmer runs
+        base = states.get if states else _dataset_state  # fleet pages: cached states when a warmer runs
+        # Every fleet surface (overview, sidebar, history) reads states through here, so they cannot
+        # disagree about which runs are failed: the sidebar once skipped unstale and counted 7 more.
+        self._state = lambda p: unstale(base(p), verdicts)
         self._states = states
         self._items = registry.cached_snapshot if states else registry.snapshot
         super().__init__(
@@ -1404,7 +1407,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if raw == "/_home":
             return self._html(_home_html(self._items(), self._state, self._verdicts))
         if raw == "/_history.json":  # the curve's data; ?at=YYYY-MM-DDTHH:MM (or epoch) reads it at one moment
-            hist = fleet_history({n: (unstale(self._state(p), self._verdicts), p) for n, p in self._items().items()})
+            hist = fleet_history({n: (self._state(p), p) for n, p in self._items().items()})
             at = urllib.parse.parse_qs(self.path.partition("?")[2]).get("at")
             if not at:
                 return self._json(200, hist)
