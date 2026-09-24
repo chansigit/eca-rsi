@@ -23,6 +23,13 @@ def test_model_turns_spend_a_per_node_slot_that_every_worker_declares():
     assert hq_resources(call, request, RELEASE_DEFAULTS)[-2:] == ["--resource", "modelcall=1"]
     assert "modelcall=1" not in hq_resources(deg, request, RELEASE_DEFAULTS)
     assert "modelcall=1" not in hq_resources(call, request, {**RELEASE_DEFAULTS, "model_call_resource": False})
+    assert "modelcall=1" not in hq_resources(call, request, RELEASE_DEFAULTS, capable=False)
+    from ecarsi.warm_pool.backend import model_call_capable
+    def worker(*names, ended=None):
+        return {"ended": ended, "configuration": {"resources": {"resources": [{"name": n} for n in names]}}}
+    assert model_call_capable([worker("cpus", "modelcall"), worker("cpus", ended="gone")])
+    assert not model_call_capable([worker("cpus", "modelcall"), worker("cpus")])
+    assert not model_call_capable([])
     assert hq_resources(deg, request, RELEASE_DEFAULTS)[:2] == ["--cpus", "2"]
     assert model_call_slots(list(range(8)), {}) == 16
     assert model_call_slots(list(range(8)), {"worker": {"model_calls_per_cpu": 0.5}}) == 4

@@ -214,14 +214,23 @@ def model_call_slots(cpu_ids, config):
     return max(1, math.ceil(len(cpu_ids) * per_cpu))
 
 
-def hq_resources(spec, request, release):
+def model_call_capable(workers):
+    """True once every live worker declares the `modelcall` resource. Asking for it earlier
+    would route every model turn to the few workers that have it (2026-09-24 01:35: seven
+    launchers reconnected with old code, the fresh GPU one alone declared it)."""
+    live = [w for w in workers if not w.get("ended")]
+    return bool(live) and all(any(r.get("name") == "modelcall" for r in w["configuration"]["resources"]["resources"])
+                              for w in live)
+
+
+def hq_resources(spec, request, release, capable=True):
     """What a submission asks HQ for. `modelcall` is the per-node cap every worker declares
-    (model_call_slots); `release.model_call_resource` turns the request off online while a pool
-    still has workers that predate it, since HQ would otherwise hold those tasks forever."""
+    (model_call_slots), requested only while all of them do (model_call_capable);
+    `release.model_call_resource` is the online kill switch."""
     cpu_share, runtime_share = hq_shares(spec)
     args = ["--cpus", cpu_share, "--resource", "mem=" + str(spec["memory_mb"]),
             "--resource", "runtime/" + request["runtime_digest"] + "=" + runtime_share]
-    if spec["operation_id"] == "agent.call" and release["model_call_resource"]:
+    if spec["operation_id"] == "agent.call" and release["model_call_resource"] and capable:
         args += ["--resource", "modelcall=1"]
     return args
 
@@ -414,6 +423,12 @@ class HyperQueue:
                 seen.append(listed if isinstance(listed, list) else [])
             return seen[0]
         now = time.time()
+        capable = []  # every live worker declares modelcall? decided once per tick, only when a model turn is submitted
+
+        def model_calls_capped():
+            if not capable:
+                capable.append(model_call_capable(hq_workers()))
+            return capable[0]
         submissions, forgettable, candidates, aged, gpu_waiting = [], [], [], [], 0
         # Per dataset: [computing, model turns, queued in HQ, held here] -- what each run is really doing.
         activity = {}
@@ -508,7 +523,8 @@ class HyperQueue:
                 spec = request["spec"]
                 # No --priority: HQ 0.26.2 panics in its scheduling solver (workerload.rs:160, index out of
                 # bounds) once prioritised tasks meet the GPU jobs' multi-variant requests (2026-09-23 18:44).
-                args = ["submit", "--name", name] + hq_resources(spec, request, self.release) + [
+                args = ["submit", "--name", name] + hq_resources(spec, request, self.release,
+                        spec["operation_id"] != "agent.call" or model_calls_capped()) + [
                         "--time-request", str(spec["time_request_seconds"]) + "s",
                         "--pin", "taskset", "--crash-limit", "never-restart", "--directives", "off",
                         "--cwd", str(attempt), "--stdout", "none", "--stderr", "none",
