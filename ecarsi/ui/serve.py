@@ -926,7 +926,9 @@ HISTORY_JS = r"""
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
   // -- which datasets count: the ones the table filter leaves visible --
   function names(){ if (!table) return Object.keys(D.datasets);
-    return [...table.tBodies[0].rows].filter(r => !r.hidden).map(r => decodeURIComponent(r.querySelector("a").getAttribute("href").slice(1, -1))); }
+    // One table row per analysis unit, so a dataset with six units is six rows; the cards and
+    // the curve count datasets, once each, like the sidebar (17 multi-unit datasets, 2026-09-24).
+    return [...new Set([...table.tBodies[0].rows].filter(r => !r.hidden).map(r => decodeURIComponent(r.querySelector("a").getAttribute("href").slice(1, -1))))]; }
   function events(){ const ev = [];
     for (const nm of names()) { const d = D.datasets[nm]; if (!d) continue;
       for (const [t, n] of d.organize) ev.push({t, n, k: "in", nm});

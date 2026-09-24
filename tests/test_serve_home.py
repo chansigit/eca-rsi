@@ -212,3 +212,11 @@ def test_sidebar_and_overview_agree_on_a_silent_run_the_plane_calls_running(tmp_
     state = lambda p: unstale(dict(row), Verdicts())
     nav = _navigator_html({"x": tmp_path}, tmp_path / "reg.json", state)
     assert 'data-cls="running"' in nav and 'data-cls="failed"' not in nav
+
+
+def test_the_overview_counts_a_multi_unit_dataset_once_like_the_sidebar():
+    """Rows are per unit; the cards and the cells curve are per dataset (the sidebar's count)."""
+    from ecarsi.ui.serve import _home_html
+    html = _home_html({})
+    names_fn = html[html.index("function names()"):html.index("function events()")]
+    assert "new Set(" in names_fn
