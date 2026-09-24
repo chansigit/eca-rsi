@@ -454,7 +454,10 @@ def serve(root, *, once=False, finished=None):
                 if state["state"] == "running" and state.get("execution") in {"pool", "service"}:
                     try:
                         reconcile_pool(root, folder, config, events)
-                    except (ValueError, KeyError, StopIteration) as exc:
+                    except (ValueError, KeyError, StopIteration, FileNotFoundError) as exc:
+                        # FileNotFoundError: the session or plan file is gone, i.e. its run's directory
+                        # was removed (two turns of a run terminated on 09-22 were retried every tick
+                        # for 50 h and kept `dispatch_error` lit). A file that is gone stays gone.
                         with lock(folder / "request.lock"):
                             if read(folder / "result.json") is None:
                                 save(folder / "result.json", dict(state="failed", reason="invalid_attempt_receipt",
