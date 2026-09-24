@@ -1,4 +1,4 @@
-from ecarsi.warm_pool.backend import cpu_capable, gpu_jobfile, release_plan, worker_capacity
+from ecarsi.warm_pool.backend import cpu_capable, gpu_jobfile, release_plan, unpin_due, worker_capacity
 
 
 def c(key, klass="work", t=0, gpu=False):
@@ -143,3 +143,52 @@ def test_a_task_pinned_to_the_gpu_cannot_use_a_drain(tmp_path):
     either.write_text(jobfile('preferred'))  # GPU variants plus the plain CPU variant
     assert not cpu_capable(pinned) and cpu_capable(either)
     assert cpu_capable(tmp_path / 'absent.toml')  # a CPU task has no job file
+
+
+def test_a_pinned_task_is_unpinned_without_a_card_or_after_the_drain_age():
+    assert unpin_due(gpu_slots=0, queued_seconds=1, drain_age_seconds=600)     # the card's allocation ended
+    assert not unpin_due(gpu_slots=1, queued_seconds=599, drain_age_seconds=600)
+    assert unpin_due(gpu_slots=1, queued_seconds=601, drain_age_seconds=600)   # the short-queue bet was wrong
+
+
+def test_an_unpinned_task_is_not_pinned_again():
+    cands = [dict(key="g", klass="work", submitted_at=1, gpu_preferred=True, unpinned=True),
+             dict(key="h", klass="work", submitted_at=2, gpu_preferred=True)]
+    plan = release_plan(cands, hq_waiting=0, cap=16, draining=False,
+                        gpu_waiting=0, gpu_slots=1, gpu_seconds=120, cpu_seconds=360)
+    assert plan == [("g", False), ("h", True)]  # an idle card still pins a fresh task, never the unpinned one
+
+
+def test_a_pinned_task_is_resubmitted_with_the_cpu_variant_once_no_card_is_live(tmp_path, monkeypatch):
+    import time
+    from ecarsi.warm_pool.backend import HyperQueue, observe
+    from ecarsi.warm_pool.state import observation, read, save
+    (tmp_path / "requests").mkdir()
+    save(tmp_path / "config.json", dict(hq="/bin/false", executor="/usr/bin/python3", runtime={}))
+    spec = dict(request_id="r", operation_id="zoom-in.compute", cpus=2, memory_mb=12288, time_request_seconds=600,
+                gpu=dict(memory_mb=4096, mode="preferred"), inputs=[])
+    request = dict(spec=spec, attempt_id="a", runtime_digest="d", digest="x", submitted_at=1.0)
+    folder, attempt = tmp_path / "requests" / "r", tmp_path / "requests" / "r" / "a"
+    attempt.mkdir(parents=True)
+    pinned = dict(request, spec=dict(spec, gpu=dict(spec["gpu"], mode="required")))  # what a gpu_only release wrote
+    (attempt / "job.toml").write_text(gpu_jobfile(pinned, attempt, "rsi.r.a", "/usr/bin/python3", ""))
+    assert not cpu_capable(attempt / "job.toml")
+    save(folder / "request.json", request)
+    observe(folder, request, dict(state="queued", job_id=1, generation="g", observed_at=time.time() - 30))
+    calls = []
+
+    def call(self, *args):
+        calls.append(args)
+        if args[:2] == ("job", "list"):
+            return [dict(id=1, name="rsi.r.a", task_stats=dict(waiting=1, running=0, canceled=0, failed=0, finished=0, aborted=0))]
+        if args[:2] == ("worker", "list"):
+            return []  # the card's allocation ended; nothing else is connected either
+        if args[:2] == ("job", "submit-file"):
+            return dict(id=2)
+        return None
+    monkeypatch.setattr(HyperQueue, "call", call)
+    HyperQueue(tmp_path).dispatch(dict(server_uid="s", pid=1, start_date="t"))
+    assert ("job", "cancel", "1") in calls
+    assert cpu_capable(attempt / "job.toml")  # resubmitted with the plain CPU variant beside the GPU ones
+    record = observation(folder, read(folder / "request.json"))
+    assert record["state"] == "queued" and record["job_id"] == 2

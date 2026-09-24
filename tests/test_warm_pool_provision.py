@@ -102,7 +102,10 @@ def test_remote_command_preserves_paths_and_rejects_shell_hostname(tmp_path, mon
     tmp_path.chmod(0o700)
     save(tmp_path / "config.json", dict(runtime={"command": ["python"]}))
     calls = []
-    monkeypatch.setattr(provision.subprocess, "run", lambda command, **_: calls.append(command))
+    def run(command, **_):
+        calls.append(command)
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(provision.subprocess, "run", run)
     provision.add_worker(tmp_path, "node1", host_python="/shared/a b/python", job_id="123", gpu=False)
     command = shlex.split(calls[0][-1])
     assert "/shared/a b/python" in command and "--no-gpu" in command and command[command.index("--job-id") + 1] == "123"

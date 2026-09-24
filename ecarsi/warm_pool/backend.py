@@ -131,6 +131,14 @@ def cpu_capable(jobfile):
     return any(line.startswith("resources") and "gpuSlot" not in line for line in text.splitlines())
 
 
+def unpin_due(gpu_slots, queued_seconds, drain_age_seconds):
+    """A task pinned to the card goes back to any core once no card is live, or once the pin has
+    outwaited the drain age: the pin was a bet on a short GPU queue, and its job file's GPU-only
+    variants are ones HQ can never place without a card (sh04-07n12's day ended 2026-09-24 06:02
+    with three pinned tasks queued an hour behind its full cores)."""
+    return not gpu_slots or queued_seconds > drain_age_seconds
+
+
 def job_memory():
     """(used, limit) bytes of this Slurm job's memory cgroup: on a shared node the host's
     /proc/meminfo is mostly other people. Used excludes reclaimable file cache. None off Slurm."""
@@ -305,7 +313,7 @@ def release_plan(candidates, *, hq_waiting, cap, draining, gpu_waiting, gpu_slot
                 continue
             budget -= 1
         gpu_only = False
-        if c.get("gpu_preferred") and gpu_slots:
+        if c.get("gpu_preferred") and gpu_slots and not c.get("unpinned"):
             gpu_only = gpu_waiting / gpu_slots * gpu_seconds < cpu_seconds
             gpu_waiting += 1
         plan.append((c["key"], gpu_only))
@@ -516,6 +524,18 @@ class HyperQueue:
                         continue
                 if job:
                     counts = job["task_stats"]
+                    spec = request["spec"]
+                    if (counts["waiting"] and not counts["running"]
+                            and (spec.get("gpu") or {}).get("mode", "preferred") == "preferred"
+                            and not cpu_capable(attempt / "job.toml")
+                            and unpin_due(sum(c[2] for c in worker_capacity(hq_workers())),
+                                          now - previous.get("observed_at", now), self.release["drain_age_seconds"])):
+                        self.call("job", "cancel", str(job["id"]))
+                        job = None  # a candidate again below, released with the CPU variant in its job file
+                    elif counts.get("canceled") and not accepted and not (counts["running"] or counts["waiting"]):
+                        job = None  # cancelled before it started (an unpin, or `hq job cancel` by hand): nothing ran
+                if job:
+                    counts = job["task_stats"]
                     state = ("running" if counts["running"] else "queued" if counts["waiting"]
                              else "unknown_external_result")
                     record = dict(state=state, job_id=job["id"], generation=generation, task_stats=counts)
@@ -564,6 +584,7 @@ class HyperQueue:
                          "tool" if ".tool-" in spec["request_id"] else "work")
                 candidates.append(dict(key=folder.name, klass=klass, submitted_at=request["submitted_at"],
                                        gpu_preferred=(spec.get("gpu") or {}).get("mode") == "preferred",
+                                       unpinned=bool(spec.get("gpu")) and not cpu_capable(attempt / "job.toml"),
                                        folder=folder, attempt=attempt, request=request, name=name, args=tuple(args)))
         if len(present) < self._present:  # folders were pruned: forget them, or settled.json only grows
             self.settled = {key for key in self.settled if key[0] in present}

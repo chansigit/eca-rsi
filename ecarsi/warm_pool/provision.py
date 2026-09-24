@@ -84,7 +84,12 @@ def add_worker(root, host=None, *, host_python=None, job_id=None, cpu_ids=None, 
             command += ["--gpu" if gpu else "--no-gpu"]
         for path in binds or []:
             command += ["--bind", path]
-        subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host, shlex.join(command)], check=True)
+        result = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host, shlex.join(command)])
+        if result.returncode:
+            # The remote command printed its own error. A local traceback on top of it is what the
+            # keeper's three-line tail kept, and it hid five "worker is still starting" waits
+            # behind a bare CalledProcessError (sh04-01n15, 2026-09-24 01:54-02:23).
+            raise SystemExit(result.returncode)
         return None
 
     profile = inventory(2**20)
