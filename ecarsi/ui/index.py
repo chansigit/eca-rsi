@@ -956,14 +956,30 @@ def _when(ts: float | None) -> str:
     return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)) if ts else ""
 
 
-def collection_of(path: Path) -> str:
-    """Collection for eca-pp fleet trees or direct study/standardize layouts."""
-    parts = Path(path).parts
+def _tree_collection(path: Path) -> str:
+    """The collection a path inside a fleet tree names: `<coll>/eca-pp/<dataset>/...`, or the
+    direct study layout `<coll>/<study>/{standardize,rsi}`."""
+    parts = path.parts
     if "eca-pp" in parts[1:]:
         return parts[parts.index("eca-pp") - 1]
-    if path.name == "rsi" and (path.parent / "standardize" / "result.json").is_file():
+    if path.name in ("rsi", "standardize") and (path.parent / "standardize" / "result.json").is_file():
         return path.parent.parent.name
     return ""
+
+
+def collection_of(path: Path) -> str:
+    """Collection for eca-pp fleet trees or direct study/standardize layouts. A run kept outside
+    those trees -- a control-plane run directory -- was organized from an input that is in one,
+    and its spec records that input (2026-09-24: Tabula Sapiens and chondroatlas plane runs sat
+    under "other" beside the same studies' Oak rows, and every new plane run would have too)."""
+    path = Path(path)
+    if coll := _tree_collection(path):
+        return coll
+    try:
+        root = json.loads((path / L.GEN2_SPEC).read_text()).get("input_root")
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return _tree_collection(Path(root)) if isinstance(root, str) else ""
 
 
 

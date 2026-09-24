@@ -149,6 +149,27 @@ def test_a_run_outside_the_fleet_tree_joins_the_collection_its_name_carries(tmp_
                                         'somethingelse-42': ''}
 
 
+def test_a_run_outside_the_fleet_tree_joins_the_collection_of_its_input(tmp_path):
+    """A plane run's spec records the input it was organized from; that input's tree names
+    the collection, whatever the run is called -- so the plane's own bare names (Ear,
+    07_Swahnetal) do not land under "other"."""
+    oak = tmp_path / 'oak'
+    save(oak / 'chondroatlas' / '08_Yan' / 'standardize' / 'result.json', {})
+    (oak / 'tabula-sapiens-clean' / 'eca-pp' / 'Ear' / 'standardize').mkdir(parents=True)
+    plane = tmp_path / 'plane'
+    save(plane / '08_Yanetal' / 'spec.json', {'input_root': str(oak / 'chondroatlas' / '08_Yan' / 'standardize')})
+    save(plane / 'Ear' / 'spec.json', {'input_root': str(oak / 'tabula-sapiens-clean' / 'eca-pp' / 'Ear' / 'standardize')})
+    save(plane / 'loose' / 'spec.json', {'input_root': str(tmp_path / 'elsewhere' / 'standardize')})
+    save(plane / 'nospec' / 'publication.json', {})
+    (plane / 'broken').mkdir()
+    (plane / 'broken' / 'spec.json').write_text('[')
+    assert index.collection_of(plane / '08_Yanetal') == 'chondroatlas'
+    assert index.collection_of(plane / 'Ear') == 'tabula-sapiens-clean'
+    assert index.collection_of(oak / 'chondroatlas' / '08_Yan' / 'standardize') == 'chondroatlas'
+    assert index.collection_of(plane / 'loose') == '' and index.collection_of(plane / 'nospec') == ''
+    assert index.collection_of(plane / 'broken') == ''
+
+
 def test_publish_copies_the_sample_reports_into_the_unit_and_the_page_links_them(tmp_path):
     """The pool request that produced a sample is a replay cache; the report a person
     reads belongs in the unit directory, and the unit page lists it."""
