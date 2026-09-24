@@ -154,8 +154,20 @@ class Registry:
     def snapshot(self) -> dict[str, Path]:
         with self._lock:
             self._load_if_changed()
+            published = self._published()
+            # A completed run is a result: write it into the file, so it stays on the page when the
+            # plane stops publishing (the 2026-09-23 outage emptied the fleet table of them).
+            keep = getattr(getattr(self._published, "__self__", None), "completed", {})
+            known = set(self._file.values())
+            new = {k: v for k, v in keep.items() if k not in self._file and v not in known}
+            if new:
+                try:
+                    self.write_file(self.path, {**self._file, **new})
+                    self._file, self._stamp = {**self._file, **new}, None
+                except OSError as exc:
+                    sys.stderr.write(f"[serve] registry {self.path}: could not keep completed runs: {exc}\n")
             return {
-                **self._published(),
+                **published,
                 **self._file,
                 **self._extra,
             }  # this process's own dirs win on a name clash
@@ -426,10 +438,11 @@ class ControlVerdicts:
     and a missing one simply leaves the disk-derived row alone."""
 
     FRESH = 120.0     # a publisher that has not written for this long is not speaking for the fleet
-    RECENT = 86400.0  # a closed run stays on the page this long, unless registered or superseded
+    RECENT = 86400.0  # a terminated run stays on the page this long; completed and failed ones stay
 
     def __init__(self, path: Path | None):
         self._path, self._mtime, self._data = path, None, {}
+        self.completed: dict[str, Path] = {}   # the completed ones among the last runs(), for the registry to keep
 
     def _load(self) -> None:
         if self._path is None:
@@ -484,7 +497,7 @@ class ControlVerdicts:
             key = r.get("dataset_id")
             if key and r.get("started", 0) > newest.get(key, 0):
                 newest[key] = r["started"]
-        out = {}
+        out, self.completed = {}, {}
         for r in datasets:
             root = r.get("output_root")
             if not root or not Path(root).is_dir():
@@ -493,12 +506,15 @@ class ControlVerdicts:
                 if r.get("started", 0) < newest.get(r.get("dataset_id"), 0):
                     continue    # superseded: the dataset was started again
                 # A failure never quietly leaves the table (owner, 2026-09-23: "失败了就是失败了,
-                # 不要隐藏问题"): it stays until a resubmission supersedes it. Completed and
-                # terminated runs still age off after a day -- the released ones are registered
-                # and the killed ones were meant to go.
-                if r.get("status") != "FAILED" and time.time() - (r.get("closed") or 0) > self.RECENT:
+                # 不要隐藏问题"): it stays until a resubmission supersedes it. Nor does a completed
+                # run: nobody registers the plane's releases, so aging them off made the Completed
+                # count fall by one each time a release turned a day old (2026-09-23, 314 -> 313).
+                # Only terminated runs, which were meant to go, age off after a day.
+                if r.get("status") not in ("FAILED", "COMPLETED") and time.time() - (r.get("closed") or 0) > self.RECENT:
                     continue
             out[Path(root).name] = Path(root)
+            if r.get("status") == "COMPLETED":
+                self.completed[Path(root).name] = Path(root)
         return out
 
 

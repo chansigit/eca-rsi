@@ -233,9 +233,10 @@ def test_a_run_the_control_plane_publishes_is_a_row_without_being_registered(tmp
     merges those runs under the file and the command line.
 
     But "everything the plane ever owned" is not the fleet: the first cut of this put 31 dead runs
-    back on the page in one refresh. A run is a row while it runs and for a day after it finishes,
-    unless a later run of the same dataset has superseded it; a failure stays until it is superseded,
-    however old (the owner: a failed run must never quietly leave the table); a registered name keeps
+    back on the page in one refresh. A run is a row while it runs, unless a later run of the same
+    dataset has superseded it; a failure or a completion stays until it is superseded, however old
+    (the owner: a failed run must never quietly leave the table, and a completed one is the result);
+    a terminated run ages off after a day; a registered name keeps
     its own path; a run whose directory is gone, and a publisher that has gone quiet, contribute nothing."""
     import json
     import time
@@ -243,7 +244,7 @@ def test_a_run_the_control_plane_publishes_is_a_row_without_being_registered(tmp
 
     now = time.time()
     runs = tmp_path / "runs"
-    for name in ("duodenum-c", "duodenum-b", "duodenum", "adrenal", "blood", "spleen", "kim2020"):
+    for name in ("duodenum-c", "duodenum-b", "duodenum", "adrenal", "blood", "spleen", "liver", "kim2020"):
         (runs / name).mkdir(parents=True)
     registered_dir = tmp_path / "elsewhere" / "kim2020"
     registered_dir.mkdir(parents=True)
@@ -257,7 +258,8 @@ def test_a_run_the_control_plane_publishes_is_a_row_without_being_registered(tmp
         "dataset/duodenum":   wf("duodenum", "FAILED", now - 90000, now - 86000, "Duodenum"),  # superseded and stale
         "dataset/adrenal":    wf("adrenal", "FAILED", now - 7200, now - 1800),                  # failed an hour ago: a row
         "dataset/blood":      wf("blood", "FAILED", now - 5 * 86400, now - 4 * 86400),          # failed four days ago, never resubmitted: still a row
-        "dataset/spleen":     wf("spleen", "COMPLETED", now - 5 * 86400, now - 4 * 86400),      # finished four days ago: history
+        "dataset/spleen":     wf("spleen", "COMPLETED", now - 5 * 86400, now - 4 * 86400),      # finished four days ago: still a row
+        "dataset/liver":      wf("liver", "TERMINATED", now - 5 * 86400, now - 4 * 86400),      # killed four days ago: gone
         "dataset/kim2020":    wf("kim2020", "RUNNING", now - 60),                               # registered under another path
         "dataset/gone":       {**wf("gone", "RUNNING", now - 60), "output_root": str(runs / "gone")},  # no directory
         "dataset/duodenum-c/unit-0": {"kind": "AnalysisUnitWorkflow", "status": "RUNNING",
@@ -265,7 +267,7 @@ def test_a_run_the_control_plane_publishes_is_a_row_without_being_registered(tmp
     }}))
     verdicts = ControlVerdicts(status)
     assert verdicts.runs() == {"duodenum-c": runs / "duodenum-c", "adrenal": runs / "adrenal",
-                               "blood": runs / "blood", "kim2020": runs / "kim2020"}
+                               "blood": runs / "blood", "spleen": runs / "spleen", "kim2020": runs / "kim2020"}
 
     reg_file = tmp_path / "registry.json"
     reg_file.write_text(json.dumps({"kim2020": str(registered_dir)}))
@@ -273,9 +275,10 @@ def test_a_run_the_control_plane_publishes_is_a_row_without_being_registered(tmp
     items = registry.snapshot()
     assert items["duodenum-c"] == runs / "duodenum-c"     # on the page, nobody registered it
     assert items["kim2020"] == registered_dir             # the registry's own path wins
-    assert set(items) == {"duodenum-c", "adrenal", "blood", "kim2020"}
+    assert set(items) == {"duodenum-c", "adrenal", "blood", "spleen", "kim2020"}
+    assert json.loads(reg_file.read_text())["spleen"] == str(runs / "spleen")   # a completed run is kept in the file
 
-    # A publisher that has gone quiet stops adding rows; the file's rows remain.
+    # A publisher that has gone quiet stops adding rows; the file's rows remain, results included.
     status.write_text(json.dumps({"generated_at": 0.0, "workflows": {}}))
     verdicts._mtime = None
-    assert set(registry.snapshot()) == {"kim2020"}
+    assert set(registry.snapshot()) == {"kim2020", "spleen"}
