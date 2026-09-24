@@ -219,7 +219,6 @@
     <details class="sub" style="margin:18px 0 0"><summary>30s samples · 10s refresh · Measurement details</summary><p>Brown ticks mark the 5-minute average. CPU covers assigned cores. RAM is our Slurm job's memory cgroup (Job RAM; a worker started before 2026-09-23 still reports the whole shared host, Host RAM); visible GPUs cover the host. Worker budgets may be smaller than Slurm allocations. Registered GPUs can receive GPU tasks. In-use counts are task grants; utilization is sampled hardware activity. Recent telemetry does not confirm scheduler membership.</p></details>
     <div class="pool-history"><strong>History</strong><div id="pool-history"></div></div>
   </section>
-  <details open class="panel" style="margin-bottom:20px"><summary style="cursor:pointer;font-weight:650">Worker resource history</summary><p class="sub">CPU, RAM and GPU measurements, separate from task placement. Uses the selected timeline window. CPU covers allocated cores; RAM is the Slurm job's own where reported, else host-wide; accessible GPUs are host-wide.</p><div class="timeline-wrap"><div id="resource-history" class="timeline"></div></div></details>
   <footer><span id="host">RSI v2</span><span>Refreshes every 10 seconds · read-only · windows beyond the index trigger one full scan</span></footer>
 </main>
 <div id="timeline-popover" role="tooltip" hidden><strong id="timeline-popover-title"></strong><b id="timeline-popover-step" hidden></b><span id="timeline-popover-body"></span></div>
@@ -385,7 +384,7 @@ window.addEventListener('resize',()=>{ clearTimeout(flowResizeTimer); flowResize
 // which fought the vertical scroll on the same gesture over the same surface (2026-09-21).
 function renderWindow() {
   if (!fullTimeline) return;
-  renderTimeline(fullTimeline); renderResourceHistory(fullTimeline);
+  renderTimeline(fullTimeline);
 }
 function idleNote(data) {
   const last=Math.max(0,...(data.tasks||[]).filter(t=>t.finished_at).map(t=>t.finished_at));
@@ -674,39 +673,6 @@ function timelineAxis(from,to,label="Worker / service") {
   } else ticks=[0,.25,.5,.75,1].map(f=>`<span class="timeline-tick" style="left:${f*100}%">${esc(clock(from+f*(to-from)))}</span>`).join('');
   return `<div class="timeline-axis"><span>${esc(label)}</span><div class="timeline-scale">${ticks}</div></div>`;
 }
-function renderResourceHistory(data) {
-  const span=data.until-data.since, pos=timeScale(data.since,data.until);
-  let chart=timelineAxis(data.since,data.until);
-  const resourceGroups=new Map();
-  for (const row of data.resources||[]) { const key=row.worker_id||row.host; if (!resourceGroups.has(key)) resourceGroups.set(key,[]); resourceGroups.get(key).push(row); }
-  const resourceRows=new Map();
-  for (const [worker,samples] of resourceGroups) for (const [name,field,color] of [
-    ['CPU','cpu_percent','#558d78'],['RAM','memory_percent','#ad8651'],
-    ['GPU','gpu_percent','#7b719c'],['GPU memory','gpu_memory_percent','#a76f83']]) {
-    const points=samples.filter(r=>r[field]!=null).map(r=>({x:pos(r.observed_at),y:r[field],t:r.observed_at,row:r}));
-    if (!points.length) continue;
-    const segments=[];
-    for (const point of points) {
-      if (!segments.length || point.t-segments.at(-1).at(-1).t>Math.max(90,span/200)) segments.push([]);
-      segments.at(-1).push(point);
-    }
-    const lines=segments.filter(part=>part.length>1).map(part=>`<polyline points="${part.map(p=>`${p.x},${100-p.y}`).join(' ')}" stroke="${color}" stroke-width="3" vector-effect="non-scaling-stroke" fill="none"/>`).join('');
-    const stride=Math.max(1,Math.ceil(points.length/40));
-    const hitPoints=points.filter((_,index)=>index%stride===0);
-    hitPoints[hitPoints.length-1]=points.at(-1);
-    const dots=hitPoints.map(p=>{
-      const extra=field==='cpu_percent'&&p.row.cpu_cores_allocated>0?`\n${p.row.cpu_cores_used.toFixed(1)} / ${p.row.cpu_cores_allocated} allocated cores`:
-        field==='memory_percent'&&p.row.memory_total_gb>0?`\n${p.row.memory_used_gb.toFixed(1)} / ${p.row.memory_total_gb.toFixed(1)} GiB host RAM`:
-        field==='gpu_memory_percent'&&p.row.gpu_memory_total_gb>0?`\n${p.row.gpu_memory_used_gb.toFixed(1)} / ${p.row.gpu_memory_total_gb.toFixed(1)} GiB GPU memory`:'';
-      const tip=`${p.y.toFixed(1)}%${extra}\nTime: ${when(p.t)}\nMean of ${p.row.samples} sample(s)`;
-      return `<rect x="${Math.max(0,p.x-.5)}" y="0" width="1" height="100" fill="transparent" pointer-events="all" tabindex="0" data-tip-title="${esc(worker)} · ${esc(name)}" data-tip-body="${esc(tip)}"></rect><rect x="${p.x-.22}" y="${100-p.y-4}" width=".44" height="8" fill="${color}" pointer-events="none"></rect>`;
-    }).join('');
-    resourceRows.set(worker,(resourceRows.get(worker)||'')+`<div class="timeline-row"><div class="timeline-label timeline-resource" tabindex="0" data-tip-title="Resource lane" data-tip-body="${esc(worker)} · ${esc(name)}">${esc(worker)} · ${esc(name)}</div><div class="timeline-track"><svg class="timeline-spark" viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="${esc(worker)} ${esc(name)} usage">${lines}${dots}</svg></div></div>`);
-  }
-  for (const rows of resourceRows.values()) chart+=rows;
-  $('resource-history').innerHTML=resourceRows.size?chart:'<div class="empty">No resource samples in this window</div>';
-}
-
 let refreshSeq=0, timelineSignature='';
 function poolMeter(label, value, mean, detail='') {
   const valid=Number.isFinite(value), averaged=Number.isFinite(mean);

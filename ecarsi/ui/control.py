@@ -407,9 +407,6 @@ class ControlPlane:
             data = cache["snapshot"]
             if timeline:
                 result = task_timeline(data["pool_requests"], data["bridge_requests"], since, until, dataset, limit, dataset_page)
-                result["resources"] = summarize_resources(resource_history(
-                    Path(self.pool_root) if self.pool_root else self.root / "pool", since, until,
-                    cache.setdefault("resource_files", {})), since, until)
                 result["indexed_since"] = cache.get("indexed_since")
                 return result
             data = dict(data)

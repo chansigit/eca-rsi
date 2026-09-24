@@ -152,15 +152,6 @@ assert.equal(graphLinks.length, 5);
 const collision = stage('input', 'analysis/another-run', 'dataset-b', 'input', 1, 2, []);
 assert.equal(context.buildFlowEdges([...graph, collision]).length, 5);
 
-context.renderResourceHistory({since: 0, until: 1000, tasks: [], total: 0, source: 'test', resources:
-  Array.from({length: 240}, (_, i) => ({worker_id: 'worker-a', observed_at: i * 4,
-    cpu_percent: i % 100, memory_percent: 20, gpu_percent: null, gpu_memory_percent: null,
-    cpu_cores_allocated: 4, cpu_cores_used: 2, memory_total_gb: 16, memory_used_gb: 3, samples: 1}))});
-const denseChart = element('resource-history').innerHTML;
-assert(denseChart.includes('<polyline'));
-assert((denseChart.match(/pointer-events="all"/g)||[]).length <= 80);
-assert(!denseChart.includes('<line '));
-
 const poolWorker=(id,reporting=true)=>({worker_id:id,host:'same-host',slurm_job_id:id,cpus:2,
   memory_mb:1024,reporting,last_seen:100,current:{cpu_percent:0,memory_percent:25,
   memory_used_gb:1,memory_total_gb:4,gpu_percent:null},mean_5m:{cpu_percent:10},
