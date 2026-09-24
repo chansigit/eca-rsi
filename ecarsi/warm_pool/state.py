@@ -196,7 +196,55 @@ def submit(root, spec):
             (attempt / "outputs").mkdir(mode=0o700)
             sync_directory(attempt)
             save(folder / "request.json", existing)
+            journal_request(root, spec)
     return status(root, spec["request_id"])
+
+
+def journal_request(root, spec):
+    """One line per new request in by-workflow/<trace.workflow_id>.txt, so a finished run's requests
+    can be found and pruned (prune_list) without walking the whole requests directory: reading one
+    request.json per folder took 4 h for 440k of them. Appends are short and O_APPEND; a torn line
+    only means one folder is not found, never that a wrong one is."""
+    workflow = (spec.get("trace") or {}).get("workflow_id")
+    if not workflow or any(part in {"..", ".", ""} for part in workflow.split("/")):
+        return
+    path = root / "by-workflow" / (workflow + ".txt")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(spec["request_id"] + "\n")
+
+
+def prune_list(root, listing, threads=16):
+    """Delete the listed request folders whose current attempt is terminal (a receipt, or cancelled
+    before it ever started); anything else stays and is reported as live. Meant to run on a pool
+    worker as a pool task: removing thousands of folders is the metadata storm the control node
+    must not host. Only for runs that are finished -- their outputs are published and nothing
+    will reopen them (see archive)."""
+    import shutil
+    from collections import Counter
+    from concurrent.futures import ThreadPoolExecutor
+    root = pool_root(root)
+    names = [line.strip() for line in Path(listing).read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    def one(name):
+        try:
+            folder = root / "requests" / identifier(name)
+        except ValueError:
+            return "unreadable"
+        request = read(folder / "request.json")
+        if request is None:
+            return "missing"
+        attempt = folder / request["attempt_id"]
+        if not ((attempt / "receipt.json").is_file()
+                or (folder / "cancel.json").is_file() and not (attempt / "accepted.json").is_file()):
+            return "live"
+        shutil.rmtree(folder, ignore_errors=True)
+        return "deleted"
+    counts = Counter()
+    with ThreadPoolExecutor(threads) as pool:
+        for outcome in pool.map(one, names, chunksize=64):
+            counts[outcome] += 1
+    return dict(listed=len(names), deleted=0, live=0, missing=0, unreadable=0) | dict(counts)
 
 
 def cancel(root, request_id):

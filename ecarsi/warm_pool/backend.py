@@ -314,6 +314,7 @@ class HyperQueue:
         # and delayed 21 tasks, 5 of them by 1061 s -- paid on every handover of the control plane.
         self.settled = {(name, ino) for name, ino in read(self.root / "settled.json", [])}
         self._saved = len(self.settled)
+        self._present = 0  # request folders seen by the last scan; a drop means pruning happened
         self.release, self._release_stamp = dict(RELEASE_DEFAULTS), None
         self._reload_release()
         self.drain_since = self.cooldown_until = None
@@ -435,8 +436,10 @@ class HyperQueue:
         def tally(request, index):
             dataset = (request["spec"].get("trace") or {}).get("dataset_id") or "Unattributed"
             activity.setdefault(dataset, [0, 0, 0, 0])[index] += 1
+        present = set()
         for entry in sorted(os.scandir(self.root / "requests"), key=lambda e: e.name):
             folder, key = Path(entry.path), (entry.name, entry.inode())
+            present.add(entry.name)
             if key in self.settled:
                 continue  # 74k saved requests: two stats each per tick was most of a 20 s tick
             try:
@@ -537,6 +540,10 @@ class HyperQueue:
                 candidates.append(dict(key=folder.name, klass=klass, submitted_at=request["submitted_at"],
                                        gpu_preferred=(spec.get("gpu") or {}).get("mode") == "preferred",
                                        folder=folder, attempt=attempt, request=request, name=name, args=tuple(args)))
+        if len(present) < self._present:  # folders were pruned: forget them, or settled.json only grows
+            self.settled = {key for key in self.settled if key[0] in present}
+            self._saved = -1
+        self._present = len(present)
         self._persist_settled()
         submissions = self._release(candidates, jobs, aged, gpu_waiting, hq_workers, generation, now)
         released = {folder.name for folder, _ in submissions}

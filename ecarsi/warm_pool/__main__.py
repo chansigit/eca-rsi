@@ -96,6 +96,10 @@ def main(argv=None):
     removal.add_argument("run", nargs="+", help="run id or dataset id; a request belongs by its spec.trace")
     removal.add_argument("--into", type=Path, help="destination; default <pool>/../archived-requests/released-<stamp>")
     removal.add_argument("--dry-run", action="store_true")
+    pruning = commands.add_parser("prune-list", help="delete the listed request folders of finished runs (terminal attempts only); run it on a pool worker")
+    pruning.add_argument("listing", type=Path, help="one request id per line, e.g. the by-workflow/ journals of a finished run")
+    pruning.add_argument("--result", type=Path, help="also write the counts here (the pool task's declared output)")
+    pruning.add_argument("--threads", type=int, default=16)
     a = p.parse_args(argv)
     if a.command == "init":
         result = initialize(a.root, a.hq, a.runtime)
@@ -126,6 +130,11 @@ def main(argv=None):
         result = archive(a.root, a.run, destination=a.into, dry_run=a.dry_run,
                          on_progress=lambda seen, hit: print(f"[archive] {seen} scanned, {hit} matched",
                                                              file=sys.stderr, flush=True))
+    elif a.command == "prune-list":
+        from .state import prune_list
+        result = prune_list(a.root, a.listing, threads=a.threads)
+        if a.result:
+            save(a.result, result)
     elif a.command == "cancel":
         result = cancel(a.root, a.request_id)
     elif a.command == "retry":

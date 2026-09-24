@@ -425,3 +425,25 @@ def test_a_finished_attempt_keeps_no_empty_files(tmp_path, monkeypatch):
     assert "status 3" in status(tmp_path, "noisy")["receipt"]["error"]
     assert (attempt / "stderr.log").stat().st_size > 0  # the traceback stays, the empty stdout goes
     assert not (attempt / "stdout.log").exists() and not (attempt / "usage.json").exists()
+
+
+def test_submit_journals_requests_by_workflow_and_prune_list_removes_only_terminal_folders(tmp_path):
+    from ecarsi.warm_pool.state import prune_list
+    tmp_path.chmod(0o700)
+    (tmp_path / "requests").mkdir()
+    save(tmp_path / "config.json", {"runtime": {"command": ["/usr/bin/python3"]}})
+    base = dict(operation_id="zoom-in.deg", args=["-c", "pass"], cpus=1, memory_mb=64, timeout_seconds=10, outputs=["x"])
+    trace = dict(workflow_id="zoom-in/run-abc", dataset_id="ds", unit_id="u")
+    done = submit(tmp_path, dict(base, request_id="done", trace=trace))
+    live = submit(tmp_path, dict(base, request_id="live", trace=trace))
+    submit(tmp_path, dict(base, request_id="done", trace=trace))  # a replay is not journaled twice
+    submit(tmp_path, dict(base, request_id="untraced"))
+    journal = tmp_path / "by-workflow" / "zoom-in" / "run-abc.txt"
+    assert journal.read_text().split() == ["done", "live"]
+    save(tmp_path / "requests/done" / done["attempt_id"] / "receipt.json", dict(state="succeeded", outputs=[]))
+    save(tmp_path / "requests/live" / live["attempt_id"] / "accepted.json", dict(host="h", started_at=1))
+    listing = tmp_path / "prune.txt"
+    listing.write_text("done\nlive\ngone\n..\n")
+    result = prune_list(tmp_path, listing, threads=2)
+    assert result == dict(listed=4, deleted=1, live=1, missing=1, unreadable=1)
+    assert not (tmp_path / "requests/done").exists() and (tmp_path / "requests/live").is_dir()
