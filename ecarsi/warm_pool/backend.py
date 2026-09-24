@@ -293,7 +293,13 @@ class HyperQueue:
             self.drain_since = None
         draining = self.drain_since is not None
         hq_waiting = sum(1 for j in jobs if j["task_stats"]["waiting"])
-        cap = max(cfg["backlog_min"], int(sum(c[0] for c in capacity) * cfg["backlog_per_cpu"]))
+        total_cpus = sum(c[0] for c in capacity)
+        running = sum(j["task_stats"]["running"] for j in jobs)
+        # Fill idle CPUs, then keep a short queue. ponytail: a running task counts as one CPU, so a
+        # pool of wide tasks is over-released a little (the surplus just queues in HQ); read the
+        # tasks' cpus if that queue ever matters.
+        cap = (max(cfg["backlog_min"], int(total_cpus * cfg["backlog_per_cpu"]))
+               + max(0, total_cpus - running))
         gpu_slots = sum(c[2] for c in capacity)
         plan = release_plan(candidates, hq_waiting=hq_waiting, cap=cap, draining=draining,
                             gpu_waiting=gpu_waiting, gpu_slots=gpu_slots,

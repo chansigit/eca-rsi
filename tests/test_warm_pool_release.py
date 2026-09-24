@@ -53,3 +53,14 @@ def test_drain_starts_on_an_aged_task_and_yields_after_its_limit():
     tick(150, ["wide"]); assert not hq.release_state["draining"]   # yielding
     tick(202, ["wide"]); assert hq.release_state["draining"]       # drains again
     tick(203, []); assert hq.drain_since is None
+
+
+def test_backlog_cap_fills_idle_cpus_first(tmp_path):
+    from ecarsi.warm_pool.backend import HyperQueue, RELEASE_DEFAULTS
+    hq = HyperQueue.__new__(HyperQueue)
+    hq.release, hq.drain_since, hq.cooldown_until = dict(RELEASE_DEFAULTS), None, None
+    worker = {"configuration": {"resources": {"resources": [{"kind": "list", "name": "cpus", "values": list(range(48))}]}}}
+    jobs = [{"task_stats": {"running": 1, "waiting": 0}}] * 10
+    gone = dict(c("x"), folder=tmp_path, attempt=tmp_path, request={})   # request.json vanished: skipped
+    hq._release([gone], jobs, [], 0, lambda: [worker], "g", 0)
+    assert hq.release_state["backlog_cap"] == 16 + 38   # short queue + the 38 idle CPUs
