@@ -267,6 +267,41 @@ def worker_inventory(pool: Path, tasks: list[dict], now: float, cache: dict) -> 
     return workers + list(historical.values())
 
 
+def productivity(resource_rows: list[dict], tasks: list[dict], now: float) -> list[dict]:
+    """How much work each node did lately, whatever the dataset sizes: measured busy cores over its
+    allocated cores (1 h and 4 h), the core-hours that makes, and the pool tasks it finished."""
+    hosts = {}
+    for row in resource_rows:
+        if row.get("cpu_percent") is None:
+            continue
+        cores = len(row.get("cpu_ids") or [])
+        h = hosts.setdefault(row["host"], {"host": row["host"], "workers": {}, "windows": {}, "gpu": []})
+        if row["observed_at"] >= now - 300:     # the workers it has now, not every one of the 4 h
+            h["workers"][row.get("worker_id")] = cores
+        for span in (3600, MAX_WINDOW):
+            if row["observed_at"] >= now - span:
+                busy, allocated, samples = h["windows"].get(span, (0.0, 0, 0))
+                h["windows"][span] = (busy + row["cpu_percent"] * cores / 100, allocated + cores, samples + 1)
+        busy_gpus = [g["utilization_percent"] for g in row.get("gpus") or [] if g.get("utilization_percent") is not None]
+        if busy_gpus and row["observed_at"] >= now - 3600:
+            h["gpu"].append(sum(busy_gpus) / len(busy_gpus))
+    out = []
+    for host, h in sorted(hosts.items()):
+        rate = {span: 100 * busy / allocated if allocated else None
+                for span, (busy, allocated, _) in h["windows"].items()}
+        busy, _, samples = h["windows"].get(MAX_WINDOW, (0.0, 0, 0))
+        done = [t for t in tasks if t.get("host") == host and t.get("finished_at")
+                and t["finished_at"] >= now - MAX_WINDOW and not (t.get("operation") or "").startswith("agent.")]
+        out.append({"host": host, "cores": sum(h["workers"].values()),
+                    "efficiency_1h": rate.get(3600), "efficiency_4h": rate.get(MAX_WINDOW),
+                    # a sample stands for 30 s of every core it summed
+                    "core_hours_4h": busy * 30 / 3600,
+                    "tasks_done_4h": sum(t.get("state") == "succeeded" for t in done),
+                    "tasks_failed_4h": sum(t.get("state") == "failed" for t in done),
+                    "gpu_percent_1h": sum(h["gpu"]) / len(h["gpu"]) if h["gpu"] else None})
+    return out
+
+
 def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.0.1",
              cache: dict | None = None, pool_root: Path | None = None,
              bridge_root: Path | None = None, temporal_service_root: Path | None = None,
@@ -299,6 +334,8 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
     temporal_ui = bool(published.get("ui"))
     temporal_port = published.get("ui_port") or 0
     workers = worker_inventory(pool, pool_rows, time.time(), cache)
+    nodes = productivity(resource_history(pool, now - MAX_WINDOW, now, cache.setdefault("resource_files", {})),
+                         pool_rows, now)
     return {
         "generated_at": time.time(), "host": socket.gethostname(),
         "mode": "development / read-only", "temporal_ui": temporal_ui,
@@ -306,6 +343,7 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
         "temporal_service": service,
         "scheduler": scheduler, "bridge_summary": bridge_summary,
         "worker_live_count": sum(w["reporting"] for w in workers), "workers": workers,
+        "productivity": nodes,
         "running_datasets": sorted({w.get("dataset_id") or k for k, w in
                                     (read(root / "fleet-status.json", {}).get("workflows") or {}).items()
                                     if w.get("kind") == "DatasetWorkflow" and w.get("status") == "RUNNING"}),

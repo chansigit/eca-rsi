@@ -250,3 +250,15 @@ def test_token_rows_sum_saved_replies_per_dataset(tmp_path):
         self.assertEqual(sum(t["worker_id"] == "busy" for t in result["tasks"]), 5)
         self.assertEqual([t["id"] for t in result["tasks"] if t["worker_id"] == "busy"],
                          [f"late-{i}" for i in range(45, 50)])   # the most recent, not the oldest
+
+
+def test_node_productivity_is_busy_cores_over_allocated_cores():
+    from ecarsi.ui.control import productivity
+    now = 10_000.0
+    rows = [dict(host="a", worker_id="w", cpu_ids=[0, 1, 2, 3], cpu_percent=50.0, observed_at=now - 30 * i)
+            for i in range(120)]                      # 1 h of 2 busy cores out of 4
+    tasks = [dict(host="a", finished_at=now - 60, state="succeeded", operation="compute"),
+             dict(host="a", finished_at=now - 60, state="succeeded", operation="agent.call")]
+    (node,) = productivity(rows, tasks, now)
+    assert (node["cores"], node["efficiency_1h"], node["tasks_done_4h"]) == (4, 50.0, 1)
+    assert node["core_hours_4h"] == 2.0

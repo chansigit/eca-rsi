@@ -210,6 +210,8 @@
   <section class="panel" id="at-work" style="margin-bottom:20px"><div class="panel-head"><div><h2>Datasets at work</h2><div class="sub">A running dataset is not necessarily computing. Per the pool scheduler's last tick: <b>computing</b> has a pool task running, <b>model turn</b> only a model call, <b>queued</b> only waits for a pool slot, and <b>between steps</b> has nothing in the pool at all (a workflow step, a retry wait, or stuck).</div></div><span class="status off" id="at-work-state">Loading</span></div>
     <div id="at-work-summary" class="metrics" style="grid-template-columns:repeat(5,1fr)"></div><details class="sub" style="margin-top:14px"><summary>By dataset</summary><div id="at-work-list"></div></details></section>
   <section class="panel" style="margin-bottom:20px"><div class="panel-head"><div><h2>Worker timeline</h2><div class="sub">Is every worker working? One fixed-height lane per worker showing how busy it has been over the last hour — height is concurrent tasks, colour is the dataset, red ticks are failures. Click a lane to open its individual tasks. This window is the recent past only; every finished task's duration is in that worker's <code>tasks-&lt;day&gt;.jsonl</code> journal, which is where a post-mortem belongs.</div></div><span class="status off" id="timeline-state">Loading</span></div><div class="timeline-controls"><select id="timeline-view" aria-label="Timeline view"><option value="workers" selected>Workers</option><option value="datasets">Datasets</option></select><span class="timeline-spans" role="group" aria-label="Window"><button type="button" data-span="900">15m</button><button type="button" data-span="3600" class="on">1h</button><button type="button" data-span="14400">4h</button></span><label class="timeline-log-toggle" title="Compress the older part of the window and stretch the last minutes"><input type="checkbox" id="timeline-log"> Log time</label><input id="timeline-dataset" type="search" placeholder="Filter dataset…" aria-label="Filter dataset"><details class="timeline-failures"><summary title="Failures the published records cover: the timeline window, not a fixed day. Older ones are in each worker's tasks-&lt;day&gt;.jsonl journal.">Recent failures <span id="failure-count"></span></summary><ul id="failure-list"></ul></details></div><div class="timeline-legend"><span>One color per dataset</span><span><i class="model-key"></i>Model call</span><span><i class="compute-key"></i>Worker task</span><span><i style="background:transparent;border:2px solid #a4514e"></i>Failed task</span><span>Click a lane to expand its tasks · the wheel only scrolls</span></div><div class="flow-layout" id="flow-layout"><div class="timeline-wrap" id="flow-scroll"><div class="timeline" id="timeline" aria-busy="true"><div class="timeline-skeleton" aria-hidden="true"><div class="timeline-skeleton-row"><i style="width:60%"></i><b style="left:4%;width:22%"></b><b style="left:38%;width:30%"></b></div><div class="timeline-skeleton-row"><i style="width:45%"></i><b style="left:10%;width:35%"></b><b style="left:60%;width:18%"></b></div><div class="timeline-skeleton-row"><i style="width:70%"></i><b style="left:2%;width:12%"></b><b style="left:26%;width:44%"></b></div><div class="timeline-skeleton-row"><i style="width:50%"></i><b style="left:30%;width:26%"></b><b style="left:70%;width:20%"></b></div></div></div></div><aside id="flow-detail" class="flow-detail" aria-label="Selected step details" hidden></aside></div><div id="flow-pages" class="flow-pages"></div><div class="note" id="timeline-note"></div></section>
+  <section class="panel" id="productivity" style="margin-bottom:20px"><div class="panel-head"><div><h2>Node productivity</h2><div class="sub">How hard each node has actually worked lately, independent of dataset size and of whether anything has been released: <b>efficiency</b> is the measured busy cores over the node's allocated cores (worker telemetry, 30 s samples), <b>core-hours</b> is the computing that makes. The pool figure is the mean of the nodes.</div></div><span class="status off" id="productivity-state">Loading</span></div>
+    <div id="productivity-summary" class="metrics" style="grid-template-columns:repeat(4,1fr)"></div><div class="timeline-wrap"><table id="productivity-table" class="sub" style="width:100%;margin-top:14px;border-collapse:collapse"></table></div></section>
   <section class="panel" id="compute-pool" style="margin-bottom:20px">
     <div class="panel-head"><div><h2>Compute Warm Pool</h2></div><span id="compute-pool-state" class="status off">Checking</span></div>
     <p id="compute-pool-summary" class="sub"></p>
@@ -739,6 +741,20 @@ function renderComputePool(data) {
   $('pool-history').innerHTML=departed.length?'<ul>'+departed.sort((a,b)=>(b.last_seen||b.last_activity||0)-(a.last_seen||a.last_activity||0)).map(w=>`<li title="${esc(w.worker_id||'Worker ID not recorded')} · Slurm job ${esc(w.slurm_job_id||'not recorded')}">${esc(w.host)} · ${w.history_only?'Last task '+esc(when(w.last_activity)):w.last_seen?'Last seen '+esc(when(w.last_seen)):'No telemetry'}${w.tasks.length?' · '+w.tasks.length+' unresolved tasks':''}</li>`).join('')+'</ul>':'<p class="sub">None</p>';
 }
 
+function renderProductivity(data) {
+  const nodes=data.productivity||[], pct=x=>Number.isFinite(x)?x.toFixed(0)+'%':'—';
+  const mean=k=>{const v=nodes.map(n=>n[k]).filter(Number.isFinite); return v.length?v.reduce((a,b)=>a+b,0)/v.length:NaN;};
+  const sum=k=>nodes.reduce((a,n)=>a+(n[k]||0),0);
+  $('productivity-state').textContent=nodes.length?`${nodes.length} nodes`:'No telemetry';
+  $('productivity-state').className=`status ${nodes.length?'ok':'off'}`;
+  $('productivity-summary').innerHTML=[['Pool efficiency · 1 h',pct(mean('efficiency_1h'))],['Pool efficiency · 4 h',pct(mean('efficiency_4h'))],
+    ['Core-hours · 4 h',sum('core_hours_4h').toFixed(0)],['Tasks done · 4 h',sum('tasks_done_4h')]]
+    .map(([k,v])=>`<div class="metric"><b>${v}</b><span>${k}</span></div>`).join('');
+  const bar=x=>Number.isFinite(x)?`<span style="display:inline-block;width:60px;height:8px;background:#e6e1d6;vertical-align:middle;margin-right:6px"><span style="display:block;height:8px;width:${Math.min(100,x)}%;background:${x<30?'#a4514e':x<60?'#ad8651':'#558d78'}"></span></span>${pct(x)}`:'—';
+  $('productivity-table').innerHTML='<tr style="text-align:left"><th>Node</th><th>Cores</th><th>Efficiency 1 h</th><th>Efficiency 4 h</th><th>Core-hours 4 h</th><th>Tasks done 4 h</th><th>Failed 4 h</th><th>GPU 1 h</th></tr>'+
+    nodes.map(n=>`<tr><td>${esc(n.host)}</td><td>${n.cores||'gone'}</td><td>${bar(n.efficiency_1h)}</td><td>${bar(n.efficiency_4h)}</td><td>${n.core_hours_4h.toFixed(1)}</td><td>${n.tasks_done_4h}</td><td>${n.tasks_failed_4h||''}</td><td>${Number.isFinite(n.gpu_percent_1h)?pct(n.gpu_percent_1h):''}</td></tr>`).join('');
+}
+
 function renderAtWork(data) {
   const act=data.scheduler?.datasets||{}, running=data.running_datasets||[];
   const kind=c=>c[0]?'computing':c[1]?'model turn':(c[2]||c[3])?'queued':'between steps';
@@ -772,6 +788,7 @@ async function refresh() {
     $('host').textContent = `${d.host} · isolated v2 state`;
     renderComputePool(d);
     renderAtWork(d);
+    renderProductivity(d);
     renderFailures(d.recent_failures||[]);
     const dataset=$('timeline-dataset').value.trim(), {since,until}=windowNow();
     const params=new URLSearchParams({since:String(since),until:String(until),dataset,limit:'2000'});
