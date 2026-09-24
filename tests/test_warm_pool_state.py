@@ -447,3 +447,32 @@ def test_submit_journals_requests_by_workflow_and_prune_list_removes_only_termin
     result = prune_list(tmp_path, listing, threads=2)
     assert result == dict(listed=4, deleted=1, live=1, missing=1, unreadable=1)
     assert not (tmp_path / "requests/done").exists() and (tmp_path / "requests/live").is_dir()
+
+
+def test_a_submission_stranded_by_an_earlier_server_generation_is_submitted_again(tmp_path, monkeypatch):
+    from ecarsi.warm_pool.backend import HyperQueue
+    tmp_path.chmod(0o700)
+    (tmp_path / 'requests').mkdir()
+    save(tmp_path / 'config.json', {'hq': '/test/hq', 'executor': '/test/python', 'runtime': {'version': 'test'}})
+    submit(tmp_path, dict(request_id='stranded', operation_id='compute', args=['-c', 'pass'],
+                          cpus=1, memory_mb=64, timeout_seconds=10, outputs=['result.json']))
+    folder = tmp_path / 'requests/stranded'
+    request = read(folder / 'request.json')
+    save(folder / 'request.json', dict(request, backend=dict(state='submitting', generation='old-server', observed_at=1)))
+    backend, calls = HyperQueue(tmp_path), []
+    def call(*args):
+        calls.append(args)
+        if args[:2] == ('job', 'list'):
+            return []
+        if args[0] == 'submit':
+            return {'id': 9}
+    monkeypatch.setattr(backend, 'call', call)
+    backend.dispatch(dict(server_uid='new', pid=1, start_date='now'))
+    assert sum(a[0] == 'submit' for a in calls) == 1
+    assert read(folder / 'request.json')['backend']['state'] == 'queued'
+    # The same generation's own in-flight submission is left alone.
+    observed = read(folder / 'request.json')['backend']
+    save(folder / 'request.json', dict(read(folder / 'request.json'), backend=dict(observed, state='submitting')))
+    calls.clear()
+    backend.dispatch(dict(server_uid='new', pid=1, start_date='now'))
+    assert not any(a[0] == 'submit' for a in calls)

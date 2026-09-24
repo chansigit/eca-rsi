@@ -391,8 +391,13 @@ class HyperQueue:
             folder, attempt, request = c["folder"], c["attempt"], c["request"]
             with lock(folder / "request.lock"):
                 current = read(folder / "request.json")
+                previous = observation(folder, current) if current else {}
                 if (not current or current["attempt_id"] != request["attempt_id"] or read(folder / "cancel.json")
-                        or observation(folder, current).get("state") == "submitting"):
+                        or previous.get("state") == "submitting" and previous.get("generation") == generation):
+                    # "submitting" from an earlier server generation is a submission that never reached
+                    # HQ (the tick died first: 235 requests stranded that way on 2026-09-24 01:06 when
+                    # the HQ server was stopped under a running tick); no job carries its name, or the
+                    # reconcile above would have kept it out of the candidates. Submit it again.
                     continue
                 observe(folder, current, dict(state="submitting", generation=generation, observed_at=time.time()))
             if request["spec"].get("gpu"):
