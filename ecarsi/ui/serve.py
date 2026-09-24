@@ -858,7 +858,6 @@ def fleet_history(states: dict) -> dict:
         ev = s.get("events") or {}
         out[name] = {"collection": colls[name], "species": s["species"],
                      "organize": [list(e) for e in ev.get("organize", [])], "release": [list(e) for e in ev.get("release", [])],
-                     "rounds": [list(e) for e in ev.get("rounds", [])],
                      "state": s["cls"], "input_cells": s.get("n_input") or 0,
                      "awaiting_start": s.get("awaiting_start", s["cls"] == "queued"),
                      "final_cells": s.get("final_cells") or 0}
@@ -939,37 +938,6 @@ HISTORY_JS = r"""
     const note=document.getElementById('hist-undated'); if(note){note.hidden=!undated;
       note.textContent=undated.toLocaleString('en-US')+' input cells lack a recorded start time and are excluded from Cells in and the time curve.';}
   }
-  // -- productivity: cell-rounds per hour, a trailing-window rate on the curve's own time axis --
-  // One finished round of a unit that went in with n cells is n cell-rounds: the loop's unit of
-  // work, whether it came from a big dataset's one round or a small one's many.
-  const prodBox = document.getElementById("prod");
-  function drawProd(t0, t1, x, xm, xt, xl){
-    if (!prodBox) return;
-    const rs = []; for (const nm of names()) { const d = D.datasets[nm]; if (d && d.rounds) for (const [t, n] of d.rounds) rs.push([t, n]); }
-    rs.sort((a, b) => a[0] - b[0]);
-    if (!rs.length) { prodBox.innerHTML = '<p class="empty">no finished round is dated yet</p>'; return; }
-    const span = t1 - t0, win = span > 7 * 86400 ? 86400 : 6 * 3600, NB = 160, pts = [];
-    for (let i = 0; i <= NB; i++) { const te = t0 + span * i / NB; let c = 0, k = 0;
-      for (const [t, n] of rs) { if (t > te) break; if (t > te - win) { c += n; k++; } }
-      pts.push([te, c / (win / 3600), k / (win / 3600)]); }
-    const yraw = Math.max(...pts.map(p => p[1]), 1);
-    const nice = [1, 2, 5, 10, 20, 50].map(m => m * Math.pow(10, Math.floor(Math.log10(yraw)) - 1)).find(s => yraw / s <= 5) || yraw / 4;
-    const ymax = Math.ceil(yraw / nice) * nice, PH = 150, y = v => T + (1 - v / ymax) * (PH - T - B), yt = [];
-    for (let v = 0; v <= ymax + nice / 2; v += nice) yt.push(v);
-    const d = pts.map((p, i) => `${i ? "L" : "M"}${x(p[0]).toFixed(1)} ${y(p[1]).toFixed(1)}`).join(" ");
-    prodBox.innerHTML = `<svg class="hist-svg" viewBox="0 0 ${W} ${PH}" role="img" aria-label="cell-rounds per hour">
-      ${yt.map(v => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text class="tick" x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${fmtN(v)}</text>`).join("")}
-      ${xm.map(t => `<line class="grid" x1="${x(t)}" x2="${x(t)}" y1="${PH - B}" y2="${PH - B + 5}"/>`).join("")}
-      ${xt.map(t => `<text class="tick" x="${x(t)}" y="${PH - B + 18}" text-anchor="middle">${xl(t)}</text>`).join("")}
-      <path class="ser rel" d="${d}"/><rect class="hit" x="${L}" y="${T}" width="${W - L - R}" height="${PH - T - B}" fill="transparent"/></svg>
-      <div class="hist-legend"><span><i class="rel"></i>cell-rounds per hour, trailing ${win / 3600} h</span></div>`;
-    const svg = prodBox.querySelector("svg");
-    svg.querySelector(".hit").addEventListener("mousemove", e => { const r = svg.getBoundingClientRect();
-      const f = ((e.clientX - r.left) / r.width * W - L) / (W - L - R), p = pts[Math.max(0, Math.min(NB, Math.round(f * NB)))];
-      tip.style.display = "block"; tip.innerHTML = `<b>${fmtT(p[0])}</b><br><b>${Math.round(p[1]).toLocaleString()}</b> cell-rounds/h · ${p[2].toFixed(1)} rounds/h<br><span class="m">over the ${win / 3600} h before</span>`;
-      tip.style.left = Math.max(window.scrollX + 4, e.pageX - tip.offsetWidth / 2) + "px"; tip.style.top = (e.pageY - tip.offsetHeight - 10) + "px"; });
-    svg.querySelector(".hit").addEventListener("mouseleave", () => { tip.style.display = "none"; });
-  }
   // Release speed centred on t: cells released in [t - 1.5 d, t + 1.5 d] per day. Near now the
   // window has no future half, so it divides by the days it actually covers and says so.
   function rate3d(t){ const a = t - 1.5 * 86400, b = Math.min(t + 1.5 * 86400, now()), days = (b - a) / 86400;
@@ -1028,7 +996,6 @@ HISTORY_JS = r"""
       <rect class="zoom" id="hist-zoom" y="${T}" height="${H - T - B}" style="display:none"/>
       <rect class="hit" x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent"/></svg>
       <div class="hist-legend">${showIn ? '<span><i class="in"></i>cells in</span>' : ""}<span><i class="rel"></i>cells released</span>${lo || hi ? '<span class="muted">zoomed · double-click to reset</span>' : ""}</div>`;
-    drawProd(t0, t1, x, xm, xt, xl);
     if (nEl) { const k = totals(t1); nEl.textContent = `${names().length} datasets · ${k.din} started · ${k.drel} released`; }
     const svg = box.querySelector("svg"), hit = svg.querySelector(".hit"), cross = svg.querySelector("#hist-cross"), zoom = svg.querySelector("#hist-zoom");
     const tAt = ev_ => { const r = svg.getBoundingClientRect(); const px = (ev_.clientX - r.left) / r.width * W; return un((px - L) / (W - L - R)); };
@@ -1212,10 +1179,7 @@ def _home_html(items: dict[str, Path], state=_dataset_state, verdicts: "ControlV
         '<button type="button" id="hist-show-in" aria-pressed="false" title="cells in rises much faster than cells released and compresses it on a shared axis">show cells in</button>'
         '<button type="button" id="hist-log" aria-pressed="false" title="space by age instead of by clock, so the newest hours get most of the width">log time</button></div>'
         '<div id="hist" class="hist"></div><div id="hist-tip" class="sk-tip" style="display:none"></div>'
-        '<h2 style="margin-top:var(--s3)">Productivity over time</h2>'
-        '<p class="lede">Cell-rounds per hour: each finished round adds the cells it started with, so one round of a '
-        '100k-cell unit counts as much as ten rounds of a 10k-cell one. Follows the zoom and filter above.</p>'
-        '<div id="prod" class="hist"></div></section>'
+'</section>'
         f'<section class="block" id="datasets"><h2>Datasets <span class="count" id="ds-n">{len(rows)} units</span></h2>'
         '<p class="lede">Input counts include declared queued inputs. Cells out shows the latest output count; kept is out / in. Click a column header to sort.</p>'
         '<div class="toolbar"><label for="ds-q">Filter</label><input id="ds-q" type="search" placeholder="name, collection, species, status…" autocomplete="off"></div>'
