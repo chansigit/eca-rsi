@@ -141,7 +141,8 @@ def test_dispatch_cache_revisits_retries_cancellation_and_replayed_jobs(tmp_path
     backend.dispatch(info)
     cancel(tmp_path, 'r')
     backend.dispatch(info)
-    assert read(folder / 'backend.json')['state'] == 'cancelled'
+    assert read(folder / 'request.json')['backend']['state'] == 'cancelled'
+    assert not (folder / 'backend.json').exists()
 
 
 def test_retry_preserves_receipts_and_pins_runtime_until_explicit_upgrade(tmp_path):
@@ -324,17 +325,18 @@ def test_dispatch_submits_concurrently_and_resubmits_a_failed_submission(tmp_pat
     info = dict(server_uid='one', pid=1, start_date='one')
     backend.dispatch(info)
     assert calls.count(('journal', 'flush')) == 1  # one flush per tick, not per submission
-    assert read(tmp_path / 'requests/a/backend.json')['state'] == 'submit_failed'
-    assert read(tmp_path / 'requests/b/backend.json') == dict(state='queued', job_id=7, generation=read(tmp_path / 'requests/b/backend.json')['generation'], observed_at=read(tmp_path / 'requests/b/backend.json')['observed_at'])
+    assert read(tmp_path / 'requests/a/request.json')['backend']['state'] == 'submit_failed'
+    observed = read(tmp_path / 'requests/b/request.json')['backend']
+    assert observed['state'] == 'queued' and observed['job_id'] == 7 and {'generation', 'observed_at'} <= observed.keys()
     broken.clear()
     calls.clear()
     backend.dispatch(info)
     assert sum(args[0] == 'submit' for args in calls) == 1  # only the failed one is submitted again
-    assert read(tmp_path / 'requests/a/backend.json')['state'] == 'queued'
+    assert read(tmp_path / 'requests/a/request.json')['backend']['state'] == 'queued'
     # An unchanged live job is not rewritten every tick (each save is an fsync on shared storage).
-    before = (tmp_path / 'requests/b/backend.json').stat().st_mtime_ns
+    before = (tmp_path / 'requests/b/request.json').stat().st_mtime_ns
     backend.dispatch(info)
-    assert (tmp_path / 'requests/b/backend.json').stat().st_mtime_ns == before
+    assert (tmp_path / 'requests/b/request.json').stat().st_mtime_ns == before
     # A succeeded request is settled: later ticks do not even stat it.
     for name in ('a', 'b'):
         request = read(tmp_path / f'requests/{name}/request.json')

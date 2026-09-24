@@ -2,6 +2,7 @@
 import ctypes
 from datetime import datetime, timezone
 import json
+import math
 import os
 from pathlib import Path
 import signal
@@ -9,7 +10,7 @@ import socket
 import subprocess
 import time
 
-from .state import digest, file_digest, lock, pool_root, read, save
+from .state import digest, file_digest, lock, observation, pool_root, read, save
 
 
 # ponytail: bounded native alternatives cover up to 64 cards per worker, including
@@ -202,7 +203,38 @@ def worker_lost_receipt(request, accepted, error):
                 started_at=accepted["started_at"], finished_at=time.time())
 
 
+MODEL_CALLS_PER_CPU = 2  # pool/config.json `worker.model_calls_per_cpu` overrides; read at each HQ worker start
+
+
+def model_call_slots(cpu_ids, config):
+    """Model turns a worker admits at once. They wait on the provider and cost ~250 MB each, so a
+    full core per turn was too much (hq_shares), but with no cap at all 59 of them landed on an
+    8-core node (2026-09-23, sh04-01n22 at 11 % efficiency) while compute queued elsewhere."""
+    per_cpu = (config.get("worker") or {}).get("model_calls_per_cpu", MODEL_CALLS_PER_CPU)
+    return max(1, math.ceil(len(cpu_ids) * per_cpu))
+
+
+def hq_resources(spec, request, release):
+    """What a submission asks HQ for. `modelcall` is the per-node cap every worker declares
+    (model_call_slots); `release.model_call_resource` turns the request off online while a pool
+    still has workers that predate it, since HQ would otherwise hold those tasks forever."""
+    cpu_share, runtime_share = hq_shares(spec)
+    args = ["--cpus", cpu_share, "--resource", "mem=" + str(spec["memory_mb"]),
+            "--resource", "runtime/" + request["runtime_digest"] + "=" + runtime_share]
+    if spec["operation_id"] == "agent.call" and release["model_call_resource"]:
+        args += ["--resource", "modelcall=1"]
+    return args
+
+
+def observe(folder, request, record):
+    """The scheduler's observation lives inside request.json (the caller holds request.lock and
+    read `request` under it). A legacy backend.json is superseded and dropped: one inode less."""
+    save(folder / "request.json", dict(request, backend=record))
+    (folder / "backend.json").unlink(missing_ok=True)
+
+
 RELEASE_DEFAULTS = dict(
+    model_call_resource=True, # agent.call asks HQ for one `modelcall` slot (see hq_resources)
     backlog_per_cpu=1 / 3,    # HQ waiting queue kept at ~a third of the pool's CPUs (one tick of starts)
     backlog_min=16,
     drain_age_seconds=600,    # a feasible task waiting this long in HQ starts a drain
@@ -350,9 +382,9 @@ class HyperQueue:
             with lock(folder / "request.lock"):
                 current = read(folder / "request.json")
                 if (not current or current["attempt_id"] != request["attempt_id"] or read(folder / "cancel.json")
-                        or read(folder / "backend.json", {}).get("state") == "submitting"):
+                        or observation(folder, current).get("state") == "submitting"):
                     continue
-                save(folder / "backend.json", dict(state="submitting", generation=generation, observed_at=time.time()))
+                observe(folder, current, dict(state="submitting", generation=generation, observed_at=time.time()))
             if request["spec"].get("gpu"):
                 spec = request["spec"]
                 if gpu_only:
@@ -410,7 +442,7 @@ class HyperQueue:
                     continue
                 attempt = folder / request["attempt_id"]
                 receipt = read(attempt / "receipt.json")
-                previous = read(folder / "backend.json", {})
+                previous = observation(folder, request)
                 name = "rsi." + request["spec"]["request_id"] + "." + request["attempt_id"]
                 job = by_name.get(name)
                 if read(folder / "cancel.json"):
@@ -420,7 +452,7 @@ class HyperQueue:
                     if job and (receipt or not accepted) and (job["task_stats"]["running"] or job["task_stats"]["waiting"]):
                         self.call("job", "cancel", str(job["id"]))
                     if receipt or not accepted:
-                        save(folder / "backend.json", dict(previous, state="cancelled", observed_at=time.time()))
+                        observe(folder, request, dict(previous, state="cancelled", observed_at=time.time()))
                     if receipt:
                         self.finished[folder.name] = stamp
                         self.settled.add(key)
@@ -463,23 +495,20 @@ class HyperQueue:
                     if any(previous.get(k) != v for k, v in record.items()):
                         # Each save is an fsync'd write on Lustre; refreshing observed_at
                         # for 150 live jobs every tick cost more than the whole scan.
-                        save(folder / "backend.json", dict(record, observed_at=time.time()))
+                        observe(folder, request, dict(record, observed_at=time.time()))
                     continue
                 if read(attempt / "accepted.json"):
                     # A lost backend record is not evidence that computation stopped.
-                    save(folder / "backend.json", dict(previous, state="unknown_external_result", observed_at=time.time()))
+                    observe(folder, request, dict(previous, state="unknown_external_result", observed_at=time.time()))
                     continue
                 if previous.get("state") in {"submitting", "unknown_external_result"} and previous.get("generation") == generation:
                     continue  # reply may have been lost; reconcile by stable job name
                 if read(folder / "cancel.json"):
                     continue
                 spec = request["spec"]
-                cpu_share, runtime_share = hq_shares(spec)
                 # No --priority: HQ 0.26.2 panics in its scheduling solver (workerload.rs:160, index out of
                 # bounds) once prioritised tasks meet the GPU jobs' multi-variant requests (2026-09-23 18:44).
-                args = ["submit", "--name", name, "--cpus", cpu_share,
-                        "--resource", "mem=" + str(spec["memory_mb"]),
-                        "--resource", "runtime/" + request["runtime_digest"] + "=" + runtime_share,
+                args = ["submit", "--name", name] + hq_resources(spec, request, self.release) + [
                         "--time-request", str(spec["time_request_seconds"]) + "s",
                         "--pin", "taskset", "--crash-limit", "never-restart", "--directives", "off",
                         "--cwd", str(attempt), "--stdout", "none", "--stderr", "none",
@@ -524,17 +553,18 @@ class HyperQueue:
         self.call("journal", "flush")
         for folder, submitted, error in results:
             with lock(folder / "request.lock"):
-                previous = read(folder / "backend.json", {})
-                if previous.get("state") != "submitting" or previous.get("generation") != generation:
+                request = read(folder / "request.json")
+                previous = observation(folder, request) if request else {}
+                if not request or previous.get("state") != "submitting" or previous.get("generation") != generation:
                     continue  # cancelled or replaced meanwhile; the stable job name reconciles it
                 if error:
                     # Not "submitting": that state means a lost reply for a job that may exist,
                     # which the next tick reconciles by name. This one is retried from scratch.
-                    save(folder / "backend.json", dict(state="submit_failed", error=error,
-                         generation=generation, observed_at=time.time()))
+                    observe(folder, request, dict(state="submit_failed", error=error,
+                            generation=generation, observed_at=time.time()))
                 else:
-                    save(folder / "backend.json", dict(state="queued", job_id=submitted["id"],
-                         generation=generation, observed_at=time.time()))
+                    observe(folder, request, dict(state="queued", job_id=submitted["id"],
+                            generation=generation, observed_at=time.time()))
 
 
 def start_hq_server(backend, host, log):
@@ -752,6 +782,7 @@ def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit
                         "--cpus", "[" + ",".join(map(str, cpu_ids)) + "]", "--detect-resources", "none",
                         "--resource", f"mem=sum({memory_mb - reserve})",
                         "--resource", f"runtime/{digest(runtime)}=sum({len(cpu_ids)})",
+                        "--resource", f"modelcall=sum({model_call_slots(cpu_ids, read(backend.root / 'config.json', {}))})",
                         "--on-server-lost", "finish-running", "--overview-interval", "30s",
                         "--work-dir", str(work_dir)] + lifetime + device_resources,
                         env=dict(os.environ, ECA_POOL_WORKER_ID=worker_id),

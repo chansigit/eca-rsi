@@ -256,10 +256,8 @@ def retry(root, request_id, *, reason, use_current_runtime=False, memory_mb=None
         attempt.mkdir(mode=0o700)
         (attempt / "outputs").mkdir(mode=0o700)
         sync_directory(attempt)
-        save(previous / "request.json", request)
-        if not (previous / "backend.json").exists():
-            save(previous / "backend.json", read(folder / "backend.json", {}))
-        replacement = dict(request, spec=spec, digest=digest(spec),
+        save(previous / "request.json", request)  # the audit copy carries the scheduler's last observation
+        replacement = dict(request, spec=spec, digest=digest(spec), backend=dict(state="queued", attempt_id=attempt_id),
             original_digest=request.get("original_digest", request["digest"]),
             attempt_id=attempt_id, submitted_at=time.time(),
             runtime=runtime, runtime_digest=digest(runtime),
@@ -268,9 +266,15 @@ def retry(root, request_id, *, reason, use_current_runtime=False, memory_mb=None
                        use_current_runtime=use_current_runtime, memory_mb=memory_mb,
                        timeout_seconds=timeout_seconds, without_gpu=without_gpu))
         # The old receipt remains authoritative until request.json switches atomically.
-        save(folder / "backend.json", dict(state="queued", attempt_id=attempt_id))
         save(folder / "request.json", replacement)
+        (folder / "backend.json").unlink(missing_ok=True)
     return status(root, request_id)
+
+
+def observation(folder, request):
+    """The scheduler's last look at a request (state, HQ job, generation). Inside request.json since
+    2026-09-24; a separate backend.json before that, kept readable until those requests are gone."""
+    return request.get("backend") or read(folder / "backend.json", {})
 
 
 def status(root, request_id=None):
@@ -285,7 +289,7 @@ def status(root, request_id=None):
     receipt = read(attempt / "receipt.json")
     accepted = read(attempt / "accepted.json")
     cancellation = read(folder / "cancel.json")
-    backend = read(folder / "backend.json", {})
+    backend = observation(folder, request)
     usage = read(attempt / "usage.json")
     state = receipt["state"] if receipt else "running" if accepted else backend.get("state", "queued")
     if accepted and not receipt and time.time() - (usage or {}).get("observed_at", accepted["started_at"]) > 15:

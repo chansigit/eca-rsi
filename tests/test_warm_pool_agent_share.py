@@ -15,6 +15,20 @@ def test_model_turns_ask_for_a_slice_and_compute_for_whole_cores():
     assert 0 < float(AGENT_CALL_SHARE) < 1
 
 
+def test_model_turns_spend_a_per_node_slot_that_every_worker_declares():
+    from ecarsi.warm_pool.backend import RELEASE_DEFAULTS, hq_resources, model_call_slots
+    call = {"operation_id": "agent.call", "cpus": 1, "memory_mb": 384}
+    deg = {"operation_id": "zoom-in.deg", "cpus": 2, "memory_mb": 4096}
+    request = {"runtime_digest": "r"}
+    assert hq_resources(call, request, RELEASE_DEFAULTS)[-2:] == ["--resource", "modelcall=1"]
+    assert "modelcall=1" not in hq_resources(deg, request, RELEASE_DEFAULTS)
+    assert "modelcall=1" not in hq_resources(call, request, {**RELEASE_DEFAULTS, "model_call_resource": False})
+    assert hq_resources(deg, request, RELEASE_DEFAULTS)[:2] == ["--cpus", "2"]
+    assert model_call_slots(list(range(8)), {}) == 16
+    assert model_call_slots(list(range(8)), {"worker": {"model_calls_per_cpu": 0.5}}) == 4
+    assert model_call_slots([0], {"worker": {"model_calls_per_cpu": 0.1}}) == 1
+
+
 class _hold:
     """A live executor holds the attempt directory's flock; flock conflicts across descriptors."""
     def __init__(self, attempt):
