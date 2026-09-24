@@ -450,6 +450,7 @@ def test_submit_journals_requests_by_workflow_and_prune_list_removes_only_termin
 
 
 def test_a_submission_stranded_by_an_earlier_server_generation_is_submitted_again(tmp_path, monkeypatch):
+    """No "submitting" record exists any more; a stale one from before is simply ignored."""
     from ecarsi.warm_pool.backend import HyperQueue
     tmp_path.chmod(0o700)
     (tmp_path / 'requests').mkdir()
@@ -459,20 +460,20 @@ def test_a_submission_stranded_by_an_earlier_server_generation_is_submitted_agai
     folder = tmp_path / 'requests/stranded'
     request = read(folder / 'request.json')
     save(folder / 'request.json', dict(request, backend=dict(state='submitting', generation='old-server', observed_at=1)))
-    backend, calls = HyperQueue(tmp_path), []
+    backend, calls, known = HyperQueue(tmp_path), [], []
     def call(*args):
         calls.append(args)
         if args[:2] == ('job', 'list'):
-            return []
+            return [dict(name=name, id=9, task_stats=dict(waiting=1, running=0, finished=0)) for name in known]
         if args[0] == 'submit':
+            known.append(args[args.index('--name') + 1])
             return {'id': 9}
     monkeypatch.setattr(backend, 'call', call)
     backend.dispatch(dict(server_uid='new', pid=1, start_date='now'))
     assert sum(a[0] == 'submit' for a in calls) == 1
     assert read(folder / 'request.json')['backend']['state'] == 'queued'
-    # The same generation's own in-flight submission is left alone.
-    observed = read(folder / 'request.json')['backend']
-    save(folder / 'request.json', dict(read(folder / 'request.json'), backend=dict(observed, state='submitting')))
+    # Next tick HQ lists the job by name: nothing to submit, nothing rewritten while it runs.
     calls.clear()
+    mtime = (folder / 'request.json').stat().st_mtime_ns
     backend.dispatch(dict(server_uid='new', pid=1, start_date='now'))
-    assert not any(a[0] == 'submit' for a in calls)
+    assert not any(a[0] == 'submit' for a in calls) and (folder / 'request.json').stat().st_mtime_ns == mtime

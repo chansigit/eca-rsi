@@ -394,17 +394,14 @@ class HyperQueue:
                 current = read(folder / "request.json")
                 previous = observation(folder, current) if current else {}
                 reason = ("gone" if not current else "replaced" if current["attempt_id"] != request["attempt_id"]
-                          else "cancelled" if read(folder / "cancel.json")
-                          else "submitting" if previous.get("state") == "submitting" and previous.get("generation") == generation
-                          else None)
+                          else "cancelled" if read(folder / "cancel.json") else None)
                 if reason:
-                    # "submitting" from an earlier server generation is a submission that never reached
-                    # HQ (the tick died first: 235 requests stranded that way on 2026-09-24 01:06 when
-                    # the HQ server was stopped under a running tick); no job carries its name, or the
-                    # reconcile above would have kept it out of the candidates. Submit it again.
                     skipped[reason] = skipped.get(reason, 0) + 1
                     continue
-                observe(folder, current, dict(state="submitting", generation=generation, observed_at=time.time()))
+                # No "submitting" record: the job name is the fence (reconcile finds it by name next tick,
+                # even when this tick dies between submit and the result below), and every observation
+                # is an fsync'd rewrite of request.json -- three per request made a 170-submission tick
+                # take 24 s, most of a model turn's tool call (2026-09-24 02:50).
             if request["spec"].get("gpu"):
                 spec = request["spec"]
                 if gpu_only:
@@ -412,9 +409,9 @@ class HyperQueue:
                 path = attempt / "job.toml"
                 pythonpath = os.pathsep.join(filter(None, (str(Path(__file__).resolve().parents[2]), os.environ.get("PYTHONPATH", ""))))
                 path.write_text(gpu_jobfile(request, attempt, c["name"], self.config["executor"], pythonpath))
-                submissions.append((folder, ("job", "submit-file", str(path))))
+                submissions.append((folder, ("job", "submit-file", str(path)), request["attempt_id"]))
             else:
-                submissions.append((folder, c["args"]))
+                submissions.append((folder, c["args"], request["attempt_id"]))
         self.release_state = dict(held=len(candidates) - len(submissions), released=len(submissions),
                                   planned=len(plan), skipped=skipped, candidates=len(candidates),
                                   hq_waiting=hq_waiting, backlog_cap=cap, draining=draining, aged=len(aged),
@@ -521,16 +518,17 @@ class HyperQueue:
                                 and any(c[0] >= spec["cpus"] and c[1] >= spec["memory_mb"]
                                         for c in worker_capacity(hq_workers()))):
                             aged.append((folder.name, now - request["submitted_at"]))
-                    if any(previous.get(k) != v for k, v in record.items()):
-                        # Each save is an fsync'd write on Lustre; refreshing observed_at
-                        # for 150 live jobs every tick cost more than the whole scan.
+                    if state != "running" and any(previous.get(k) != v for k, v in record.items() if k != "task_stats"):
+                        # Each save is an fsync'd write on Lustre; refreshing observed_at for 150
+                        # live jobs every tick cost more than the whole scan. A start needs no
+                        # record either: accepted.json is what status() reads for "running".
                         observe(folder, request, dict(record, observed_at=time.time()))
                     continue
                 if read(attempt / "accepted.json"):
                     # A lost backend record is not evidence that computation stopped.
                     observe(folder, request, dict(previous, state="unknown_external_result", observed_at=time.time()))
                     continue
-                if previous.get("state") in {"submitting", "unknown_external_result"} and previous.get("generation") == generation:
+                if previous.get("state") == "unknown_external_result" and previous.get("generation") == generation:
                     continue  # reply may have been lost; reconcile by stable job name
                 if read(folder / "cancel.json"):
                     continue
@@ -557,7 +555,7 @@ class HyperQueue:
         self._present = len(present)
         self._persist_settled()
         submissions = self._release(candidates, jobs, aged, gpu_waiting, hq_workers, generation, now)
-        released = {folder.name for folder, _ in submissions}
+        released = {folder.name for folder, *_ in submissions}
         for c in candidates:
             tally(c["request"], 2 if c["folder"].name in released else 3)
         self.activity = activity
@@ -575,25 +573,22 @@ class HyperQueue:
         from concurrent.futures import ThreadPoolExecutor
 
         def submit_one(item):
-            folder, command = item
+            folder, command, attempt_id = item
             try:
-                return folder, self.call(*command), None
+                return folder, attempt_id, self.call(*command), None
             except Exception as exc:  # noqa: BLE001 - recorded on the request, resubmitted next tick
-                return folder, None, (type(exc).__name__ + ": " + str(exc))[:500]
+                return folder, attempt_id, None, (type(exc).__name__ + ": " + str(exc))[:500]
         with ThreadPoolExecutor(max_workers=8) as workers:
             results = list(workers.map(submit_one, submissions))
         # RSI already persisted acceptance. Flush makes backend lookup
         # survive ordinary restart; wrapper receipts cover later loss.
         self.call("journal", "flush")
-        for folder, submitted, error in results:
+        for folder, attempt_id, submitted, error in results:
             with lock(folder / "request.lock"):
                 request = read(folder / "request.json")
-                previous = observation(folder, request) if request else {}
-                if not request or previous.get("state") != "submitting" or previous.get("generation") != generation:
-                    continue  # cancelled or replaced meanwhile; the stable job name reconciles it
+                if not request or request["attempt_id"] != attempt_id:
+                    continue  # replaced meanwhile; the stable job name reconciles it
                 if error:
-                    # Not "submitting": that state means a lost reply for a job that may exist,
-                    # which the next tick reconciles by name. This one is retried from scratch.
                     observe(folder, request, dict(state="submit_failed", error=error,
                             generation=generation, observed_at=time.time()))
                 else:
