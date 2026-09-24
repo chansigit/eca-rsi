@@ -264,10 +264,16 @@ def agent_step(action: str, args: list):
         return immutable(Path(spec["output_root"]) / "result.json",
                                  {"session": args[0], "reply": reference(args[1])})["path"]
     if action == "restart":
+        from ..warm_pool.state import reference
         spec, reason = args
         root = Path(spec["output_root"])
         root.mkdir(mode=0o700, parents=True, exist_ok=True)
         fresh = dict(spec, session_id=spec["session_id"] + "-r2", output_root=str(root / "restart"))
+        # The fresh session pins the program files as they are now: a session that died because a deployment
+        # changed a pinned stage file would otherwise die again on its first tool call.
+        fresh["tools"] = [dict(tool, inputs=[dict(item, **reference(item["path"])) if isinstance(item, dict)
+                               and "sha256" in item and Path(str(item.get("path"))).is_file() else item
+                               for item in tool.get("inputs", [])]) for tool in spec.get("tools", [])]
         intent = immutable(root / "restart.json", dict(reason=reason, superseded=spec["session_id"], spec=fresh))
         return verified(intent)["spec"]
     if action == "tool":

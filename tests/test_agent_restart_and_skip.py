@@ -155,7 +155,7 @@ def test_lineage_whose_sessions_died_keeps_its_labels_within_the_limit(monkeypat
         monkeypatch.setattr(module, 'call', call)
         monkeypatch.setattr(module, 'await_pool', await_pool)
         monkeypatch.setattr(module.workflow, 'execute_child_workflow', child)
-        monkeypatch.setattr(module.workflow, 'info', lambda: SimpleNamespace(workflow_id='zoom-test'))
+        monkeypatch.setattr(module.workflow, 'info', lambda: SimpleNamespace(workflow_id='zoom-test', get_current_history_length=lambda: 0))
         monkeypatch.setattr(module.workflow, 'patched', lambda name: True)
         monkeypatch.setattr(module.workflow, 'wait', asyncio.wait)
         result = await module.ZoominWorkflow().run(dict(max_in_flight_lineages=1, max_in_flight_deg=2))
@@ -226,3 +226,19 @@ def test_release_lists_skipped_samples_for_review(tmp_path):
     items = review_items(unit, exclusions, [])
     assert [(i.kind, i.scope, i.n_cells) for i in items] == [('agent_skipped', 'b', 5)]
     assert 'session died twice' in items[0].note
+
+
+def test_a_restart_pins_the_program_files_as_they_are_now(tmp_path):
+    from ecarsi.control.coordinator import agent_step
+    from ecarsi.warm_pool.state import reference
+    program = tmp_path / 'zoomin.py'
+    program.write_text('old')
+    evidence = tmp_path / 'evidence.json'
+    evidence.write_text('{}')
+    spec = dict(session_id='zoom-abc', output_root=str(tmp_path / 'agent-2'),
+                tools=[dict(name='submit_quality', inputs=[reference(program), reference(evidence), 'not-a-reference'])])
+    program.write_text('new')   # a deployment changed the stage file under the dead session
+    fresh = agent_step('restart', [spec, 'tool: input identity mismatch'])
+    assert fresh['tools'][0]['inputs'][0] == reference(program) and fresh['tools'][0]['inputs'][0]['sha256'] != spec['tools'][0]['inputs'][0]['sha256']
+    assert fresh['tools'][0]['inputs'][1] == reference(evidence) and fresh['tools'][0]['inputs'][2] == 'not-a-reference'
+    assert spec['tools'][0]['inputs'][0]['sha256'] != fresh['tools'][0]['inputs'][0]['sha256'] and 'tools' in spec  # the original spec is untouched

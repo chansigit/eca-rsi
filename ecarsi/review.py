@@ -302,12 +302,13 @@ def _num(s: str):
 
 
 def _mark_recurring(items: list[Item]) -> None:
-    """A reassignment of the same population (lineage → target, same fine
-    label) in several rounds is one recurring problem, not several."""
+    """A reassignment of the same population (lineage → target) in several
+    rounds is one recurring problem, not several. Fine labels are not part of
+    the key: an agent words the same population differently every round."""
     groups: dict[tuple, list[Item]] = {}
     for it in items:
         if it.kind == "reassigned":
-            groups.setdefault((it.scope, it.extra.get("reassign_to"), it.label), []).append(it)
+            groups.setdefault((it.scope, it.extra.get("reassign_to")), []).append(it)
     for g in groups.values():
         rs = sorted({it.round for it in g})
         if len(rs) > 1:
