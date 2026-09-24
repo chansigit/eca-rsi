@@ -166,11 +166,17 @@ class Registry:
                     self._file, self._stamp = {**self._file, **new}, None
                 except OSError as exc:
                     sys.stderr.write(f"[serve] registry {self.path}: could not keep completed runs: {exc}\n")
-            return {
-                **published,
-                **self._file,
-                **self._extra,
-            }  # this process's own dirs win on a name clash
+            return self._merge(published)
+
+    def _merge(self, published: dict[str, Path]) -> dict[str, Path]:
+        """The three sources as one list: this process's own dirs win on a name clash, and a
+        published run whose directory is already bound under another name is not a second row.
+        The plane names a run by its directory (07_Swahnetal); the file may hold the same path
+        under a qualified name (chondroatlas-g2-07_Swahnetal) -- merging by name alone put five
+        chondro runs on the page twice, the bare copies under "other" (2026-09-24)."""
+        mine = {**self._file, **self._extra}
+        bound = set(mine.values())
+        return {**{k: v for k, v in published.items() if v not in bound}, **mine}
 
     def get(self, name: str) -> Path | None:
         return self.snapshot().get(name)
@@ -178,7 +184,7 @@ class Registry:
     def cached_snapshot(self) -> dict[str, Path]:
         # Readers never wait on filesystem I/O under the registry write lock.
         # _file is replaced atomically, not modified in place.
-        return {**self._published(), **self._file, **self._extra}
+        return self._merge(self._published())
 
     def start(self) -> None:
         def refresh():

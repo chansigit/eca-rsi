@@ -89,3 +89,13 @@ def test_the_monitor_needs_no_index_because_it_reads_published_records(tmp_path)
     snapshot(root, temporal_port=0, cache=cache)
     assert "pool_done" not in cache and "pool_stale" not in cache
     assert set(cache) <= {"journals", "resource_files", "worker_tails", "indexed_since"}
+
+
+def test_a_published_run_already_bound_under_another_name_is_one_row(tmp_path):
+    # The plane publishes a run by its directory name; the registry file may bind the same
+    # directory under a qualified name. One path, one row, and the file's name is the one shown.
+    swahn, yan = tmp_path / 'chondro' / '07_Swahnetal', tmp_path / 'chondro' / '08_Yanetal'
+    registry = serve.Registry(tmp_path / 'registry.json', published=lambda: {'07_Swahnetal': swahn, '08_Yanetal': yan})
+    serve.Registry.write_file(registry.path, {'chondroatlas-g2-07_Swahnetal': swahn})
+    assert registry.snapshot() == {'chondroatlas-g2-07_Swahnetal': swahn, '08_Yanetal': yan}
+    assert registry.cached_snapshot() == registry.snapshot()
