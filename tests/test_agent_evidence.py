@@ -208,15 +208,18 @@ def test_inventory_pages_summaries_by_bytes_and_an_exclusion_needs_the_full_prop
         png = source / f'{name}.png'; png.write_bytes(PNG)
         files[f'{name}/annotation_proposal.json'] = reference(p)
         files[f'{name}/figures/umap_clusters.png'] = reference(png)
-        samples.append(dict(sample=name, n_cells=20, qc=dict(median_genes=700), annotation=proposal))
+        samples.append(dict(sample=name, n_cells=20, qc=dict(median_genes='700.0'), annotation=proposal))
     bundle = dict(samples=samples, files=files)
     page, more = inventory_page(bundle, 0)
     assert more is None and [e['sample'] for e in page] == ['s0', 's1', 's2']
     entry = page[0]
     assert entry['n_clusters'] == 4 and entry['confidence'] == {'low': 1, 'high': 3} and entry['uncertain_fraction'] == 0.25
-    assert entry['top_coarse'] == ['T cell x3', 'Doublet x1'] and len(entry['verdict']) == 300
-    assert entry['proposal'] == 's0/annotation_proposal.json' and entry['figures'] == ['s0/figures/umap_clusters.png']
-    assert 'doubts' not in json.dumps(page) and len(json.dumps(page)) < 3000   # the summary, not the prose
+    assert entry['top_coarse'] == ['T cell x3', 'Doublet x1'] and len(entry['verdict']) == 240
+    assert entry['proposal'] == 's0/annotation_proposal.json' and entry['umap'] == 's0/figures/umap_clusters.png'
+    assert entry['qc'] == {'median_genes': 700}
+    assert 'doubts' not in json.dumps(page) and len(json.dumps(page)) < 2400   # the summary, not the prose
+    from ecarsi.stages.crosssample import compact_qc
+    assert compact_qc({'median_pct_mt': '2.452605724334717', 'median_counts': '5996.5', 'n_cells': '2110', 'decontx_degenerate': 'False'}) == {'median_pct_mt': 2.45, 'median_counts': 6000, 'n_cells': 2110, 'decontx_degenerate': 'False'}
     monkeypatch.setattr('ecarsi.stages.crosssample.INVENTORY_PAGE_BYTES', len(json.dumps(page[0])) + 10)
     assert [e['sample'] for e in inventory_page(bundle, 0)[0]] == ['s0'] and inventory_page(bundle, 0)[1] == 1
     assert inventory_page(bundle, 2)[1] is None

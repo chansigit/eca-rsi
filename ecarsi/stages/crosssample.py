@@ -29,11 +29,24 @@ def inventory_entry(sample):
     confidence = Counter(str(c.get('confidence', '')) for c in clusters)
     coarse = Counter(str(c.get('label_coarse', '')) for c in clusters)
     uncertain = sum(n for level, n in confidence.items() if level in {'low', 'medium'})
-    return dict(sample=sample['sample'], n_cells=sample['n_cells'], qc=sample.get('qc'), n_clusters=len(clusters),
+    return dict(sample=sample['sample'], n_cells=sample['n_cells'], qc=compact_qc(sample.get('qc')), n_clusters=len(clusters),
                 confidence=dict(confidence), uncertain_fraction=round(uncertain / len(clusters), 2) if clusters else None,
                 top_coarse=[f'{label} x{n}' for label, n in coarse.most_common(5)],
-                verdict=str(proposal.get('overall') or '')[:300],
+                verdict=str(proposal.get('overall') or '')[:240],
                 proposal=sample['sample'] + '/annotation_proposal.json' if proposal else None)
+
+
+def compact_qc(qc):
+    """The QC summary as short numbers: osp writes every value as a full-precision string (900 bytes a
+    sample); three significant digits carry the same judgement in a quarter of the space."""
+    out = {}
+    for key, value in (qc or {}).items():
+        try:
+            number = float(value)
+            out[key] = int(number) if number.is_integer() and abs(number) >= 100 else float(f'{number:.3g}')
+        except (TypeError, ValueError):
+            out[key] = value
+    return out
 
 
 def inventory_page(bundle, offset):
@@ -45,7 +58,10 @@ def inventory_page(bundle, offset):
     page, size = [], 0
     for sample in samples[offset:]:
         entry = inventory_entry(sample)
-        entry['figures'] = [n for n in bundle['files'] if n.startswith(sample['sample'] + '/') and n.endswith('.png')]
+        # One figure path per entry: thirty paths a sample were most of a 4 KB entry (2026-09-25); the
+        # rest are in list_evidence.
+        entry['umap'] = next((n for n in bundle['files'] if n.startswith(sample['sample'] + '/figures/')
+                              and 'umap_clusters' in n and n.endswith('.png')), None)
         size += len(json.dumps(entry))
         if page and size > INVENTORY_PAGE_BYTES:
             break
