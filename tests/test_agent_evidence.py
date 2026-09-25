@@ -62,6 +62,8 @@ def inclusion_state(tmp_path, count=3):
 
 
 def test_inclusion_batches_inventories_and_figures_but_requires_every_sample(tmp_path, monkeypatch):
+    import ecarsi.stages.crosssample as cross
+    monkeypatch.setattr(cross, 'INVENTORY_PAGE_BYTES', 1)   # one sample per page: the batch mechanics under test
     state = inclusion_state(tmp_path)
     allowed = ['sample_inventory', 'read_evidence']
     result = run_batch(tmp_path / 'inventory', monkeypatch, 'ecarsi.stages.crosssample', state,
@@ -93,6 +95,8 @@ def test_inclusion_batches_inventories_and_figures_but_requires_every_sample(tmp
 
 
 def test_pagination_bound_and_frozen_execution_plan(tmp_path, monkeypatch):
+    import ecarsi.stages.crosssample as cross
+    monkeypatch.setattr(cross, 'INVENTORY_PAGE_BYTES', 1)
     state = inclusion_state(tmp_path, count=12)
     result = run_batch(tmp_path / 'inventory', monkeypatch, 'ecarsi.stages.crosssample', state,
         'sample_inventory', dict(offset=0), ['sample_inventory'], multimodal=False)
@@ -189,3 +193,50 @@ def test_osp_table_pages_reach_the_model_compacted(tmp_path, monkeypatch):
     assert result['text'].startswith('de_top_genes_r1.csv  (top 15 markers per cluster')
     assert result['text'].count('G79_') == 15 and ' G0_15 ' not in result['text'] and len(result['text']) < 40000  # raw text is 124k
     assert all(e['result'].get('text') == '' for e in result['additional_evidence'] if e['tool'] == 'read_evidence' and e['arguments'].get('kind') == 'tables')
+
+
+def test_inventory_pages_summaries_by_bytes_and_an_exclusion_needs_the_full_proposal(tmp_path, monkeypatch):
+    from ecarsi.stages.crosssample import inventory_page, tool
+    source = tmp_path / 'source'; source.mkdir()
+    samples, files = [], {}
+    for i in range(3):
+        name = f's{i}'
+        clusters = [dict(cluster=str(c), confidence='high' if c else 'low', label_coarse='T cell' if c else 'Doublet',
+                         label_fine='x', doubts='ambient ' * 50, evidence_genes=['CD3D']) for c in range(4)]
+        proposal = dict(cluster_key='leiden', clusters=clusters, overall='verdict ' * 80)
+        p = source / f'{name}.json'; p.write_text(json.dumps(proposal))
+        png = source / f'{name}.png'; png.write_bytes(PNG)
+        files[f'{name}/annotation_proposal.json'] = reference(p)
+        files[f'{name}/figures/umap_clusters.png'] = reference(png)
+        samples.append(dict(sample=name, n_cells=20, qc=dict(median_genes=700), annotation=proposal))
+    bundle = dict(samples=samples, files=files)
+    page, more = inventory_page(bundle, 0)
+    assert more is None and [e['sample'] for e in page] == ['s0', 's1', 's2']
+    entry = page[0]
+    assert entry['n_clusters'] == 4 and entry['confidence'] == {'low': 1, 'high': 3} and entry['uncertain_fraction'] == 0.25
+    assert entry['top_coarse'] == ['T cell x3', 'Doublet x1'] and len(entry['verdict']) == 300
+    assert entry['proposal'] == 's0/annotation_proposal.json' and entry['figures'] == ['s0/figures/umap_clusters.png']
+    assert 'doubts' not in json.dumps(page) and len(json.dumps(page)) < 3000   # the summary, not the prose
+    monkeypatch.setattr('ecarsi.stages.crosssample.INVENTORY_PAGE_BYTES', len(json.dumps(page[0])) + 10)
+    assert [e['sample'] for e in inventory_page(bundle, 0)[0]] == ['s0'] and inventory_page(bundle, 0)[1] == 1
+    assert inventory_page(bundle, 2)[1] is None
+    with pytest.raises(ValueError, match='past the last sample'):
+        inventory_page(bundle, 3)
+    # the host rule: every inventory and UMAP read, and the full proposal of a sample being excluded
+    evidence = immutable(tmp_path / 'bundle.json', bundle)
+    state = immutable(tmp_path / 'state.json', dict(evidence=evidence, phase='inclusion', types=None,
+        inventories=['s0', 's1', 's2'], read=[f's{i}/figures/umap_clusters.png' for i in range(3)], lookups=[], qc=False))
+    decision = immutable(tmp_path / 'decision.json', dict(proposal_json=json.dumps({'notes': 'n', 'samples': [
+        dict(sample='s0', include=True, reason='fine'), dict(sample='s1', include=False, reason='doublets'),
+        dict(sample='s2', include=True, reason='fine')]})))
+    reject = tmp_path / 'reject'; reject.mkdir()
+    tool('submit_decision', state['path'], decision['path'], reject)
+    assert "Read the full annotation proposal" in read(reject / 'result.json')['content'] and "['s1']" in read(reject / 'result.json')['content']
+    args = immutable(tmp_path / 'read.json', dict(path='s1/annotation_proposal.json', offset=0))
+    seen = tmp_path / 'seen'; seen.mkdir()
+    tool('read_evidence', state['path'], args['path'], seen)
+    result = read(seen / 'result.json')
+    assert 'ambient' in result['content'] and result['next_offset'] is None
+    accept = tmp_path / 'accept'; accept.mkdir()
+    tool('submit_decision', result['state']['path'], decision['path'], accept)
+    assert read(accept / 'result.json')['accepted'] is True
