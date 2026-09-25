@@ -296,6 +296,8 @@ def test_worker_timeout_fallback_continuation_and_dispatcher_recovery(tmp_path):
         bridge.serve(root, once=True)
         assert status(pool, first['pool_request_id'])['accepted'] is None
         assert len(bridge.status(root, request_id)['attempts']) == 1
+        # the turn in flight is counted for its dataset (Periscope's 'Datasets at work' reads this; runner turns are not Pool tasks)
+        assert read(root/'summary.json')['datasets'] == {read(root/'requests'/request_id/'request.json')['spec']['trace']['dataset_id']: 1}
         save(backend, dict(state='queued'))
 
         def execute(attempt):

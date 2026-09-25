@@ -725,7 +725,8 @@ function renderProductivity(data) {
 function renderAtWork(data) {
   const act=data.scheduler?.datasets||{}, running=data.running_datasets||[];
   const kind=c=>c[0]?'computing':c[1]?'model turn':(c[2]||c[3])?'queued':'between steps';
-  const rows=running.map(n=>[n,act[n]||[0,0,0,0]]), groups={computing:[],'model turn':[],queued:[],'between steps':[]};
+  const turns=data.bridge_summary?.datasets||{};  // model turns in flight per dataset: runner turns are not Pool tasks
+  const rows=running.map(n=>{const c=[...(act[n]||[0,0,0,0])]; if(n in turns)c[1]=turns[n]; return [n,c];}), groups={computing:[],'model turn':[],queued:[],'between steps':[]};
   for (const r of rows) groups[kind(r[1])].push(r);
   const stale=data.scheduler?.observed_at?Date.now()/1000-data.scheduler.observed_at:null;
   $('at-work-state').textContent=stale!==null&&stale<180?'Live':'Scheduler silent';

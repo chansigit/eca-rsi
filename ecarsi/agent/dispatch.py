@@ -433,7 +433,7 @@ def serve(root, *, once=False, finished=None):
         finished.update({(name, ino): state for name, ino, state in read(root / "finished.json", [])})
     persisted = len(finished)
     dispatch_count = len(events)
-    served = Counter()
+    served, dataset_of = Counter(), {}  # dataset per request folder, read once: the trace never changes
     with lock(root / "service.lock", blocking=False):
         while True:
             scanning = time.monotonic()
@@ -441,7 +441,7 @@ def serve(root, *, once=False, finished=None):
             settings = policy(config)
             if type(config["concurrency"]) is not int or config["concurrency"] < 1:
                 raise ValueError("Bridge concurrency must be a positive integer")
-            active, queued, legacy_active = Counter(), [], 0
+            active, queued, legacy_active, turns = Counter(), [], 0, Counter()
             error = None
             for entry in sorted(os.scandir(root / "requests"), key=lambda e: e.name):
                 folder, key = Path(entry.path), (entry.name, entry.inode())
@@ -474,6 +474,10 @@ def serve(root, *, once=False, finished=None):
                     queued.append((state["submitted_at"], folder))
                 elif state.get("attempts"):
                     active[model_key(state["attempts"][-1]["model"])] += 1
+                    if key not in dataset_of:
+                        trace = (read(folder / "request.json", {}).get("spec") or {}).get("trace") or {}
+                        dataset_of[key] = trace.get("dataset_id") or "Unattributed"
+                    turns[dataset_of[key]] += 1  # runner turns never touch the Pool: the scheduler's table cannot see them
                 else:
                     legacy_active += 1
             health = {}
@@ -512,7 +516,7 @@ def serve(root, *, once=False, finished=None):
             save(root / "summary.json", dict(updated_at=time.time(), counts=dict(counts), execution="pool",
                  concurrency=config["concurrency"], running=sum(active.values()), unresolved=legacy_active,
                  available=max(0, config["concurrency"]-sum(active.values())-legacy_active), dispatch_error=error,
-                 dispatch_scan_seconds=time.monotonic()-scanning,
+                 dispatch_scan_seconds=time.monotonic()-scanning, datasets=dict(turns),
                  models=model_health(events, normalized_models(read(config["catalog"])), active, settings),
                  routing=settings, service=config.get("service") or {},
                  runners={p.stem: read(p) for p in (root / "runners").glob("*.json")} if (root / "runners").is_dir() else {}))
