@@ -562,12 +562,19 @@ def unstale(s: dict, verdicts: "ControlVerdicts | None") -> dict:
     return {**s, "cls": "running", "stage": "no progress 12h+ · " + s["stage"][len("stopped · "):]}
 
 
+def storage_of(root: Path) -> str:
+    """The filesystem a run directory lives on, by its first path component (/oak, /scratch)."""
+    parts = Path(root).parts
+    return parts[1] if len(parts) > 1 else str(root)
+
+
 class StateCache:
     """Fleet requests only read memory, including during a slow storage refresh."""
 
     def __init__(self, registry: Registry, ttl: float = 60.0, cache_file: Path | None = None):
         self._registry, self._ttl = registry, ttl
         self._states: dict[Path, tuple[float, dict]] = {}
+        self._slow: dict[str, float] = {}   # storage_of(root) -> until when its roots are left alone
         self._lock = threading.Lock()
         self._cache_file = cache_file
         self._save_lock = threading.Lock()
@@ -608,6 +615,8 @@ class StateCache:
 
     SETTLED = frozenset({"released"})   # the one state whose files will not move again
     FULL_EVERY = 10                     # sweeps between two rereads of the settled majority
+    HUNG_AFTER = 60                     # seconds without a single read finishing: the running ones are stuck in storage
+    QUARANTINE = 1800                   # seconds a storage whose read hung is skipped (its rows keep their last state)
 
     def refresh(self, full: bool = True) -> None:
         roots = set(self._registry.snapshot().values())
@@ -619,9 +628,38 @@ class StateCache:
             with self._lock:
                 settled = {root for root, (_, st) in self._states.items() if st.get("cls") in self.SETTLED}
             roots = {root for root in roots if root not in settled} or roots
-        # Bound filesystem work independently of the number of browser requests.
-        with ThreadPoolExecutor(max_workers=4, thread_name_prefix='dataset-warmer') as workers:
-            list(workers.map(self._put, roots))
+        now = time.time()
+        with self._lock:
+            slow = {fs for fs, until in self._slow.items() if until > now}
+        roots = {root for root in roots if storage_of(root) not in slow}
+        # Bound filesystem work independently of the number of browser requests. A read that hangs in
+        # the filesystem client cannot be cancelled (2026-09-24: Oak OSTs returned I/O errors and all
+        # four warmer threads sat in cl_sync_io_wait for hours, so the scratch rows went stale too);
+        # a sweep in which nothing finishes for HUNG_AFTER seconds abandons the reads still running,
+        # quarantines their storage, and leaves their rows as they were.
+        from concurrent.futures import FIRST_COMPLETED, wait
+        pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix='dataset-warmer')
+        futures = {pool.submit(self._put, root): root for root in roots}
+        pending = set(futures)
+        while pending:
+            done, pending = wait(pending, timeout=self.HUNG_AFTER, return_when=FIRST_COMPLETED)
+            if done or not pending:
+                continue
+            hung = [futures[f] for f in pending if f.running()]
+            for f in pending:
+                f.cancel()   # not started: read next sweep
+            with self._lock:
+                for root in hung:
+                    self._slow[storage_of(root)] = time.time() + self.QUARANTINE
+                    if root not in self._states:
+                        self._states[root] = (time.time(), dict(
+                            units=0, released=0, n_input=None, final_cells=None, rounds=0, species='',
+                            finished=None, updated=None, events={'organize': [], 'release': []},
+                            stage=f'storage not responding ({storage_of(root)})', cls='loading', collection=''))
+            sys.stderr.write(f"[serve] state warmer: {len(hung)} read(s) hung on "
+                             f"{sorted({storage_of(r) for r in hung})}; skipped for {self.QUARANTINE // 60} min\n")
+            break
+        pool.shutdown(wait=False)   # hung threads end when the storage answers; nothing waits for them
         with self._lock:
             live = set(self._registry.snapshot().values())
             for gone in set(self._states) - live:
