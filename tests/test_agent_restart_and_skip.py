@@ -193,6 +193,13 @@ def test_resume_treats_requests_of_superseded_sessions_as_settled(tmp_path):
     save(agent / 'restart/context-reset-2.json', dict(spec=dict(session_id='osp-a-r2-g2')))
     save(root / 'units/u/rounds/round01/03-zoom-in/zoom-1/context-reset-3.json', dict(spec=dict(session_id='zoom-z-g3')))
     assert superseded_sessions(root) == {'osp-a', 'osp-a-r2', 'zoom-z-g2'}
+    cross = root / 'units/u/rounds/round01/02-cross-sample/cross-1'
+    (cross / 'generation-2').mkdir(parents=True)
+    save(cross / 'restart.json', dict(superseded='cross-c', spec={}))
+    save(cross / 'context-reset-2.json', dict(spec=dict(session_id='cross-c-g2')))
+    save(cross / 'generation-2/context-reset-3.json', dict(spec=dict(session_id='cross-c-g3')))
+    # a restart supersedes every generation of the session that died, the one live at the restart included
+    assert superseded_sessions(root) == {'osp-a', 'osp-a-r2', 'zoom-z-g2', 'cross-c', 'cross-c-g2', 'cross-c-g3'}
     assert request_session(dict(request_id='osp-a.turn-3')) == 'osp-a'
     assert request_session(dict(request_id='osp-a-r2.tool-ff')) == 'osp-a-r2'
     assert request_session(dict(request_id='agent-ff', operation_id='agent.call',

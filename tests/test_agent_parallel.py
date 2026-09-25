@@ -32,6 +32,7 @@ def test_merge_retains_all_observations_and_rejects_scientific_mutations():
 def test_parallel_handoff_preserves_all_results_and_next_turn_state(tmp_path):
     from tests.test_agent_session import setup, Client, ScriptedModel, completed_tool, execute_turn
     from harness_bridge import _harness_openai as adapter
+    from ecarsi.warm_pool.budget import MEASURED_CEILING_MB
     from agents.models.interface import ModelResponse
     from agents.usage import Usage
     from openai.types.responses import ResponseFunctionToolCall
@@ -57,7 +58,7 @@ def test_parallel_handoff_preserves_all_results_and_next_turn_state(tmp_path):
         for i in range(18):
             item = session.tool_request(ref, reply, i)
             request = read(Path(spec['pool_root'])/'requests'/item['request_id']/'request.json')['spec']
-            assert base in request['inputs'] and request['memory_mb'] == 2048
+            assert base in request['inputs'] and request['memory_mb'] == min(2048, MEASURED_CEILING_MB['read_evidence'])
             state = immutable(tmp_path/f'fork-{i}.json', dict(verified(base), read=[str(i)]))
             accepted.append(completed_tool(spec, item, {'text': str(i), 'state': state}))
         assert choose(ref, reply)  # Restart retains its original parallel policy.

@@ -19,6 +19,10 @@ def test_organize_resume_accepts_relocated_publication_but_rejects_changed_data(
     monkeypatch.setattr(coordinator, 'check_pool', lambda *args: {
         'state': 'ready', 'path': str(output / 'completion.json')})
     assert dataset_step('completed', ['organize', spec]) == str(destination)
+    monkeypatch.setattr(coordinator, 'check_pool', lambda *args: (_ for _ in ()).throw(KeyError(args[1])))
+    assert dataset_step('completed', ['organize', spec]) == str(destination)   # Pool folder pruned
+    monkeypatch.setattr(coordinator, 'check_pool', lambda *args: {
+        'state': 'ready', 'path': str(output / 'completion.json')})
     L.input_h5ad(L.unit_dir(destination, 'unit')).write_bytes(b'corrupted')
     with pytest.raises(ValueError, match='Organize output changed'):
         dataset_step('completed', ['organize', spec])
@@ -160,6 +164,15 @@ def test_completed_stage_requires_same_input_spec_and_accepted_result(tmp_path, 
     save(root / 'publication.json', {**bundle, 'result': reference(output)})
     monkeypatch.setattr(coordinator, 'check_pool', lambda *args: {'state': 'ready', 'path': str(output)})
     assert dataset_step('completed', ['zoom_in', spec]) == str(root / 'publication.json')
+    def pruned(*args):
+        raise KeyError(args[1])
+    monkeypatch.setattr(coordinator, 'check_pool', pruned)   # the run's Pool folders were pruned after it finished
+    assert dataset_step('completed', ['zoom_in', spec]) == str(root / 'publication.json')
+    save(output, {**bundle, 'n_survived': 3})
+    with pytest.raises(ValueError):
+        dataset_step('completed', ['zoom_in', spec])
+    save(output, bundle)
+    monkeypatch.setattr(coordinator, 'check_pool', lambda *args: {'state': 'ready', 'path': str(output)})
     with pytest.raises(ValueError, match='specification changed'):
         dataset_step('completed', ['zoom_in', {**spec, 'config': {'changed': True}}])
     save(output, {**bundle, 'n_survived': 3})

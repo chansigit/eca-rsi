@@ -57,15 +57,19 @@ UNFINISHED = frozenset({'FAILED', 'TERMINATED', 'CANCELED', 'TIMED_OUT'})
 
 def superseded_sessions(root):
     """Sessions whose Pool and Bridge requests no longer matter for resume: a restart ran the same
-    judgement again as a fresh session, a context reset continued it in a fresh conversation."""
+    judgement again as a fresh session (every generation of the one that died: the generation live at
+    the restart kept six resumes blocked on its failed turn, 2026-09-24), a context reset continued it
+    in a fresh conversation."""
     from ..warm_pool.state import read
-    ids = set()
-    for path in Path(root).rglob('restart.json'):
-        ids.add(read(path)['superseded'])
+    restarted = {read(path)['superseded'] for path in Path(root).rglob('restart.json')}
+    ids = set(restarted)
     for path in Path(root).rglob('context-reset-*.json'):
         generation = int(path.stem.rsplit('-', 1)[1])
-        base = re.sub(r'-g\d+$', '', read(path)['spec']['session_id'])
+        current = read(path)['spec']['session_id']
+        base = re.sub(r'-g\d+$', '', current)
         ids.add(base if generation == 2 else f'{base}-g{generation - 1}')
+        if base in restarted:
+            ids.add(current)
     return ids
 
 
@@ -307,12 +311,20 @@ def dataset_step(action, args):
         from .coordinator import check_pool
         def accepted(ref):
             request = Path(ref['path']).relative_to(Path(spec['pool_root']) / 'requests').parts[0]
-            result = check_pool(spec['pool_root'], request, Path(ref['path']).name)
+            try:
+                result = check_pool(spec['pool_root'], request, Path(ref['path']).name)
+            except KeyError:
+                # The Pool folder is gone (pruned after the run finished, or archived by hand: six 3CA
+                # resumes died on this, 2026-09-24); the publication's own reference still verifies the file.
+                return verified(ref)
             if result['state'] != 'ready' or reference(result['path']) != ref:
                 raise ValueError('Cached stage output is no longer accepted')
             return verified(ref)
         if stage == 'organize':
-            result = check_pool(spec['pool_root'], spec['run_id'] + '.execute', 'completion.json')
+            try:
+                result = check_pool(spec['pool_root'], spec['run_id'] + '.execute', 'completion.json')
+            except KeyError:
+                return str(root)  # Pool folder pruned; the relocated publication was accepted when written
             if result['state'] != 'ready':
                 raise ValueError('Organize execution is no longer accepted')
             # Publication relocates the manifest. Reuse its full validation rather
