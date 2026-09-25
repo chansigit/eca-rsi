@@ -1,15 +1,19 @@
 # Task: decide which samples enter cross-sample integration
 
 You are given, for every sample of one analysis unit, its single-sample
-pipeline (osp) results: QC summary numbers, the annotation proposal
-(per-cluster labels, confidence, doubts), and paths to its figures.
+pipeline (osp) results: QC summary numbers, a summary of its annotation
+proposal (cluster count, confidence counts, top coarse labels, the overall
+verdict), and paths to its figures and to the full proposal (per-cluster
+labels, confidence, doubts), readable with read_evidence.
 Decide, sample by sample, whether it enters harmony integration.
 
 ## How to judge
 
 - **Read the figures — do not decide from numbers alone.** For every
   sample, Read at least its cluster-UMAP figure; read QC violins when the
-  numbers look off. A sample whose UMAP is shattered into many small
+  numbers look off. The inventory summary only screens: before excluding
+  a sample, read its full annotation proposal (`<sample>/annotation_proposal.json`)
+  so the per-cluster doubts, not the numbers, make the call. A sample whose UMAP is shattered into many small
   clusters that its annotation cannot explain, or whose clusters are
   dominated by ambient/low-quality signal, is a candidate for exclusion.
 - **Exclusion is the rare exception**, for samples clearly and broadly

@@ -14,6 +14,56 @@ from .persample import check_bundle, sealed
 from ..warm_pool.state import digest, read, save
 
 BASE = 'msp_leiden_r2.0'
+INVENTORY_PAGE_BYTES = 64 * 1024  # sample_inventory pages by bytes, like evidence pages: a cohort of 62
+                                  # patients paged one full proposal per call filled the model's context
+                                  # by page 8 in every generation (2026-09-24, six 3CA datasets)
+
+
+def inventory_entry(sample):
+    """One sample's inventory line: its numbers and a screen of its annotation proposal. The per-cluster
+    labels and doubts stay in <sample>/annotation_proposal.json for read_evidence: the summary screens,
+    the full text decides."""
+    from collections import Counter
+    proposal = sample.get('annotation') or {}
+    clusters = proposal.get('clusters') or []
+    confidence = Counter(str(c.get('confidence', '')) for c in clusters)
+    coarse = Counter(str(c.get('label_coarse', '')) for c in clusters)
+    uncertain = sum(n for level, n in confidence.items() if level in {'low', 'medium'})
+    return dict(sample=sample['sample'], n_cells=sample['n_cells'], qc=sample.get('qc'), n_clusters=len(clusters),
+                confidence=dict(confidence), uncertain_fraction=round(uncertain / len(clusters), 2) if clusters else None,
+                top_coarse=[f'{label} x{n}' for label, n in coarse.most_common(5)],
+                verdict=str(proposal.get('overall') or '')[:300],
+                proposal=sample['sample'] + '/annotation_proposal.json' if proposal else None)
+
+
+def inventory_page(bundle, offset):
+    """Inventory entries from `offset` that fit INVENTORY_PAGE_BYTES (at least one), and the offset of
+    the next page or None; an offset past the last sample is an error, as before."""
+    samples = bundle['samples']
+    if not 0 <= offset < len(samples):
+        raise ValueError('offset past the last sample')
+    page, size = [], 0
+    for sample in samples[offset:]:
+        entry = inventory_entry(sample)
+        entry['figures'] = [n for n in bundle['files'] if n.startswith(sample['sample'] + '/') and n.endswith('.png')]
+        size += len(json.dumps(entry))
+        if page and size > INVENTORY_PAGE_BYTES:
+            break
+        page.append(entry)
+    more = offset + len(page)
+    return page, more if more < len(samples) else None
+
+
+def proposal_artifact(bundle, key):
+    """<sample>/annotation_proposal.json of an evidence bundle prepared before proposals were listed in
+    its files (2026-09-24): resolved through the sample's own per-sample bundle."""
+    sample_name, _, name = key.rpartition('/')
+    if name != 'annotation_proposal.json':
+        return artifact(bundle, key)
+    sample = next((s for s in bundle['samples'] if s['sample'] == sample_name), None)
+    if sample is None:
+        raise KeyError(key)
+    return artifact(check_bundle(sample['bundle']), name)
 
 
 def artifact(bundle, name):
@@ -52,7 +102,7 @@ def inspect_input(spec, destination):
         samples.append(dict(sample=label, bundle=ref, n_cells=bundle['validation']['n_survived'],
                             qc=bundle['validation']['qc_summary'], annotation=proposal))
         for name, item in bundle['files'].items():
-            if name.endswith('.png'):
+            if name.endswith('.png') or name == 'annotation_proposal.json':
                 files[label + '/' + name] = item
     if not samples:
         raise ValueError('No surviving samples to integrate')
@@ -284,7 +334,7 @@ def agent_spec(spec, evidence_ref, phase, parent, types_ref=None):
     if phase=='inclusion':
         prompt=PROMPTS.joinpath('sample_inclusion.md').read_text()
         prompt+='\nRead every sample inventory and cluster UMAP before deciding. Sample count: '+str(len(bundle['samples']))
-        props['sample_inventory']=(schema({'offset':{'type':'integer','minimum':0}}),'Read the next sample inventory and its figure paths. Follow next_offset until null.',False)
+        props['sample_inventory']=(schema({'offset':{'type':'integer','minimum':0}}),'Read the next page of sample inventories (cells, QC, cluster count, confidence counts, top coarse labels, verdict) with each sample\'s figure and proposal paths. Follow next_offset until null. The full proposal with per-cluster doubts is read_evidence on <sample>/annotation_proposal.json.',False)
     else:
         prompt=(PROMPTS/'crosssample-deg.md').read_text()
         prompt+='\n'+(PROMPTS/('crosssample-'+phase+'.md')).read_text()
@@ -369,7 +419,7 @@ def tool(name,state_path,args_path,destination):
     if name=='deg_lookup':args=lookup_arguments(args)
     try:
         if name=='read_evidence':
-            path=artifact(bundle,args['path'])
+            path=artifact(bundle,args['path']) if args['path'] in bundle['files'] else proposal_artifact(bundle,args['path'])
             if path.suffix=='.png':
                 if path.stat().st_size>8*2**20:raise ValueError('Figure exceeds the image budget')
                 response.update(content=args['path'],images=['data:image/png;base64,'+base64.b64encode(path.read_bytes()).decode()])
@@ -383,9 +433,9 @@ def tool(name,state_path,args_path,destination):
             page,nxt=evidence_page(evidence_paths(bundle),args.get('offset') or 0)
             response.update(content=page,next_offset=nxt)
         elif name=='sample_inventory':
-            offset=args['offset'];sample=bundle['samples'][offset]
-            response.update(content=sample,figures=[n for n in bundle['files'] if n.startswith(sample['sample']+'/')],next_offset=offset+1 if offset+1<len(bundle['samples']) else None)
-            state['inventories']=sorted(set(state.get('inventories',[]))|{sample['sample']})
+            page,nxt=inventory_page(bundle,args['offset'])
+            response.update(content=page,next_offset=nxt)
+            state['inventories']=sorted(set(state.get('inventories',[]))|{e['sample'] for e in page})
         elif name=='type_context':
             entries=verified(state['types'])['proposal']['clusters'] if state['types'] else list(bundle['type_entries'].values())
             response.update(content=entries,next_offset=None)
@@ -418,6 +468,9 @@ def tool(name,state_path,args_path,destination):
                 if set(state.get('inventories',[]))!={s['sample'] for s in bundle['samples']}:raise ValueError('Read every sample inventory before inclusion')
                 missing=[s['sample'] for s in bundle['samples'] if not any(p.startswith(s['sample']+'/figures/') and 'umap_clusters' in p for p in state['read'])]
                 if missing:raise ValueError('Read each sample cluster UMAP before inclusion: '+str(missing))
+                proposals={s['sample'] for s in bundle['samples'] if s.get('annotation')}
+                unread=[s['sample'] for s in proposal['samples'] if not s['include'] and s['sample'] in proposals and s['sample']+'/annotation_proposal.json' not in state['read']]
+                if unread:raise ValueError('Read the full annotation proposal (read_evidence on <sample>/annotation_proposal.json) of each sample you exclude before inclusion: '+str(unread))
             else:
                 data=_data(bundle);clusters=sorted(data.obs[BASE].astype(str).unique())
                 if not state['lookups']:raise ValueError('Query DEG with deg_lookup or deg_sql before submission')
