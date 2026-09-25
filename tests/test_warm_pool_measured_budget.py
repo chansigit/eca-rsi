@@ -34,7 +34,7 @@ def test_ceiling_caps_listed_operations_only_and_never_raises():
     assert measured_ceiling(_spec("a", "submit_quality", 24576))["memory_mb"] == MEASURED_CEILING_MB["submit_quality"]
     assert measured_ceiling(_spec("a", "submit_quality", 1024))["memory_mb"] == 1024
     assert measured_ceiling(_spec("a", "cross-sample.compute", 24576))["memory_mb"] == 24576
-    assert all(v % 256 == 0 and 1024 <= v <= 12288 for v in MEASURED_CEILING_MB.values())
+    assert all(v % 256 == 0 and 512 <= v <= 12288 for v in MEASURED_CEILING_MB.values())   # deg_sql / deg_lookup measured at 259 MiB
 
 
 def test_submit_applies_ceiling_and_still_accepts_the_uncapped_identity(tmp_path):

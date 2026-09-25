@@ -17,9 +17,13 @@ from .state import digest, read
 # check_genes max 3715; zoom-in.assemble max 879; zoom-in.apply max 6489. DEG had no ceiling and asked
 # 2304-2816 MiB each, so a 64-core node with 118 GiB ran 51 of them, and wide 12 GiB tasks waited
 # behind them. A ceiling near p99 costs one retried attempt per hundred; the memory buys the rest.
+# Re-measured again 2026-09-24/25 once the 80-120k-cell PanSci organs ran (retry peaks, MiB): zoom-in.deg
+# p50 2144 / p90 3472 / max 3672 (190 kills in 4 h at 1536), cross-sample.deg p50 3860 / max 6320,
+# check_genes and check_qc_scores max 4374, read_evidence up to 2 GiB. The 3CA-era table below them
+# killed 250 attempts in four hours; these are the values the pool ran on from then on.
 MEASURED_CEILING_MB = {
-    'zoom-in.deg': 1536, 'cross-sample.deg': 3072,
-    'check_genes': 4096, 'check_qc_scores': 4096, 'read_evidence': 1024, 'deg_sql': 512,
+    'zoom-in.deg': 4096, 'cross-sample.deg': 7168,
+    'check_genes': 6144, 'check_qc_scores': 6144, 'read_evidence': 2048, 'deg_sql': 512,
     'deg_lookup': 512, 'list_evidence': 5376, 'annotation_status': 5632, 'type_context': 6400,
     'sample_inventory': 1536, 'submit_quality': 5632, 'submit_decision': 9984,
     'submit_annotation': 4096, 'submit_types': 5632, 'submit_plan': 5632,
