@@ -282,3 +282,25 @@ def test_a_run_the_control_plane_publishes_is_a_row_without_being_registered(tmp
     status.write_text(json.dumps({"generated_at": 0.0, "workflows": {}}))
     verdicts._mtime = None
     assert set(registry.snapshot()) == {"kim2020", "spleen"}
+
+
+def test_a_read_hung_in_storage_does_not_stall_the_sweep_and_quarantines_that_storage(tmp_path, monkeypatch):
+    release = threading.Event()
+    calls = []
+    def state(root):
+        calls.append(root)
+        if root.name.startswith("oak"):
+            release.wait()          # a read stuck in the filesystem client: it returns when the storage does
+        return {"stage": "x", "cls": "running"}
+    monkeypatch.setattr(serve, "_dataset_state", state)
+    monkeypatch.setattr(serve, "storage_of", lambda root: root.name[:3])
+    oak, scr = tmp_path / "oak-a", tmp_path / "scr-b"
+    cache = serve.StateCache(_Reg({"a": oak, "b": scr}), ttl=60)
+    cache.HUNG_AFTER = 0.2
+    cache.refresh()                 # returns although the oak read never does
+    assert cache.get(scr)["stage"] == "x"
+    assert cache.get(oak)["stage"].startswith("storage not responding") and cache.get(oak)["cls"] == "loading"
+    assert "oak" in cache._slow
+    cache.refresh()
+    assert calls.count(oak) == 1    # quarantined: not read again this half hour
+    release.set()
