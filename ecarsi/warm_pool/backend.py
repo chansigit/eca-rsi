@@ -1,4 +1,5 @@
 """Pinned HyperQueue CLI adapter. HQ alone grants CPU and memory resources."""
+from collections import deque
 import ctypes
 from datetime import datetime, timezone
 import json
@@ -8,6 +9,7 @@ from pathlib import Path
 import signal
 import socket
 import subprocess
+import sys
 import time
 
 from .state import digest, file_digest, lock, observation, pool_root, read, save
@@ -261,16 +263,20 @@ def observe(folder, request, record):
     (folder / "backend.json").unlink(missing_ok=True)
 
 
+# The timing knobs are fallbacks: the scheduler measures them from the pool's own task journals
+# (pool/measured.json, `warm_pool measure`, refreshed every MEASURE_INTERVAL seconds) and uses the
+# measurement unless the knob is set in pool/config.json, which is an operator's decision and wins.
 RELEASE_DEFAULTS = dict(
     model_call_resource=True, # agent.call asks HQ for one `modelcall` slot (see hq_resources)
-    backlog_per_cpu=1 / 3,    # HQ waiting queue kept at ~a third of the pool's CPUs (one tick of starts)
+    backlog_per_cpu=1 / 3,    # HQ waiting queue kept at ~a third of the pool's CPUs; measured: two ticks of starts
     backlog_min=16,
-    drain_age_seconds=600,    # a feasible task waiting this long in HQ starts a drain
-    max_drain_seconds=900,    # a drain that has not placed it by then yields for as long again
+    drain_age_seconds=600,    # a feasible task waiting this long in HQ starts a drain; measured: p90 wait of its operation
+    max_drain_seconds=900,    # a drain that has not placed it by then yields for as long again; measured: 2 x p90 run of batch work
     gpu_host_fraction=0.5,    # share of a GPU worker's RAM only GPU tasks may use (shared by its cards)
-    gpu_task_seconds=120,     # typical GPU / CPU run of a GPU-preferred task (2026-09-23: 1.7 vs 3-10 min)
-    cpu_task_seconds=360,
+    gpu_task_seconds=120,     # GPU / CPU run of a GPU-preferred task; measured per operation (zoom-in.compute 44 / 81 s,
+    cpu_task_seconds=360,     # cross-sample.compute-round 155 / 353 s over 2026-09-24/25)
 )
+MEASURE_INTERVAL = 1800  # seconds between runs of the journal measurement
 
 
 def worker_capacity(workers):
@@ -291,16 +297,18 @@ def worker_capacity(workers):
     return out
 
 
-def release_plan(candidates, *, hq_waiting, cap, draining, gpu_waiting, gpu_slots, gpu_seconds, cpu_seconds):
+def release_plan(candidates, *, hq_waiting, cap, draining, gpu_queue_seconds, gpu_slots):
     """Which held requests go to HQ this tick, and whether a GPU-preferred one goes GPU-only.
 
     HQ fills a freed core with whatever waiting task fits, so a deep HQ queue of 1-CPU tasks
     starves every wider one, and HQ task priorities crash 0.26.2. Keeping HQ's queue short and
     ordering the rest here gives: interactive work first (model calls and session tools, both
     short and waited on by a model), then FIFO by submission; a drain releases no batch work so cores
-    accumulate for an aged wide task; a GPU-preferred task is pinned to the GPU while the GPU queue
-    ahead of it would clear sooner than a CPU run takes (earliest finish), else it may take either.
-    candidates: dicts with key, klass ('agent'|'tool'|'work'), submitted_at, gpu_preferred."""
+    accumulate for an aged wide task; a GPU-preferred task is pinned to the GPU while the card's queue
+    (`gpu_queue_seconds`: the measured remaining run time of what waits and runs there, shared by
+    `gpu_slots` cards) plus its own GPU run would end sooner than its CPU run, else it may take either.
+    candidates: dicts with key, klass ('agent'|'tool'|'work'), submitted_at, gpu_preferred, and the
+    operation's measured gpu_seconds / cpu_seconds (the knobs when absent)."""
     order = {"agent": 0, "tool": 1, "work": 2}
     budget = max(0, cap - hq_waiting)
     plan = []
@@ -314,8 +322,9 @@ def release_plan(candidates, *, hq_waiting, cap, draining, gpu_waiting, gpu_slot
             budget -= 1
         gpu_only = False
         if c.get("gpu_preferred") and gpu_slots and not c.get("unpinned"):
-            gpu_only = gpu_waiting / gpu_slots * gpu_seconds < cpu_seconds
-            gpu_waiting += 1
+            gpu_run = c.get("gpu_seconds", RELEASE_DEFAULTS["gpu_task_seconds"])
+            gpu_only = gpu_queue_seconds / gpu_slots + gpu_run < c.get("cpu_seconds", RELEASE_DEFAULTS["cpu_task_seconds"])
+            gpu_queue_seconds += gpu_run  # pinned or not, a preferred task takes the card when it is free
         plan.append((c["key"], gpu_only))
     return plan
 
@@ -334,8 +343,11 @@ class HyperQueue:
         self.settled = {(name, ino) for name, ino in read(self.root / "settled.json", [])}
         self._saved = len(self.settled)
         self._present = 0  # request folders seen by the last scan; a drop means pruning happened
-        self.release, self._release_stamp = dict(RELEASE_DEFAULTS), None
+        self.release, self._release_stamp, self.overrides = dict(RELEASE_DEFAULTS), None, set()
         self._reload_release()
+        self.measured, self._measured_stamp, self._measurer, self._measured_at = {}, None, None, 0.0
+        self.receipts_seen = deque()  # when receipts were first seen: the pool's own start rate
+        self.tick_seconds, self._last_tick = 1.0, None
         self.drain_since = self.cooldown_until = None
         self.release_state, self.activity = {}, {}
 
@@ -351,11 +363,70 @@ class HyperQueue:
             return
         self._release_stamp = (stat.st_mtime_ns, stat.st_size)
         try:
-            wanted = {**RELEASE_DEFAULTS, **read(self.root / "config.json").get("release", {})}
+            configured = read(self.root / "config.json").get("release", {})
+            wanted = {**RELEASE_DEFAULTS, **configured}
         except (ValueError, AttributeError):
             return
         if set(wanted) == set(RELEASE_DEFAULTS) and all(isinstance(v, (int, float)) for v in wanted.values()):
-            self.release = wanted
+            self.release, self.overrides = wanted, set(configured)
+
+    def _reload_measured(self):
+        """pool/measured.json (written by `warm_pool measure`) is re-read when it changes."""
+        path = self.root / "measured.json"
+        try:
+            stat = os.stat(path)
+            if (stat.st_mtime_ns, stat.st_size) != self._measured_stamp:
+                self.measured, self._measured_stamp = read(path) or {}, (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            pass
+
+    def measure_if_due(self, now):
+        """The measurement runs as a subprocess every MEASURE_INTERVAL seconds, and once at start when
+        there is none, so a tick never reads the journals (the serving loop calls this, not dispatch)."""
+        if self._measurer is not None and self._measurer.poll() is None:
+            return
+        if now - self._measured_at >= MEASURE_INTERVAL or (not self.measured and self._measurer is None):
+            self._measured_at = now
+            with (self.root / "measure.log").open("ab") as log:
+                self._measurer = subprocess.Popen([sys.executable, "-m", "ecarsi.warm_pool", "--root", str(self.root), "measure"],
+                                                  stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+
+    def timing(self, operation, kind):
+        """Measured seconds for the operation: the median run on cores ('cpu') or on a card ('gpu'), the
+        p90 queue wait ('wait'); None when the journals have none."""
+        entry = ((self.measured.get("operations") or {}).get(operation) or {}).get(kind) or {}
+        return entry.get("p90_s" if kind == "wait" else "median_s")
+
+    def run_seconds(self, operation, gpu):
+        """Expected run time of the operation on a card or on cores: the measurement, unless the knob is
+        configured or nothing was measured."""
+        key = "gpu_task_seconds" if gpu else "cpu_task_seconds"
+        measured = self.timing(operation, "gpu" if gpu else "cpu")
+        return self.release[key] if key in self.overrides or measured is None else measured
+
+    def wait_limit(self, operation):
+        """How long the operation may wait in HQ before it counts as starved: the p90 wait of its peers
+        (at least a minute), unless drain_age_seconds is configured or nothing was measured."""
+        measured = self.timing(operation, "wait")
+        return self.release["drain_age_seconds"] if "drain_age_seconds" in self.overrides or measured is None else max(measured, 60)
+
+    def drain_limit(self):
+        """How long a drain may hold batch work: twice the p90 run of batch work, i.e. the time the cores
+        under it take to free (2 x 31 s on a DEG-bound pool, 2026-09-25; the 900 s knob idled the whole pool
+        for 20 minutes on 2026-09-24), unless max_drain_seconds is configured or nothing was measured."""
+        measured = self.measured.get("work_p90_s")
+        return self.release["max_drain_seconds"] if "max_drain_seconds" in self.overrides or not measured else max(2 * measured, 60)
+
+    def backlog(self, now, total_cpus):
+        """HQ waiting queue to keep: two ticks of starts at the rate the scheduler itself saw receipts over
+        the last five minutes, unless backlog_per_cpu is configured or no receipt was seen yet; never under
+        backlog_min."""
+        cfg = self.release
+        while self.receipts_seen and self.receipts_seen[0] < now - 300:
+            self.receipts_seen.popleft()
+        if "backlog_per_cpu" in self.overrides or not self.receipts_seen:
+            return max(cfg["backlog_min"], int(total_cpus * cfg["backlog_per_cpu"]))
+        return max(cfg["backlog_min"], int(2 * len(self.receipts_seen) / 300 * self.tick_seconds))
 
     def call(self, *args):
         result = subprocess.run(self.command + list(args), stdin=subprocess.DEVNULL,
@@ -373,8 +444,8 @@ class HyperQueue:
         save(self.root / "settled.json", sorted(self.settled))
         self._saved = len(self.settled)
 
-    def _release(self, candidates, jobs, aged, gpu_waiting, hq_workers, generation, now, gpu_busy=0):
-        cfg = self.release
+    def _release(self, candidates, jobs, aged, gpu_waiting, hq_workers, generation, now, gpu_busy=0, gpu_queue_seconds=0.0):
+        cfg, limit = self.release, self.drain_limit()
         if not candidates and not aged:
             self.drain_since = None
             return []
@@ -386,8 +457,8 @@ class HyperQueue:
         if aged and not (self.cooldown_until and now < self.cooldown_until):
             if self.drain_since is None:
                 self.drain_since = now
-            if now - self.drain_since > cfg["max_drain_seconds"] * boost:
-                self.drain_since, self.cooldown_until = None, now + cfg["max_drain_seconds"] / boost
+            if now - self.drain_since > limit * boost:
+                self.drain_since, self.cooldown_until = None, now + limit / boost
         else:
             self.drain_since = None
         draining = self.drain_since is not None
@@ -397,14 +468,12 @@ class HyperQueue:
         # Fill idle CPUs, then keep a short queue. ponytail: a running task counts as one CPU, so a
         # pool of wide tasks is over-released a little (the surplus just queues in HQ); read the
         # tasks' cpus if that queue ever matters.
-        cap = (max(cfg["backlog_min"], int(total_cpus * cfg["backlog_per_cpu"]))
-               + max(0, total_cpus - running))
+        cap = self.backlog(now, total_cpus) + max(0, total_cpus - running)
         gpu_slots = sum(c[2] for c in capacity)
-        # The card's queue is what is waiting plus what is on it now; counting only the waiting ones let a
-        # 20-minute GPU job look like a free card and pinned three tasks behind it (2026-09-24).
+        # The card's queue is what waits for it plus what runs on it now, in measured seconds (2026-09-24 a
+        # 20-minute GPU job counted as nothing and three tasks were pinned behind it).
         plan = release_plan(candidates, hq_waiting=hq_waiting, cap=cap, draining=draining,
-                            gpu_waiting=gpu_waiting + gpu_busy, gpu_slots=gpu_slots,
-                            gpu_seconds=cfg["gpu_task_seconds"], cpu_seconds=cfg["cpu_task_seconds"])
+                            gpu_queue_seconds=gpu_queue_seconds, gpu_slots=gpu_slots)
         by_key = {c["key"]: c for c in candidates}
         submissions = []
         skipped = {}  # why a planned request was not submitted this tick; published for the operator
@@ -436,8 +505,9 @@ class HyperQueue:
         self.release_state = dict(held=len(candidates) - len(submissions), released=len(submissions),
                                   planned=len(plan), skipped=skipped, candidates=len(candidates),
                                   hq_waiting=hq_waiting, backlog_cap=cap, draining=draining, aged=len(aged),
-                                  oldest_aged_minutes=round((boost - 1) * 60),
-                                  gpu_slots=gpu_slots, gpu_waiting=gpu_waiting, gpu_busy=gpu_busy)
+                                  oldest_aged_minutes=round((boost - 1) * 60), drain_limit_seconds=round(limit),
+                                  gpu_slots=gpu_slots, gpu_waiting=gpu_waiting, gpu_busy=gpu_busy,
+                                  gpu_queue_seconds=round(gpu_queue_seconds), measured_at=self.measured.get("generated_at"))
         return submissions
 
     def dispatch(self, info):
@@ -453,13 +523,17 @@ class HyperQueue:
                 seen.append(listed if isinstance(listed, list) else [])
             return seen[0]
         now = time.time()
+        self._reload_measured()
+        if self._last_tick is not None:
+            self.tick_seconds = 0.8 * self.tick_seconds + 0.2 * (now - self._last_tick)
+        self._last_tick = now
         capable = []  # every live worker declares modelcall? decided once per tick, only when a model turn is submitted
 
         def model_calls_capped():
             if not capable:
                 capable.append(model_call_capable(hq_workers()))
             return capable[0]
-        submissions, forgettable, candidates, aged, gpu_waiting, gpu_busy = [], [], [], [], 0, 0
+        submissions, forgettable, candidates, aged, gpu_waiting, gpu_busy, gpu_queue_seconds = [], [], [], [], 0, 0, 0.0
         # Per dataset: [computing, model turns, queued in HQ, held here] -- what each run is really doing.
         activity = {}
         def tally(request, index):
@@ -505,6 +579,7 @@ class HyperQueue:
                         self.settled.add(key)
                     continue
                 if receipt:
+                    self.receipts_seen.append(now)
                     # A persisted result wins over a replayed HQ journal entry.
                     if job and job["task_stats"]["waiting"]:
                         self.call("job", "cancel", str(job["id"]))
@@ -529,7 +604,7 @@ class HyperQueue:
                             and (spec.get("gpu") or {}).get("mode", "preferred") == "preferred"
                             and not cpu_capable(attempt / "job.toml")
                             and unpin_due(sum(c[2] for c in worker_capacity(hq_workers())),
-                                          now - previous.get("observed_at", now), self.release["drain_age_seconds"])):
+                                          now - previous.get("observed_at", now), self.wait_limit(spec["operation_id"]))):
                         self.call("job", "cancel", str(job["id"]))
                         job = None  # a candidate again below, released with the CPU variant in its job file
                     elif counts.get("canceled") and not accepted and not (counts["running"] or counts["waiting"]):
@@ -543,9 +618,11 @@ class HyperQueue:
                         tally(request, 2 if state == "queued" else int(request["spec"]["operation_id"] == "agent.call"))
                     spec = request["spec"]
                     if state == "queued":
-                        gpu_waiting += bool(spec.get("gpu"))
+                        if spec.get("gpu"):
+                            gpu_waiting += 1
+                            gpu_queue_seconds += self.run_seconds(spec["operation_id"], True)
                         if (previous.get("state") == "queued" and previous.get("generation") == generation
-                                and now - previous.get("observed_at", now) > self.release["drain_age_seconds"]
+                                and now - previous.get("observed_at", now) > self.wait_limit(spec["operation_id"])
                                 and spec["operation_id"] != "agent.call"
                                 and (spec.get("gpu") or {}).get("mode", "preferred") == "preferred"
                                 and any(c[0] >= spec["cpus"] and c[1] >= spec["memory_mb"]
@@ -554,6 +631,8 @@ class HyperQueue:
                             aged.append((folder.name, now - request["submitted_at"]))
                     elif state == "running" and accepted and accepted.get("gpu_ids"):
                         gpu_busy += 1
+                        gpu_queue_seconds += max(0.0, self.run_seconds(spec["operation_id"], True)
+                                                 - (now - accepted.get("started_at", now)))
                     if state != "running" and any(previous.get(k) != v for k, v in record.items() if k != "task_stats"):
                         # Each save is an fsync'd write on Lustre; refreshing observed_at for 150
                         # live jobs every tick cost more than the whole scan. A start needs no
@@ -584,6 +663,8 @@ class HyperQueue:
                          "tool" if ".tool-" in spec["request_id"] else "work")
                 candidates.append(dict(key=folder.name, klass=klass, submitted_at=request["submitted_at"],
                                        gpu_preferred=(spec.get("gpu") or {}).get("mode") == "preferred",
+                                       gpu_seconds=self.run_seconds(spec["operation_id"], True),
+                                       cpu_seconds=self.run_seconds(spec["operation_id"], False),
                                        unpinned=bool(spec.get("gpu")) and not cpu_capable(attempt / "job.toml"),
                                        folder=folder, attempt=attempt, request=request, name=name, args=tuple(args)))
         if len(present) < self._present:  # folders were pruned: forget them, or settled.json only grows
@@ -591,7 +672,7 @@ class HyperQueue:
             self._saved = -1
         self._present = len(present)
         self._persist_settled()
-        submissions = self._release(candidates, jobs, aged, gpu_waiting, hq_workers, generation, now, gpu_busy)
+        submissions = self._release(candidates, jobs, aged, gpu_waiting, hq_workers, generation, now, gpu_busy, gpu_queue_seconds)
         released = {folder.name for folder, *_ in submissions}
         for c in candidates:
             tally(c["request"], 2 if c["folder"].name in released else 3)
@@ -701,6 +782,7 @@ def serve(root, host=None):
                     try:
                         info = backend.call("server", "info")
                         scanning = time.monotonic()
+                        backend.measure_if_due(time.time())
                         backend.dispatch(info)
                         save(backend.root / "scheduler.json", dict(pid=os.getpid(), host=socket.gethostname(),
                              backend_pid=info["pid"], observed_at=time.time(), state="running",

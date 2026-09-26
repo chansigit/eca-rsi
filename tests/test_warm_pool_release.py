@@ -5,7 +5,18 @@ def c(key, klass="work", t=0, gpu=False):
     return dict(key=key, klass=klass, submitted_at=t, gpu_preferred=gpu)
 
 
-KW = dict(gpu_waiting=0, gpu_slots=0, gpu_seconds=120, cpu_seconds=360)
+KW = dict(gpu_queue_seconds=0, gpu_slots=0)
+
+
+def bare(**release):
+    """A scheduler object without a pool: the release knobs given here count as configured."""
+    from collections import deque
+    from ecarsi.warm_pool.backend import HyperQueue, RELEASE_DEFAULTS
+    hq = HyperQueue.__new__(HyperQueue)
+    hq.release, hq.overrides = dict(RELEASE_DEFAULTS, **release), set(release)
+    hq.measured, hq.receipts_seen, hq.tick_seconds = {}, deque(), 1.0
+    hq.drain_since = hq.cooldown_until = None
+    return hq
 
 
 def test_short_hq_queue_fifo_and_interactive_first():
@@ -23,14 +34,16 @@ def test_drain_holds_batch_work_only():
 
 
 def test_gpu_preferred_pinned_to_gpu_only_while_its_queue_is_short():
-    cands = [c(f"compute-{i}", t=i, gpu=True) for i in range(6)]
-    plan = release_plan(cands, hq_waiting=0, cap=16, draining=False,
-                        gpu_waiting=1, gpu_slots=1, gpu_seconds=120, cpu_seconds=360)
-    # 1 and 2 ahead on one GPU clear within a CPU run (240 s < 360 s): GPU-only; from 3 ahead, either
-    assert [g for _, g in plan] == [True, True, False, False, False, False]
-    plan = release_plan(cands, hq_waiting=0, cap=16, draining=False,
-                        gpu_waiting=1, gpu_slots=4, gpu_seconds=120, cpu_seconds=360)
-    assert all(g for _, g in plan)  # four GPUs: every one clears sooner than a CPU run
+    cands = [c(f"compute-{i}", t=i, gpu=True) for i in range(6)]   # unmeasured: the 120 s / 360 s knobs
+    plan = release_plan(cands, hq_waiting=0, cap=16, draining=False, gpu_queue_seconds=120, gpu_slots=1)
+    # one run ahead on one card: the first would end at 240 s < 360 s on cores, GPU-only; the second at 360 s, either
+    assert [g for _, g in plan] == [True, False, False, False, False, False]
+    plan = release_plan(cands, hq_waiting=0, cap=16, draining=False, gpu_queue_seconds=120, gpu_slots=4)
+    assert all(g for _, g in plan)  # four cards: every one ends sooner than a CPU run
+    # measured per operation (zoom-in.compute: 44 s on the card, 81 s on cores): the card's queue in seconds decides
+    measured = [dict(c(f"z-{i}", t=i, gpu=True), gpu_seconds=44, cpu_seconds=81) for i in range(3)]
+    plan = release_plan(measured, hq_waiting=0, cap=16, draining=False, gpu_queue_seconds=30, gpu_slots=1)
+    assert [g for _, g in plan] == [True, False, False]   # 30 + 44 < 81; then 74 + 44 is not
 
 
 def test_worker_capacity_reads_hq_json():
@@ -42,10 +55,7 @@ def test_worker_capacity_reads_hq_json():
 
 
 def test_drain_starts_on_an_aged_task_and_yields_after_its_limit():
-    from ecarsi.warm_pool.backend import HyperQueue, RELEASE_DEFAULTS
-    hq = HyperQueue.__new__(HyperQueue)
-    hq.release = dict(RELEASE_DEFAULTS, max_drain_seconds=100)
-    hq.drain_since = hq.cooldown_until = None
+    hq = bare(max_drain_seconds=100)
     tick = lambda now, aged: hq._release([], [], aged, 0, lambda: [], "g", now) or hq.release_state
     fresh, old = [("wide", 0)], [("wide", 3 * 3600)]
     tick(0, fresh); assert hq.release_state["draining"]
@@ -60,9 +70,7 @@ def test_drain_starts_on_an_aged_task_and_yields_after_its_limit():
 
 
 def test_backlog_cap_fills_idle_cpus_first(tmp_path):
-    from ecarsi.warm_pool.backend import HyperQueue, RELEASE_DEFAULTS
-    hq = HyperQueue.__new__(HyperQueue)
-    hq.release, hq.drain_since, hq.cooldown_until = dict(RELEASE_DEFAULTS), None, None
+    hq = bare()
     worker = {"configuration": {"resources": {"resources": [{"kind": "list", "name": "cpus", "values": list(range(48))}]}}}
     jobs = [{"task_stats": {"running": 1, "waiting": 0}}] * 10
     gone = dict(c("x"), folder=tmp_path, attempt=tmp_path, request={})   # request.json vanished: skipped
@@ -154,8 +162,7 @@ def test_a_pinned_task_is_unpinned_without_a_card_or_after_the_drain_age():
 def test_an_unpinned_task_is_not_pinned_again():
     cands = [dict(key="g", klass="work", submitted_at=1, gpu_preferred=True, unpinned=True),
              dict(key="h", klass="work", submitted_at=2, gpu_preferred=True)]
-    plan = release_plan(cands, hq_waiting=0, cap=16, draining=False,
-                        gpu_waiting=0, gpu_slots=1, gpu_seconds=120, cpu_seconds=360)
+    plan = release_plan(cands, hq_waiting=0, cap=16, draining=False, gpu_queue_seconds=0, gpu_slots=1)
     assert plan == [("g", False), ("h", True)]  # an idle card still pins a fresh task, never the unpinned one
 
 

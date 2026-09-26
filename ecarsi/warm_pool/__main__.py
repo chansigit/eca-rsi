@@ -100,6 +100,8 @@ def main(argv=None):
     pruning.add_argument("listing", type=Path, help="one request id per line, e.g. the by-workflow/ journals of a finished run")
     pruning.add_argument("--result", type=Path, help="also write the counts here (the pool task's declared output)")
     pruning.add_argument("--threads", type=int, default=16)
+    measuring = commands.add_parser("measure", help="per-operation run times and waits from the workers' task journals -> pool/measured.json (the scheduler runs this every half hour)")
+    measuring.add_argument("--days", type=int, default=3)
     a = p.parse_args(argv)
     if a.command == "init":
         result = initialize(a.root, a.hq, a.runtime)
@@ -130,6 +132,9 @@ def main(argv=None):
         result = archive(a.root, a.run, destination=a.into, dry_run=a.dry_run,
                          on_progress=lambda seen, hit: print(f"[archive] {seen} scanned, {hit} matched",
                                                              file=sys.stderr, flush=True))
+    elif a.command == "measure":
+        from .measure import write
+        result = write(a.root, a.days)
     elif a.command == "prune-list":
         from .state import prune_list
         result = prune_list(a.root, a.listing, threads=a.threads)
