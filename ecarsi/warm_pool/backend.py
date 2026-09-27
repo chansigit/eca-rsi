@@ -336,6 +336,21 @@ def worker_capacity(workers):
     return out
 
 
+def infeasible(spec, capacity):
+    """Why no live worker could ever hold the request, or None. `capacity` is worker_capacity(). A task
+    HQ can never place would wait in its queue for good (2,700 of the 352k requests of 2026-09-24 in the
+    replay; a wide zoom-in.apply behind six-core test workers); marking it here keeps it out of HQ and
+    names the reason in its observation and in scheduler.json, and it is re-tried every tick, so a
+    worker joining later picks it up."""
+    if not capacity:
+        return "no live worker"
+    gpu = (spec.get("gpu") or {}).get("mode") == "required"
+    if any(c[0] >= spec["cpus"] and c[1] >= spec["memory_mb"] and (c[2] or not gpu) for c in capacity):
+        return None
+    cpus, mem, _ = max(capacity, key=lambda c: (c[0], c[1]))
+    return f"no worker holds {spec['cpus']} cpus / {spec['memory_mb']} MB{' + a GPU' if gpu else ''} (largest {cpus} cpus / {int(mem)} MB)"
+
+
 def release_plan(candidates, *, gpu_queue_seconds, gpu_slots):
     """Every candidate goes to HQ this tick, in the order HQ will rank them; the plan only decides
     whether a GPU-preferred one goes GPU-only: pinned to the card while the card's queue
@@ -456,13 +471,15 @@ class HyperQueue:
         if not candidates:
             return []
         hq_waiting = sum(1 for j in jobs if j["task_stats"]["waiting"])
-        gpu_slots = sum(c[2] for c in worker_capacity(hq_workers()))
+        capacity = worker_capacity(hq_workers())
+        gpu_slots = sum(c[2] for c in capacity)
         # The card's queue is what waits for it plus what runs on it now, in measured seconds (2026-09-24 a
         # 20-minute GPU job counted as nothing and three tasks were pinned behind it).
         plan = release_plan(candidates, gpu_queue_seconds=gpu_queue_seconds, gpu_slots=gpu_slots)
         by_key = {c["key"]: c for c in candidates}
         submissions = []
         skipped = {}  # why a planned request was not submitted this tick; published for the operator
+        unplaceable = {}  # infeasible reason -> count
         for key, gpu_only in plan:
             c = by_key[key]
             folder, attempt, request = c["folder"], c["attempt"], c["request"]
@@ -472,6 +489,13 @@ class HyperQueue:
                           else "cancelled" if read(folder / "cancel.json") else None)
                 if reason:
                     skipped[reason] = skipped.get(reason, 0) + 1
+                    continue
+                why = infeasible(request["spec"], capacity)
+                if why:
+                    unplaceable[why] = unplaceable.get(why, 0) + 1
+                    previous = observation(folder, current)
+                    if previous.get("infeasible") != why:  # one fsync when the reason changes, not per tick
+                        observe(folder, current, dict(state="queued", infeasible=why, generation=generation, observed_at=time.time()))
                     continue
                 # No "submitting" record: the job name is the fence (reconcile finds it by name next tick,
                 # even when this tick dies between submit and the result below), and every observation
@@ -488,7 +512,7 @@ class HyperQueue:
                 submissions.append((folder, ("job", "submit-file", str(path)), request["attempt_id"]))
             else:
                 submissions.append((folder, c["args"], request["attempt_id"]))
-        self.release_state = dict(released=len(submissions), skipped=skipped, candidates=len(candidates),
+        self.release_state = dict(released=len(submissions), skipped=skipped, infeasible=unplaceable, candidates=len(candidates),
                                   hq_waiting=hq_waiting, gpu_slots=gpu_slots, gpu_waiting=gpu_waiting, gpu_busy=gpu_busy,
                                   gpu_queue_seconds=round(gpu_queue_seconds), measured_at=self.measured.get("generated_at"))
         return submissions

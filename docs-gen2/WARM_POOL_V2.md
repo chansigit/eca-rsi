@@ -204,6 +204,12 @@ they changed no dataset's completion time while class-first HQ priority cuts the
 95 s to 2 s. `release.hq_priority: false` in `config.json` submits without priorities (HQ 0.26.2 panics
 with them, #1135; the pool runs a patched build).
 
+Before a request is submitted the scheduler checks that some live worker could hold it (CPUs, memory,
+a GPU when required). One that cannot stays out of HQ with `infeasible: <reason>` in its observation
+(`warm_pool status`) and is counted per reason under `release.infeasible` in `scheduler.json`; it is
+re-checked every tick, so a worker joining later picks it up. Nothing changes for the workflow waiting
+on it: the request stays `queued`, as it would have in HQ, but the operator can see why.
+
 What the release layer still decides is whether a GPU-preferred task is pinned to the card, and when a
 pinned task that keeps waiting is unpinned. Its timings come from the pool's own task journals, not from
 constants: `python -m ecarsi.warm_pool --root <pool> measure [--days 3]` reads `workers/*/tasks-<day>.jsonl`

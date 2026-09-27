@@ -163,7 +163,8 @@ def test_a_pinned_task_is_resubmitted_with_the_cpu_variant_once_no_card_is_live(
         if args[:2] == ("job", "list"):
             return [dict(id=1, name="rsi.r.a", task_stats=dict(waiting=1, running=0, canceled=0, failed=0, finished=0, aborted=0))]
         if args[:2] == ("worker", "list"):
-            return []  # the card's allocation ended; nothing else is connected either
+            return [{"configuration": {"resources": {"resources": [   # the card's allocation ended; a CPU node remains
+                {"kind": "list", "name": "cpus", "values": list(range(8))}, {"kind": "sum", "name": "mem", "size": 32768 * 10000}]}}}]
         if args[:2] == ("job", "submit-file"):
             return dict(id=2)
         return None
@@ -191,3 +192,28 @@ def test_hq_priority_is_class_then_cpus_and_can_be_switched_off(tmp_path):
 def test_hq_version_accepts_the_release_and_source_builds():
     assert hq_version("hyperqueue v0.26.2\n") == (0, 26, 2) and hq_version("hyperqueue 0.26.2-dev") == (0, 26, 2)
     assert hq_version("hyperqueue 0.27.0-dev") == (0, 27, 0) and hq_version("hyperqueue nightly") is None
+
+
+def test_a_request_no_worker_can_hold_is_marked_infeasible_not_queued(tmp_path):
+    from ecarsi.warm_pool.backend import infeasible
+    from ecarsi.warm_pool.state import observation, read, save
+    small, big = (6, 24576.0, 0), (64, 118000.0, 1)
+    assert infeasible(dict(cpus=4, memory_mb=8192), [small]) is None
+    assert infeasible(dict(cpus=12, memory_mb=8192), [small]).startswith("no worker holds 12 cpus / 8192 MB (largest 6 cpus")
+    assert infeasible(dict(cpus=1, memory_mb=1024, gpu=dict(mode="required")), [small]).endswith("+ a GPU (largest 6 cpus / 24576 MB)")
+    assert infeasible(dict(cpus=1, memory_mb=1024, gpu=dict(mode="required")), [small, big]) is None
+    assert infeasible(dict(cpus=1, memory_mb=1024), []) == "no live worker"
+    # through _release: the observation names the reason, nothing is submitted, and a fitting worker frees it
+    hq = bare()
+    folder, attempt = tmp_path / "r", tmp_path / "r" / "a"
+    attempt.mkdir(parents=True)
+    spec = dict(request_id="r", operation_id="zoom-in.apply", cpus=12, memory_mb=8192, time_request_seconds=60)
+    request = dict(spec=spec, attempt_id="a", submitted_at=1.0)
+    save(folder / "request.json", request)
+    cand = dict(c("r"), folder=folder, attempt=attempt, request=request, name="rsi.r.a", args=("submit",))
+    worker = lambda cpus: {"configuration": {"resources": {"resources": [{"kind": "list", "name": "cpus", "values": list(range(cpus))},
+                                                                          {"kind": "sum", "name": "mem", "size": 24576 * 10000}]}}}
+    assert hq._release([cand], [], lambda: [worker(6)], "g") == []
+    assert hq.release_state["infeasible"] == {"no worker holds 12 cpus / 8192 MB (largest 6 cpus / 24576 MB)": 1}
+    assert observation(folder, read(folder / "request.json"))["infeasible"].startswith("no worker holds 12 cpus")
+    assert len(hq._release([cand], [], lambda: [worker(16)], "g")) == 1 and hq.release_state["infeasible"] == {}
