@@ -1,4 +1,4 @@
-from ecarsi.warm_pool.backend import cpu_capable, gpu_jobfile, release_plan, unpin_due, worker_capacity
+from ecarsi.warm_pool.backend import cpu_capable, gpu_jobfile, hq_priority, release_plan, unpin_due, worker_capacity
 
 
 def c(key, klass="work", t=0, gpu=False):
@@ -199,3 +199,13 @@ def test_a_pinned_task_is_resubmitted_with_the_cpu_variant_once_no_card_is_live(
     assert cpu_capable(attempt / "job.toml")  # resubmitted with the plain CPU variant beside the GPU ones
     record = observation(folder, read(folder / "request.json"))
     assert record["state"] == "queued" and record["job_id"] == 2
+
+
+def test_hq_priority_is_the_cpu_count_and_can_be_switched_off(tmp_path):
+    spec = dict(request_id='r', cpus=4, memory_mb=1024, time_request_seconds=60, gpu=dict(memory_mb=4096, mode='preferred'))
+    assert hq_priority(spec, {'hq_priority': True}) == 4 and hq_priority(spec, {}) == 4
+    assert hq_priority(spec, {'hq_priority': False}) is None
+    request = dict(spec=spec, attempt_id='a', runtime_digest='d')
+    with_priority = gpu_jobfile(request, tmp_path / 'r' / 'a', 'rsi.r', '/usr/bin/python3', '', priority=4)
+    assert 'priority = 4' in with_priority
+    assert 'priority = ' not in gpu_jobfile(request, tmp_path / 'r' / 'a', 'rsi.r', '/usr/bin/python3', '')

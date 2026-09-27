@@ -100,13 +100,24 @@ def check_hq(binary):
         raise ValueError("this adapter is validated against HyperQueue 0.26.2")
 
 
-def gpu_jobfile(request, attempt, name, executor, pythonpath):
+def hq_priority(spec, release):
+    """The HQ task priority of a request: its CPU count, so a scheduling pass that sees enough free
+    cores considers the wide task before the stream of 1-CPU DEGs that would otherwise take them one by
+    one (five 4-CPU computes waited 17 h behind them on 2026-09-23). None while `release.hq_priority`
+    is off: HQ 0.26.2 panics in its gap computation with priorities (#1135); the pool runs a build
+    with the fix (#1136 + #1137)."""
+    return spec["cpus"] if release.get("hq_priority", True) else None
+
+
+def gpu_jobfile(request, attempt, name, executor, pythonpath, priority=None):
     """Native HQ alternatives: GPU first; CPU fallback only when declared."""
     spec = request["spec"]
     command = [executor, "-m", "ecarsi.warm_pool.worker", "execute",
                str(attempt.parent.parent.parent), spec["request_id"], request["attempt_id"]]
     fields = dict(command=command, cwd=str(attempt), pin="taskset", crash_limit="never-restart",
                   stdout="none", stderr="none")  # the executor keeps its own logs beside the receipt
+    if priority is not None:
+        fields["priority"] = priority
     text = "name = " + json.dumps(name) + "\n[[task]]\n"
     text += "\n".join(k + " = " + json.dumps(v) for k, v in fields.items())
     text += "\nenv = { PYTHONPATH = " + json.dumps(pythonpath) + ', ECA_POOL_GPU_LAYOUT = "slots-v2" }\n'
@@ -268,6 +279,7 @@ def observe(folder, request, record):
 # measurement unless the knob is set in pool/config.json, which is an operator's decision and wins.
 RELEASE_DEFAULTS = dict(
     model_call_resource=True, # agent.call asks HQ for one `modelcall` slot (see hq_resources)
+    hq_priority=True,         # tasks carry priority = cpus (hq_priority); needs an HQ with #1135 fixed
     backlog_per_cpu=1 / 3,    # HQ waiting queue kept at ~a third of the pool's CPUs; measured: two ticks of starts
     backlog_min=16,
     drain_age_seconds=600,    # a feasible task waiting this long in HQ starts a drain; measured: p90 wait of its operation
@@ -498,7 +510,8 @@ class HyperQueue:
                     request = dict(request, spec=dict(spec, gpu=dict(spec["gpu"], mode="required")))
                 path = attempt / "job.toml"
                 pythonpath = os.pathsep.join(filter(None, (str(Path(__file__).resolve().parents[2]), os.environ.get("PYTHONPATH", ""))))
-                path.write_text(gpu_jobfile(request, attempt, c["name"], self.config["executor"], pythonpath))
+                path.write_text(gpu_jobfile(request, attempt, c["name"], self.config["executor"], pythonpath,
+                                            priority=hq_priority(spec, self.release)))
                 submissions.append((folder, ("job", "submit-file", str(path)), request["attempt_id"]))
             else:
                 submissions.append((folder, c["args"], request["attempt_id"]))
@@ -648,9 +661,8 @@ class HyperQueue:
                 if read(folder / "cancel.json"):
                     continue
                 spec = request["spec"]
-                # No --priority: HQ 0.26.2 panics in its scheduling solver (workerload.rs:160, index out of
-                # bounds) once prioritised tasks meet the GPU jobs' multi-variant requests (2026-09-23 18:44).
-                args = ["submit", "--name", name] + hq_resources(spec, request, self.release,
+                priority = hq_priority(spec, self.release)
+                args = ["submit", "--name", name] + (["--priority", str(priority)] if priority is not None else []) + hq_resources(spec, request, self.release,
                         spec["operation_id"] != "agent.call" or model_calls_capped()) + [
                         "--time-request", str(spec["time_request_seconds"]) + "s",
                         "--pin", "taskset", "--crash-limit", "never-restart", "--directives", "off",
