@@ -1,4 +1,4 @@
-from ecarsi.warm_pool.backend import cpu_capable, gpu_jobfile, hq_priority, release_plan, unpin_due, worker_capacity
+from ecarsi.warm_pool.backend import cpu_capable, gpu_jobfile, hq_priority, hq_version, release_plan, unpin_due, worker_capacity
 
 
 def c(key, klass="work", t=0, gpu=False):
@@ -209,3 +209,8 @@ def test_hq_priority_is_the_cpu_count_and_can_be_switched_off(tmp_path):
     with_priority = gpu_jobfile(request, tmp_path / 'r' / 'a', 'rsi.r', '/usr/bin/python3', '', priority=4)
     assert 'priority = 4' in with_priority
     assert 'priority = ' not in gpu_jobfile(request, tmp_path / 'r' / 'a', 'rsi.r', '/usr/bin/python3', '')
+
+
+def test_hq_version_accepts_the_release_and_source_builds():
+    assert hq_version("hyperqueue v0.26.2\n") == (0, 26, 2) and hq_version("hyperqueue 0.26.2-dev") == (0, 26, 2)
+    assert hq_version("hyperqueue 0.27.0-dev") == (0, 27, 0) and hq_version("hyperqueue nightly") is None

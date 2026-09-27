@@ -94,10 +94,24 @@ def check_runtime(runtime, *, imports=False):
             *runtime["imports"]], check=True, timeout=60, env=runtime_environment(runtime))
 
 
+HQ_MIN_VERSION = (0, 26, 2)  # the CLI and JSON shapes this adapter was written against
+
+
+def hq_version(text):
+    """(major, minor, patch) of `hq --version` output: 'hyperqueue v0.26.2' from a release,
+    'hyperqueue 0.26.2-dev' or 'hyperqueue nightly-…' from a source build."""
+    import re
+    found = re.search(r"(\d+)\.(\d+)\.(\d+)", text)
+    return tuple(int(n) for n in found.groups()) if found else None
+
+
 def check_hq(binary):
     result = subprocess.run([binary, "--version"], capture_output=True, text=True, check=True, timeout=10)
-    if result.stdout.strip() != "hyperqueue v0.26.2":
-        raise ValueError("this adapter is validated against HyperQueue 0.26.2")
+    version = hq_version(result.stdout)
+    if version is None or version < HQ_MIN_VERSION:
+        # The pool runs its own build of upstream main (0.26.2-dev with #1136 + #1137, 2026-09-27); the
+        # version line only has to be at least the release the adapter was validated against.
+        raise ValueError(f"this adapter needs HyperQueue {'.'.join(map(str, HQ_MIN_VERSION))} or later, got {result.stdout.strip()!r}")
 
 
 def hq_priority(spec, release):
