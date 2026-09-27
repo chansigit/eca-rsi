@@ -1,7 +1,6 @@
 """The release layer's timings come from the pool's task journals, not from knobs (D8 step 2, 2026-09-25)."""
 import json
 import time
-from collections import deque
 
 from ecarsi.warm_pool.measure import measure, quantile, write
 from ecarsi.warm_pool.state import read
@@ -47,7 +46,6 @@ def scheduler(measured, **release):
     from ecarsi.warm_pool.backend import HyperQueue, RELEASE_DEFAULTS
     hq = HyperQueue.__new__(HyperQueue)
     hq.release, hq.overrides, hq.measured = dict(RELEASE_DEFAULTS, **release), set(release), measured
-    hq.receipts_seen, hq.tick_seconds = deque(), 2.0
     return hq
 
 
@@ -64,21 +62,10 @@ def test_measurements_replace_the_knobs_unless_a_knob_is_configured():
     assert hq.run_seconds("cross-sample.compute", False) == 360  # never measured at all: the knob
     assert hq.wait_limit("zoom-in.compute") == 625 and hq.wait_limit("zoom-in.deg") == 60   # p90 wait, a minute at least
     assert hq.wait_limit("unknown") == 600
-    assert hq.drain_limit() == 62                                # twice the p90 run of batch work
-    configured = scheduler(MEASURED, gpu_task_seconds=200, drain_age_seconds=900, max_drain_seconds=900)
+    configured = scheduler(MEASURED, gpu_task_seconds=200, pin_wait_seconds=900)
     assert configured.run_seconds("zoom-in.compute", True) == 200 and configured.run_seconds("zoom-in.compute", False) == 81
-    assert configured.wait_limit("zoom-in.compute") == 900 and configured.drain_limit() == 900
-    assert scheduler({}).drain_limit() == 900 and scheduler({}).wait_limit("zoom-in.deg") == 600
-
-
-def test_backlog_follows_the_start_rate_the_scheduler_saw():
-    hq = scheduler(MEASURED)
-    assert hq.backlog(1000.0, 48) == 16                         # no receipt seen yet: the knob (48 / 3)
-    hq.receipts_seen.extend([600.0] + [990.0] * 150)            # 150 receipts in the last five minutes, one too old
-    assert hq.backlog(1000.0, 48) == 16 and len(hq.receipts_seen) == 150   # 2 s ticks at 0.5/s: two starts, floor 16
-    hq.receipts_seen.extend([995.0] * 3000)
-    assert hq.backlog(1000.0, 48) == int(2 * 3150 / 300 * 2.0) == 42       # two ticks of starts at 10.5 per second
-    assert scheduler(MEASURED, backlog_per_cpu=1).backlog(1000.0, 48) == 48   # configured: cpus x knob
+    assert configured.wait_limit("zoom-in.compute") == 900
+    assert scheduler({}).wait_limit("zoom-in.deg") == 600
 
 
 def test_measured_file_is_reloaded_when_it_changes(tmp_path):

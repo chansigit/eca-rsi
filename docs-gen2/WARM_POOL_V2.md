@@ -193,18 +193,26 @@ offline. Repeating an identical request ID returns its existing attempt;
 changing its content is rejected. Cancellation is also durable and remains
 effective without Scheduler RPC. A cancelled result cannot advance a workflow.
 
-## Measured release timings
+## Release order and measured timings
 
-The scheduler's release layer (which held request goes to HQ when, whether a GPU-preferred task is pinned
-to the card, when a waiting task counts as starved and how long a drain may hold batch work) takes its
-timings from the pool's own task journals, not from constants. `python -m ecarsi.warm_pool --root <pool>
-measure [--days 3]` reads `workers/*/tasks-<day>.jsonl` (about 13 s for three days of a 240-core pool) and
-writes `measured.json`: per operation the median and p90 run time on cores and on a card and the p90 queue
-wait, plus the p90 run time of batch work and the completion rate. The serving scheduler runs it every half
-hour and re-reads the file when it changes; `scheduler.json` `release` shows `measured_at`, the card's
-queue in seconds (`gpu_queue_seconds`) and the drain limit in force. A knob set under `release` in
-`config.json` (`gpu_task_seconds`, `cpu_task_seconds`, `drain_age_seconds`, `max_drain_seconds`,
-`backlog_per_cpu`) overrides the corresponding measurement; leave it out to use the measurement.
+Every request goes to HQ the tick the scheduler sees it. HQ orders its queue by the task priority the
+scheduler attaches (`hq_priority`: 1000 for a model turn, 800 for a session tool, 0 for batch work, plus
+ten per CPU) and, since upstream #1136, reserves cores for a wide task itself. The scheduler-side hold,
+backlog cap and drain of 2026-09-19..27 are gone: `python -m ecarsi.warm_pool.replay --root <pool> --day
+<day>` replays a day's task journals under a policy and showed, on the 352k-task day of 2026-09-24, that
+they changed no dataset's completion time while class-first HQ priority cuts the p90 agent/tool wait from
+95 s to 2 s. `release.hq_priority: false` in `config.json` submits without priorities (HQ 0.26.2 panics
+with them, #1135; the pool runs a patched build).
+
+What the release layer still decides is whether a GPU-preferred task is pinned to the card, and when a
+pinned task that keeps waiting is unpinned. Its timings come from the pool's own task journals, not from
+constants: `python -m ecarsi.warm_pool --root <pool> measure [--days 3]` reads `workers/*/tasks-<day>.jsonl`
+(about 13 s for three days of a 240-core pool) and writes `measured.json`: per operation the median and p90
+run time on cores and on a card and the p90 queue wait, plus the completion rate. The serving scheduler
+runs it every half hour and re-reads the file when it changes; `scheduler.json` `release` shows
+`measured_at` and the card's queue in seconds (`gpu_queue_seconds`). A knob set under `release` in
+`config.json` (`gpu_task_seconds`, `cpu_task_seconds`, `pin_wait_seconds`) overrides the corresponding
+measurement; leave it out to use the measurement.
 
 ## Recovery and diagnosis
 

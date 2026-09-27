@@ -10,39 +10,28 @@ KW = dict(gpu_queue_seconds=0, gpu_slots=0)
 
 def bare(**release):
     """A scheduler object without a pool: the release knobs given here count as configured."""
-    from collections import deque
     from ecarsi.warm_pool.backend import HyperQueue, RELEASE_DEFAULTS
     hq = HyperQueue.__new__(HyperQueue)
-    hq.release, hq.overrides = dict(RELEASE_DEFAULTS, **release), set(release)
-    hq.measured, hq.receipts_seen, hq.tick_seconds = {}, deque(), 1.0
-    hq.drain_since = hq.cooldown_until = None
+    hq.release, hq.overrides, hq.measured = dict(RELEASE_DEFAULTS, **release), set(release), {}
     return hq
 
 
-def test_short_hq_queue_fifo_and_interactive_first():
+def test_every_candidate_is_released_interactive_first():
     cands = [c("deg-new", t=5), c("deg-old", t=1), c("tool", "tool", t=9), c("agent", "agent", t=9)]
-    plan = release_plan(cands, hq_waiting=14, cap=16, draining=False, **KW)
-    # model call and tool bypass the backlog cap; work fills the two free places oldest first
-    assert [k for k, _ in plan] == ["agent", "tool", "deg-old", "deg-new"]
-    plan = release_plan(cands, hq_waiting=15, cap=16, draining=False, **KW)
-    assert [k for k, _ in plan] == ["agent", "tool", "deg-old"]
-
-
-def test_drain_holds_batch_work_only():
-    cands = [c("deg"), c("tool", "tool"), c("agent", "agent")]
-    assert release_plan(cands, hq_waiting=0, cap=16, draining=True, **KW) == [("agent", False), ("tool", False)]
+    plan = release_plan(cands, **KW)
+    assert [k for k, _ in plan] == ["agent", "tool", "deg-old", "deg-new"]   # nothing is held back: HQ ranks them
 
 
 def test_gpu_preferred_pinned_to_gpu_only_while_its_queue_is_short():
     cands = [c(f"compute-{i}", t=i, gpu=True) for i in range(6)]   # unmeasured: the 120 s / 360 s knobs
-    plan = release_plan(cands, hq_waiting=0, cap=16, draining=False, gpu_queue_seconds=120, gpu_slots=1)
+    plan = release_plan(cands, gpu_queue_seconds=120, gpu_slots=1)
     # one run ahead on one card: the first would end at 240 s < 360 s on cores, GPU-only; the second at 360 s, either
     assert [g for _, g in plan] == [True, False, False, False, False, False]
-    plan = release_plan(cands, hq_waiting=0, cap=16, draining=False, gpu_queue_seconds=120, gpu_slots=4)
+    plan = release_plan(cands, gpu_queue_seconds=120, gpu_slots=4)
     assert all(g for _, g in plan)  # four cards: every one ends sooner than a CPU run
     # measured per operation (zoom-in.compute: 44 s on the card, 81 s on cores): the card's queue in seconds decides
     measured = [dict(c(f"z-{i}", t=i, gpu=True), gpu_seconds=44, cpu_seconds=81) for i in range(3)]
-    plan = release_plan(measured, hq_waiting=0, cap=16, draining=False, gpu_queue_seconds=30, gpu_slots=1)
+    plan = release_plan(measured, gpu_queue_seconds=30, gpu_slots=1)
     assert [g for _, g in plan] == [True, False, False]   # 30 + 44 < 81; then 74 + 44 is not
 
 
@@ -54,28 +43,13 @@ def test_worker_capacity_reads_hq_json():
     assert worker_capacity([w, dict(w, ended="x")]) == [(4, 29491.0, 1)]
 
 
-def test_drain_starts_on_an_aged_task_and_yields_after_its_limit():
-    hq = bare(max_drain_seconds=100)
-    tick = lambda now, aged: hq._release([], [], aged, 0, lambda: [], "g", now) or hq.release_state
-    fresh, old = [("wide", 0)], [("wide", 3 * 3600)]
-    tick(0, fresh); assert hq.release_state["draining"]
-    tick(50, fresh); assert hq.drain_since == 0
-    tick(101, fresh); assert not hq.release_state["draining"] and hq.cooldown_until == 201
-    tick(150, fresh); assert not hq.release_state["draining"]   # yielding
-    tick(202, fresh); assert hq.release_state["draining"]       # drains again
-    tick(203, []); assert hq.drain_since is None
-    # a task waiting 3 h: drains 4x as long, yields a quarter as long
-    tick(1000, old); tick(1350, old); assert hq.release_state["draining"]
-    tick(1401, old); assert not hq.release_state["draining"] and hq.cooldown_until == 1401 + 25
-
-
-def test_backlog_cap_fills_idle_cpus_first(tmp_path):
+def test_a_vanished_request_is_skipped_not_submitted(tmp_path):
     hq = bare()
     worker = {"configuration": {"resources": {"resources": [{"kind": "list", "name": "cpus", "values": list(range(48))}]}}}
     jobs = [{"task_stats": {"running": 1, "waiting": 0}}] * 10
     gone = dict(c("x"), folder=tmp_path, attempt=tmp_path, request={})   # request.json vanished: skipped
-    hq._release([gone], jobs, [], 0, lambda: [worker], "g", 0)
-    assert hq.release_state["backlog_cap"] == 16 + 38   # short queue + the 38 idle CPUs
+    assert hq._release([gone], jobs, lambda: [worker], "g") == []
+    assert hq.release_state["skipped"] == {"gone": 1} and hq.release_state["candidates"] == 1
 
 
 def test_release_knobs_follow_config_edits(tmp_path):
@@ -84,12 +58,12 @@ def test_release_knobs_follow_config_edits(tmp_path):
     hq = HyperQueue.__new__(HyperQueue)
     hq.root, hq.release, hq._release_stamp = tmp_path, dict(RELEASE_DEFAULTS), None
     config = tmp_path / "config.json"
-    config.write_text(json.dumps({"release": {"backlog_per_cpu": 1}}))
-    hq._reload_release(); assert hq.release["backlog_per_cpu"] == 1
-    config.write_text(json.dumps({"release": {"backlog_per_cpu": 2, "typo": 1}})); os.utime(config, ns=(1, 1))
-    hq._reload_release(); assert hq.release["backlog_per_cpu"] == 1   # unknown knob: keep what is in force
-    config.write_text(json.dumps({"release": {"drain_age_seconds": 60}})); os.utime(config, ns=(2, 2))
-    hq._reload_release(); assert hq.release["drain_age_seconds"] == 60 and hq.release["backlog_per_cpu"] == 1 / 3
+    config.write_text(json.dumps({"release": {"gpu_host_fraction": 0.3}}))
+    hq._reload_release(); assert hq.release["gpu_host_fraction"] == 0.3
+    config.write_text(json.dumps({"release": {"gpu_host_fraction": 0.2, "typo": 1}})); os.utime(config, ns=(1, 1))
+    hq._reload_release(); assert hq.release["gpu_host_fraction"] == 0.3   # unknown knob: keep what is in force
+    config.write_text(json.dumps({"release": {"pin_wait_seconds": 60}})); os.utime(config, ns=(2, 2))
+    hq._reload_release(); assert hq.release["pin_wait_seconds"] == 60 and hq.release["gpu_host_fraction"] == 0.5
 
 
 def test_scheduler_uses_a_separate_hq_server_only_while_one_holds_the_lock(tmp_path):
@@ -153,16 +127,16 @@ def test_a_task_pinned_to_the_gpu_cannot_use_a_drain(tmp_path):
     assert cpu_capable(tmp_path / 'absent.toml')  # a CPU task has no job file
 
 
-def test_a_pinned_task_is_unpinned_without_a_card_or_after_the_drain_age():
-    assert unpin_due(gpu_slots=0, queued_seconds=1, drain_age_seconds=600)     # the card's allocation ended
-    assert not unpin_due(gpu_slots=1, queued_seconds=599, drain_age_seconds=600)
-    assert unpin_due(gpu_slots=1, queued_seconds=601, drain_age_seconds=600)   # the short-queue bet was wrong
+def test_a_pinned_task_is_unpinned_without_a_card_or_after_the_usual_wait():
+    assert unpin_due(gpu_slots=0, queued_seconds=1, wait_seconds=600)     # the card's allocation ended
+    assert not unpin_due(gpu_slots=1, queued_seconds=599, wait_seconds=600)
+    assert unpin_due(gpu_slots=1, queued_seconds=601, wait_seconds=600)   # the short-queue bet was wrong
 
 
 def test_an_unpinned_task_is_not_pinned_again():
     cands = [dict(key="g", klass="work", submitted_at=1, gpu_preferred=True, unpinned=True),
              dict(key="h", klass="work", submitted_at=2, gpu_preferred=True)]
-    plan = release_plan(cands, hq_waiting=0, cap=16, draining=False, gpu_queue_seconds=0, gpu_slots=1)
+    plan = release_plan(cands, gpu_queue_seconds=0, gpu_slots=1)
     assert plan == [("g", False), ("h", True)]  # an idle card still pins a fresh task, never the unpinned one
 
 
@@ -201,13 +175,16 @@ def test_a_pinned_task_is_resubmitted_with_the_cpu_variant_once_no_card_is_live(
     assert record["state"] == "queued" and record["job_id"] == 2
 
 
-def test_hq_priority_is_the_cpu_count_and_can_be_switched_off(tmp_path):
-    spec = dict(request_id='r', cpus=4, memory_mb=1024, time_request_seconds=60, gpu=dict(memory_mb=4096, mode='preferred'))
-    assert hq_priority(spec, {'hq_priority': True}) == 4 and hq_priority(spec, {}) == 4
+def test_hq_priority_is_class_then_cpus_and_can_be_switched_off(tmp_path):
+    spec = dict(request_id='r', operation_id='zoom-in.compute', cpus=4, memory_mb=1024, time_request_seconds=60,
+                gpu=dict(memory_mb=4096, mode='preferred'))
+    assert hq_priority(spec, {'hq_priority': True}) == 40 and hq_priority(spec, {}) == 40   # batch work: 10 per CPU
+    assert hq_priority(dict(spec, request_id='s.tool-1', cpus=1), {}) == 810                  # a session tool outranks any batch task
+    assert hq_priority(dict(spec, operation_id='agent.call', cpus=1), {}) == 1010             # a model turn outranks everything
     assert hq_priority(spec, {'hq_priority': False}) is None
     request = dict(spec=spec, attempt_id='a', runtime_digest='d')
-    with_priority = gpu_jobfile(request, tmp_path / 'r' / 'a', 'rsi.r', '/usr/bin/python3', '', priority=4)
-    assert 'priority = 4' in with_priority
+    with_priority = gpu_jobfile(request, tmp_path / 'r' / 'a', 'rsi.r', '/usr/bin/python3', '', priority=40)
+    assert 'priority = 40' in with_priority
     assert 'priority = ' not in gpu_jobfile(request, tmp_path / 'r' / 'a', 'rsi.r', '/usr/bin/python3', '')
 
 
