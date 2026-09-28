@@ -121,7 +121,7 @@ def test_overlapping_removals_count_once_and_mismatched_decisions_fail(tmp_path,
 
 
 def test_compute_comparisons_and_sql_handoff(tmp_path):
-    from ecarsi.stages.crosssample import inspect_input,compute,deg,assemble,tool,refine
+    from ecarsi.stages.crosssample import inspect_input,compute,deg,deg_batch,assemble,tool,refine
     rng=np.random.default_rng(2024);samples=[]
     for name in ('a','b'):
         folder=tmp_path/name;folder.mkdir()
@@ -142,10 +142,12 @@ def test_compute_comparisons_and_sql_handoff(tmp_path):
     inclusion=immutable(tmp_path/'inclusion.json',dict(accepted=True,evidence=inspected_ref,
         proposal={'samples':[dict(sample=n,include=True,reason='test fixture') for n in ('a','b')],'notes':'test fixture'}))
     computed=tmp_path/'computed';computed.mkdir();compute(inspected_ref,inclusion,computed)
-    prepared=reference(computed/'prepared.json');bundle=verified(prepared);results=[]
-    for i in range(len(bundle['tasks'])):
-        destination=tmp_path/('deg'+str(i));destination.mkdir();deg(prepared,i,destination)
-        results.append(reference(destination/'result.json'))
+    prepared=reference(computed/'prepared.json');bundle=verified(prepared);n=len(bundle['tasks'])
+    # the last comparison as a single request, the rest as one batch: assemble takes both shapes
+    single=tmp_path/'deg-last';single.mkdir();deg(prepared,n-1,single)
+    batch=tmp_path/'deg-batch';batch.mkdir();deg_batch(prepared,range(n-1),batch)
+    assert sorted(p.name for p in batch.iterdir() if p.is_dir())==sorted('deg-'+str(i) for i in range(n-1)) and (batch/'results.json').is_file()
+    results=[reference(batch/'results.json'),reference(single/'result.json')]
     destination=tmp_path/'evidence';destination.mkdir();assemble(prepared,results,destination)
     evidence=reference(destination/'evidence.json')
     state=immutable(tmp_path/'state.json',dict(evidence=evidence,phase='type',types=None,read=[],lookups=[],qc=False))

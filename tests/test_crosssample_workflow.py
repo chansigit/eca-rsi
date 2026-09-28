@@ -44,7 +44,8 @@ def test_workflow_fanout_and_annotation_order(monkeypatch, change_limit):
             if action=='accepted':return {'path':args[0],'parent':args[0]}
             if action=='publish':events.append('publish');return 'publication'
             _,payload,parents=args
-            name=action+('-'+payload['phase'] if action=='agent' else '-'+str(payload['index']) if action=='deg' else '')
+            name=('deg-'+str(payload['indices'][0]) if action=='deg-batch' else
+                  action+('-'+payload['phase'] if action=='agent' else '-'+str(payload['index']) if action=='deg' else ''))
             requests[name]=(payload,parents);events.append(name)
             return {'id':name,'output':name}
         async def await_pool(spec,request):
@@ -62,6 +63,7 @@ def test_workflow_fanout_and_annotation_order(monkeypatch, change_limit):
         monkeypatch.setattr(module.workflow,'info',lambda:SimpleNamespace(workflow_id='cross-sample/test',get_current_history_length=lambda:0))
         monkeypatch.setattr(module.workflow,'wait',asyncio.wait)
         monkeypatch.setattr(module.workflow,'patched',lambda name:True)
+        monkeypatch.setattr(module,'DEG_BATCH_SIZE',1)   # one comparison per request, as before batching
         workflow=CrosssampleWorkflow()
         assert await workflow.run({'max_in_flight_deg':3,'max_refinements':0})=='publication'
         assert peak==(5 if change_limit else 3) and events.index('assemble')>events.index('deg-7')
@@ -158,7 +160,8 @@ def test_a_long_history_continues_as_new_once_the_comparisons_are_in(monkeypatch
             if action=='accepted':return {'path':args[0],'parent':args[0]}
             if action=='publish':events.append('publish');return 'publication'
             _,payload,parents=args
-            name=action+('-'+payload['phase'] if action=='agent' else '-'+str(payload['index']) if action=='deg' else '')
+            name=('deg-'+str(payload['indices'][0]) if action=='deg-batch' else
+                  action+('-'+payload['phase'] if action=='agent' else '-'+str(payload['index']) if action=='deg' else ''))
             requests[name]=(payload,parents);events.append(name)
             return {'id':name,'output':name}
         async def await_pool(spec,request):return request['id']
@@ -170,10 +173,48 @@ def test_a_long_history_continues_as_new_once_the_comparisons_are_in(monkeypatch
         monkeypatch.setattr(module.workflow,'wait',asyncio.wait)
         monkeypatch.setattr(module.workflow,'patched',lambda name:True)
         monkeypatch.setattr(module.workflow,'continue_as_new',continue_as_new)
+        monkeypatch.setattr(module,'DEG_BATCH_SIZE',1)
         spec={'max_in_flight_deg':3,'max_refinements':0}
         with pytest.raises(Continued) as stop:
             await CrosssampleWorkflow().run(spec)
         assert stop.value.carried==[spec,{'deg_limit':3}] and 'deg-3' in events and 'assemble' not in events
         history['n']=0
         assert await CrosssampleWorkflow().run(spec,{'deg_limit':3})=='publication'
+    asyncio.run(scenario())
+
+
+def test_comparisons_are_batched_eight_per_request(monkeypatch):
+    import ecarsi.control.crosssample as module
+    async def scenario():
+        active=peak=0;events=[];requests={}
+        async def call(fn,action,args):
+            if action in ('read','session'):
+                path=args[0]
+                if path=='inspect':return {'samples':[{},{}]}
+                if path=='compute':return {'tasks':list(range(20))}
+                if path.startswith('agent'):return {'session_id':path}
+                if path=='decision-quality':return {}
+                raise AssertionError(path)
+            if action=='accepted':return {'path':args[0],'parent':args[0]}
+            if action=='publish':events.append('publish');return 'publication'
+            _,payload,parents=args
+            assert action!='deg'   # the patched path never submits single comparisons
+            name=('deg-'+str(payload['indices'][0]) if action=='deg-batch' else action+('-'+payload['phase'] if action=='agent' else ''))
+            requests[name]=(payload,parents);events.append(name)
+            return {'id':name,'output':name}
+        async def await_pool(spec,request):
+            nonlocal active,peak
+            if request['id'].startswith('deg-'):
+                active+=1;peak=max(peak,active);await asyncio.sleep(.001);active-=1
+            return request['id']
+        async def child(fn,session,**kwargs):return 'decision-'+session['session_id'].split('-')[1]
+        monkeypatch.setattr(module,'call',call);monkeypatch.setattr(module,'await_pool',await_pool)
+        monkeypatch.setattr(module.workflow,'execute_child_workflow',child)
+        monkeypatch.setattr(module.workflow,'info',lambda:SimpleNamespace(workflow_id='cross-sample/test',get_current_history_length=lambda:0))
+        monkeypatch.setattr(module.workflow,'wait',asyncio.wait)
+        monkeypatch.setattr(module.workflow,'patched',lambda name:True)
+        assert await CrosssampleWorkflow().run({'max_in_flight_deg':2,'max_refinements':0})=='publication'
+        assert [e for e in events if e.startswith('deg-')]==['deg-0','deg-8','deg-16'] and peak==2
+        assert requests['deg-8'][0]['indices']==list(range(8,16)) and requests['deg-16'][0]['indices']==[16,17,18,19]
+        assert requests['assemble'][0]['paths']==['compute','deg-0','deg-8','deg-16'] and len(requests['assemble'][1])==4
     asyncio.run(scenario())

@@ -232,20 +232,59 @@ def integrate(data, inspected_ref, inclusion_ref, destination, inputs):
            type_entries={},quality_entries={},type_scope=sorted(data.obs[BASE].astype(str).unique()))
 
 
-def deg(prepared_ref, index, destination):
-    from msp.integrate.deg import load_deg_input,compute_deg_task
-    bundle=verified(prepared_ref);task=bundle['tasks'][index]
-    # Verify the shared read-only buffers; each process maps them without loading counts or graphs.
+def _deg_buffers(prepared_ref):
+    """The verified bundle, its DEG plan and the mapped shared buffers: verified once per process
+    (each process maps them without loading counts or graphs)."""
+    from msp.integrate.deg import load_deg_input
+    bundle=verified(prepared_ref)
     for name in bundle['files']:
         if name.startswith('deg_input/'):
             artifact(bundle,name)
     directory=artifact(bundle,'deg_input/metadata.h5ad').parent
-    item=read(artifact(bundle,'deg_plan.json'))['plan'][task['plan_index']]
-    frame=compute_deg_task(load_deg_input(directory),item,task['cluster'])
+    return bundle,read(artifact(bundle,'deg_plan.json'))['plan'],load_deg_input(directory)
+
+
+def _deg_one(prepared_ref,bundle,plan,loaded,index,destination):
+    from msp.integrate.deg import compute_deg_task
+    task=bundle['tasks'][index]
+    frame=compute_deg_task(loaded,plan[task['plan_index']],task['cluster'])
     if frame is None:raise ValueError('A planned DEG comparison has no eligible reference')
     # Stress uses only top 10; annotation keeps the documented top 50 per view.
     frame.groupby('group',observed=True).head(50).to_csv(destination/'deg.csv',index=False)
-    immutable(destination/'result.json',dict(prepared=prepared_ref,index=index,task=task,table=reference(destination/'deg.csv')))
+    return immutable(destination/'result.json',dict(prepared=prepared_ref,index=index,task=task,table=reference(destination/'deg.csv')))
+
+
+def deg(prepared_ref, index, destination):
+    bundle,plan,loaded=_deg_buffers(prepared_ref)
+    _deg_one(prepared_ref,bundle,plan,loaded,index,destination)
+
+
+def deg_batch(prepared_ref, indices, destination):
+    """Several comparisons in one pool request: the buffers are verified and mapped once, each
+    comparison writes the deg-<i>/result.json a single request would, and results.json lists them so
+    assemble takes the batch in place of its members. One request per comparison cost each a process
+    start, a numba warm-up and a SHA pass over the buffers, and a lineage made N of them (2026-09-27)."""
+    indices=[int(i) for i in indices]
+    if len(set(indices))!=len(indices):raise ValueError('A DEG batch lists each comparison once')
+    bundle,plan,loaded=_deg_buffers(prepared_ref);results=[]
+    for index in indices:
+        folder=destination/('deg-'+str(index));folder.mkdir()
+        results.append(_deg_one(prepared_ref,bundle,plan,loaded,index,folder))
+    immutable(destination/'results.json',dict(prepared=prepared_ref,indices=indices,results=results))
+
+
+def deg_results(prepared_ref,results):
+    """The per-comparison result documents behind `results`: single result.json refs or deg_batch
+    results.json manifests, in any mix."""
+    rows=[]
+    for r in results:
+        doc=verified(r)
+        if 'indices' in doc:
+            if doc['prepared']!=prepared_ref:raise ValueError('DEG batch belongs to different evidence')
+            rows.extend(verified(x) for x in doc['results'])
+        else:
+            rows.append(doc)
+    return rows
 
 
 def assemble(prepared_ref, results, destination):
@@ -253,7 +292,7 @@ def assemble(prepared_ref, results, destination):
     from msp.integrate.deg import write_deg_results
     from msp.evidence import DegTables
     bundle=verified(prepared_ref);plan=read(artifact(bundle,'deg_plan.json'));out={**plan,'results':[]}
-    rows=[verified(r) for r in results]
+    rows=deg_results(prepared_ref,results)
     if sorted(r['index'] for r in rows)!=list(range(len(bundle['tasks']))):
         raise ValueError('Missing or duplicate DEG results')
     by_index={r['index']:r for r in rows}
@@ -626,6 +665,7 @@ def main():
     elif a.operation=='compute-round':compute_round(ref(0),dest)
     elif a.operation=='refine':refine(ref(0),ref(1),ref(2),dest)
     elif a.operation=='deg':deg(ref(0),int(a.args[1]),dest)
+    elif a.operation=='deg-batch':deg_batch(ref(0),a.args[1].split(','),dest)
     elif a.operation=='assemble':assemble(ref(0),read(a.args[1]),dest)
     elif a.operation=='tool':tool(a.args[0],Path(a.args[1]),Path(a.args[2]),dest)
     elif a.operation=='finalize':finalize(ref(0),ref(1),ref(2),dest)

@@ -51,6 +51,11 @@ python -m ecarsi.control --service-root /absolute/control \
 The acknowledged update is durable in Temporal history. Lowering the window lets
 already dispatched work finish before refilling; it does not cancel comparisons.
 The configured `max_in_flight_deg` remains the initial value for each new workflow.
+Since 2026-09-27 (`deg-batch-v1`) a DEG pool request runs up to `DEG_BATCH_SIZE` = 8
+comparisons in one process (`deg_batch`: the shared buffers are verified and mapped
+once, each comparison still writes its own `deg-<i>/result.json`, and `results.json`
+lists them for `assemble`); the window counts these requests, and the request's
+timeout is the per-comparison budget times the batch. Zoom-in lineages batch the same way.
 The reusable dataset example now uses 16. Pool grants still decide how many of
 these submitted requests actually execute together.
 

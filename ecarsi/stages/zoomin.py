@@ -10,7 +10,7 @@ from ..warm_pool.state import immutable, reference, verified
 from . import PROMPTS
 from .contract import (LOOKUP_NOTE, NO_ARGUMENTS, checklist, deg_lookup_schema, evidence_page, evidence_paths, json_hint,
                        lookup_arguments, proposal as parse_proposal, schema)
-from .crosssample import artifact, publish_bundle, deg, assemble
+from .crosssample import artifact, publish_bundle, deg, deg_batch, assemble
 from .persample import check_bundle, sealed
 from ..warm_pool.state import digest, read, save
 
@@ -588,6 +588,7 @@ def main():
     elif action == 'subset':subset(*refs,packet['index'],dest)
     elif action == 'compute':compute(*refs,dest)
     elif action == 'deg':deg(refs[0],packet['index'],dest)
+    elif action == 'deg-batch':deg_batch(refs[0],packet['indices'],dest)
     elif action == 'assemble':assemble(refs[0],refs[1:],dest)
     elif action == 'agent':save(dest/'agent.json',agent_spec(spec,refs[0],packet['kind'],packet['request_id']))
     elif action == 'apply':apply_lineage(*refs,dest)

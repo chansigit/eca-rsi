@@ -13,6 +13,10 @@ SKIPPED_CELL_LIMIT = 0.10  # a stage whose skipped samples or lineages hold more
 # idempotent -- content-addressed pool requests, saved session turns -- so a continued execution
 # re-drives finished steps in a handful of events each.
 HISTORY_LIMIT = 5000
+# Comparisons per DEG pool request. One request per comparison made a lineage of 40 comparisons 40
+# requests, each paying a process start, a numba warm-up and a SHA pass over the shared buffers; eight
+# per request keeps the fan-out (max_in_flight_deg counts requests) while cutting requests eightfold.
+DEG_BATCH_SIZE = 8
 
 
 def sample_summary(records, skipped, failed):

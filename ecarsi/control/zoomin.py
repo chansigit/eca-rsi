@@ -86,7 +86,7 @@ def zoomin_step(action,args):
     budget,output={
         'prepare':('prepare_budget','prepared.json'),'markers':('compute_budget','markers.json'),
         'subset':('subset_budget','subset.json'),'compute':('compute_budget','prepared.json'),
-        'deg':('deg_budget','result.json'),'assemble':('tool_budget','evidence.json'),
+        'deg':('deg_budget','result.json'),'deg-batch':('deg_budget','results.json'),'assemble':('tool_budget','evidence.json'),
         'agent':('prepare_budget','agent.json'),'apply':('merge_budget','final.json'),
         'merge':('merge_budget','final.json')}[action]
     if action=='compute':
@@ -94,7 +94,7 @@ def zoomin_step(action,args):
         if cfg['compute_backend']=='rapids' or cfg['compute_backend']=='auto' and cells>=cfg['gpu_min_cells']:
             gpu={'gpu':{'mode':'required' if cfg['compute_backend']=='rapids' else 'preferred','memory_mb':cfg['gpu_memory_mb']}}
     packet=immutable(root/(request_id+'.json'),dict(spec=spec,refs=refs,request_id=request_id,**{k:v for k,v in payload.items() if k!='paths'}))
-    unit='zoom-in.'+(payload['kind']+'.prepare' if action=='agent' else action)
+    unit='zoom-in.'+(payload['kind']+'.prepare' if action=='agent' else 'deg' if action=='deg-batch' else action)
     from .. import stages
     programs=(stages.program('zoomin'),stages.program('crosssample'),stages.program('persample'),stages.program('contract'))
     module='ecarsi.stages.zoomin'
@@ -102,8 +102,10 @@ def zoomin_step(action,args):
         args=['-m',module,action,packet['path']],**spec[budget],**gpu,
         inputs=[packet,*[reference(path) for path in programs],spec['input'],*refs],outputs=[output],
         trace=dict(workflow_id='zoom-in/'+spec['run_id'],dataset_id=spec['dataset_id'],unit_id=unit,depends_on=parents))
-    if action=='deg':
+    if action in {'deg','deg-batch'}:
         from ..warm_pool.budget import from_deg_buffers
+        if action=='deg-batch':  # the comparisons run one after another in the same process
+            request['timeout_seconds']*=len(payload['indices'])
         request=from_deg_buffers(request,refs[0],root/(request_id+'.resources.json'),spec['pool_root'])
     elif action in {'prepare','markers','subset','merge'}:
         # These load the whole cross-sample matrix; size them from it, not a constant.
@@ -138,7 +140,7 @@ class ZoominWorkflow:
     @workflow.run
     async def run(self,spec,progress=None):
         from .coordinator import run_agent
-        from .persample import SKIPPED_CELL_LIMIT
+        from .persample import DEG_BATCH_SIZE,SKIPPED_CELL_LIMIT
         progress=progress or {}  # from continue_as_new: finished lineages and the DEG window
         self._deg_limit=progress.get('deg_limit') or getattr(self,'_deg_limit',spec['max_in_flight_deg'])
         async def run(action,paths,parents,**details):
@@ -169,10 +171,16 @@ class ZoominWorkflow:
                     markers,marker_parent=await shared
                     computed,compute_parent=await run('compute',[part,markers],[part_parent,marker_parent])
                     bundle=await call(zoomin_step,'read',[computed])
+                    n=len(bundle['tasks'])
+                    if workflow.patched('deg-batch-v1'):
+                        batches=[list(range(i,min(i+DEG_BATCH_SIZE,n))) for i in range(0,n,DEG_BATCH_SIZE)]
+                        start=lambda k:run('deg-batch',[computed],[compute_parent],indices=batches[k])
+                    else:
+                        batches=list(range(n));start=lambda k:run('deg',[computed],[compute_parent],index=k)
                     pending,comparisons,next_index={},{},0
-                    while next_index<len(bundle['tasks']) or pending:
-                        while next_index<len(bundle['tasks']) and len(pending)<self._deg_limit:
-                            task=asyncio.create_task(run('deg',[computed],[compute_parent],index=next_index))
+                    while next_index<len(batches) or pending:
+                        while next_index<len(batches) and len(pending)<self._deg_limit:
+                            task=asyncio.create_task(start(next_index))
                             pending[task]=next_index;next_index+=1
                         done,_=await workflow.wait(pending,return_when=asyncio.FIRST_COMPLETED)
                         for task in sorted(done,key=lambda t:pending[t]):

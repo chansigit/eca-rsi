@@ -5,7 +5,7 @@ from pathlib import Path
 from temporalio import activity, workflow
 from temporalio.exceptions import ApplicationError
 
-from .persample import HISTORY_LIMIT, await_pool, call, handoff
+from .persample import DEG_BATCH_SIZE, HISTORY_LIMIT, await_pool, call, handoff
 
 
 def validate_spec(spec, *, resume=False):
@@ -134,6 +134,9 @@ def crosssample_step(action, args):
     elif action == 'deg':
         command += [str(payload['index'])]
         budget, output = spec['deg_budget'], 'result.json'
+    elif action == 'deg-batch':
+        command += [','.join(str(i) for i in payload['indices'])]
+        budget, output = dict(spec['deg_budget'], timeout_seconds=spec['deg_budget']['timeout_seconds'] * len(payload['indices'])), 'results.json'
     elif action == 'assemble':
         packed = immutable(root / ('comparisons-' + digest(payload)[:20] + '.json'), refs[1:])
         command = [action, refs[0]['path'], packed['path']]
@@ -149,7 +152,7 @@ def crosssample_step(action, args):
         budget, output = spec['finalize_budget'], 'final.json'
     else:
         raise ValueError('Unknown cross-sample operation')
-    unit = 'cross-sample.' + (payload['phase'] + '.prepare' if action == 'agent' else action)
+    unit = 'cross-sample.' + (payload['phase'] + '.prepare' if action == 'agent' else 'deg' if action == 'deg-batch' else action)
     from .. import stages
     module, programs = 'ecarsi.stages.crosssample', (stages.program('crosssample'), stages.program('contract'), stages.PACKAGE / 'round_policy.py')
     request = dict(request_id=request_id, operation_id=unit,
@@ -157,7 +160,7 @@ def crosssample_step(action, args):
            inputs=refs + [reference(path) for path in programs], outputs=[output],
            trace=dict(workflow_id='cross-sample/' + spec['run_id'], dataset_id=spec['dataset_id'],
                       unit_id=unit, depends_on=parents))
-    if action == 'deg':
+    if action in {'deg', 'deg-batch'}:
         from ..warm_pool.budget import from_deg_buffers
         request = from_deg_buffers(request, refs[0], root / (request_id + '.resources.json'), spec['pool_root'])
     submit(spec['pool_root'], request)
@@ -221,11 +224,17 @@ class CrosssampleWorkflow:
         for refinement in range(spec['max_refinements'] + 1):
             self._stage = 'DEG comparisons'
             plan = await call(crosssample_step, 'read', [prepared])
+            n = len(plan['tasks'])
+            if workflow.patched('deg-batch-v1'):
+                batches = [list(range(i, min(i + DEG_BATCH_SIZE, n))) for i in range(0, n, DEG_BATCH_SIZE)]
+                start = lambda k: run_operation('deg-batch', [prepared], [parent], indices=batches[k])
+            else:
+                batches = list(range(n)); start = lambda k: run_operation('deg', [prepared], [parent], index=k)
             pending, results, next_index = {}, {}, 0
-            while next_index < len(plan['tasks']) or pending:
-                while next_index < len(plan['tasks']) and len(pending) < self._deg_limit:
+            while next_index < len(batches) or pending:
+                while next_index < len(batches) and len(pending) < self._deg_limit:
                     index = next_index
-                    task = asyncio.create_task(run_operation('deg', [prepared], [parent], index=index))
+                    task = asyncio.create_task(start(index))
                     pending[task] = index
                     next_index += 1
                 done, _ = await workflow.wait(pending, return_when=asyncio.FIRST_COMPLETED)
