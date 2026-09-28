@@ -104,8 +104,12 @@ def zoomin_step(action,args):
         trace=dict(workflow_id='zoom-in/'+spec['run_id'],dataset_id=spec['dataset_id'],unit_id=unit,depends_on=parents))
     if action in {'deg','deg-batch'}:
         from ..warm_pool.budget import from_deg_buffers
-        if action=='deg-batch':  # the comparisons run one after another in the same process
-            request['timeout_seconds']*=len(payload['indices'])
+        if action=='deg-batch':
+            # The comparisons run one after another in one process, but a comparison takes seconds to a
+            # minute against a budget of many minutes: twice the budget covers a batch, and a request
+            # asking for hours could never land on a worker whose allocation has less left (HQ matches
+            # time_request against the worker's remaining time; 4 h test nodes on 2026-09-27).
+            request['timeout_seconds']*=2
         request=from_deg_buffers(request,refs[0],root/(request_id+'.resources.json'),spec['pool_root'])
     elif action in {'prepare','markers','subset','merge'}:
         # These load the whole cross-sample matrix; size them from it, not a constant.

@@ -136,7 +136,9 @@ def crosssample_step(action, args):
         budget, output = spec['deg_budget'], 'result.json'
     elif action == 'deg-batch':
         command += [','.join(str(i) for i in payload['indices'])]
-        budget, output = dict(spec['deg_budget'], timeout_seconds=spec['deg_budget']['timeout_seconds'] * len(payload['indices'])), 'results.json'
+        # Twice the per-comparison budget covers a batch (see zoomin_step): a longer request could never
+        # land on a worker whose allocation has less time left.
+        budget, output = dict(spec['deg_budget'], timeout_seconds=2 * spec['deg_budget']['timeout_seconds']), 'results.json'
     elif action == 'assemble':
         packed = immutable(root / ('comparisons-' + digest(payload)[:20] + '.json'), refs[1:])
         command = [action, refs[0]['path'], packed['path']]

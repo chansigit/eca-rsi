@@ -55,7 +55,9 @@ Since 2026-09-27 (`deg-batch-v1`) a DEG pool request runs up to `DEG_BATCH_SIZE`
 comparisons in one process (`deg_batch`: the shared buffers are verified and mapped
 once, each comparison still writes its own `deg-<i>/result.json`, and `results.json`
 lists them for `assemble`); the window counts these requests, and the request's
-timeout is the per-comparison budget times the batch. Zoom-in lineages batch the same way.
+timeout is twice the per-comparison budget (a comparison takes seconds to a minute; a
+request asking for hours could not land on a worker with less allocation time left).
+Zoom-in lineages batch the same way.
 The reusable dataset example now uses 16. Pool grants still decide how many of
 these submitted requests actually execute together.
 
