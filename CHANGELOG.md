@@ -1,5 +1,47 @@
 # Changelog
 
+## Unreleased — 2026-09-28
+
+The warm-pool scheduler after a week of gen-2 batches (2026-09-24 to 09-28): the two-day maintenance sprint of
+09-27/28 replaced the scheduler's own queueing with HyperQueue's, cut the DEG request count eightfold, and ended
+with an end-to-end run on real data. Version is still 0.3.2; this entry collects what is on `main` since then.
+
+- **HyperQueue priorities are back, on a patched HQ.** The gap-computation panic that forced priorities off on
+  09-19 is an upstream bug (It4innovations/hyperqueue#1135: `WorkerResources::remove*` indexes a worker's resource
+  vector with global resource ids). Our fix is PR #1137; the maintainer's #1136 rewrites the same area and also
+  covers it. The pool runs a local build of upstream `main` + #1136 + #1137 (`release.hq_priority` switches
+  priorities off if that ever has to be undone); `check_hq` accepts 0.26.2 or any later build (ef512b2).
+- **Priority = class first, then width** (`hq_priority`: model turn 1000, session tool 800, batch work 0, plus ten
+  per CPU). Decided by replaying a journal day under alternative rules: `python -m ecarsi.warm_pool.replay
+  --root <pool> --day <day>` (1f5567b, 87c1ce4) rebuilds a day from the workers' task journals with causal lags and
+  runs it through a policy. On 2026-09-24 (352k tasks, 13 workers) every variant finished datasets in the same
+  time (span ratio 1.01–1.02); only interactive waits differed, and class-first priority cut the p90 agent/tool
+  wait from 95 s to 2 s.
+- **The scheduler-side hold, backlog cap and drain are gone** (54f1f6b). Every request goes to HQ the tick it is
+  seen; HQ orders by priority and, with #1136, reserves cores for wide tasks itself. `release` keeps
+  `model_call_resource`, `hq_priority`, the GPU pinning knobs and `pin_wait_seconds` (was `drain_age_seconds`).
+- **A request no live worker can hold stays out of HQ** (16412ad): `infeasible: <reason>` in its observation,
+  counted per reason under `release.infeasible` in `scheduler.json`, re-checked every tick. The waiting workflow
+  still sees `queued`.
+- **Release timings come from the journals** (38c550a): `warm_pool measure` writes `pool/measured.json` (per
+  operation median/p90 run on cores and cards, p90 wait); the scheduler refreshes it every 30 min and uses it for
+  GPU pinning and unpinning unless a knob is set in `config.json`.
+- **DEG comparisons run eight per pool request** (0b2d5b2, 622fc5a): `stages.crosssample.deg_batch` verifies and
+  maps the shared buffers once, writes each comparison's `deg-<i>/result.json` and a `results.json` manifest;
+  `assemble` takes manifests and single results alike. Both workflows gate it with `deg-batch-v1`; `DEG_BATCH_SIZE`
+  lives in `control.persample`. The request's timeout is twice the per-comparison budget, not budget × batch: HQ
+  matches `time_request` against a worker's remaining allocation, so an hours-long request never lands on a short node.
+- Memory ceilings are the values the pool ran on after the PanSci organs (ad82f9c); resume supersedes every
+  generation of a restarted session and accepts a publication whose Pool folder was pruned (462f069); the bridge
+  summary counts model turns per dataset for Periscope (91e17fc).
+- **Verified on real data, 2026-09-27/28:** 11_Shietal (9,163 cells) on two 16-core `normal` nodes plus the plane
+  node: cross-sample 47 comparisons → 6 requests (22–44 s, peak 590–670 MB), zoom-in 42 → 6, four rounds, 93
+  requests all succeeded first time, `hq_waiting` 0 throughout. Stopped by the owner at round 4 and pruned.
+- Operations: Sherlock rejects sleeper jobs, so a worker node is now requested with a job that *is* the worker
+  (`ecarsi.warm_pool slurm-worker` over the whole grant; it joins the pool by itself and leaves with the job).
+  Deploy guards read the pool's own `hq` binary from `config.json` and exit with `os._exit` (the Temporal client
+  can segfault at interpreter teardown and abort a `set -e` deploy after printing its verdict).
+
 ## 0.3.2 — 2026-09-19
 
 Remove the first generation's Dask warm pool. Generation 1 runs are no longer resumed — their reports and metadata
