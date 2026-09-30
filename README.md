@@ -429,3 +429,5 @@ workflow. `attic-v01/` is an older archive.
 
 The gen-1 Dask warm pool (`ecarsi.pool`, its Periscope panel and the `pool` / `auto` OSP compute endpoints) was removed in 0.3.2:
 generation 2 schedules every stage through HyperQueue (`ecarsi.warm_pool`). msp's own `MSP_COMPUTE_ENDPOINT=dask` is unaffected.
+The control-plane path is documented under [docs-gen2/](docs-gen2/ARCHITECTURE.md); its scheduler and DEG batching as of
+2026-09-28 are summarised at the top of the changelog.
