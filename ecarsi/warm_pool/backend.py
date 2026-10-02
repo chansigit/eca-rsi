@@ -789,6 +789,7 @@ def serve(root, host=None):
                 while not stopping:
                     if server is not None and server.poll() is not None:
                         raise RuntimeError("HQ server exited; see scheduler.log")
+                    tick = time.monotonic()
                     try:
                         info = backend.call("server", "info")
                         scanning = time.monotonic()
@@ -801,7 +802,9 @@ def serve(root, host=None):
                     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as exc:
                         save(backend.root / "scheduler.json", dict(pid=os.getpid(), host=socket.gethostname(),
                              observed_at=time.time(), state="reconciling", error=str(exc)))
-                    time.sleep(.2)  # a new request waits half a tick on average before HQ sees it
+                    # Rest as long as the tick took, 0.2-5 s: each tick lists all of requests/, so a large or
+                    # slow listing must not keep the metadata server busy back to back; a fast tick stays snappy.
+                    time.sleep(min(5, max(.2, time.monotonic() - tick)))
         finally:
             stop_hq_server(server)
             save(backend.root / "scheduler.json", dict(pid=os.getpid(), host=socket.gethostname(),
