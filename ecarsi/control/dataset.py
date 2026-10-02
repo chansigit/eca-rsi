@@ -15,8 +15,12 @@ def validate_spec(spec):
     from ..warm_pool.state import identifier
     required = {'run_id', 'dataset_id', 'input_root', 'output_root', 'pool_root', 'bridge_root',
                 'organize', 'per_sample', 'cross_sample', 'zoom_in', 'round_policy'}
-    if not isinstance(spec, dict) or set(spec) != required:
+    if not isinstance(spec, dict) or set(spec) - {'storage'} != required:
         raise ValueError('Dataset needs explicit services, all four stage settings, and a round policy')
+    storage = spec.get('storage')  # optional: where the display zone and the work archive go (#25)
+    if storage is not None and (not isinstance(storage, dict) or set(storage) != {'display_root', 'archive_root'}
+                                or not all(isinstance(v, str) and Path(v).is_absolute() for v in storage.values())):
+        raise ValueError('storage needs absolute display_root and archive_root paths')
     identifier(spec['run_id'])
     if len(spec['run_id']) > 40 or not isinstance(spec['dataset_id'], str) or not spec['dataset_id'].strip():
         raise ValueError('Use a run ID up to 40 characters and a nonempty dataset label')
@@ -481,6 +485,23 @@ def dataset_step(action, args):
                 forced_release=reason.startswith('FORCED:'), reason=reason))
             result['publication'] = str(path)
         return result
+    if action == 'display':
+        # The display zone after a stage (#25); `final` also archives the work tree. See ecarsi.display.
+        from ..display import zone
+        from ..warm_pool.state import submit
+        from .. import stages
+        spec, label, final = args
+        key = digest([label, bool(final)])[:16]
+        packet = immutable(Path(spec['output_root']) / 'display-sync' / (key + '.json'),
+                           dict(zone(spec), root=spec['output_root'], final=bool(final), label=label))
+        programs = [stages.program('display'), stages.PACKAGE / 'display.py', stages.PACKAGE / 'archive.py']
+        budget = DISPLAY_FINAL_BUDGET if final else DISPLAY_BUDGET
+        request_id = spec['run_id'] + '.display-' + key
+        submit(spec['pool_root'], dict(request_id=request_id, operation_id='dataset.display',
+            args=['-m', 'ecarsi.stages.display', packet['path']], **budget,
+            inputs=[packet, *[reference(path) for path in programs]], outputs=['synced.json'],
+            trace=dict(workflow_id='dataset/' + spec['run_id'], dataset_id=spec['dataset_id'], unit_id='dataset.display')))
+        return dict(id=request_id, output='synced.json')
     if action == 'round-ledger':
         from ..warm_pool.state import submit
         spec, unit, progress = args
@@ -539,6 +560,25 @@ async def pause_if_asked(spec, unit, stage):
         raise ApplicationError(reason, non_retryable=True)
 
 
+DISPLAY_BUDGET = dict(cpus=1, memory_mb=4096, timeout_seconds=1800)  # render the pages, copy what changed
+DISPLAY_FINAL_BUDGET = dict(cpus=1, memory_mb=8192, timeout_seconds=4 * 3600)  # ... and archive the work tree
+
+
+async def show(spec, stage, unit=None, final=False):
+    """Sync the display zone after a stage (#25). A sync never holds or fails the run: it is submitted and
+    left to the pool (it renders the run as it is when it executes, so order does not matter). Only the
+    final one, which also archives the work tree, is awaited, bounded, and its failure only logged."""
+    if not spec.get('storage'):
+        return
+    label = f"{unit['name']}/{stage}" if unit else stage
+    try:
+        request = await call(dataset_step, 'display', [spec, label, final])
+        if final:
+            await asyncio.wait_for(await_pool(spec, request), DISPLAY_FINAL_BUDGET['timeout_seconds'] * 2)
+    except Exception as exc:
+        print(f'[display] {label}: not synced: {exc!r}', flush=True)
+
+
 @workflow.defn
 class AnalysisUnitWorkflow:
     @workflow.query
@@ -561,13 +601,16 @@ class AnalysisUnitWorkflow:
             self._stage = 'per-sample'
             output = await execute('per_sample', None, 0, PersampleWorkflow.run, 'persample/')
             progress = dict(per_sample=output, input=output, stats=[], rounds=[])
+            await show(spec, 'per-sample', unit)
         number = len(progress['stats']) + 1
         self._stage = f'round {number}: cross-sample'
         cross = await execute('cross_sample', progress['input'], number, CrosssampleWorkflow.run, 'cross-sample/')
+        await show(spec, f'round{number:02d}/cross-sample', unit)
         if workflow.patched('pause-after-stage-v1'):
             await pause_if_asked(spec, unit, 'crosssample')
         self._stage = f'round {number}: zoom-in'
         zoom = await execute('zoom_in', cross, number, ZoominWorkflow.run, 'zoom-in/')
+        await show(spec, f'round{number:02d}/zoom-in', unit)
         if workflow.patched('pause-after-stage-v1'):
             await pause_if_asked(spec, unit, 'zoomin')
         progress = await call(dataset_step, 'round', [spec, unit, progress, cross, zoom])
@@ -582,6 +625,7 @@ class AnalysisUnitWorkflow:
                 await call(dataset_step, 'round-ledger-published', [spec, unit, progress, result])
             except Exception as exc:  # a report is not worth failing a finished round over
                 print(f'[round] ledger not published: {exc!r}', flush=True)
+        await show(spec, f'round{number:02d}/decided', unit)
         if progress.get('paused'):
             # The round is complete and published, with its ledger; only the next one is withheld.
             # Failing is how a unit stops without releasing and stays resumable -- the same
@@ -593,6 +637,7 @@ class AnalysisUnitWorkflow:
                 request = await call(dataset_step, 'release', [spec, progress['publication']])
                 result = await await_pool(spec, request)
                 await call(dataset_step, 'released', [progress['publication'], result])
+                await show(spec, 'release', unit)
             self._stage = 'complete'
             return progress['publication']
         # Bound each unit's Temporal history; continued runs preserve the child result contract.
@@ -613,6 +658,7 @@ class DatasetWorkflow:
         organized = await call(dataset_step, 'completed', ['organize', stage]) if resume else None
         if organized is None:
             organized = await workflow.execute_child_workflow(OrganizeWorkflow.run, stage, id='organize/' + stage['run_id'])
+        await show(spec, 'organize')
         units = await call(dataset_step, 'units', [organized])
         pending = {}
         for index, unit in enumerate(units):
@@ -630,6 +676,8 @@ class DatasetWorkflow:
                 except Exception as exc:
                     failures.append(dict(unit=name, error=str(exc)))
         output = await call(dataset_step, 'publish', [spec, results, failures])
+        # The finished page; a complete dataset's work tree is archived with it.
+        await show(spec, 'published', final=not failures)
         if failures:
             raise ApplicationError('Analysis units failed; completed siblings retained at ' + output, non_retryable=True)
         self._stage = 'complete'

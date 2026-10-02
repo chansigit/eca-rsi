@@ -959,12 +959,8 @@ def _when(ts: float | None) -> str:
 def _tree_collection(path: Path) -> str:
     """The collection a path inside a fleet tree names: `<coll>/eca-pp/<dataset>/...`, or the
     direct study layout `<coll>/<study>/{standardize,rsi}`."""
-    parts = path.parts
-    if "eca-pp" in parts[1:]:
-        return parts[parts.index("eca-pp") - 1]
-    if path.name in ("rsi", "standardize") and (path.parent / "standardize" / "result.json").is_file():
-        return path.parent.parent.name
-    return ""
+    place = L.fleet_place(path)
+    return place[0] if place else ""
 
 
 def collection_of(path: Path) -> str:

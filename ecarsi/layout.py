@@ -136,6 +136,19 @@ def root_of(unit: Path) -> Path | None:
     return unit.parent.parent if unit.parent.name == UNITS else None
 
 
+def fleet_place(path: Path) -> tuple[str, str] | None:
+    """(collection, dataset) a path inside a fleet tree names: `<coll>/eca-pp/<dataset>/...`, or the direct
+    study layout `<coll>/<study>/{standardize,rsi}` (the study is the dataset). None outside both."""
+    path = Path(path)
+    parts = path.parts
+    if "eca-pp" in parts[1:-1]:
+        i = parts.index("eca-pp")
+        return parts[i - 1], parts[i + 1]
+    if path.name in ("rsi", "standardize") and (path.parent / "standardize" / "result.json").is_file():
+        return path.parent.parent.name, path.parent.name
+    return None
+
+
 def base_of(target: Path) -> Path:
     """The tree one run of one dataset occupies: the root, or a bare unit
     run outside any root. This is what ecarsi.mirror copies as a whole."""

@@ -94,20 +94,25 @@ def default_config() -> Path:
 
 def display_zones(config: Path | None) -> dict[str, Path]:
     """name -> display-zone copy, for every <root>/<collection>/<dataset>/<run>/display.json under the
-    config file's display_roots. A name that two copies claim keeps the first, in path order."""
+    config file's display_roots. A name that several copies claim (a dataset run again) goes to the newest
+    one; the others are served as <name>-<run>."""
     try:
         roots = json.loads(Path(config).read_text()).get("display_roots", []) if config else []
     except (OSError, ValueError, AttributeError):
         return {}
-    found: dict[str, Path] = {}
+    records = []
     for root in roots:
-        for record in sorted(Path(root).glob("*/*/*/" + L.DISPLAY)):
+        for path in sorted(Path(root).glob("*/*/*/" + L.DISPLAY)):
             try:
-                name = json.loads(record.read_text()).get("name")
-            except (OSError, ValueError, AttributeError):
+                record = json.loads(path.read_text())
+            except (OSError, ValueError):
                 continue
-            if name and "/" not in name:
-                found.setdefault(name, record.parent)
+            if isinstance(record, dict) and record.get("name") and "/" not in record["name"]:
+                records.append((record.get("synced_at") or record.get("copied_at") or "", record, path.parent))
+    found: dict[str, Path] = {}
+    for _, record, path in sorted(records, key=lambda r: r[0], reverse=True):
+        name = record["name"] if record["name"] not in found else f"{record['name']}-{path.name}"
+        found.setdefault(name, path)
     return found
 
 
@@ -192,7 +197,8 @@ class Registry:
             # plane stops publishing (the 2026-09-23 outage emptied the fleet table of them).
             keep = getattr(getattr(self._published, "__self__", None), "completed", {})
             known = set(self._file.values())
-            new = {k: v for k, v in keep.items() if k not in self._file and v not in known}
+            # a run with a display zone is kept by it (#25); its scratch work tree must not shadow it here
+            new = {k: v for k, v in keep.items() if k not in self._file and v not in known and k not in self._display}
             if new:
                 try:
                     self.write_file(self.path, {**self._file, **new})

@@ -80,8 +80,14 @@ def test_display_roots_in_the_config_serve_every_display_zone_under_its_recorded
     reg = Registry(registry_file, config=config)
     assert reg.snapshot() == {"3ca-Durante": tmp_path / "elsewhere", "kept": root / "hcl" / "Adipose" / "gen1"}  # not scanned yet
     reg.scan_display()
-    # the file wins by name and by path; the second claim on a name loses; a broken record is skipped
-    assert reg.snapshot() == {"3ca-Durante": tmp_path / "elsewhere", "kept": root / "hcl" / "Adipose" / "gen1"}
+    # the file wins by name and by path; a second claim on a name gets its run appended; a broken record is skipped
+    assert reg.snapshot() == {"3ca-Durante": tmp_path / "elsewhere", "kept": root / "hcl" / "Adipose" / "gen1",
+                              "hcl-Adipose-gen1-copy": root / "hcl" / "Adipose" / "gen1-copy"}
     registry_file.write_text("{}")
-    assert reg.snapshot() == {"3ca-Durante": root / "3ca" / "Durante" / "gen2-20260917", "hcl-Adipose": root / "hcl" / "Adipose" / "gen1"}
+    assert reg.snapshot() == {"3ca-Durante": root / "3ca" / "Durante" / "gen2-20260917", "hcl-Adipose": root / "hcl" / "Adipose" / "gen1",
+                              "hcl-Adipose-gen1-copy": root / "hcl" / "Adipose" / "gen1-copy"}
+    # a dataset run again: the newest copy takes the name
+    (root / "hcl" / "Adipose" / "gen1-copy" / "display.json").write_text(json.dumps({"name": "hcl-Adipose", "synced_at": "2026-10-05"}))
+    reg.scan_display()
+    assert reg.snapshot()["hcl-Adipose"] == root / "hcl" / "Adipose" / "gen1-copy"
     assert Registry(registry_file, config=tmp_path / "missing.json").snapshot() == {}

@@ -117,10 +117,11 @@ PRIORITY_BASE = {"agent": 1000, "tool": 800, "work": 0}
 
 
 def request_class(spec):
-    """'agent' for a model turn, 'tool' for a session tool call, 'work' for batch computation."""
+    """'agent' for a model turn, 'tool' for a session tool call or a display-zone sync, 'work' for batch
+    computation. A sync is one small task; behind the batch work its page would lag by the whole queue."""
     if spec["operation_id"] == "agent.call":
         return "agent"
-    return "tool" if ".tool-" in spec["request_id"] else "work"
+    return "tool" if ".tool-" in spec["request_id"] or ".display-" in spec["request_id"] else "work"
 
 
 def hq_priority(spec, release):
