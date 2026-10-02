@@ -7,17 +7,25 @@ import json
 import os
 from pathlib import Path
 
+from .warm_pool.state import sync_directory
+
 
 def read_json(path: Path) -> dict:
     return json.loads(path.read_text())
 
 
 def write_json(path: Path, value: dict) -> None:
+    """Atomic and durable: a node death must not leave an empty manifest or .pruned marker. Not
+    warm_pool.state.save: its bytes differ, and earlier manifests' file identities depend on them."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
     try:
-        tmp.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n")
+        with tmp.open("w") as stream:
+            stream.write(json.dumps(value, indent=2, ensure_ascii=False) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
         os.replace(tmp, path)
+        sync_directory(path.parent)
     finally:
         tmp.unlink(missing_ok=True)
 
