@@ -227,7 +227,7 @@ def plan_without(plan, skipped):
         raise ValueError('Skipped lineages must be zoomed lineages of the plan: ' + ', '.join(sorted(names.keys() - zoomed)))
     # Every lineage carries a reason: the agent states one where it declines to zoom, the
     # host states one where it skipped, and zmip's round report prints the column for all.
-    return {**plan, 'lineages': [{'reason': '', **line, 'zoom': False,
+    return {**plan, 'lineages': [{**line, 'zoom': False,
                                   'reason': 'annotation agent failed twice; cross-sample labels kept: '
                                   + str(names[line['name']].get('error', ''))[:300]} if line['name'] in names
                                  else {'reason': '', **line} for line in plan['lineages']]}
