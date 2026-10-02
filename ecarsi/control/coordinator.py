@@ -107,8 +107,9 @@ def check_pool_once(root, request_id, output):
     if state["state"] == "succeeded":
         receipt = state["receipt"]
         selected = next((item for item in receipt["outputs"] if Path(item["path"]).name == output), None)
-        if selected is None or file_digest(selected["path"]) != selected["sha256"]:
-            raise ValueError("Pool receipt output changed or missing")
+        if selected is None or not Path(selected["path"]).is_file() or file_digest(selected["path"]) != selected["sha256"]:
+            # Final: raised, it was polled again 40 times over ~35 min before failing (#22).
+            return {"state": "failed", "detail": "Pool receipt output changed or missing"}
         return {"state": "ready", "path": selected["path"],
                 "attempt_id": state["attempt_id"]}
     if state["state"] == "failed":
@@ -120,19 +121,23 @@ def check_pool_once(root, request_id, output):
             # a 50k-cell PCA each failed whole datasets (2026-09-18). The worker's `retryable`
             # covers interruptions whose budget was fine.
             if error.startswith("MemoryError") and "GPU" in error and spec.get("gpu", {}).get("mode") == "preferred":
-                retry(root, request_id, without_gpu=True, reason="Automatic retry on CPUs after the GPU memory budget")
+                change = dict(without_gpu=True, reason="Automatic retry on CPUs after the GPU memory budget")
             elif error.startswith("MemoryError") and retryable:
-                retry(root, request_id, memory_mb=2 * spec["memory_mb"],
-                      reason="Automatic retry at twice the budget after the RSS watchdog")
+                change = dict(memory_mb=2 * spec["memory_mb"],
+                              reason="Automatic retry at twice the budget after the RSS watchdog")
             elif error.startswith("TimeoutError") and not (request.get("retry") or {}).get("timeout_seconds"):
                 # Once: doubled twice, a DEG batch (7200 s -> 28 800 s) needed a whole 8 h node and
                 # waited as infeasible (#18). A second timeout fails with its error.
-                retry(root, request_id, timeout_seconds=2 * spec["timeout_seconds"],
-                      reason="Automatic retry at twice the time limit after the execution deadline")
+                change = dict(timeout_seconds=2 * spec["timeout_seconds"],
+                              reason="Automatic retry at twice the time limit after the execution deadline")
             elif retryable:
-                retry(root, request_id, reason="Automatic recovery after a confirmed local interruption")
+                change = dict(reason="Automatic recovery after a confirmed local interruption")
             else:
                 return {"state": "failed", "detail": error}
+            try:
+                retry(root, request_id, **change)
+            except ValueError as exc:  # e.g. a pinned input changed: polling again never heals it (#22)
+                return {"state": "failed", "detail": f"{error}; automatic retry refused: {exc}"}
             return {"state": "waiting"}
     if state["state"] == "unknown_external_result":
         return {"state": "waiting", "detail": "unknown_external_result"}
@@ -153,7 +158,7 @@ def check_bridge_once(root, request_id):
     if result["state"] == "reply_saved":
         path = root_path(root) / "requests" / request_id / "result.json"
         if not path.is_file():
-            raise ValueError("Bridge reply receipt is absent")
+            return {"state": "failed", "detail": "Bridge reply receipt is absent"}  # final, not polled 40 times (#22)
         return {"state": "ready", "path": str(path)}
     if result["state"] == "unknown_external_result":
         return {"state": "waiting", "detail": "unknown_external_result"}

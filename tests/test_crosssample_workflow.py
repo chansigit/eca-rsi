@@ -130,6 +130,26 @@ def test_a_time_limit_is_doubled_once(tmp_path):
     assert read(folder/'request.json')['spec']['timeout_seconds']==60
 
 
+def test_a_changed_output_or_pinned_input_fails_at_once(tmp_path):
+    # #22: both raised ValueError, which the poll activity retried 40 times over ~35 min.
+    from ecarsi.control.coordinator import check_pool
+    from ecarsi.warm_pool.state import submit
+    tmp_path.chmod(0o700);(tmp_path/'requests').mkdir();save(tmp_path/'config.json',{'runtime':{}})
+    pinned=tmp_path/'input.json';save(pinned,{'v':1})
+    submit(tmp_path,dict(request_id='r',operation_id='compute',args=['-c','pass'],cpus=1,memory_mb=64,timeout_seconds=30,
+        inputs=[reference(pinned)],outputs=['result.json']))
+    folder=tmp_path/'requests/r';request=read(folder/'request.json');attempt=folder/request['attempt_id']
+    save(attempt/'receipt.json',dict(state='failed',retryable=True,finished_at=1,
+        attempt_id=request['attempt_id'],request_digest=request['digest'],runtime_digest=request['runtime_digest']))
+    save(pinned,{'v':2})
+    result=check_pool(str(tmp_path),'r','result.json')
+    assert result['state']=='failed' and 'Retry input changed' in result['detail']
+    output=attempt/'outputs/result.json';save(output,{'v':1})
+    save(attempt/'receipt.json',dict(state='succeeded',outputs=[reference(output)]))
+    save(output,{'v':2})
+    assert check_pool(str(tmp_path),'r','result.json')==dict(state='failed',detail='Pool receipt output changed or missing')
+
+
 def test_uncertain_observation_waits_for_same_attempt_receipt(tmp_path):
     from ecarsi.control.coordinator import check_pool, check_bridge
     from ecarsi.warm_pool.state import submit
