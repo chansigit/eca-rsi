@@ -70,7 +70,9 @@ start() {
         ${TEMPORAL_DYNAMIC_CONFIG:+--dynamic-config $TEMPORAL_DYNAMIC_CONFIG} ;;
     hq) launch hq-server "${PY[@]}" -m ecarsi.warm_pool --root "$POOL" hq-server --host "$(hostname -s)"
         # the scheduler looks for this lock once, at start: hold it before a scheduler can look
-        for _ in $(seq 60); do flock -n "$POOL/hq-server.lock" true || return 0; sleep 1; done; echo "warning: hq-server did not start" ;;
+        # without it the scheduler would start an embedded server of its own beside this one: stop here
+        for _ in $(seq 60); do flock -n "$POOL/hq-server.lock" true || return 0; sleep 1; done
+        echo "error: hq-server did not take $POOL/hq-server.lock within 60 s; see $LOGS/hq-server.log; nothing after hq started" >&2; return 1 ;;
     scheduler) launch scheduler "${PY[@]}" -m ecarsi.warm_pool --root "$POOL" scheduler --host "$(hostname -s)" ;;
     bridge) launch bridge "${PY[@]}" -m ecarsi.agent serve "$BRIDGE" ;;
     coordinators) local n; n=$(pids coordinators | wc -l)
@@ -94,9 +96,9 @@ status() { for c in temporal hq scheduler bridge runners coordinators observator
 cmd=${1:-status}; shift || true
 comps=("$@"); [ ${#comps[@]} -eq 0 ] && comps=(temporal hq scheduler bridge runners coordinators fleet-status pruner)
 case $cmd in
-  start) identity | tee -a "$LOGS/identity.log"; host_code >/dev/null; for c in "${comps[@]}"; do start "$c"; done; sleep 2; status ;;
+  start) identity | tee -a "$LOGS/identity.log"; host_code >/dev/null; for c in "${comps[@]}"; do start "$c" || exit 1; done; sleep 2; status ;;
   stop) for c in "${comps[@]}"; do stop "$c"; done; status ;;
-  restart) identity | tee -a "$LOGS/identity.log"; host_code >/dev/null; for c in "${comps[@]}"; do stop "$c"; done; for c in "${comps[@]}"; do start "$c"; done; sleep 3; status ;;
+  restart) identity | tee -a "$LOGS/identity.log"; host_code >/dev/null; for c in "${comps[@]}"; do stop "$c"; done; for c in "${comps[@]}"; do start "$c" || exit 1; done; sleep 3; status ;;
   identity) identity ;;
   host-code) host_code ;;   # the eca-rsi that host-side helpers (worker-node.sh, add-worker) should put on PYTHONPATH
   status) status ;;
