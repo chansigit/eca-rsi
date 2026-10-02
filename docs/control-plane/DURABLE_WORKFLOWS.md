@@ -1,12 +1,8 @@
-# Durable RSI workflows
+# Durable workflows: design record
 
-Status: approved architecture and isolated implementation; no production migration.
-Design branch: `feature/durable-workflows`. Implementation branch: `feature/warmpool-v2`.
-The [first Warm Pool implementation](WARM_POOL_V2.md) verifies local recovery
-and Scheduler relocation between two Slurm hosts before scientific or Temporal integration.
-Current implementation entries: [dataset orchestration and iteration](DATASET_V2.md),
-[shared Temporal persistence and recovery](DURABLE_CONTROL.md),
-[cross-sample acceptance](../history/CROSSSAMPLE_V2_ACCEPTANCE.md), and [Zoom-in acceptance](ZOOMIN_V2.md).
+This is the design record of the control-plane path, written in September 2026 before the implementation. It is kept because the implementation follows it. For the implemented system read [ARCHITECTURE.md](ARCHITECTURE.md); for each component read [WARM_POOL_V2.md](WARM_POOL_V2.md), [AGENT_BRIDGE_V2.md](AGENT_BRIDGE_V2.md), [DURABLE_CONTROL.md](DURABLE_CONTROL.md) and [DATASET_V2.md](DATASET_V2.md). Statements of status below ("not implemented", "remaining gates") describe September 2026 and are left as written.
+
+The design uses four component names: Work Coordinator (`ecarsi.control`), Agent Bridge (`ecarsi.agent`, the model-turn service), Warm Pool Scheduler and Warm Pool Worker (`ecarsi.warm_pool`).
 
 ## Component names and proposed responsibility boundary
 
@@ -388,7 +384,7 @@ artifact dependencies rather than a global round barrier. Temporal is the next
 development target for both local and distributed workflows. HyperQueue backs
 the v2 prototype, with auto-allocation disabled by user policy.
 
-- [Primitive catalog, local modes and tiered storage](PRIMITIVE_OPERATIONS.zh-CN.md)
+- [Primitive catalog, local modes and tiered storage (draft, not implemented)](../history/PRIMITIVE_OPERATIONS.zh-CN.md)
 - [Organize execution blocks (HTML)](../design/00-organize/index.html)
 - [Per-sample / OSP execution blocks (HTML)](../design/01-per-sample/index.html)
 - [cross-sample execution blocks (HTML)](../design/02-cross-sample/index.html)

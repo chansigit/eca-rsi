@@ -1,14 +1,22 @@
-# Cross-sample v2
+# Cross-sample stage
 
-Temporal coordinates the operations; Warm Pool workers execute MSP kernels and evidence tools; Agent Bridge handles model turns. The input is a completed per-sample `publication.json`. This path does not start a legacy dataset driver or run `msp inspect` / `msp annotate` as long-lived agents.
+Temporal coordinates the operations. Warm pool workers run the MSP kernels and the evidence tools. The model-turn service runs the model turns. For round 1, the input is a completed per-sample `publication.json`. For round ≥ 2, the input is the zoom-in publication from the previous round.
 
-The order is input verification → sample inclusion → integration → parallel DEG → evidence publication → type annotation → quality annotation → final publication. Datasets advance independently, and model waits hold no compute grant. Integration keeps normalization, HVG, PCA, Harmony, neighbors, Leiden, UMAP and numerical QC together. Global DEG runs per resolution; local DEG runs per target against its pooled PAGA neighbors. Comparisons map shared frozen expression buffers; one assembly task publishes read-only SQLite.
+## Steps
 
-Quality can request bounded subclustering. The coordinator schedules it on a worker, rebuilds matching DEG, then requests type review for affected clusters and merge partners before restarting quality. Parent labels are context, not child annotations. Failed operations retain their receipts and completed siblings and never become successful publications.
+1. `inspect`: Verify the published input.
+2. Sample inclusion (round 1, more than one sample): An agent session decides which samples take part. A single sample skips the session (`include-single`).
+3. `compute`: Run merge, normalization, HVG, PCA, Harmony, neighbors, Leiden, UMAP, and numerical QC in one task. For round ≥ 2, run `compute-round` on the previous survivors instead.
+4. DEG: Compute global DEG per resolution. Compute local DEG per target against its pooled PAGA neighbors. Comparisons map shared frozen expression buffers. Each pool request (`deg-batch`) runs eight comparisons. The timeout of the request is twice the per-comparison budget.
+5. `assemble`: Publish the evidence bundle and a read-only SQLite DEG database.
+6. Type annotation: An agent session labels the clusters.
+7. Quality review: An agent session decides removals, merges, and subclustering.
+8. `refine` (optional): The quality review can request subclustering. The coordinator recomputes the affected clusters and their DEG. The coordinator asks type review for the affected clusters and merge partners. The coordinator then restarts quality. Repeat this process up to `max_refinements` times.
+9. `finalize`: Apply the decisions, plot, write the report, and publish.
 
-## Start
+Datasets advance independently. A model wait holds no compute grant. Failed operations keep their receipts and completed siblings. They never become publications.
 
-Use the deployment's recorded source revision and science image. The image must include MSP's `feature/scheduled-operations` changes; released MSP 0.5.2 alone does not provide these interfaces. CPU and GPU use the same pinned scientific dependencies.
+## Spec
 
 ```json
 {
@@ -30,58 +38,47 @@ Use the deployment's recorded source revision and science image. The image must 
 }
 ```
 
-Budgets are examples, not dataset-size estimates. Set them for the input and available workers. The output directory must be fresh. Species and sample key must match Organize's accepted mapping. `auto` prefers GPU above the configured threshold and permits CPU fallback; `rapids` requires GPU; `cpu` uses Scanpy. `max_in_flight_deg` bounds each dataset's dispatched comparisons; worker resources control actual concurrency.
+Budgets are examples. Size them for the input and the workers. The output directory must be fresh. Species and sample key must match the accepted Organize mapping. For `compute_backend`, `auto` prefers a GPU above `gpu_min_cells` and allows CPU fallback. The setting `rapids` requires a GPU. The setting `cpu` uses Scanpy. `max_in_flight_deg` bounds the dispatched DEG requests of the dataset. Worker resources decide real concurrency.
 
-CPU DEG requests with the recognized mapped-buffer layout use a persisted memory
-estimate: four times the expression/metadata file bytes plus 2 GiB, rounded up to
-256 MiB and capped by `deg_budget.memory_mb`. This allows private sparse copies,
-rank workspaces and imports without reserving counts/graph layers that DEG never
-loads. Unknown layouts, unaccepted inputs and GPU requests retain their declared
-budgets. Existing requests never change. A replay over 1,262 completed comparisons
-from 20 development datasets retained at least 2.17 times their observed RSS peak;
-this is calibration evidence, not a guarantee for every future input/runtime.
+CPU DEG requests with the mapped-buffer layout use a measured memory estimate. Calculate this estimate as four times the expression and metadata file bytes plus 2 GiB. Round the estimate up to 256 MiB. Cap the estimate at `deg_budget.memory_mb`. Unknown layouts and GPU requests keep their declared budgets. Existing requests never change.
 
-The dispatch window can also be updated without restarting a workflow:
+Change the DEG window of a running workflow without restarting it:
 
 ```bash
-python -m ecarsi.control --service-root /absolute/control \
-  set-deg-limit cross-sample RUN_ID 16
+python -m ecarsi.control --service-root <control> set-deg-limit cross-sample RUN_ID 16
 ```
 
-The acknowledged update is durable in Temporal history. Lowering the window lets
-already dispatched work finish before refilling; it does not cancel comparisons.
-The configured `max_in_flight_deg` remains the initial value for each new workflow.
-Since 2026-09-27 (`deg-batch-v1`) a DEG pool request runs up to `DEG_BATCH_SIZE` = 8
-comparisons in one process (`deg_batch`: the shared buffers are verified and mapped
-once, each comparison still writes its own `deg-<i>/result.json`, and `results.json`
-lists them for `assemble`); the window counts these requests, and the request's
-timeout is twice the per-comparison budget (a comparison takes seconds to a minute; a
-request asking for hours could not land on a worker with less allocation time left).
-Zoom-in lineages batch the same way.
-The reusable dataset example now uses 16. Pool grants still decide how many of
-these submitted requests actually execute together.
+Lowering the window lets dispatched work finish before refilling. Sparse global DEG requires a private normalized-expression workspace. Scanpy edits sparse storage in place. Include this workspace in the memory budget.
+
+## Commands
+
+Inside a dataset workflow, the stage starts by itself. Run the stage standalone:
 
 ```bash
-python -m ecarsi.control --temporal HOST:7233 start-crosssample spec.json
-python -m ecarsi.control --temporal HOST:7233 status-crosssample example-crosssample
+python -m ecarsi.control --service-root <control> --task-queue <queue> start-crosssample spec.json
+python -m ecarsi.control --service-root <control> --task-queue <queue> status-crosssample RUN_ID
+python -m ecarsi.control --service-root <control> --task-queue <queue> resume-crosssample RUN_ID
 ```
 
-The coordinator worker registers this alongside Organize and per-sample. Restarting it resumes open Temporal histories. Confirmed local interruptions retry automatically, up to three attempts. Other failures require a recorded repair before `resume-crosssample`; unresolved external API outcomes are not blindly submitted again. Completed agent submissions are verified and reused on resume. An unfinished session with an incompatible adapter revision requires a new session/run.
+Restart the coordinator to resume open histories. The system retries confirmed local interruptions automatically, up to three times. Other failures need a recorded repair before you run `resume-crosssample`. The system never resubmits unresolved external outcomes blindly. The system verifies and reuses completed agent submissions on resume.
 
-For a known failed computation, preserve its history and retry through the Pool API:
+For a confirmed failed computation, keep its history and retry through the pool:
 
 ```bash
-python -m ecarsi.warm_pool --root /shared/pool retry REQUEST_ID --reason "Verified repair"
-# Add --use-current-runtime only after validating an intentional runtime upgrade.
-python -m ecarsi.control --temporal HOST:7233 resume-crosssample example-crosssample
+python -m ecarsi.warm_pool --root <pool> retry REQUEST_ID --reason "Verified repair"   # --use-current-runtime only after an intended runtime upgrade
+python -m ecarsi.control --service-root <control> --task-queue <queue> resume-crosssample RUN_ID
 ```
 
-Retry refuses changed inputs, completed/cancelled tasks and unknown outcomes. Runtime upgrades are explicit and retained in the attempt history. Changing a pinned worker program or scientific input requires a fresh run/output. Do not modify programs while active sessions reference their hashes. Sparse global DEG needs a private normalized-expression workspace because Scanpy edits sparse storage in place; include that workspace in its memory budget. Shared evidence files remain unchanged.
+The retry command refuses changed inputs, completed or cancelled tasks, and unknown outcomes. Changing a pinned program or a scientific input requires a fresh run. Do not modify programs while active sessions reference their hashes.
 
-## Outputs and validation
+## Outputs
 
-The final `publication.json` references `annotated.h5ad`, type and quality proposals, figures, report, and `cell_exclusions.csv.gz` through its `files` map. Intermediate evidence is an immutable bundle: resolve files through the manifest, since they can reside in different completed Pool attempts.
+The final `publication.json` references `annotated.h5ad`, the type and quality proposals, figures, the report, and `cell_exclusions.csv.gz` through its `files` map. The evidence bundle is immutable. Files can live in different pool attempts. Resolve its files through the manifest.
 
-The exclusion ledger records stable cell IDs, original source IDs, stage, run, evidence version and applicable reasons. Overlapping rules count a cell once. Reasons include sample exclusion, numerical QC, inherited OSP proposals and accepted type/quality removals. The input publication links earlier ledgers; temporary DEG masks are not physical removals. Publication requires serialized output/ledger conservation.
+The exclusion ledger records stable cell ids, original source ids, stage, run, evidence version, and reasons. Overlapping rules count a cell once. Reasons include sample exclusion, numerical QC, inherited OSP proposals, and accepted type or quality removals. Temporary DEG masks are not removals. Publication requires serialized output and ledger conservation.
 
-The development observatory consumes the same Pool and Bridge traces, including DEG fan-in dependencies and actual worker placement. Small-data acceptance does not establish large-dataset speedup. Representative memory/throughput tests, global storage budgets, and the subsequent Zoom-in migration remain separate work.
+Periscope's `/_control/` page shows the same pool and bridge traces. These traces include DEG fan-in and worker placement.
+
+## History
+
+The 2026-09-15 acceptance is in [docs/history/CROSSSAMPLE_V2_ACCEPTANCE.md](../history/CROSSSAMPLE_V2_ACCEPTANCE.md).
