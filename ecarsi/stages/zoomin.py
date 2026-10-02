@@ -94,6 +94,9 @@ def compute(subset_ref, marker_ref, destination):
 
 
 def numerical_reasons(bundle, data):
+    """Why the numerical pre-annotation removes each cell of a lineage. Cross-sample's list also has
+    osp_proposal: OSP's drop advice is applied there, in round 1, so no such cell reaches a lineage;
+    one that did would have no reason here and fail loudly rather than be recorded vaguely."""
     import pandas as pd
     from msp.evidence import load_removal_mask
     mask = load_removal_mask(artifact(bundle, 'preannotation_removal.csv').parent, data)
