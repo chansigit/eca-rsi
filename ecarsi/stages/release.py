@@ -149,7 +149,7 @@ def reassign_items(entry, quality):
             items.append(Item('reassigned', entry['round'], entry['stage'], entry['scope'],
                 str(cluster.get('cluster_id', '')) + ':' + ','.join(flag.get('type_clusters', [])),
                 label=str(flag.get('fine_label', '')), action='→ ' + str(flag.get('reassign_to', '')),
-                confidence=str(flag.get('confidence', '')), note=note, link=entry['source']['path'],
+                confidence=str(flag.get('confidence', '')), note=note, link=entry['source'].get('link', entry['source']['path']),
                 extra={'reassign_to': flag.get('reassign_to', '')}))
     return items
 
@@ -162,8 +162,28 @@ def type_proposal(prop):
     return prop['types'] if isinstance(prop.get('types'), dict) else prop
 
 
-def review_items(unit, exclusions, decisions):
-    """Reuse review records; count actual removed cells, not proposed cluster sizes."""
+def local_link(root, entry):
+    """A decision's copy inside the unit, as a unit-relative link: the pool request that holds the original
+    is pruned once the run finishes, which left these links dead (#26). The stages copy their proposals next
+    to their publications (control/artifacts.py); without an identical copy the original path is kept."""
+    from .. import layout as L
+    from ..warm_pool.state import file_digest
+    name = Path(entry['source']['path']).name
+    if entry['stage'] == 'per-sample':
+        rel = Path(L.GEN2_PERSAMPLE) / entry['scope'] / name
+    else:
+        rel = Path(L.ROUNDS) / f"round{entry['round']:02d}" / (L.GEN2_CROSS if entry['stage'] == 'cross-sample' else L.GEN2_ZOOM)
+        if entry['stage'] == 'zoom-in' and entry['scope']:
+            from zmip.report import slug
+            rel = rel / slug(entry['scope'])
+        rel = rel / name
+    copy = Path(root) / rel
+    return str(rel) if copy.is_file() and file_digest(copy) == entry['source']['sha256'] else entry['source']['path']
+
+
+def review_items(unit, exclusions, decisions, root=None):
+    """Reuse review records; count actual removed cells, not proposed cluster sizes. `root` is the unit
+    directory, where decisions link to their local copies."""
     from ..review import Item, _loop_items, _annotation_items, _mark_recurring
     items = []
     for ref in unit['rounds']:
@@ -192,6 +212,8 @@ def review_items(unit, exclusions, decisions):
                 note='Removal evidence includes medium or low confidence; see cell_exclusions.csv.gz.',
                 link='cell_exclusions.csv.gz'))
     for entry in decisions:
+        if root is not None:
+            entry = {**entry, 'source': {**entry['source'], 'link': local_link(root, entry)}}
         prop = entry['value']
         typed = type_proposal(prop)
         if entry['stage'] == 'per-sample':
@@ -200,7 +222,7 @@ def review_items(unit, exclusions, decisions):
                 'action': 'keep'} for c in typed.get('clusters', [])]}
         if typed.get('clusters') and all('cluster_id' in c for c in typed['clusters']):
             items += [item for item in _annotation_items(entry['round'], entry['stage'], entry['scope'],
-                typed, {}, {}, entry['source']['path']) if item.kind != 'removed']
+                typed, {}, {}, entry['source'].get('link', entry['source']['path'])) if item.kind != 'removed']
         quality = prop.get('quality', prop if 'inspection' in Path(entry['source']['path']).name else {})
         items += reassign_items(entry, quality)
         for cluster in quality.get('clusters', []):
@@ -210,14 +232,14 @@ def review_items(unit, exclusions, decisions):
                     items.append(Item('inspect_flag', entry['round'], entry['stage'], entry['scope'],
                         str(cluster.get('cluster_id', cluster.get('cluster', ''))),
                         action=flag.get('action', ''), confidence=flag.get('confidence', ''),
-                        note=flag.get('rationale', ''), link=entry['source']['path']))
+                        note=flag.get('rationale', ''), link=entry['source'].get('link', entry['source']['path'])))
         for warning in prop.get('host_warnings', []):
             items.append(Item('plan_warning', entry['round'], entry['stage'], entry['scope'],
-                note=str(warning), link=entry['source']['path']))
+                note=str(warning), link=entry['source'].get('link', entry['source']['path'])))
         for line in prop.get('lineages', []):
             if not line['zoom']:
                 items.append(Item('lineage_skipped', entry['round'], entry['stage'], line['name'],
-                    n_cells=line['n_cells'], note=line.get('reason', ''), link=entry['source']['path']))
+                    n_cells=line['n_cells'], note=line.get('reason', ''), link=entry['source'].get('link', entry['source']['path'])))
     _mark_recurring(items)
     return items
 
@@ -251,7 +273,7 @@ def publish(unit_ref):
             excluded.to_csv(destination / 'cell_exclusions.csv.gz', index=False, compression=compression)
             save(destination / 'sankey.json', sankey_data(ledger, stages))
             save(destination / 'decisions.json', decisions)
-            items = review_items(unit, excluded, decisions)
+            items = review_items(unit, excluded, decisions, root)
             (destination / 'needs_review.json').write_text(to_json(items))
             markdown = to_markdown(items, unit['unit']['name'], len(unit['rounds']))
             markdown = markdown.replace('Everything the agents were unsure about or the host overrode',
