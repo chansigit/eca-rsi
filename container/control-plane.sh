@@ -2,7 +2,8 @@
 # Start/stop the v2 control plane on THIS host. The deployed copy lives in the run directory and
 # exports the paths below; everything is idempotent, logs under $BASE/control-logs, and state lives
 # on shared storage, so run it again on a fresh node after an allocation expires.
-#   control-plane.sh start|stop|restart|status [temporal|hq|scheduler|bridge|coordinators|observatory|fleet-status|pruner|keeper ...]
+#   control-plane.sh start|stop|restart|status [temporal|hq|scheduler|bridge|runners|coordinators|fleet-status|pruner|observatory ...]
+#   observatory (a second, private Periscope) starts only when named; ops/start-periscope.sh starts the real one.
 #   hq is the HyperQueue server on its own: restarting the scheduler then leaves every worker connected.
 #   Without it running the scheduler starts (and on exit kills) a server of its own, as before.
 #   control-plane.sh report [--sessions HOURS] [--json]     # text status of pool, bridge, workers, datasets
@@ -38,8 +39,7 @@ pattern() { case $1 in temporal) echo "ecarsi.control.temporal --root $CONTROL";
     bridge) echo "ecarsi.agent serve $BRIDGE";; runners) echo "ecarsi.agent runners $BRIDGE";; coordinators) echo "ecarsi.control --service-root $CONTROL .*worker";;
     observatory) echo "ecarsi.serve --registry $BASE/periscope-registry.json";;   # the registry path, not --control-plane: another Periscope may serve the same run directory
     fleet-status) echo "fleet-status.py --service-root $CONTROL";;
-    pruner) echo "request-pruner.py --service-root $CONTROL";;
-    keeper) echo "worker-keeper.sh $POOL";; esac; }
+    pruner) echo "request-pruner.py --service-root $CONTROL";; esac; }
 # Skip container wrappers, interactive `bash -c` shells and this script's own subshells: a shell whose
 # command text merely mentions a component (an editor, a heredoc) must never count as, or be killed as, that component.
 pids() { pgrep -u "$USER" -f "$(pattern "$1")" | while read -r p; do tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -qE 'apptainer|bash -c|control-plane\.sh' || echo "$p"; done; }
@@ -83,17 +83,16 @@ start() {
     runners) launch runners "${PY[@]}" -m ecarsi.agent runners "$BRIDGE" ;;
     pruner) launch request-pruner "${PY[@]}" "$CODE_IN/container/request-pruner.py" --service-root "$CONTROL" --pool-root "$POOL" \
         --fleet-status "$BASE/fleet-status.json" --interval "${PRUNE_INTERVAL:-3600}" ;;
-    keeper) local hc; hc=$(host_code); launch worker-keeper env CODE="$hc" HOSTPY="$HOSTPY" "$hc/container/worker-keeper.sh" "$POOL" ;;
   esac
 }
 stop() {
   pids "$1" | while read -r p; do kill -TERM "$p" 2>/dev/null; done
   for _ in $(seq 20); do pids "$1" | grep -q . || return 0; sleep 1; done; echo "warning: $1 still running"
 }
-status() { for c in temporal hq scheduler bridge runners coordinators observatory fleet-status pruner keeper; do printf '%-13s %s\n' "$c" "$(n=$(pids "$c" | wc -l); [ "$n" -gt 0 ] && echo "running ($n proc)" || echo stopped)"; done; }
+status() { for c in temporal hq scheduler bridge runners coordinators observatory fleet-status pruner; do printf '%-13s %s\n' "$c" "$(n=$(pids "$c" | wc -l); [ "$n" -gt 0 ] && echo "running ($n proc)" || echo stopped)"; done; }
 
 cmd=${1:-status}; shift || true
-comps=("$@"); [ ${#comps[@]} -eq 0 ] && comps=(temporal hq scheduler bridge runners coordinators observatory fleet-status pruner keeper)
+comps=("$@"); [ ${#comps[@]} -eq 0 ] && comps=(temporal hq scheduler bridge runners coordinators fleet-status pruner)
 case $cmd in
   start) identity | tee -a "$LOGS/identity.log"; host_code >/dev/null; for c in "${comps[@]}"; do start "$c"; done; sleep 2; status ;;
   stop) for c in "${comps[@]}"; do stop "$c"; done; status ;;
