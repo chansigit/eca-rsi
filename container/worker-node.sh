@@ -11,7 +11,8 @@ BINDS=${BINDS:-/scratch,/oak,/home,/lscratch}
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 INSIDE=${CODE:-/opt/eca-rsi}
 cpus=$("$HOSTPY" -c "import os; print(','.join(map(str, sorted(os.sched_getaffinity(0)))))")
-mem=$(( SLURM_MEM_PER_NODE * 9 / 10 ))
+# a --mem-per-cpu job sets only SLURM_MEM_PER_CPU (MB per granted core)
+mem=$(( ${SLURM_MEM_PER_NODE:-$(( SLURM_MEM_PER_CPU * $(tr ',' '\n' <<< "$cpus" | wc -l) ))} * 9 / 10 ))
 work=$POOL/worker-state/$(hostname -s)-$SLURM_JOB_ID
 echo "worker node $(hostname -s) job $SLURM_JOB_ID cpus $cpus mem ${mem}MB eca-rsi ${CODE:-image snapshot}"
 export PYTHONPATH=${CODE:-$HERE}
