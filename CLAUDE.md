@@ -1,325 +1,117 @@
-# ECA-RSI: Recursive Self-Improvement for an Ensemble Cell Atlas
+# ECA-RSI: recursive self-improvement for an Ensemble Cell Atlas
 
-**主线(2026-09-02 起)是 `ecarsi/` 包**:确定的计算内核(osp / msp / zmip)+ Agent SDK 窄决策 +
-自驱动循环,见下文"主线:ecarsi 包"一节。入口:
+ECA-RSI is the `ecarsi/` package. Deterministic kernels (osp / msp / zmip) do the computation. Agents make narrow decisions. The host validates these decisions. A round loop repeats integration and refinement until it meets a cell-count rule.
+
+## Read this first
+
+- **One supported way to run: the control-plane path.** Start Temporal, the HyperQueue (HQ) warm pool, and the bridge from `container/control-plane.sh`. The local path is not maintained (`eca-rsi run`, `run-eca-rsi.sh`). Do not debug the local path. Its interpreter venvs are gone.
+- **Code lives in `$GROUP_HOME/chensj16/eca/src/`** (eca-rsi, osp, msp, zmip, agent-harness-bridge, standissect-lite). Worktrees are in `$GROUP_HOME/chensj16/eca/worktrees/`. The paths in `$SCRATCH/projects/*` are symlinks to these checkouts.
+- **Production code is the snapshot inside the two images** in `$GROUP_HOME/chensj16/eca/images/`. Editing a checkout changes nothing in production. New code reaches production only through a rebuilt image (`ops/build-images-update.sh`, `ops/switch-images.sh` in the deployment directory).
+- **Change code like this:** Edit in `worktrees/eca-rsi-dev`. Run the tests inside the images. Fast-forward `main`. Rebuild and switch images when no execution is running.
+- **Test like this:** Run `bash $CONTROL/ops/runsci-dev.sh -m pytest -q tests`. This command runs the whole suite inside the compute image (~4 min). The script `runpy-dev.sh` uses the control image and cannot import the kernels. For pure document changes, run only `git diff --check` and a link check.
+- **Runtime state is in `$GROUP_SCRATCH/chensj16/eca/{control,pool,bridge,runs}`.** Set directories to mode 0700. Do not walk, `du`, or mass-delete there. The coordinators' Lustre client stalls under unpaced scans of the request folders.
+- The working language with the owner is Chinese. Do not write Japanese.
+
+## Package map
+
+```
+ecarsi/control/     Temporal workflows: coordinator, temporal, dataset, persample, crosssample, zoomin (the package itself does not import temporalio)
+ecarsi/agent/       model-turn service: dispatch, session, parallel, tool_errors, runners
+ecarsi/warm_pool/   bounded compute requests, HQ adapter, scheduler, provisioning (add-worker, slurm-worker), measure
+ecarsi/stages/      programs that run in the pool: organize, persample, crosssample, zoomin, release, contract, evidence, execution
+ecarsi/ui/          Periscope (serve, index, umapdata); outside the identity digest
+ecarsi/layout.py    the only place that defines the run directory layout; no step builds paths by hand
+ecarsi/observatory.py   status / releases / tokens reports; the data behind Periscope's /_control/ page
+```
+
+The kernels are osp, msp, and zmip. The osp kernel performs per-sample QC, clustering, and annotation. The msp kernel performs cross-sample integration, inspection, and annotation. The zmip kernel performs lineage zoom-in. The zmip kernel reuses the DEG, evidence, and report code from the msp kernel. The bridge (agent-harness-bridge) is the agent runtime. It provides provenance and is not part of the run identity.
+
+Run directory layout (one run = one dataset):
+
+```
+<root>/index.html  organize/manifest.json  mirror.json
+<root>/units/<unit>/
+  index.html  progress.log  input/  persample/<sample>/
+  rounds/roundNN/{manifest.json, input.h5ad (N≥2), crosssample/, zoomin/, ledger/, stats.txt, decision.txt}
+  release/{final.h5ad, summary.md, summary.json, needs_review.md, needs_review.json, cell_ledger.csv, sankey_coarse.png, umap.json}
+```
+
+## Control-plane path
+
+For details, see [docs/control-plane/ARCHITECTURE.md](docs/control-plane/ARCHITECTURE.md).
+
+**Components.** The command `control-plane.sh start|stop|status` manages several components: temporal, hq, scheduler, bridge, runners, coordinators, fleet-status, and pruner. Temporal includes Temporal Server and PostgreSQL from `/opt/rsi-services`. The HQ server runs separately so scheduler restarts keep workers connected. Runners are resident model-call processes. Coordinators are 4 Temporal workers. Start Periscope from the compute image with `ops/start-periscope.sh`. The control-plane page for Periscope is `/_control/`.
+
+**Images.** The image `rsi-control-*.sif` holds Temporal, PostgreSQL, HQ, the agent SDKs, and the ecarsi snapshot at `/opt/eca-rsi`. The compute image `rsi-science-*.sif` holds the kernels at `/opt/rsi-python`, HQ, and the same snapshot. In the launcher, `CODE=<checkout>` shadows the snapshot for development. The command `control-plane.sh host-code` unpacks the snapshot to `control/image-code` for host-side helpers. Run `warm_pool configure-runtime` inside the compute image.
+
+**Workers.** The owner requests Slurm nodes. There is no autoscaler. The script `container/worker-node.sh` makes the job itself the worker (`slurm-worker`). Run `warm_pool add-worker <host> --job-id <id>` to join a running allocation. Workers advertise a runtime digest. When you switch images, stop the worker supervisors and add the workers again. The plane node itself can be a 6-core test worker. Stop it before a real batch. Do not touch the owner's `warmpool-gpu` jobs.
+
+**Scheduler.** Every request goes to HQ with a native priority. The priority formula is class base + 10 × cpus. The class base values are 1000 for agent, 800 for tool, and 0 for work. There is no hold, drain, or backlog layer. The scheduler marks a request as `infeasible: <reason>` if no live worker can hold it (cpus, memory, required GPU, or worker time left ≥ `time_request`). The scheduler retries the request every tick. DEG runs in batches of 8 comparisons per request (`DEG_BATCH_SIZE` in `ecarsi/control/persample.py`). A batch timeout is twice the per-comparison budget.
+
+**Requests pin program files by content.** Do not fast-forward a stage file (`ecarsi/stages/*`, `ecarsi/agent/session.py`) while sessions are in flight. Fast-forwarding kills queued requests and sessions. Deploy pinned files only with zero running executions. For images, switch images only when `ops/count-wf.py` reports 0 running executions.
+
+**Sessions.** New sessions use protocol 2 (portable history). Legacy protocol-1 restores fill `annotations: []` for every SDK version. A failed session restarts once (`-r2`, same evidence). A second failure skips the sample (label `unannotated`, needs_review `agent_skipped`) or the lineage (keeps cross-sample labels). Cross-sample sessions restart but never skip. If skipped cells exceed 10 % of the stage input (`SKIPPED_CELL_LIMIT`), the stage fails. Superseded sessions count as `superseded` in resume preflight. Crosssample and Zoomin workflows continue-as-new past 5 000 history events. Run `ops/replay-check.py` before you deploy any `control/` workflow change.
+
+**Pruner.** The script `container/request-pruner.py` deletes the pool requests of finished runs. Failed runs keep their requests and their Periscope row until a later run of the same dataset completes.
+
+**Manual controls.** Both paths read `<unit>/loop_control.json` at every round boundary. This file controls `cap`, `rounds`, `extra_rounds_after_convergence`, `max_removed`, `pause`, `stop_after_round`, and `pause_after_stage: crosssample|zoomin`. A pause ends the unit workflow with a `PAUSED: …` non-retryable failure. To recover, clear the control and run `resume-dataset <run_id> --reason …`. Periscope shows PAUSED in the wait colour, not the failure colour.
+
+**Runtime identity.** The function `runtime_identity()` hashes the computation packages (ecarsi except `ecarsi/ui/`, the kernels, the numeric stack). The control-plane path ignores this digest. Content-pinned inputs serve as its guard. `ECA_RSI_DEVELOPER_MODE=1` is a no-op there.
+
+## Scientific rules
+
+- **Stopping uses cell counts only.** Label changes are not a stopping criterion. With `--rounds N`, release after N rounds (N = 1 is allowed). Without `--rounds N`, release when condition A or condition B holds, and condition C holds. Condition A: this round removed < 1 % or < 100 cells. Condition B: three consecutive rounds removed < 2 %. Condition C: this round removed < 1 000 cells (`max_removed`). In automatic mode, round 1 never releases. The option `--cap` (default 15) forces a release and marks it.
+- **Cumulative removal is not a risk.** Only the per-round policy gates a release. Do not flag total cell loss across rounds.
+- **Every removal is accounted per cell.** Track removals in osp `qc_removed.csv`, msp `annotation_removed.csv`, and zmip `zmip_removed.csv`. The ledger aligns these files. The counts must match exactly.
+- **Removal semantics.** OSP QC filters cells directly. OSP annotation keep/flag/drop provides advice only. MSP integrate and MSP inspect keep cells. MSP annotation applies preannotation, inspect drops, and agent removals. Surviving cells remain in `annotated.h5ad`. ZMIP applies local removals and outputs `annotated_zmip.h5ad`.
+- **Zoom-in.** ZMIP plans lineages from labels and connectivity. The default minimum size is 800 cells. Small lineages keep their labels. Reassign changes labels without re-embedding in the target lineage. The host check `lineage_islands.csv` rejects merging separate islands into one lineage. Splitting one island requires `confirm_shared_islands: true` and lands in needs_review.
+- **Single sample.** A single sample skips the inclusion agent. If inclusion leaves one sample, MSP skips Harmony. In that case, inspect and annotate ignore sample composition.
+- **Biological doubts do not block release.** Send low confidence, inspect flags, sample exclusions, and reassignments to `release/needs_review.*`. Group these items by category: convergence, removed, sample_excluded, reassigned (with recurring items marked), inspect_flag, lineage_skipped, low_confidence, agent_skipped, and policy_excluded. Execution failures still fail the unit.
+- **Boundary reviews.** MSP requires `boundary_reviews` for adjacent coarse-label pairs. ZMIP requires `shared_island_reviews` for same-island splits. A missing DEG or a fixed mixing percentage never forces a merge.
+- **Sample-map policies** (`ecarsi/policies.py`): Policies include `exclude_cells` and `batch_key`. See [docs/front-integration.md](docs/front-integration.md). `MSP_BATCH_COL` overrides `batch_key`. A conflict causes an error.
+- **Design context.** `ecarsi.design` derives the study design from obs and passes it as agent context only. The study design is not part of the run identity.
+- **H5AD slimming.** The file `organized.h5ad` keeps expression in `layers["counts"]` only. `X` is an empty placeholder. Convert wide integer counts to int32. Do not include `.raw`. Store embeddings as float32.
+- **Release and prune.** The script `release_state.py` builds the release in a staging directory and switches atomically. After release, the system prunes intermediate H5AD files. It creates `.pruned` markers and keeps `.obs.parquet` for the ledger. Option `--mirror DIR` copies light files to a long-term directory at every landing-page write. It copies all files at release.
+- **Agent config changes are recorded, not blocked.** A backend or model change during a run is written to progress.log and to needs_review under `agent_config_changed`.
+
+## Environment variables
+
+| Variable | Meaning |
+|---|---|
+| `HARNESS` | The options are `openai`, `claude`, and `deepseek`. The default value is `openai`. This option uses the OpenAI Agents SDK on Ark/Doubao. |
+| `MODEL` | Specifies the model. The default model per backend is `doubao-seed-2-1-turbo-260628` / `claude-sonnet-5`. |
+| `ARK_API_KEY` | Specifies the Ark key for the openai backend. |
+| `OPENAI_AGENTS_API` | The options are `responses` and `chat_completions`. The default value is `responses`. |
+| `OPENAI_AGENTS_MAX_NUDGES`, `OPENAI_AGENTS_MAX_CONTEXT_RESETS` | The default value is 2 for each variable. |
+| `OPENAI_AGENTS_SERVER_STATE` | The default value is 1. This value enables incremental Responses continuation. |
+| `AGENT_WALL_MIN` | Specifies the wall-clock budget per agent call for all backends. The default value is 180 min. |
+| `AGENT_MODEL_POOL` | Specifies an ordered fallback list of `harness:model,...`. Set `AGENT_MODEL_POOL_ROTATE=1` to rotate the start per subprocess. This setting is off by default. |
+| `PERSAMPLE_PARALLEL`, `PERSAMPLE_MEM_PER_CELL_MB`, `ZMIP_PARALLEL` | Configures local-path concurrency. The control-plane path budgets per request instead. |
+| `MSP_BATCH_COL` | Specifies the explicit batch column. Keep this value constant within each OSP experiment. |
+| `MSP_COMPUTE_ENDPOINT` | The options are `local|dask-local|dask`. The control-plane path pins `local`. |
+| `ZMIP_MIN_CELLS` | Specifies the lineage zoom-in threshold. The default value is 800. |
+| `ECA_RSI_PAUSE_FILE` | Specifies the shared pause-request file for SIGTERM handling. |
+| `ECA_RSI_DEVELOPER_MODE` | Skips the runtime-identity comparison on the local path. This variable has no effect on the control-plane path. |
+| `MSP_PYTHON`, `ZMIP_PYTHON`, `DSH_BIN` | Specifies the kernel interpreters and the DeepSeek harness binary for the local path. |
+
+## Versions
+
+The current combination includes ecarsi 0.3.2, agent-harness-bridge 0.2.15, OSP 0.1.7, MSP 0.5.2, ZMIP 0.3.9, and standissect-lite 0.2.0. The combination also includes openai-agents 0.22.3 and claude-agent-sdk 0.2.163. HQ is the owner's patched fork on branch `local`. The authoritative lists are [INSTALL.md](INSTALL.md) and `container/control-requirements.lock`.
+
+## Targeted checks
 
 ```bash
-eca-rsi run <eca-pp 输出目录> <root> [--rounds N] [--mirror DIR] [--serve 8899]   # = organize → 每 unit persample → loop → 落地页;./run-eca-rsi.sh 是薄壳
-eca-rsi organize|persample|loop|serve ...                          # 分步,等价 python -m ecarsi.<step>;organize/persample/loop 也收 --mirror DIR
-```
-
-`run.sh` + `steps/*.md` 是封存的"六步 prompt 循环"(agent 自己写分析代码),完整封存在
-分支 **`primitive`**(原 main;main 上只在 `docs/history/primitive/` 留一份 run.sh / steps 作参考,不再维护)。下面"封存"几节是它的记录,
-历史任务书不能当作主线的行为保证。当前实现的计算、提交检查、细胞守恒审计和发布判据
-以 `ecarsi/` 及配套内核源码为准；主线没有照搬旧 prompt 的所有删除预算和治理条款。
-
-## 叫法(0.3.2 起统一,别再说"第几代")
-
-同一个包 **ecarsi 0.3.2**,两条执行路径并存,按跑法区分,不是按新旧:
-
-| 叫法 | 是什么 | 入口 | 守卫 |
-|---|---|---|---|
-| **本地路径** | 单数据集,直接起子进程 | `eca-rsi run <目录> <root>` | 比对源码摘要(`runtime_identity()`);`ECA_RSI_DEVELOPER_MODE=1` 关掉的就是这个比对 |
-| **控制面路径** | 批量,Temporal + 暖池 + bridge | `container/control-plane.sh` | 把程序文件按内容钉进每个请求(`spec.inputs` 的 sha256);**developer mode 对它无效** |
-
-两者共用同一套内核(osp / msp / zmip)和同一份 `loop_control.json` 手动挡。
-**第三样东西**是封存在分支 `primitive` 的 prompt 循环,只作历史,不参与上面两条。
-
-## 主线:ecarsi 包(2026-09-02 由 agent-sdk 分支升格为 main)
-
-确定的计算进包(osp / msp / zmip,各自独立仓库,同级目录),agent 只做窄决策
-且被 host 校验;`ecarsi/` 是 wrapper + 驱动。
-
-```
-python -m ecarsi.organize    <输入目录> <root>       # eca-pp 守门 + 分析单元规划(agent)+ 细胞守恒审计
-python -m ecarsi.persample   <unit>                 # 样本列识别(agent)+ host 子进程池并行跑 osp(每样本 subset.h5ad;QC 只此一次,doublet 只在完整样本池算)
-python -m ecarsi.loop        <unit> [--rounds N] [--cap 15] [--force-reopen]
-   round 1: ecarsi.crosssample(样本纳入 agent → msp integrate/inspect/annotate)→ ecarsi.zoomin(zmip)
-   round N: 上轮 zoomin/annotated_zmip.h5ad,先验列改名 r(N-1)_* → msp --from-h5ad → zmip
-python -m ecarsi.ledger      <unit> [round dirs]    # 逐细胞台账 cell_ledger.csv + Sankey(每步删除流进红色 sink)
-python -m ecarsi.index       <root|unit>            # 从磁盘推导落地页(每步结束也自动写;配了 mirror 就顺手同步一次)
-python -m ecarsi.serve       [dir...] [--registry F] [--port 8899] [--ngrok [--domain D]] [--auth u:p]   # 前台多数据集导航 server,无状态,Ctrl-C 即停
-                             scan-add <dir|glob>... [--name N] [--dry-run] | remove <name>... | list [--json]   # 改 registry 文件(~/.config/ecarsi/registry.json)
-                             dump [path] | reload <path> [--replace]                                            # registry 文件另存 / 合并;server 按 mtime 自动重读
-eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__main__.py);run.sh 是 primitive 分支的旧入口
-```
-
-- **release 后默认 prune**（`run` / `loop` 加 `--no-prune` 关闭）：删各轮和各样本的中间 H5AD，
-  留 `<file>.pruned` 标记；带标签的矩阵另留 `<file>.obs.parquet` 或 `<file>.obs.csv.gz`，供 ledger 读取。
-  `release/pruned.json` 记录清理；保留 `input/organized.h5ad`、`release/`、报告和表格。
-  这是保留决策历史，不是保留全部中间表达矩阵。只预览用 `eca-rsi prune <root|unit> --dry-run`。
-
-**目录结构只在 `ecarsi/layout.py` 一处定义**,各步不得自拼路径(2026-09-02 统一):
-
-```
-<root>/                     organize 的 out_root = 一个数据集一次运行;serve 投这一层
-  index.html  organize/manifest.json  mirror.json(--mirror 的目标目录,ecarsi.mirror)
-  units/<unit>/
-    index.html  progress.log  input/  persample/<sample>/
-    rounds/roundNN/{manifest.json, input.h5ad(N≥2), crosssample/, zoomin/, ledger/, stats.txt, decision.txt}
-    release/{final.h5ad, summary.md, summary.json, needs_review.md, needs_review.json, cell_ledger.csv, sankey_coarse.png, umap.json}
-```
-
-- 落地页(`ecarsi.index`)**纯从磁盘推导**(manifest / 契约文件 / stats / decision / progress.log),
-  跑到一半也能渲染(round 进行中显示到哪一步、persample 完成数);serve 每次请求根页/unit 页都现算,
-  各步结束再写一份静态页留档。内核(osp/msp/zmip)只写各自的 `report.html`,永不写 index.html。
-- release 时 `ecarsi.umapdata` 从 final.h5ad 抽 `release/umap.json`(坐标 16 位量化 + 标签索引;超过 `--max-points`=10 万时分层抽样,
-  <300 细胞的小簇全保留,图例计数仍是全量);unit 落地页用原生 JS canvas 画 coarse / fine 两个同步面板
-  (像素缓冲直写 + 基图缓存 + 网格找最近点 + 拖拽缩放时 LOD),不依赖外部库。
-- needs_review(`ecarsi.review`)按**类别**分节而非按轮:convergence → removed(低于 high 的真删,不可逆)
-  → sample_excluded → reassigned(跨轮重复的标 recurs)→ inspect_flag → lineage_skipped → low_confidence;
-  每条带 round/step/scope/cluster/细胞数/report 链接;同一记录渲染 md / json / html。
-- persample manifest 记录的 `dir` 是绝对路径,但所有读取方一律用 `layout.sample_dir()` 按 basename
-  在本 unit 的 persample/ 下定位,目录搬家不坏。
-- **`--mirror DIR`(`ecarsi.mirror`)**:root 在 scratch、长期目录(Oak)给 serve 看时用。目标记在 `<root>/mirror.json`,
-  续跑和单步不必再传。每次写落地页(`index.write_all`:organize 完成、persample 每个样本完成、每轮各阶段、release)
-  都把整个 root 的**轻量文件**(html / md / json / txt / log / png / svg / `.pruned`、≤1 MiB 的 csv;永不 h5ad / parquet / csv.gz /
-  大表 / 点目录)增量拷到 DIR(size+mtime 相同就不动,copy2 保留 mtime,先写临时名再 `os.replace`);release 且 prune 之后
-  全量同步(含 final.h5ad、organized.h5ad、台账)并删掉 DIR 里该 unit 子树下 root 已没有的文件——只在 `units/<unit>/` 之内,别处不碰。
-  mirror 只写不读,失败只在 stdout + progress.log 记一行 warning,不让步骤失败。落地页页脚 `run state updated <t>` 取自
-  progress.log / manifest / stats / decision 等状态文件的最新 mtime,拷贝保留 mtime,所以 serve 直接投 DIR 时也能看出新鲜度;
-  DIR 里的 mirror.json 指向自身时页脚标 `a mirror copy of <source>`。`eca-rsi index <root>` 可手工再同步一次。
-
-- **停机只看细胞数**,标签变动不作判据(agent 措辞有随机性):给了 `--rounds N` 就按总轮数发布，允许 `--rounds 1`;
-  没给则 (1) 本轮删除比 < 1% 或删除数 < 100,或 (2) 连续三轮删除比 < 2%,**且** (3) 本轮删除 < 1000 细胞(绝对下限,2026-09-10 起,
-  `loop_control.json` 的 `max_removed` 可调;reason 会写明 `removed 0.81% but 1,989 cells >= 1,000 floor`)即 release；自动模式首轮继续;
-  `--cap`(默认 15,2026-09-18 起;此前 10)是安全上限,触顶强制 release 并标记。`--force-reopen` 越过已有 release 继续开轮。
-- **手动挡**:`<unit>/loop_control.json` 在每个轮次边界重读(唯一做决定的时刻),可在跑的过程中编辑:
-  `cap`(改安全上限)、`rounds`(固定总轮数)、`extra_rounds_after_convergence`(收敛后再跑 n 轮)、
-  `stop_after_round`(该轮后暂停:退出码 3,不 release,重跑续上)。每次覆盖写 progress.log 并进该轮 stats 的 reason;
-  文件不合法只记录不生效。轮次循环是 while,上限每轮重算。
-- **生物学疑点不触发人工审批**：低 confidence、inspect flag、样本排除、reassign 等在
-  `release/needs_review.md` 汇总。执行失败、无可纳入样本或缺少必需输出仍会使单元失败，不能承诺必然发布。
-- **每次删除都逐细胞记账**:osp `qc_removed.csv`、msp `annotation_removed.csv`、zmip `zmip_removed.csv`;
-  ledger 把它们对齐成一张表,数目必须严丝合缝。
-- OSP 完整分析先按 QC 规则真实过滤；OSP 注释的 keep/flag/drop 是建议，不在该注释阶段删除。
-  MSP integrate/inspect 保留细胞，annotation 应用 preannotation、inspect drop 和 agent 删除的并集；
-  幸存者在 `annotated.h5ad`。ZMIP 进一步应用局部删除，输出 `annotated_zmip.h5ad`。
-- ZMIP 依据标签与连通性规划 lineage，默认 ≥800 细胞才下钻；各 lineage 可并发计算和注释。
-  小 lineage 保留原标签；reassign 修改标签，不在目标 lineage 重新嵌入；全局嵌入继承 MSP。
-- **单样本 / 单批次**：persample 只有一个样本时不调用纳入 agent。若多样本经纳入决策后只剩一个，
-  仍已有该次纳入决策。两种情况都由 MSP 跳过 Harmony，inspect / annotate 不把样本组成当作证据。
-  OSP 注释的 drop 仍是建议，OSP QC 过滤照常发生。
-- 环境:`HARNESS`(默认 **openai** = OpenAI Agents SDK + Ark 驱动豆包,2026-09-04 起;`deepseek` 走 dsh;`claude` 走 claude_agent_sdk,耗 Claude Code 额度)、
-  `MODEL`(默认随后端:doubao-seed-2-1-turbo-260628 / claude-sonnet-5)、`DSH_BIN`（按共享 bridge 配置）、`ARK_API_KEY`(shell 里 export)、`MSP_PYTHON` / `ZMIP_PYTHON`、`ZMIP_MIN_CELLS`;
-  `OPENAI_AGENTS_API`(`responses` 默认,`chat_completions` 仅文本兼容)、`OPENAI_AGENTS_MAX_NUDGES`(默认 2)、`OPENAI_AGENTS_MAX_CONTEXT_RESETS`(默认 2)、`OPENAI_AGENTS_SERVER_STATE`(默认 1,Responses 增量续接)、
-  `AGENT_WALL_MIN`(每次 agent 调用的墙钟预算,默认 180 分钟,所有后端都强制,超时重开一次);
-  并发池:`PERSAMPLE_PARALLEL` / `PERSAMPLE_MEM_PER_CELL_MB`(persample)、`ZMIP_PARALLEL`(zoomin)，
-  各层结合可用 CPU 和内存估算调度，具体配置以对应内核为准。
-  `AGENT_MODEL_POOL`(`harness:model,harness:model,...`,同一 stickiness scope 内的 agent 调用共用一个
-  `ModelPool` 按序降级,详见 agent-harness-bridge)在子进程边界(osp per-sample worker、zmip per-lineage worker)
-  各自重新解析、互不知情——`AGENT_MODEL_POOL_ROTATE=1`(2026-09-11,eca-rsi#7)让 persample.drive 和
-  zmip.lineage 各自的并发派发循环给第 N 个起的子进程一份轮转过 N 位的 pool(`rotate_model_pool`),
-  把并发请求摊开到 pool 里的不同模型,而不是全部先撞主候选;默认关,语义是"pool 里的模型同等可信任",
-  跟"pool 是质量排序的降级链"这个默认假设冲突,不能无条件打开。
-- agent runtime 实现在独立 `agent-harness-bridge` 包;`ecarsi.harness` / `osp.harness` 保持旧导入路径；MSP 0.4 起已删除 `msp.harness`，调用方直接导入 `harness_bridge`。adapter 回归测试在共享包,本仓库 `tests/test_harness_sync.py` 验证 shim 身份;`resources.py` 两份仍需逐字节相同。
-- persample 前半程接入已升级：逐来源实验映射、`eca_sample_id`、上游快照、完整实验池检查；
-  同名样本默认跨来源隔离，跨文件合池须显式映射。统一 `ecarsi.osp_worker` 子进程调用 OSP 公共 API。
-  每样本成功状态、内容指纹和 QC 细胞守恒共同决定完成；只自动重试明确临时错误，注释失败可单独恢复。
-  参数、迁移及测试见 [docs/front-integration.md](docs/front-integration.md)。MSP/ZMIP 冻结已解除；后段升级记录见 [docs/history/DOWNSTREAM_INTEGRATION.md](docs/history/DOWNSTREAM_INTEGRATION.md)。
-- zmip plan 有 host 连通性校验:`lineage_islands.csv`(UMAP 2D kNN 连通分量)——把分开的岛并成一个 lineage 直接打回;
-  同一岛拆成多个 lineage 打回一次,agent 可带 `confirm_shared_islands: true` 重交,记入 plan 的 `host_warnings` 与 needs_review。
-- 历史测试与服务记录（使用前核对当前目录和进程）：`$SCRATCH/eca-runs/_organize_test/fu2022/fu2022-meniscus` 是旧结构的真实跑(不迁移);
-  `$SCRATCH/eca-runs/_layout_test/fu2022` 是它的 symlink 复刻(新结构,验证 index/serve 用),
-  `_layout_test/running` 是"round 3 跑到一半"的假象。直播:`eca-rsi serve scan-add <root>` 再 `eca-rsi serve --domain csj.ngrok.io`(一个前台进程、一条隧道,`/<name>/` 路径路由;registry 文件是唯一真相,改文件 server 自动重读,进程随时可杀可重起),
-  用户自己的 ngrok 隧道 8899 → csj.ngrok.io(2026-09-09 起走 csj.ngrok.io,pizza 已改作用户的终端隧道;勿动;ngrok 账号并发 endpoint 有上限,`--ngrok` 会直接报它的错)。
-- serve 的 fleet 页(`/`、`/_home`)从 `StateCache` 后台线程(每 60 s 预算全部数据集 `dataset_state`)读内存,数据集页 / unit 页仍现算;
-  渲染页按 Accept-Encoding gzip。根因是 Oak 冷元数据 8 ms/次 × 每页 15k 次(2026-09-07,分支 `serve-state-cache`;合并前从 worktree 起:
-  `PYTHONPATH=$SCRATCH/worktrees/eca-rsi-serve-cache python -m ecarsi serve ...`)。
-- 容器环境的构建配方在仓库里:`container/build.sh`(镜像内建 venv + 五个仓库 editable)、`container/install-wrapper.sh`(生成 `python` wrapper)、
-  `container/README.md`(为什么要容器、踩过的坑、验证方法)。全部环境变量配置(`ECA_CT_ROOT` / `ECA_SIF` / `ECA_REPOS`),不写死路径。
-- serve 跑在容器解释器上,和批量作业同一个环境,不依赖 dl2025。容器 PATH 没有 `~/local/bin`,`start_ngrok()` 的 `shutil.which` 会找不到 ngrok,
-  加一个 `APPTAINERENV_APPEND_PATH=$HOME/local/bin` 即可(二进制在容器里可见且能跑,不必改共享 wrapper——批量作业每个内核子进程都在用它)。
-
-
-## 主线检查与接口边界
-
-- 输入发现校验 ECA-PP schema 2 / 状态 / counts / 维度 / 物种；精确排除步骤内 `.history`。
-  rejected 来源留清单，error/blocked 不允许把输入集合静默缩小。上游结果和派生 TSV 保存在 input/upstream。
-- organize 按来源检查细胞恰好分配一次；同一分析单元只容许一种物种，计划先登记再逐单元发布。
-  源码、输入和计划一致时可恢复部分计划；普通空 units 目录不代表组织完成。
-- `run --stop-after organize|persample` 可验证前半程。新版 persample 校验输入/配置/解释器/源码身份和 QC 台账。
-  旧 manifest 和 `.pruned` 可以浏览，不能替代新计算的成功证据；前半程变更配置需要新输出目录。
-- crosssample/zoomin/loop 通过 `downstream.py` 校验输入内容、实际解释器/源码、计算参数和输出；
-  `unit_lock` 覆盖整个下游写入，MSP pending 与 ZMIP publication 凭证不能被文件跳步绕过。
-  counts 使用 HDF5 直接分块比较，不能用 AnnData backed 模式假设 layers 不占内存。
-- 运行身份只比内容:`runtime_identity()` / `downstream.runtime()` 记录计算包(ecarsi / osp / msp / zmip / standissect-lite 及数值栈)的版本 + 源码摘要;
-  **developer mode `ECA_RSI_DEVELOPER_MODE=1`**:跳过全部 runtime 比对(organize adapter / persample / 各阶段 prepare 与 verify,含样本级完成判定),输入与配置身份照比,每次跳过都打印并记进阶段状态;开发期改代码、发版、重装 editable 都不再让在跑的单元作废。**agent-harness-bridge 不进身份,只进 provenance**(2026-09-12 起,0.2.9:它是 agent 运行时,和换模型同类,bridge 发个补丁版不能让在跑的单元作废);checkout 路径和 git HEAD
-  另存为 `provenance`(persample manifest 与各阶段 `.rsi-stage.json`),只供追溯,不参与比对。改仓库顶层文档、同一源码换 worktree 路径都不影响续跑。
-  bridge 版本/源码仅记 provenance；`ECA_RSI_DEVELOPER_MODE=1` 可跳过 RSI 的运行身份比较，但不跳过输入/配置/输出校验或内核检查。
-  复用 OSP 样本必须保留并验证原 receipt identity，跳过记录 `runtime_check: skipped` 不能在终检时重置为 ok。
-- `release_state.py` 在暂存目录生成完整 release 和收据，再可恢复地切换目录；入口先恢复中断发布。
-  重开保留旧 round decision，只新增轮次；已有 release 无收据仅可浏览，计算用新目录。
-  换后端/模型不再需要 `--allow-agent-change`（2026-09-10 起该开关已删，中途换模型是合理操作，`check_agent_config` 只记录不拦截，记进 progress.log 和 needs_review 的 `agent_config_changed`）；下游 agent 预算变化不使计算身份失效。
-- `--force-reopen` 继续已有 release，不等于 ZMIP 的 `--force`；`--rounds N` 是总轮数，要大于已完成轮数。
-- 本轮删除统计从 MSP integrated 到 ZMIP survivors，不含此前 OSP QC 和整样本排除；完整历史查 ledger。
-  达到停止阈值不证明注释准确；轮数上限或固定轮数发布应按 reason 与收敛发布区分。
-- `ecarsi.cost` 只累计捕获到的费用事件；缺失记录不能解释成免费或完整账单。
-- 配套版本（2026-09-19 起 main）：ecarsi 0.3.2、bridge 0.2.14、OSP 0.1.7（mt 上限 25 %）、MSP 0.5.2、ZMIP 0.3.9。默认 Harmony 2 CPU；可选 RAPIDS GPU。
-- `loop_control.json` 支持 `pause: true` 与 `pause_after_stage: crosssample|zoomin`；停止派发新任务，等待已启动任务到安全点，退出 3、不 release。恢复前清除对应控制项。
-  SIGTERM 通过共享 `ECA_RSI_PAUSE_FILE` 请求同样的安全暂停；Slurm 模板提前 600 秒发 TERM，shell 等待子任务落盘后复制部分结果。
-- MSP `.msp-state/*-progress.json` 与 ZMIP `.annotation-progress.json` 原子保存 host 接受的提交及分簇；恢复必须核对输入、证据、代码，再过原校验器。
-  ZMIP `.zmip-compute.json` 验证并复用未完成 lineage 的整合；上游重算会归档旧注释进度。模型变化可续未完成簇，但不重做已接受决定。
-- `MSP_COMPUTE_ENDPOINT=local|dask-local|dask` 调度 Harmony、图/聚类、DE；ZMIP lineage 复用同一实现。
-  `dask` 连接 `MSP_DASK_SCHEDULER`，`MSP_COMPUTE_GPU=1` 要求 GPU worker；这是 MSP 自己的可选后端，控制面路径把它钉死在 `local`。
-  0.3.2 之前的 Dask 池（`ecarsi.pool`、Periscope 的 Warm pool 面板、`compute_policy`、OSP 的 `pool`/`auto` 端点）已删除，`pool/slurm.py` 与 `pool/budget.py` 作为仍在用的公共件搬成 `warm_pool/slurm.py` 与 `warm_pool/reservation.py`。暖池仍手动管理，没有自动扩缩容。
-- MSP 相邻 coarse-label pair 必须提交 `boundary_reviews`（证据、uncertain），未解决边界留在 needs_review；
-  ZMIP 同岛拆分要求 `shared_island_reviews`。不把缺失 DEG 或固定混合百分比当作强制合并依据。
-- `MSP_BATCH_COL` 可显式选择校正列，完整 OSP 实验内必须只有一个值；默认仍为 `eca_sample_id`，
-  不自动推断 biological condition 应被校正，不将校正分组用于重切 OSP 实验池。
-- sample map 的两个声明式细胞策略（`ecarsi/policies.py`，见 docs/front-integration.md）：`exclude_cells`
-  （`where` 精确匹配 / `blank` 所列列全缺失；切 OSP subset 之前执行；未知列报错、命中 0 细胞记 warning；
-  每个细胞写 `persample/excluded_cells.csv`，ledger 记 `removed:persample-policy:<reason>`，守恒检查含此项，
-  needs_review 有 `policy_excluded` 节；规则进映射身份）和 `batch_key`（host 校验每个 OSP 实验内恒定、NA 忽略并按实验回填、
-  ≥2 值；crosssample 作 MSP batch 列，`selection: sample_map`；`MSP_BATCH_COL` 仍优先，二者冲突报错）。
-  无 map 时样本列 agent 可提 `exclude_cells` 提案（host 用 obs 当场校验，≤ 来源一半），`batch_key` 只由 agent **推荐**进
-  needs_review，从不自动应用。FACS 例：blank `mouse.id`+`subtissue`+`cell_ontology_class` → `upstream_qc_blank`，`batch_key: mouse.id`。
-- **H5AD 瘦身(2026-09-10,eca-rsi#2)**:`organized.h5ad` 的 X 是空 csr 占位(`uns["X_placeholder"]` 说明),表达只在 `layers["counts"]`
-  ——`validate_matrix` 本来就不认 X 为 counts,OSP/MSP 都从 counts 重建 X;X 不能是 None,anndata backed 模式读 layers 要有 X 组。
-  三层写盘规则一致:整数 counts 宽于 4 字节则转 int32(float 不动)、不再存 `.raw`(与 X 逐字节相同的副本)、
-  嵌入 float32(osp 0.1.6 / msp 0.3.6 / ecarsi 0.2.6)。persample 的 `computed.h5ad` 仍是 clustered.h5ad 的整份拷贝(注释重试用的检查点),未动。
-- `ecarsi.design` 从 organized.h5ad 的 obs 推导 study design（每样本内恒定、跨样本变化的列，如 FACS 的 `subtissue` / `mouse.id`），
-  以 `--design-context` 原文交给 MSP/ZMIP 的 inspect/annotate agent（含 round N≥2 与 zoomin）；只是 agent 上下文，
-  与 `--report-context` 一样不进 run identity。`python -m ecarsi.design <unit>` 预览文本。
-- 新版内核的输入检查、锁和发布恢复机制不能自动视为 ECA-RSI 外层的端到端保证。
-  内核独立验证与配套版本声明也不代替更新组合后的真实运行验证。
-
-开发时从本仓库运行现有针对性检查（需要配套依赖与 pytest）：
-
-```bash
-# 前半程独立检查；不依赖 MSP/ZMIP
+# front half only; no MSP/ZMIP needed
 python -m pytest -q tests/test_front_integration.py tests/test_osp_worker.py tests/test_agent_selection.py
-# 下游集成、细胞守恒、发布故障恢复与公共对象身份
+# downstream integration, cell conservation, release recovery, shared-object identity
 python -m pytest -q tests/test_downstream.py tests/test_downstream_state.py tests/test_ledger_conservation.py tests/test_release_state.py tests/test_crosssample_cwd.py tests/test_harness_sync.py
 ```
 
-纯文档修改检查 `git diff --check`、本地链接和 CLI 示例即可，无需启动模型或数据分析任务。
-安装步骤见 [INSTALL.md](INSTALL.md)，用户入口与输出语义见 [README.md](README.md)。
+Run the tests through `ops/runsci-dev.sh` to resolve imports. `tests/conftest.py` restores `os.environ` around each test.
 
-## 环境
+## History
 
-- 集群运行前确认已有适当的计算 allocation，不把历史会话的节点状态当作当前状态。
-- `run-eca-rsi.sh` 的本机解释器候选为 `/scratch/users/chensj16/venvs/dl2025/.venv/bin/python`；
-  可用 `ECA_RSI_PYTHON` 覆盖。包版本和实际导入路径按 [INSTALL.md](INSTALL.md) 检查。
-- **本目录是开发目录:运行产物一律放仓库外**(workdir 指到如
-  `$SCRATCH/eca-runs/<数据集名>`),输入数据也不进本仓库。
-- **批次跑着时四个主 checkout 的包目录是只读的**(`chmod -R a-w projects/{eca-rsi/ecarsi,osp/osp,msp/msp,zmip/zmip}`,2026-09-07 起):
-  `runtime_identity()` / `downstream.runtime()` 哈希包内全部 .py/.md/.json,主 checkout 上任何改动都会让
-  正在 verify 的阶段失败(tome E9.5 round 3 zoomin 因此重算过)。改代码走 worktree + PYTHONPATH,批次结束再 `chmod -R u+w` 并合并。
-  **例外:`ecarsi/ui/`(serve / index / umapdata)不进哈希**(2026-09-21,eca-rsi#10):展示代码不影响任何计算,
-  改页面不该让在跑的阶段作废——那正是 2026-09-07 两次重算的原因。`run_state.PRESENTATION` 是这条规则,
-  按目录而非文件清单;`ecarsi/{serve,index,umapdata}.py` 只剩 shim,保住 `python -m ecarsi.serve` 这个拼写(部署脚本在用)。
-
-## 控制面路径：durable 控制面（0.3.1 起在 main，原 `gen2` 分支 2026-09-17 起；细节见 [docs/control-plane/ARCHITECTURE.md](docs/control-plane/ARCHITECTURE.md)）
-
-同一套内核，包装成 Temporal + HyperQueue + Bridge 的批量系统；本地路径的模块位置不动，控制面的代码收进子包：
-
-```
-ecarsi/control/     Temporal 工作流（coordinator 原 work_coordinator；temporal / dataset / persample / crosssample / zoomin；包本身不引 temporalio）
-ecarsi/agent/       模型回合服务（__init__ 原 agent_bridge；dispatch / session / parallel / tool_errors）；叫 agent 是为了让 bridge 只指外部包 agent-harness-bridge
-ecarsi/warm_pool/   有界计算请求 + HyperQueue 适配；budget（原 operation_budget）
-ecarsi/stages/      Pool 里跑的程序：organize / persample / crosssample / zoomin / release（原 *_v2、dataset_release，v3 已折回），
-                    contract（协议 v4 的共享件）、evidence / execution（Pool 上的执行计划，session 按登记的 planner 名字调用）；
-                    stages.program() 给 control 拿被 pin 的文件
-ecarsi/observatory.py   控制面监视器（2026-09-18 起并入 Periscope：`ecarsi serve --control-plane <run dir>` 在 /_control/ 出页面）+ `status` / `releases` / `tokens` 报告
-```
-
-- 入口：`python -m ecarsi.control.temporal` / `ecarsi.warm_pool` / `ecarsi.agent serve` / `ecarsi.control … worker` /
-  `ecarsi.serve --control-plane <run dir>`（Periscope 侧栏多一项 Control plane）；`container/control-plane.sh` 是启动模板，部署副本放运行目录并在那里配路径。
-- 请求按内容 pin 程序文件、按请求 id 回放已存内容：会话在飞时不改 stages / agent/session.py；旧布局的已存请求
-  在新布局下不能回放，切换只在没有会话在飞时做（或归档相关请求后 resume）。
-- 控制面路径的文档在 `docs/control-plane/`（AGENT_BRIDGE_V2、WARM_POOL_V2、DURABLE_CONTROL、DATASET_V2 …），`docs/design/` 是设计页，`docs/diagrams/` 是架构图，`docs/history/` 是过时文档与验收记录。
-- 控制面节点上不要无节制扫描 pool / bridge 的 requests 目录（会拖垮协调器的 Lustre 客户端）。
-- **会话死亡**（2026-09-18 起）：任何 agent 会话失败先自动重开一次全新会话（`-r2`，同一份证据）；再失败时样本跳过
-  （不注释、先验标签 `unannotated`，needs_review `agent_skipped`）或 lineage 跳过（保留 cross-sample 标签，写进 plan reason），
-  cross-sample 会话只重开不跳过；跳过的细胞超过该阶段输入的 10%（`SKIPPED_CELL_LIMIT`）整个阶段失败。
-  被替代的会话（重开、上下文重置）的请求在 resume 预检中视为 superseded，不再需要手工归档。
-- **手动挡在控制面路径同样生效**（2026-09-20 起）：`round_policy.read_control()` 是两条路径共用的读取器，
-  `control/dataset.py` 的 round 活动在每个轮次边界重读 `<unit>/loop_control.json`，覆盖 spec 里冻结的
-  `round_policy`（`cap` / `rounds` / `extra_rounds_after_convergence` / `max_removed`），生效值与原始控制项
-  一起写进该轮 `publication.json` 的 `policy` / `control`。`pause: true` 或 `stop_after_round: N`
-  **优先于 release**：该轮照常发布（含 ledger），下一轮不开，unit workflow 以 `PAUSED: …` 非重试失败告终
-  ——这正是 `resume-dataset <run_id> --reason …` 已有的续跑契约，等价于本地路径的退出码 3。清掉控制项再 resume。
-  `pause_after_stage: crosssample|zoomin` 在控制面路径也生效（2026-09-21）：子 workflow 完成就是本地路径
-  `safe_point("crosssample")` / `safe_point("zoomin")` 的那个安全点——该阶段产物已落盘、下一阶段未开、本轮未结算。
-  同样以 `PAUSED: …` 非重试失败告终，`resume-dataset` 续跑；恢复前要清掉控制项，否则下一轮原地再停。
-  Periscope 把 `PAUSED` 与真失败区分开：状态色是等待色（`--wait`）而非失败红。
-- 0.3.0 之前的 batch 准入（`eca-rsi batch`、节点代理、OSP compute-ahead、driver 内存租借）留在树里但不再维护；控制面路径的数据集由控制面准入。
-
-## 封存(primitive 分支):run.sh 六步循环(分支 primitive;2026-08-25 推倒重做后;总共 ~300 行)
-
-一条命令处理一个装着 h5ad 的文件夹:
-
-```bash
-./run.sh <h5ad文件夹> <工作目录> [最大轮数]   # 默认 sonnet-5;MODEL/MODEL_<步骤> 可覆盖
-```
-
-每轮六步:explore(探查规划)→ compute(重算特征空间)→ annotate(注释)
-→ qc(质控判决)→ apply(执行)→ stop(判 continue/release)。收敛或到达
-轮数上限即 release,绝不中途停下等人;存疑事项以 flag 形式进最终报告的
-"needs review" 一节。
-
-- `run.sh` — 循环本体。每步 = 一次全新的 `claude -p`(全工具、
-  `--dangerously-skip-permissions`、`--max-turns 200`),cwd 在工作目录。
-  步骤完成的唯一契约:写出 `rounds/roundNN/<step>.md` 报告;缺文件重试一次
-  再失败才停。**续跑天然支持**:重跑同一命令,已完成步骤自动跳过。
-- `steps/*.md` — 六份任务书,每步现读(改动即刻生效于下一步)。分析代码由
-  agent 自己写、自己跑,连同输出存进本轮目录 —— 代码即审计痕迹。
-- `docs -> ../eca-cycle/docs`(只在 primitive 分支;eca-cycle 仓库本机和 GitHub 都已不在,main 上 2026-10-02 删了这个失效链接,`docs/` 现在是真目录,放 `docs/history/`)— 方法文档(CONSTITUTION / RULES_annotation /
-  RULES_data_cleaning),相对 symlink 引用不复制;任务书让 agent 按需读
-  具体条款,不全文注入。
-- `attic-v01/` — 上一版(skills + bin/eca-check + schema)的封存,勿用;从未进 git,2026-10-02 起在 Oak `eca-rsi-archive/attic-v01/`。
-- 上游兼容:输入旁若有 eca-pp/ecasteps 产物(`standardized.h5ad` +
-  `result.json`、`batch.tsv`),explore 任务书会让 agent 读取并采信
-  (物种/counts/批次列/先验标签),探查力气花在上游管不了的跨文件关系上。
-  纯 prompt 指引,无硬编码;没有上游产物照常跑。
-- 停机判决走 `rounds/roundNN/decision.txt`(仅一个小写单词 continue 或
-  release)—— 机器读机器文件,散文归 stop.md,不做文本捞词。
-- **重开**:`--force-reopen` 可越过启动前已存在的 release 判决继续开新轮
-  (本次运行新产生的 release 不受影响),事件记入 progress.log,再次收敛
-  时原地更新 release/ 并在 summary 注明取代关系。
-- 全局重嵌入豁免默认**关闭**(`EXEMPT_PCT=0`:细胞数一变就必须重算);设为
-  正数 N 则"上轮删除 <N% 可跳过全局重算"。教训:Liu 数据集豁免连用三轮,
-  round 1 分区(含 1 细胞残渣 cluster)原样进了 release。
-- `--one-round` 调试模式:只跑一个新轮(resume 跳过的旧轮不算)即停,
-  不触发强制 release;事件记 progress.log(oneround)。
-- progress.log 每轮记 stats 事件(removed / label_l1_changed /
-  label_l2_changed,由 apply 写 stats.txt、runner 中继);apply 另出
-  `umap_removed.png`(本轮删除红/保留浅灰,零删除也出全灰图)。
-
-## 封存(primitive 分支)：设计哲学
-
-上一版把 compute/apply 写成固定脚本、决策格式定 schema 加 lint,结果六个
-silent bug 全部长在"规格与实现的接缝"上(记录了但没人执行、写了但从未实现)。
-本版反转:**能力全部交给每步的 agent(它有工具),固定的只有循环骨架和任务
-书**。教训不丢,但从代码降格为任务书里的硬句子:
-
-- 特征空间每轮在当前细胞上重算;阈值(群体统计量)不许缓存,doublet 只在
-  完整每样本池上算一次(那次缓存是规则要求的)。
-- barcode 重叠 + 表达一致 = 同一批细胞,合并即双重计数,必须排除其一。
-- apply 必须执行每条决策;执行不了明列"not executed",不许自行变通;
-  声称写了的文件必须核实存在("那个失败真实发生过")。
-- checkpoint 绝不原地覆写:写 `checkpoint.tmp.h5ad` 再 rename(唯一状态,
-  半截写坏无法恢复)。
-- release 数字锚:本轮删除 < 当前细胞 1% 才许收敛(7.6% 曾被判"almost
-  none",教训);round 1 永不 release;最后一轮强制 release-with-flags。
-- 删除预算(单轮 ~10%/累计 ~30%)越线不停机,转保守:边缘删除降级为 flag。
-  **这条是 primitive 分支的历史记录,主线明确不采纳**(用户 2026-09-20 决定:
-  "sun 的数据垃圾的要命! 多删点数据不用大惊小怪")。跨轮累计删除不是风险,
-  唯一的闸门是 `round_policy` 的每轮判据。别再把它当待办提出来。
-
-## 封存(primitive 分支)：运行记录与 backlog（2026-08-25 快照）
-
-- 两个数据集真实跑通:18_Clayton_2025(1766 细胞,Fable,3 轮收敛;数据
-  后因上游丢样本弃用)与 **Fu 2022 半月板(35k 细胞,eca-pp 完整产物,
-  全 Sonnet,3 轮 67 分钟自主收敛)**,后者交付在
-  `$OAK/.../05_Fuetal/rsi/`,关键结论与手工分析一致且多出深度混杂检验。
-- Fu 跑后复盘已修:annotate 引用须持久化(round 2 幽灵拆分,系统一轮自愈)、
-  全局重算的 <1% 豁免成文(但全局四图每轮必出)、flag 必附了结检验
-  (无检验的 flag 直进 needs-review 不占悬案)、standissect-lite 每轮 qc
-  必调(R11)、逐轮列命名 roundNN_* 升格为正式约定(agent 自发发明)。
-- **未修 backlog**:步骤无墙钟超时、无并发锁、run.sh 运行中被编辑有 bash
-  增量解析隐患(包 main() 可解)、启动时不验证输入、限额等待逻辑未经实战
-  (措辞变体覆盖未知)、强制末轮 release 与 exhausted 路径从未走过、
-  checkpoint 逐轮列膨胀(35k 细胞已 791MB,大数据集需归档策略)、
-  progress.log retry 事件措辞不准、"每个大谱系 release 前至少一次专属重嵌入"是否入收敛判据待用户拍板。
+- Branch `primitive` holds the six-step prompt loop: Explore → Compute → Annotate → QC → Apply → Stop. In this loop, agents write their own analysis code. Directory [docs/history/primitive/](docs/history/primitive/) holds its `run.sh` and `steps/*.md`. The main line does not include its removal budgets and its `docs -> ../eca-cycle/docs` link.
+- `attic-v01` (schema + lint + skill, August 2026) was never in git. It is on Oak under `eca-rsi-archive/attic-v01/`.
+- The project retired several rules. It no longer makes the main checkouts read-only during batches, because production now runs from images. Version 0.3.2 removed the Dask pool and `compute_policy`. The project retired batch admission before 0.3.0 (`eca-rsi batch`, node agents). It also retired the keeper autoscaler.
+- Dated records, acceptance reports, and the operational to-do live in [docs/history/](docs/history/) and in the deployment directory's `OPEN-ITEMS.md`.
