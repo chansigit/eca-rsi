@@ -14,6 +14,7 @@ import traceback
 from .backend import check_runtime, parent_death_signal
 
 GPU_BLIND_LIMIT = 120  # seconds nvidia-smi may keep failing before the attempt is given up
+USAGE_SECONDS = 5  # usage.json cadence: status() calls an attempt stale after 15 s; the RSS watchdog still samples every 0.25 s
 from .state import digest, file_digest, identifier, lock, pool_root, read, save, sync_directory
 
 
@@ -395,6 +396,7 @@ def run(folder, request, ownership):
             previous, stamp = group_usage(proc.pid), time.monotonic()
             peak, cpu_ticks = 0, 0  # cpu_ticks: positive deltas only; an exiting child drops out of the group sum
             gpu_usage, gpu_stamp, peak_gpu_mb, gpu_blind = None, 0, 0, None
+            saved, saved_stamp, save_due = previous, stamp, 0.0  # an fsync'd Lustre write: 4 per second per task was too many
             while os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is None:
                 now = time.monotonic()
                 usage = group_usage(proc.pid)
@@ -421,11 +423,13 @@ def run(folder, request, ownership):
                         peak_gpu_mb = max(peak_gpu_mb, mine if mine is not None else gpu_usage["used_mb"])
                         if peak_gpu_mb > spec["gpu"]["memory_mb"]:
                             raise MemoryError("attempt exceeded its GPU memory budget")
-                save(attempt / "usage.json", dict(usage, observed_at=time.time(),
-                     cpu_percent=max(0, usage["ticks"] - previous["ticks"]) / os.sysconf("SC_CLK_TCK") / max(.001, now - stamp) * 100,
-                     cpu_count=spec["cpus"], reserved_memory_bytes=spec["memory_mb"] * 2**20,
-                     memory_enforcement="process-group RSS watchdog", peak_rss_bytes=peak,
-                     gpu=gpu_usage, peak_gpu_memory_mb=peak_gpu_mb))
+                if now >= save_due:
+                    save(attempt / "usage.json", dict(usage, observed_at=time.time(),
+                         cpu_percent=max(0, usage["ticks"] - saved["ticks"]) / os.sysconf("SC_CLK_TCK") / max(.001, now - saved_stamp) * 100,
+                         cpu_count=spec["cpus"], reserved_memory_bytes=spec["memory_mb"] * 2**20,
+                         memory_enforcement="process-group RSS watchdog", peak_rss_bytes=peak,
+                         gpu=gpu_usage, peak_gpu_memory_mb=peak_gpu_mb))
+                    saved, saved_stamp, save_due = usage, now, now + USAGE_SECONDS
                 previous, stamp = usage, now
                 if read(folder / "cancel.json"):
                     receipt["state"] = "cancelled"

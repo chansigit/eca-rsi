@@ -533,3 +533,23 @@ def test_immutable_leaves_no_lock_and_one_writer_wins(tmp_path):
     winners = [v for state, v in results if state == "ok"]
     assert len(winners) == 1 and read(raced) == winners[0]
     assert not (tmp_path / "raced.json.lock").exists()
+
+
+def test_usage_is_written_every_few_seconds_not_every_sample(tmp_path, monkeypatch):
+    """Each usage.json write is an fsync on Lustre; the 0.25 s watchdog loop wrote one per sample."""
+    import os
+    import subprocess
+    import sys
+    from ecarsi.warm_pool import worker
+    tmp_path.chmod(0o700)
+    (tmp_path / "requests").mkdir()
+    version = subprocess.check_output([sys.executable, "--version"], text=True).strip()
+    save(tmp_path / "config.json", {"runtime": {"command": [sys.executable], "version": version, "files": {}}})
+    monkeypatch.setenv("ECA_POOL_WORKER_ID", "test-worker")
+    writes = []
+    monkeypatch.setattr(worker, "save", lambda path, value: (writes.append(path.name), save(path, value)))
+    spec = dict(request_id="slow", operation_id="test.slow", args=["-c", "import time; time.sleep(1.5); open('x', 'w').write('1')"],
+                cpus=len(os.sched_getaffinity(0)), memory_mb=256, timeout_seconds=30, outputs=["x"])
+    attempt = submit(tmp_path, spec)["attempt_id"]
+    assert worker.execute(tmp_path, "slow", attempt) == 0
+    assert writes.count("usage.json") == 1
