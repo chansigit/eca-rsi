@@ -109,4 +109,4 @@ Test results from the 2026-09-21 run show that killing the control plane does no
 
 ## History
 
-Find the build.sh / eca-ct toolchain, the 2026-09-15..21 images, and their retention schedule in [docs/history/CONTAINER_LEGACY.md](../docs/history/CONTAINER_LEGACY.md). The runtime manifests from that period (`*-runtime-2026*.json`) remain in this directory for reference.
+Find the build.sh / eca-ct toolchain, the 2026-09-15..21 images, and their retention schedule in [docs/history/CONTAINER_LEGACY.md](../docs/history/CONTAINER_LEGACY.md). The scripts and runtime manifests of that period are in [docs/history/container-legacy/](../docs/history/container-legacy/).

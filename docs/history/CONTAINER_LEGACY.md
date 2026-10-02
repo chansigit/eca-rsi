@@ -1,10 +1,10 @@
 # Container notes before the two-image deployment
 
-Moved from `container/README.md` on 2026-10-02. The build.sh / eca-ct chain, the 2026-09-15..21 images and the retention table are superseded by the two-image deployment described in `container/README.md`. Kept for the record of why the images were built the way they were.
+Moved from `container/README.md` on 2026-10-02. The build.sh / eca-ct chain, the 2026-09-15..21 images and the retention table are superseded by the two-image deployment described in `container/README.md`. Kept for the record of why the images were built the way they were. The scripts and runtime manifests of that chain (`build.sh`, `install-wrapper.sh`, `worker-keeper.sh`, `*-runtime-2026*.json`) moved from `container/` to [container-legacy/](container-legacy/) on 2026-10-02.
 
 ## Worker model calls
 
-[Agent Worker manifest](../../container/agent-worker-runtime-20260915.json) extends the pinned
+[Agent Worker manifest](container-legacy/agent-worker-runtime-20260915.json) extends the pinned
 science image with `/opt/rsi-control` from the pinned control image. Its Python
 path puts `/opt/rsi-control` before `/opt/rsi-python`, so Bridge and Worker use
 the same harness/SDK dependencies. NumPy, SciPy and scientific kernels come from
@@ -25,7 +25,7 @@ only in model executor processes, never in request manifests.
 
 ## V2 control runtime
 
-The [control manifest](../../container/control-runtime-20260915.json) records the base SIF,
+The [control manifest](container-legacy/control-runtime-20260915.json) records the base SIF,
 installed Bridge wheel, and resulting SIF hashes. Its
 [requirements lock](../../container/control-requirements.lock) pins CPython 3.12 Linux x86_64
 wheels, including transitive dependencies. This image runs the Work Coordinator,
@@ -89,8 +89,8 @@ Measured on CentOS 7 (glibc 2.17), 2026-09: host numpy `dgemm 4000³` 45 s, cont
 export ECA_CT_ROOT=/path/to/env          # venv + wrapper land here
 export ECA_SIF=/path/to/python312-slim.sif
 export ECA_REPOS=/path/to/checkouts      # holds agent-harness-bridge osp msp zmip eca-rsi
-apptainer exec --bind /scratch,/oak,/home "$ECA_SIF" bash container/build.sh
-bash container/install-wrapper.sh
+apptainer exec --bind /scratch,/oak,/home "$ECA_SIF" bash docs/history/container-legacy/build.sh
+bash docs/history/container-legacy/install-wrapper.sh
 ```
 
 Any stock `python:3.12-slim` image works; there is no custom recipe. Then point the
@@ -120,7 +120,7 @@ agent-harness-bridge 88 (its one node-dependent test fails in a slim image).
 
 The second-generation modules live in subpackages: `ecarsi.control` (Temporal workflows, `python -m ecarsi.control … worker`),
 `ecarsi.agent` (`python -m ecarsi.agent serve`), `ecarsi.stages` (the programs the pool runs), `ecarsi.warm_pool` and
-`ecarsi.observatory`. [agent-worker-runtime-20260917.json](../../container/agent-worker-runtime-20260917.json) is the science runtime for that
+`ecarsi.observatory`. [agent-worker-runtime-20260917.json](container-legacy/agent-worker-runtime-20260917.json) is the science runtime for that
 layout (the import list names the new modules); [control-plane.sh](../../container/control-plane.sh) is the launcher template the run
 directory copies and configures. See `docs/control-plane/ARCHITECTURE.md`.
 
@@ -130,7 +130,7 @@ directory copies and configures. See `docs/control-plane/ARCHITECTURE.md`.
 15 → 25 %, osp branch `qc-mt-25`); every other file is identical. Built unprivileged on a compute node's local disk
 (`apptainer build --sandbox`, copy the file, rename the dist-info, refresh `/opt/rsi-runtime.json`, `apptainer build`)
 in three minutes; the script that did it is kept next to the images as `build-20260917-1.sh`.
-[agent-worker-runtime-20260917-osp017.json](../../container/agent-worker-runtime-20260917-osp017.json) is its runtime record; enable it
+[agent-worker-runtime-20260917-osp017.json](container-legacy/agent-worker-runtime-20260917-osp017.json) is its runtime record; enable it
 on a pool with `configure-runtime` (the `runtime` sub-object of that file) run inside the image. Per-sample results of
 datasets already past their per-sample stage do not change.
 
@@ -146,7 +146,7 @@ differed and `msp/agent_data.py` was missing entirely. That is how zmip `8aa16a9
 undeployed and kept `test_zoomin_v2` red in the suite. Equal versions are not equal code; the manifest's
 `msp_source` / `zmip_source` digests in `/opt/rsi-runtime.json` are what to compare.
 
-[agent-worker-runtime-20260921.json](../../container/agent-worker-runtime-20260921.json) is its runtime record; enable it on a pool
+[agent-worker-runtime-20260921.json](container-legacy/agent-worker-runtime-20260921.json) is its runtime record; enable it on a pool
 with `configure-runtime` (the `runtime` sub-object) run inside the image. Changing the image changes the runtime
 digest, so this is batch-boundary work: results already computed keep their original runtime identity. It has been
 the acceptance pool's runtime since 2026-09-21.
