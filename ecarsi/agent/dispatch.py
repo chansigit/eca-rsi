@@ -385,16 +385,31 @@ def session_order(queued, wait_seconds, cache, now, offset):
         yield item
 
 
+def fail_invalid(folder, error):
+    with lock(folder / "request.lock"):
+        if read(folder / "result.json") is None:
+            save(folder / "result.json", dict(state="failed", reason="invalid_attempt_receipt",
+                 error=error, finished_at=time.time()))
+
+
 def queue_order(root, queued, wait_seconds, cache, now=None, offset=0, served=None):
     """Round-robin ready operation kinds so sample fan-out cannot bury later stages."""
     now = time.time() if now is None else now
     groups = {}
     for submitted, folder in queued:
         if folder.name not in cache:
-            spec = read(folder / 'request.json')['spec']
+            spec = (read(folder / 'request.json') or {}).get('spec')
+            if spec is None:
+                continue  # archived since the scan listed it
             ref, first = spec.get('session'), submitted
             if ref:
-                session = read(ref['path'])['spec']
+                session = read(ref['path'])
+                if session is None:
+                    # Its run directory was removed: the turn can never run. Unhandled, this escaped the
+                    # generator and killed serve(), again on every restart (#16).
+                    fail_invalid(folder, 'FileNotFoundError')
+                    continue
+                session = session['spec']
                 initial = read(root / 'requests' / (session['session_id'] + '.turn-0') / 'request.json')
                 if initial:
                     first = initial['submitted_at']
@@ -417,9 +432,16 @@ def queue_order(root, queued, wait_seconds, cache, now=None, offset=0, served=No
 
 
 def serve(root, *, once=False, finished=None):
-    from . import root_path, status as bridge_status, reconcile
+    from . import root_path, status as request_status, reconcile
     from ..model_web import normalized_models
     root = root_path(root)
+
+    def bridge_status(root, name):
+        """None for a folder archived (pruned) between this tick's scan and the read (#16)."""
+        try:
+            return request_status(root, name)
+        except KeyError:
+            return None
     (root / "model-events").mkdir(mode=0o700, exist_ok=True)
     # Read immutable events once per service lifetime; no growing history scan per tick.
     events = {e.get("pool_request_id") or e.get("turn_id"): e for p in (root / "model-events").glob("*.json") if (e := read(p))}
@@ -450,7 +472,8 @@ def serve(root, *, once=False, finished=None):
                 if finished.get(key) == 'reply_saved' or not (folder / "request.json").is_file():
                     continue
                 finished.pop(key, None)
-                state = bridge_status(root, folder.name)
+                if (state := bridge_status(root, folder.name)) is None:
+                    continue
                 if state["state"] == "running" and state.get("execution") in {"pool", "service"}:
                     try:
                         reconcile_pool(root, folder, config, events)
@@ -458,16 +481,15 @@ def serve(root, *, once=False, finished=None):
                         # FileNotFoundError: the session or plan file is gone, i.e. its run's directory
                         # was removed (two turns of a run terminated on 09-22 were retried every tick
                         # for 50 h and kept `dispatch_error` lit). A file that is gone stays gone.
-                        with lock(folder / "request.lock"):
-                            if read(folder / "result.json") is None:
-                                save(folder / "result.json", dict(state="failed", reason="invalid_attempt_receipt",
-                                     error=type(exc).__name__, finished_at=time.time()))
+                        fail_invalid(folder, type(exc).__name__)
                     except OSError as exc:
                         error = type(exc).__name__
                     state = bridge_status(root, folder.name)
                 elif state["state"] in {"running", "unknown_external_result"}:
                     reconcile(folder)
                     state = bridge_status(root, folder.name)
+                if state is None:
+                    continue
                 if state["state"] in {"reply_saved", "failed"}:
                     finished[key] = state["state"]
                 elif state["state"] == "queued":
@@ -511,7 +533,8 @@ def serve(root, *, once=False, finished=None):
                     save(folder / "dispatch-error.json", dict(error=error, observed_at=time.time()))
             counts = Counter(finished.values())
             for _, folder in queued:
-                counts[bridge_status(root, folder.name)["state"]] += 1
+                if (state := bridge_status(root, folder.name)) is not None:
+                    counts[state["state"]] += 1
             counts["running"] = sum(active.values())
             save(root / "summary.json", dict(updated_at=time.time(), counts=dict(counts), execution="pool",
                  concurrency=config["concurrency"], running=sum(active.values()), unresolved=legacy_active,

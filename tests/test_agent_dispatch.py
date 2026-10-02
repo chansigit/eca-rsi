@@ -511,3 +511,20 @@ def test_a_turn_recreated_with_different_content_gets_its_own_pool_request(tmp_p
     assert session.submit_turn(ref, 0, parents=('elsewhere',)) == turn
     bridge.serve(root, once=True)
     assert bridge.status(root, turn)['attempts'][0]['pool_request_id'] != first
+
+
+def test_a_queued_turn_whose_run_directory_was_removed_fails_instead_of_killing_the_bridge(tmp_path, monkeypatch):
+    """#16: queue_order read the missing session file, the TypeError escaped its generator and
+    serve() died, again on every restart; a folder archived mid-tick raised KeyError the same way."""
+    from tests.test_agent_session import setup
+    spec, ref = setup(tmp_path)
+    root = Path(spec['bridge_root'])
+    save(root / 'config.json', dict(read(root / 'config.json'), pool_root=spec['pool_root']))
+    turn = session.submit_turn(ref, 0)
+    Path(ref['path']).unlink()
+    bridge.serve(root, once=True)
+    state = bridge.status(root, turn)
+    assert state['state'] == 'failed' and state['reason'] == 'invalid_attempt_receipt'
+    real = bridge.status
+    monkeypatch.setattr(bridge, 'status', lambda r, name: (_ for _ in ()).throw(KeyError(name)) if name == turn else real(r, name))
+    bridge.serve(root, once=True, finished={})
