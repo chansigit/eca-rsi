@@ -1,0 +1,197 @@
+# Container notes before the two-image deployment
+
+Moved from `container/README.md` on 2026-10-02. The build.sh / eca-ct chain, the 2026-09-15..21 images and the retention table are superseded by the two-image deployment described in `container/README.md`. Kept for the record of why the images were built the way they were.
+
+## Worker model calls
+
+[Agent Worker manifest](../../container/agent-worker-runtime-20260915.json) extends the pinned
+science image with `/opt/rsi-control` from the pinned control image. Its Python
+path puts `/opt/rsi-control` before `/opt/rsi-python`, so Bridge and Worker use
+the same harness/SDK dependencies. NumPy, SciPy and scientific kernels come from
+`/opt/rsi-python`; the control directory contains no numerical stack.
+Model clients and registered scientific tools can therefore run on the same
+allocation without using a host Python environment.
+
+To rebuild, extract both recorded source images with `apptainer build --sandbox`,
+copy the control image's `/opt/rsi-control` into the science sandbox, and pack it
+with `LC_ALL=C LANG=C apptainer build` — **no `--mksquashfs-args`**: passing
+`-processors N` makes apptainer 1.4 / mksquashfs 4.7.5 die with SIGSEGV right after
+"Creating SIF file…" (2026-09-21, both 4 and 2 processors, while the same mksquashfs
+run by hand on the same sandbox succeeds). Apptainer parallelises on its own.
+Record the resulting SIF hash. Run `configure-runtime` inside that image before
+rejoining idle workers with `add-worker`; running tasks retain their original
+runtime identity. Workers load model credentials from user shell configuration
+only in model executor processes, never in request manifests.
+
+## V2 control runtime
+
+The [control manifest](../../container/control-runtime-20260915.json) records the base SIF,
+installed Bridge wheel, and resulting SIF hashes. Its
+[requirements lock](../../container/control-requirements.lock) pins CPython 3.12 Linux x86_64
+wheels, including transitive dependencies. This image runs the Work Coordinator,
+Agent Bridge, and Warm Pool Scheduler. Scientific operations retain their own
+science image; adding scientific packages to the control environment is unnecessary.
+Organize validates sample decisions from prepared metadata without importing pandas.
+
+To rebuild, obtain the base image and Bridge wheel matching the manifest hashes.
+The wheel can be built from the recorded Bridge commit; use a separate checkout.
+Run from this repository, with absolute paths for the build inputs:
+
+```bash
+# Set BASE_SIF, BRIDGE_WHEEL, BUILD_ROOT, and CONTROL_SIF to your local paths.
+apptainer build --sandbox "$BUILD_ROOT" "$BASE_SIF"
+apptainer exec --cleanenv --bind "$PWD,$BUILD_ROOT,$(dirname "$BRIDGE_WHEEL")" \
+  "$BASE_SIF" python3 -m pip install --only-binary=:all: --require-hashes \
+  --target "$BUILD_ROOT/opt/rsi-control" -r "$PWD/container/control-requirements.lock"
+apptainer exec --cleanenv --bind "$BUILD_ROOT,$(dirname "$BRIDGE_WHEEL")" \
+  "$BASE_SIF" python3 -m pip install --no-deps \
+  --target "$BUILD_ROOT/opt/rsi-control" "$BRIDGE_WHEEL"
+apptainer build "$CONTROL_SIF" "$BUILD_ROOT"   # no --mksquashfs-args; see the note above
+```
+
+Build timestamps can change the resulting SIF hash; record the new artifact's hash
+after validation. Launch against an explicit RSI checkout and shared run directories:
+
+```bash
+apptainer exec --cleanenv --bind /path/to/rsi,/shared/rsi \
+  --env PYTHONPATH=/path/to/rsi:/opt/rsi-control \
+  --env PYTHONNOUSERSITE=1 --env PYTHONSAFEPATH=1 \
+  "$CONTROL_SIF" python3 -m ecarsi.control \
+  --service-root /shared/rsi/control --task-queue ecarsi-durable-v2 worker
+```
+
+Use the same interpreter prefix for `ecarsi.agent` and `ecarsi.warm_pool`.
+Bind the recorded native binaries when launching `ecarsi.control.temporal`.
+With `--cleanenv`, forward each configured provider credential through an
+`APPTAINERENV_` environment variable (for example `APPTAINERENV_OPENROUTER_API_KEY`);
+do not put credentials in command arguments or manifests. Preserve the chosen
+`OPENAI_AGENTS_API` mode when restarting services. Replay existing histories before
+replacing the Coordinator, and retain the previous image until verification passes.
+
+## Legacy full-chain runtime
+
+`build.sh` + `install-wrapper.sh` reproduce the interpreter that ECA-RSI batches run on.
+Nothing in them is site-specific; everything is set by environment variable.
+
+## Why
+
+If the host's glibc is older than the manylinux tag a wheel targets, pip and uv silently
+fall back to building from source. For numpy that yields a build with **no BLAS**: it
+imports, all tests pass, and matmul is ~100x slower. Building the venv inside a modern
+image removes that entire failure mode, and it pins the numeric stack independently of
+whatever the login environment happens to have.
+
+Measured on CentOS 7 (glibc 2.17), 2026-09: host numpy `dgemm 4000³` 45 s, container 0.37 s.
+
+## Build
+
+```bash
+export ECA_CT_ROOT=/path/to/env          # venv + wrapper land here
+export ECA_SIF=/path/to/python312-slim.sif
+export ECA_REPOS=/path/to/checkouts      # holds agent-harness-bridge osp msp zmip eca-rsi
+apptainer exec --bind /scratch,/oak,/home "$ECA_SIF" bash container/build.sh
+bash container/install-wrapper.sh
+```
+
+Any stock `python:3.12-slim` image works; there is no custom recipe. Then point the
+pipeline at the wrapper:
+
+```bash
+ECA_RSI_PYTHON=$ECA_CT_ROOT/python eca-rsi run <eca-pp dir> <root>
+```
+
+(labels identical); see msp `docs/compute-endpoint-design.md`.
+
+## Validation
+
+`build.sh` ends with a sanity block (BLAS check, a dgemm timing, versions, imports).
+Beyond that, run the suites inside the image:
+
+```bash
+for r in eca-rsi osp msp zmip agent-harness-bridge; do
+  (cd "$ECA_REPOS/$r" && "$ECA_CT_ROOT/python" -m pytest -q)
+done
+```
+
+Reference run 2026-09-07 on Sherlock: eca-rsi 47 + 68/2 skipped, osp 40, msp 136, zmip 78,
+agent-harness-bridge 88 (its one node-dependent test fails in a slim image).
+
+## Branch `v2` layout (2026-09-17)
+
+The second-generation modules live in subpackages: `ecarsi.control` (Temporal workflows, `python -m ecarsi.control … worker`),
+`ecarsi.agent` (`python -m ecarsi.agent serve`), `ecarsi.stages` (the programs the pool runs), `ecarsi.warm_pool` and
+`ecarsi.observatory`. [agent-worker-runtime-20260917.json](../../container/agent-worker-runtime-20260917.json) is the science runtime for that
+layout (the import list names the new modules); [control-plane.sh](../../container/control-plane.sh) is the launcher template the run
+directory copies and configures. See `docs/control-plane/ARCHITECTURE.md`.
+
+## Science image 20260917-1 (OSP 0.1.7)
+
+`rsi-science-20260917-1.sif` is `rsi-science-20260915-8.sif` with osp 0.1.7 (`qc.py`: fixed mitochondrial cutoff
+15 → 25 %, osp branch `qc-mt-25`); every other file is identical. Built unprivileged on a compute node's local disk
+(`apptainer build --sandbox`, copy the file, rename the dist-info, refresh `/opt/rsi-runtime.json`, `apptainer build`)
+in three minutes; the script that did it is kept next to the images as `build-20260917-1.sh`.
+[agent-worker-runtime-20260917-osp017.json](../../container/agent-worker-runtime-20260917-osp017.json) is its runtime record; enable it
+on a pool with `configure-runtime` (the `runtime` sub-object of that file) run inside the image. Per-sample results of
+datasets already past their per-sample stage do not change.
+
+## Science image 20260921-1 (msp and zmip synced to their checkouts)
+
+`rsi-science-20260921-1.sif` is `rsi-science-20260917-1.sif` with `/opt/rsi-python/{msp,zmip}` replaced by the
+checkout mains (msp `386ff27`, zmip `8aa16a9`); osp is unchanged. Same recipe; the script that did it is kept next to the images as `build-20260921-1.sh`, ~10 minutes.
+
+Why it was needed: **committing a kernel fix does not deploy it.** The pool's runtime pythonpath is
+`[<eca-rsi worktree>, /opt/rsi-control, /opt/rsi-python]`, so only `ecarsi` comes from a checkout — and the
+image's msp/zmip carried the *same version numbers* as the checkouts (0.5.2, 0.3.9) while 11 source files
+differed and `msp/agent_data.py` was missing entirely. That is how zmip `8aa16a9` (`report._proposal`) stayed
+undeployed and kept `test_zoomin_v2` red in the suite. Equal versions are not equal code; the manifest's
+`msp_source` / `zmip_source` digests in `/opt/rsi-runtime.json` are what to compare.
+
+[agent-worker-runtime-20260921.json](../../container/agent-worker-runtime-20260921.json) is its runtime record; enable it on a pool
+with `configure-runtime` (the `runtime` sub-object) run inside the image. Changing the image changes the runtime
+digest, so this is batch-boundary work: results already computed keep their original runtime identity. It has been
+the acceptance pool's runtime since 2026-09-21.
+
+**One image serves every worker, GPU included.** A pool's `config.json` holds a single `runtime`, and this image
+carries both stacks: the science tree has NumPy 2.2.6 / SciPy 1.16.3 / scanpy 1.12.4 *and* cudf/cuml 25.12 with
+cupy 13.6, while `/opt/rsi-control` has temporalio 1.32, openai-agents 0.22 and agent-harness-bridge 0.2.14. So
+there is no separate GPU image to fall behind — which matters, because falling behind is exactly the failure this
+image was built to fix, and a second accelerator-specific image would double the chance of it. The two host venvs
+`venvs/eca-ct` (NumPy 2.5.3) and `venvs/eca-ct-gpu` (NumPy 2.4.6) are generation-1 leftovers on a different
+numerical stack: `eca-ct` still runs Periscope, which is presentation and outside the identity hash, and
+`eca-ct-gpu` has no consumer left. Neither is on any generation-2 compute path.
+
+What this does **not** settle is whether the GPU is worth using. RAPIDS is installed and importable; no run has
+measured a speed-up, and nothing in the scheduler steers GPU-suited work to a GPU worker. That is a measurement,
+not a build.
+
+
+## Which images to keep, and why there are ever several (2026-09-21)
+
+A SIF has no layers and must not be edited in place — its sha256 is in `runtime.image.sha256`, so patching one
+would invalidate every stage verifying against it. "Change the image" therefore always means "write another
+3.68 GB file", which is how 2026-09-15 produced nine science images between 01:03 and 16:26. Those were nine
+attempts at one build, not nine designs, and they are retired in `containers/_retired-20260921/`.
+
+Three are kept:
+
+| image | why |
+|---|---|
+| `rsi-science-20260921-1.sif` | the runtime of every pool |
+| `rsi-science-20260917-1.sif` | 98 % of the finished 28-dataset batch's requests pin it |
+| `rsi-science-20260915-8.sif` | the other 2 % — that batch's earliest per-sample requests |
+
+The last two are kept for one reason: the twelve released datasets record those digests in their runtime
+identity, and the image files are the only artefacts that can recompute them byte-for-byte. It is all or
+nothing — drop either and the batch stops being reproducible. Resuming a *failed* dataset does not need them
+(`resume-dataset` opens new stages on the current runtime); only `warm_pool retry` of an individual old request
+does, because it deliberately reruns on the original image so the result matches its siblings.
+
+**Retire both when reproducing that batch stops mattering** (owner's call, deferred 2026-09-21). They live on
+SCRATCH, which purges at 90 days without a content write, so archiving them properly means moving them to OAK —
+blocked while OAK sits at 95 %.
+
+`rsi-control-20260915-1.sif` is a strict subset of the science image (same Python, same `/opt/rsi-control`), and
+is separate on purpose: the control plane is not in any run identity, so it can be patched without minting a new
+3.68 GB compute image. `python312-slim.sif` is a generation-1 base that only Periscope's host venv still uses;
+it can go once Periscope runs on the science image.
+
