@@ -1,6 +1,6 @@
 # Container environment for the ecarsi chain
 
-# Two-image deployment (2026-10-01)
+## Two-image deployment (2026-10-01)
 
 A deployment needs two images and a short launcher; nothing is installed on the host.
 
