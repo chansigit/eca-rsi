@@ -395,10 +395,10 @@ The 0.2.10 combination has offline tests for provider selection, computation
 endpoints, resume receipts, cell conservation, and release review rendering.
 A replay of 19 saved chondroatlas rounds checks the new boundary-review contract
 without changing historical results or calling a model. Detailed release checks
-for the earlier 0.2.9 combination are recorded in [TAKEOVER_VALIDATION.md](TAKEOVER_VALIDATION.md).
+for the earlier 0.2.9 combination are recorded in [docs/history/TAKEOVER_VALIDATION.md](docs/history/TAKEOVER_VALIDATION.md).
 A fresh two-round E5.25 run verified stage pause and recovery of four accepted
 lineage submissions after SIGKILL, ending with 301 of 331 input cells and a
-verified cell ledger. Details are in [CHECKPOINT_VALIDATION.md](CHECKPOINT_VALIDATION.md).
+verified cell ledger. Details are in [docs/history/CHECKPOINT_VALIDATION.md](docs/history/CHECKPOINT_VALIDATION.md).
 The fixed-task model comparison is in [eval/RESULTS.md](eval/RESULTS.md).
 
 The earlier 0.1.0 validation also checked installed-wheel resources and offline
@@ -417,15 +417,15 @@ validated biological accuracy. Details and remaining review items are in
 
 See [CLAUDE.md](CLAUDE.md) for source layout, operating conventions, and targeted
 checks. See [CHANGELOG.md](CHANGELOG.md) for release changes and
-[TODO.md](TODO.md) for deferred policy discussions. The [architecture diagram](diagrams/architecture.html) illustrates the
+[docs/history/TODO.md](docs/history/TODO.md) for the policy discussions deferred in September. The [architecture diagram](diagrams/architecture.html) illustrates the
 main package flow; consult this README and the source for current runtime and
 resume behavior.
 
-`run.sh` and `steps/*.md` belong to the previous six-step prompt loop, preserved
-on branch `primitive`. That generation used agents to write analysis scripts
+The previous six-step prompt loop (`run.sh` and `steps/*.md`, kept for reference in
+`docs/history/primitive/`) is preserved on branch `primitive`. That generation used agents to write analysis scripts
 through Explore → Compute → Annotate → QC → Apply → Stop. Its commands,
 governance prompts, and timing examples do not describe the current `ecarsi`
-workflow. `attic-v01/` is an older archive.
+workflow. An older v0.1 archive (`attic-v01/`, never in git) is kept outside the repository.
 
 The gen-1 Dask warm pool (`ecarsi.pool`, its Periscope panel and the `pool` / `auto` OSP compute endpoints) was removed in 0.3.2:
 generation 2 schedules every stage through HyperQueue (`ecarsi.warm_pool`). msp's own `MSP_COMPUTE_ENDPOINT=dask` is unaffected.

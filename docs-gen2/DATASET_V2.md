@@ -6,7 +6,7 @@ Scientific work still uses the versioned OSP/MSP/ZMIP operations on Warm Pool wo
 
 ## Submit
 
-Use [the specification template](../../examples/dataset-v2.json), replacing the absolute input/output/service paths and selecting operation budgets and tissue context for the dataset. Species and sample key come from the accepted Organize manifest. Conflicting explicit stage settings are rejected.
+Use [the specification template](../examples/dataset-v2.json), replacing the absolute input/output/service paths and selecting operation budgets and tissue context for the dataset. Species and sample key come from the accepted Organize manifest. Conflicting explicit stage settings are rejected.
 
 ```bash
 python -m ecarsi.control --service-root /shared/rsi/control \

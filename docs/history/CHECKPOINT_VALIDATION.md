@@ -66,7 +66,7 @@ saved release retains three inspection flags and three low-confidence labels.
 
 ## Model comparison
 
-[The matched Turbo/Pro comparison](eval/RESULTS.md) completed on a separate frozen
+[The matched Turbo/Pro comparison](../../eval/RESULTS.md) completed on a separate frozen
 4,597-cell Mural task. Both candidates pass production output checks. Their
 55-cell disagreement has low confidence on both sides and needs independent
 review. Historical proposal agreement is not biological accuracy.

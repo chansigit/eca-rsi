@@ -71,5 +71,5 @@ local model service has passed a vision/tool run.
 
 Each repository's GitHub Release carries its wheel and source archive. PyPI
 publication and downloaded-file hashes are verified separately. Exact versions
-and install commands are in [INSTALL.md](INSTALL.md); the release-specific
-changes are in [CHANGELOG.md](CHANGELOG.md).
+and install commands are in [INSTALL.md](../../INSTALL.md); the release-specific
+changes are in [CHANGELOG.md](../../CHANGELOG.md).

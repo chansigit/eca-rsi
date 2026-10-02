@@ -45,7 +45,7 @@ numpy 由此失去 BLAS（能导入、测试全过、matmul 慢约 100 倍），
 ## 3. 安装发行包与驱动源码
 
 本次发布组合为 ecarsi 0.2.10、bridge 0.2.14、OSP 0.1.6、MSP 0.5.1、ZMIP 0.3.9。
-PyPI 包和 GitHub Release 分别核验，记录见 [CHECKPOINT_VALIDATION.md](CHECKPOINT_VALIDATION.md)。
+PyPI 包和 GitHub Release 分别核验，记录见 [docs/history/CHECKPOINT_VALIDATION.md](docs/history/CHECKPOINT_VALIDATION.md)。
 
 ```bash
 python -m venv /path/to/venvs/eca

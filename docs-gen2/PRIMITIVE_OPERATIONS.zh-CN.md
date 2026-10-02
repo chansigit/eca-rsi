@@ -32,17 +32,17 @@ Organize 收敛为三个块：`organize.prepare`（pool 准备证据）→ `orga
 已确认由 Organize 同时决定 analysis units 和实验映射，在写出前完成细胞守恒、实验完整性及拆分兼容性检查。
 Per-sample 信任该结果，只核对交接版本与 cell IDs，不再设置样本确认 AI 或重新判断实验边界。
 其执行块为子集准备 → OSP 固定计算 → 注释 AI/按需工具 → 应用结果；校验、日志和保存结果归入块内。
-详见 [Organize 简洁方案](../../design/00-organize/index.html)。以下同阶段动作应默认合并到相应执行块，不能直接逐项提交 scheduler。
+详见 [Organize 简洁方案](../design/00-organize/index.html)。以下同阶段动作应默认合并到相应执行块，不能直接逐项提交 scheduler。
 
 已确认的计算粒度：OSP 按完整样本并行，样本内 QC、聚类、UMAP、DEG 连续执行，不再拆调度任务；仅跨模型等待保留交接。
 cross-sample 主流程为计算准备 → 类型注释 → 质量注释 → 保存；计算准备内部：整合、UMAP、QC 掩码与 PAGA 比较准备在同一任务内连续执行，复用内存中的矩阵与图；只将 DEG 拆成独立比较任务（小比较合批）并行执行。
 OSP 与 cross-sample 均设计 CPU Scanpy / GPU RAPIDS-singlecell 两套路径，保留科学契约和实际后端记录；这是待实现方案。
 两段 cross-sample agent 共用按计算版本持久化的预计算 DEG SQLite，通过 deg_lookup / deg_sql 优先查库；类型提案先保存，质量决定完成后统一应用删除与合并。
-详见 [OSP](../../design/01-per-sample/index.html) 与 [cross-sample](../../design/02-cross-sample/index.html)。
+详见 [OSP](../design/01-per-sample/index.html) 与 [cross-sample](../design/02-cross-sample/index.html)。
 
-zoom-in：准备规划证据 → 规划谱系（模型推理）→ 按谱系计算/注释并行 → 合并。计算与模型等待分开；整合到 UMAP 连续，独立 DEG 可分发。共享谱系 markers 是有预算的程序执行，不由 Coordinator 常驻矩阵计算。暂保留每谱系一个注释 agent，先按 Leiden 1.0 做类型注释，再按 2.0 做质量/归属判断；两套决定按 cell ID 映射，不假设聚类严格嵌套。zoom-in 的 2.0 质控默认去除判定为 tissue dissociation / cell dying 的亚群（结合 high MT、HSP、JUN 等证据），只作用于相关细胞；删除超限复核也须遵循该策略，不沿用旧的 blanket stress 保留提示。详见 [zoom-in](../../design/03-zoom-in/index.html)。
+zoom-in：准备规划证据 → 规划谱系（模型推理）→ 按谱系计算/注释并行 → 合并。计算与模型等待分开；整合到 UMAP 连续，独立 DEG 可分发。共享谱系 markers 是有预算的程序执行，不由 Coordinator 常驻矩阵计算。暂保留每谱系一个注释 agent，先按 Leiden 1.0 做类型注释，再按 2.0 做质量/归属判断；两套决定按 cell ID 映射，不假设聚类严格嵌套。zoom-in 的 2.0 质控默认去除判定为 tissue dissociation / cell dying 的亚群（结合 high MT、HSP、JUN 等证据），只作用于相关细胞；删除超限复核也须遵循该策略，不沿用旧的 blanket stress 保留提示。详见 [zoom-in](../design/03-zoom-in/index.html)。
 
-所有步骤增加块内的细胞排除记账：实际过滤时记录逐细胞原因及决定来源，输出和账本一起验收；临时计算掩码、提案与改归属不计入实际排除。统一契约见 [细胞排除账本](../../design/cell-exclusion-ledger.md)。
+所有步骤增加块内的细胞排除记账：实际过滤时记录逐细胞原因及决定来源，输出和账本一起验收；临时计算掩码、提案与改归属不计入实际排除。统一契约见 [细胞排除账本](../design/cell-exclusion-ledger.md)。
 
 ## 候选清单
 
@@ -136,9 +136,9 @@ CPU/GPU 算法、随机种子、精度与运行环境身份必须记录，不能
 
 ## 执行契约
 
-具体派发、模型工具循环、结果接受及恢复流程见 [Work Coordinator](../../design/work-coordinator/index.html)。这属于组件设计，不是 00–03 之后新增科学步骤。
+具体派发、模型工具循环、结果接受及恢复流程见 [Work Coordinator](../design/work-coordinator/index.html)。这属于组件设计，不是 00–03 之后新增科学步骤。
 
-[Agent Bridge](../../design/agent-bridge/index.html) 统一管理跨数据集的逐次模型调用、共享额度和持久会话。模型回复、工具请求/结果分别保存；等待工具释放模型调用并发，续接仍须重新取得额度。科学提案验收归 Coordinator，重计算归 pool，不能在整段 `run_agent()` 外加队列就认为完成了拆分。
+[Agent Bridge](../design/agent-bridge/index.html) 统一管理跨数据集的逐次模型调用、共享额度和持久会话。模型回复、工具请求/结果分别保存；等待工具释放模型调用并发，续接仍须重新取得额度。科学提案验收归 Coordinator，重计算归 pool，不能在整段 `run_agent()` 外加队列就认为完成了拆分。
 
 
 每个 OperationSpec 保存：op_id、kind/version、dataset/unit/sample/lineage scope、

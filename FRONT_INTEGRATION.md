@@ -168,7 +168,7 @@ LC_ALL=C LANG=C PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovide
 
 这些测试独立于 MSP/ZMIP。原有跨内核 harness/resources 检查保留，仍单独暴露冻结中的不一致。
 已测配套源码见 [FRONT_COMPATIBILITY.json](FRONT_COMPATIBILITY.json)，实际运行结果见
-[FRONT_VALIDATION.md](FRONT_VALIDATION.md)。ECA-PP 仍自带 harness 的迁移由上游独立协调。
+[docs/history/FRONT_VALIDATION.md](docs/history/FRONT_VALIDATION.md)。ECA-PP 仍自带 harness 的迁移由上游独立协调。
 
 ## bridge 0.2.0 适配
 

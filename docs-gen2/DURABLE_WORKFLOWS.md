@@ -71,7 +71,7 @@ to configured, task-eligible alternatives before overload causes timeouts.
 Preserve the actual model, retries, token use and routing reason for each call.
 Changing models must preserve compatible context and existing accepted decisions.
 
-The [Agent Bridge design](../../design/agent-bridge/index.html) specifies per-provider-call
+The [Agent Bridge design](../design/agent-bridge/index.html) specifies per-provider-call
 admission, durable reply/tool boundaries, configuration reload and recovery.
 Start with one asynchronous Bridge dispatcher; adapter subprocesses are internal
 executors. Existing whole-session `run_agent()` wrappers and process-local model
@@ -168,7 +168,7 @@ no duplicate accepted result, no stale publication and no unintended allocation.
 
 ## Isolation
 
-The production worktree stays on main. DURABLE_BASELINE.json records hashes of
+The production worktree stays on main. docs/history/DURABLE_BASELINE.json records hashes of
 151 copied source/document/test files, including the fixes subsequently committed on main as `f85414e`.
 Untracked Slurm logs and ignored runtime data were not copied. Existing config,
 registry, scheduler endpoints, service processes, allocations and output roots
@@ -389,15 +389,15 @@ development target for both local and distributed workflows. HyperQueue backs
 the v2 prototype, with auto-allocation disabled by user policy.
 
 - [Primitive catalog, local modes and tiered storage](PRIMITIVE_OPERATIONS.zh-CN.md)
-- [Organize execution blocks (HTML)](../../design/00-organize/index.html)
-- [Per-sample / OSP execution blocks (HTML)](../../design/01-per-sample/index.html)
-- [cross-sample execution blocks (HTML)](../../design/02-cross-sample/index.html)
-- [zoom-in execution blocks (HTML)](../../design/03-zoom-in/index.html)
-- [Cell exclusion ledger and per-step conservation](../../design/cell-exclusion-ledger.md)
-- [Work Coordinator execution and recovery (HTML)](../../design/work-coordinator/index.html)
-- [Temporal integration and intermittent-host constraints (HTML)](../../design/work-coordinator/temporal.html)
-- [Warm Pool Scheduler / Worker contracts (HTML)](../../design/warm-pool/index.html)
-- [Agent Bridge shared routing, conversations and recovery (HTML)](../../design/agent-bridge/index.html)
+- [Organize execution blocks (HTML)](../design/00-organize/index.html)
+- [Per-sample / OSP execution blocks (HTML)](../design/01-per-sample/index.html)
+- [cross-sample execution blocks (HTML)](../design/02-cross-sample/index.html)
+- [zoom-in execution blocks (HTML)](../design/03-zoom-in/index.html)
+- [Cell exclusion ledger and per-step conservation](../design/cell-exclusion-ledger.md)
+- [Work Coordinator execution and recovery (HTML)](../design/work-coordinator/index.html)
+- [Temporal integration and intermittent-host constraints (HTML)](../design/work-coordinator/temporal.html)
+- [Warm Pool Scheduler / Worker contracts (HTML)](../design/warm-pool/index.html)
+- [Agent Bridge shared routing, conversations and recovery (HTML)](../design/agent-bridge/index.html)
 - [HyperQueue evidence, recovery gaps and prototype acceptance](HYPERQUEUE_REVIEW.zh-CN.md)
 
 These are design documents, not implemented backend or recovery guarantees.

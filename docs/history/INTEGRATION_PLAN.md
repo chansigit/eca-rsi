@@ -2,10 +2,10 @@
 
 审查日期：2026-09-04。状态：用户已授权实施，A/B/C 已落地，D 已完成前半程验收。
 
-下文第 2–6 节保留实施前的审查证据。新版行为见 [FRONT_INTEGRATION.md](FRONT_INTEGRATION.md)，
+下文第 2–6 节保留实施前的审查证据。新版行为见 [FRONT_INTEGRATION.md](../../FRONT_INTEGRATION.md)，
 实际验收与剩余边界见 [FRONT_VALIDATION.md](FRONT_VALIDATION.md)。
 2026-09-05 更新：用户已解除 MSP/ZMIP 冻结；最新源码审查、复现与 E1–E4 实施规划见
-[DOWNSTREAM_INTEGRATION.md](DOWNSTREAM_INTEGRATION.md)。下文冻结措辞保留为前阶段历史记录。
+[DOWNSTREAM_INTEGRATION.md](../../DOWNSTREAM_INTEGRATION.md)。下文冻结措辞保留为前阶段历史记录。
 
 本次覆盖 `eca-pp → organize → persample → osp`，以及共享 `agent-harness-bridge` 的接入边界。
 MSP、ZMIP 及其 crosssample / zoomin 调用适配暂缓，等用户通知其开发完成后再审查和实施。
@@ -37,7 +37,7 @@ eca-pp 原有脚本修改和未跟踪文件未改动；本次只新增此规划�
 - ecarsi / osp 已经使用共享 bridge 的 identity-preserving shim。超时、后端重试和 MCP 生命周期修复应继续放在 bridge；样本分组、质量判据、文件和续跑状态仍由业务模块负责。
 - 新的 Scrublet 分数统计和 `decontx_degenerate` 进入 `qc_summary.csv` 后，现有 `_sample_inventory()` 会把全部键传给样本纳入 agent。不能把这部分描述成“新指标完全丢失”；欠账主要在配置、持久化状态和集中复核展示。
 
-对应实现：[ECA-PP build](../eca-pp/src/eca_pp/standardize/build.py)、[OSP CLI](../osp/osp/__main__.py)、[OSP 发布注释](../osp/osp/annotate.py)、[RSI inventory](ecarsi/crosssample.py)、[共享 shim](ecarsi/harness.py)。
+对应实现：[ECA-PP build](../../../eca-pp/src/eca_pp/standardize/build.py)、[OSP CLI](../../../osp/osp/__main__.py)、[OSP 发布注释](../../../osp/osp/annotate.py)、[RSI inventory](../../ecarsi/crosssample.py)、[共享 shim](../../ecarsi/harness.py)。
 
 ## 3. 集成欠账
 
@@ -51,7 +51,7 @@ ECA-PP `archive_outputs()` 把旧结果移到 `standardize/.history/standardize-
 
 实施：只从当前步骤结果发现来源，明确排除上游约定的 `.history` 子树；当前目录内未声明的额外 H5AD 继续报错，不能把所有未知文件都静默忽略。
 
-证据：[organize.py](ecarsi/organize.py)，`find_ecapp_units` 第 40–61 行；[run_outputs.py](../eca-pp/src/eca_pp/core/run_outputs.py)，第 12–42 行。
+证据：[organize.py](../../ecarsi/organize.py)，`find_ecapp_units` 第 40–61 行；[run_outputs.py](../../../eca-pp/src/eca_pp/core/run_outputs.py)，第 12–42 行。
 
 ### U2 · P0：入口没有消费上游质量状态，也没有完整的来源清单
 
@@ -75,7 +75,7 @@ ECA-PP `archive_outputs()` 把旧结果移到 `standardize/.history/standardize-
 
 另外，文档声称每分析单元只有一个物种，但 `plan._validate()` 没有校验；混合人鼠的 profile 通过了 host 校验。实施时加入合并前的同物种检查，避免只依赖 prompt。
 
-证据：[organize.py](ecarsi/organize.py)，第 45–59、81–112 行；[plan.py](ecarsi/plan.py)，`_validate`；[result.py](../eca-pp/src/eca_pp/core/result.py)；[standardize CLI](../eca-pp/src/eca_pp/standardize/cli.py)，第 304–349 行；[OSP counts 读取](../osp/osp/qc.py)，第 430–438 行。
+证据：[organize.py](../../ecarsi/organize.py)，第 45–59、81–112 行；[plan.py](../../ecarsi/plan.py)，`_validate`；[result.py](../../../eca-pp/src/eca_pp/core/result.py)；[standardize CLI](../../../eca-pp/src/eca_pp/standardize/cli.py)，第 304–349 行；[OSP counts 读取](../../../osp/osp/qc.py)，第 430–438 行。
 
 ### U3 · P1：identify-columns 的新证据没有进入 organize / persample
 
@@ -89,7 +89,7 @@ organize 仅保存可选 `identify_columns_result` 路径；profile 没有读取
 
 兼容性也需要覆盖旧 `step_version=0.2.0`：当前磁盘上的 MCA1.1 AdrenalGland 结果已经有 derived `batch.tsv`，不是只在未来 0.5.0 才需要支持。此次抽查到的若干真实结果仍是 0.2.0，不能按当前源码版本给它们贴新版标签。
 
-证据：[organize.py](ecarsi/organize.py)，第 55–57、91–112 行；[persample.py](ecarsi/persample.py)，第 440–466 行；[crosssample.py](ecarsi/crosssample.py)，`ecapp_batch_designations`；[identify-columns CLI](../eca-pp/src/eca_pp/identify_columns/cli.py)，第 578–693 行；[TSV 对齐契约](../eca-pp/src/eca_pp/core/colspec.py)。
+证据：[organize.py](../../ecarsi/organize.py)，第 55–57、91–112 行；[persample.py](../../ecarsi/persample.py)，第 440–466 行；[crosssample.py](../../ecarsi/crosssample.py)，`ecapp_batch_designations`；[identify-columns CLI](../../../eca-pp/src/eca_pp/identify_columns/cli.py)，第 578–693 行；[TSV 对齐契约](../../../eca-pp/src/eca_pp/core/colspec.py)。
 
 ### S1 · P0：来源内样本名没有转换为全局实验样本身份
 
@@ -105,7 +105,7 @@ organize 仅保存可选 `identify_columns_result` 路径；profile 没有读取
 
 若 organize 的器官拆分切断了同一物理实验的细胞池，应记录并阻断错误的独立 doublet 计算，或另行设计共享的实验级 QC 前置阶段。不能声称“每 unit 中的一份子集”自动等于完整实验池。
 
-证据：[execute.py](ecarsi/execute.py)，第 136–143 行；[persample.py](ecarsi/persample.py)，`profile_obs`、`_validate_sample_column`、`list_samples`、`write_subsets`；[OSP 单样本校验](../osp/osp/qc.py)，第 297–309 行。
+证据：[execute.py](../../ecarsi/execute.py)，第 136–143 行；[persample.py](../../ecarsi/persample.py)，`profile_obs`、`_validate_sample_column`、`list_samples`、`write_subsets`；[OSP 单样本校验](../../../osp/osp/qc.py)，第 297–309 行。
 
 ### S2 · P0：完成检查不满足新版 OSP 的外层驱动要求
 
@@ -119,7 +119,7 @@ organize 仅保存可选 `identify_columns_result` 路径；profile 没有读取
 
 旧目录、成功后被 prune 的目录、需要重新计算的目录使用不同状态。已有 release 的清理标记不能作为新一轮计算成功的依据。OSP 无目录级锁，RSI 也需确保同一样本目录只有一个 writer。
 
-证据：[layout.py](ecarsi/layout.py)，第 52–58、179–186 行；[persample.py](ecarsi/persample.py)，第 252–254、349–364、490–496 行；[ledger.py](ecarsi/ledger.py)，第 85–103 行；[OSP 完成规则](../osp/docs/input-output.md)，Reruns and completion。
+证据：[layout.py](../../ecarsi/layout.py)，第 52–58、179–186 行；[persample.py](../../ecarsi/persample.py)，第 252–254、349–364、490–496 行；[ledger.py](../../ecarsi/ledger.py)，第 85–103 行；[OSP 完成规则](../../../osp/docs/input-output.md)，Reruns and completion。
 
 ### S3 · P1：严格输入检查后的失败处理与配置透传尚未适配
 
@@ -131,7 +131,7 @@ organize 仅保存可选 `identify_columns_result` 路径；profile 没有读取
 
 “全被 QC 删除”和“保留细胞但无法聚类”要区分。当前阶段仍按 unit 未完成处理；不要为继续进入冻结中的 MSP 临时制造假 clustered H5AD 或静默排除样本。零幸存样本如何进入后续流程，留待 MSP 完成后联合定约。
 
-证据：[OSP 输入输出约束](../osp/docs/input-output.md)；[OSP cluster.py](../osp/osp/cluster.py)，第 336–440、766–827 行；[OSP CLI](../osp/osp/__main__.py)，第 21–44、65–89 行；[persample.py](ecarsi/persample.py)，第 171–203、354–364 行。
+证据：[OSP 输入输出约束](../../../osp/docs/input-output.md)；[OSP cluster.py](../../../osp/osp/cluster.py)，第 336–440、766–827 行；[OSP CLI](../../../osp/osp/__main__.py)，第 21–44、65–89 行；[persample.py](../../ecarsi/persample.py)，第 171–203、354–364 行。
 
 ### R1 · P1：外层续跑缺少输入、配置、版本及完整组织结果的身份校验
 
@@ -141,7 +141,7 @@ persample 只校验 harness/model，重用旧分组和计数，不校验 H5AD、
 
 实施：organize 完整完成记录必须包含所有计划单元及验证结果；样本 manifest 明确 schema 和输入/配置身份。对大 H5AD 采用首次交接时的内容指纹及可复用清单，避免每个子进程重复哈希全文件。旧 manifest 可读、可展示，但不能凭空补造已验证身份；升级默认使用新输出根目录。
 
-证据：[__main__.py](ecarsi/__main__.py)，第 61–69 行；[layout.py](ecarsi/layout.py)，第 63–85 行；[execute.py](ecarsi/execute.py)，第 151–185 行；[persample.py](ecarsi/persample.py)，第 281–300、425–466 行。
+证据：[__main__.py](../../ecarsi/__main__.py)，第 61–69 行；[layout.py](../../ecarsi/layout.py)，第 63–85 行；[execute.py](../../ecarsi/execute.py)，第 151–185 行；[persample.py](../../ecarsi/persample.py)，第 281–300、425–466 行。
 
 ### I1 · P1/P2：配套版本声明和公共基础设施边界需要补齐
 
@@ -150,7 +150,7 @@ persample 只校验 harness/model，重用旧分组和计数，不校验 H5AD、
 - **P2，上游协调项**：eca-pp 仍保留自己的 `harness.py` 和三份 `_harness_*`，尚未迁入共享 bridge。它有较短墙钟预算、typed errors 和确定性降级策略，不能机械替换导入后套用 RSI 默认预算。该迁移由 eca-pp / bridge 独立推进，不应成为本次文件对接的阻塞条件。
 - **P2，展示与审计**：合并时 `ad.concat` 没有保留 `uns['eca_pp_standardize']`，已在小型样例确认；外层应有独立的逐来源快照，不依赖合并后的 uns 保留单一上游对象。上游 reasons/warnings 及 OSP 的退化标志应汇总到本项目报告；现有 `review.collect()` 只汇总后续 rounds。
 
-证据：[pyproject.toml](pyproject.toml)、[现有跨仓库测试](tests/test_harness_sync.py)、[eca-pp harness](../eca-pp/src/eca_pp/harness.py)、[bridge 责任边界](../agent-harness-bridge/README.md)、[review.py](ecarsi/review.py)，第 218–225 行。
+证据：[pyproject.toml](../../pyproject.toml)、[现有跨仓库测试](../../tests/test_harness_sync.py)、[eca-pp harness](../../../eca-pp/src/eca_pp/harness.py)、[bridge 责任边界](../../../agent-harness-bridge/README.md)、[review.py](../../ecarsi/review.py)，第 218–225 行。
 
 ## 4. 建议实施顺序及验收
 

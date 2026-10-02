@@ -9,7 +9,7 @@ eca-rsi organize|persample|loop|serve ...                          # 分步,等�
 ```
 
 `run.sh` + `steps/*.md` 是封存的"六步 prompt 循环"(agent 自己写分析代码),完整封存在
-分支 **`primitive`**(原 main;树里的 run.sh / steps 仍在,但不再维护)。下面"封存"几节是它的记录,
+分支 **`primitive`**(原 main;main 上只在 `docs/history/primitive/` 留一份 run.sh / steps 作参考,不再维护)。下面"封存"几节是它的记录,
 历史任务书不能当作主线的行为保证。当前实现的计算、提交检查、细胞守恒审计和发布判据
 以 `ecarsi/` 及配套内核源码为准；主线没有照搬旧 prompt 的所有删除预算和治理条款。
 
@@ -265,10 +265,10 @@ ecarsi/observatory.py   控制面监视器（2026-09-18 起并入 Periscope：`e
   再失败才停。**续跑天然支持**:重跑同一命令,已完成步骤自动跳过。
 - `steps/*.md` — 六份任务书,每步现读(改动即刻生效于下一步)。分析代码由
   agent 自己写、自己跑,连同输出存进本轮目录 —— 代码即审计痕迹。
-- `docs -> ../eca-cycle/docs` — 方法文档(CONSTITUTION / RULES_annotation /
+- `docs -> ../eca-cycle/docs`(只在 primitive 分支;eca-cycle 仓库本机和 GitHub 都已不在,main 上 2026-10-02 删了这个失效链接,`docs/` 现在是真目录,放 `docs/history/`)— 方法文档(CONSTITUTION / RULES_annotation /
   RULES_data_cleaning),相对 symlink 引用不复制;任务书让 agent 按需读
   具体条款,不全文注入。
-- `attic-v01/` — 上一版(skills + bin/eca-check + schema)的封存,勿用。
+- `attic-v01/` — 上一版(skills + bin/eca-check + schema)的封存,勿用;从未进 git,2026-10-02 起在 Oak `eca-rsi-archive/attic-v01/`。
 - 上游兼容:输入旁若有 eca-pp/ecasteps 产物(`standardized.h5ad` +
   `result.json`、`batch.tsv`),explore 任务书会让 agent 读取并采信
   (物种/counts/批次列/先验标签),探查力气花在上游管不了的跨文件关系上。
