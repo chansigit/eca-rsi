@@ -31,11 +31,11 @@ class LocalRestoreError(RuntimeError):
 
 @contextmanager
 def sdk_restore_compat(folder):
-    """SDK 0.22 can serialize Chat text without annotations, then reject its own state.
-
-    Keep this boundary shim while pinned 0.22 sessions exist. It preserves saved
-    records and avoids changing their pinned agent adapter during a live run.
-    Each Bridge executor owns one model turn in its own process.
+    """Saved text output without `annotations` (Ark/Doubao never sends them; SDK 0.22 serializes it so) is
+    rejected by RunState.from_json, which validates every saved message strictly since 0.22.1. The repair
+    adds the empty list the field means, for every SDK version: until 2026-10-01 it ran only on 0.22.0, so
+    the 0.22.3 upgrade failed every continued session. It preserves saved records and avoids changing their
+    pinned agent adapter during a live run. Each Bridge executor owns one model turn in its own process.
     """
     from agents import RunState
     import agents
@@ -57,8 +57,7 @@ def sdk_restore_compat(folder):
             elif isinstance(value, list):
                 for child in value:
                     visit(child)
-        if agents.__version__ == "0.22.0":
-            visit(state)
+        visit(state)
         try:
             result = await original(agent, state, **kwargs)
         except Exception as exc:
