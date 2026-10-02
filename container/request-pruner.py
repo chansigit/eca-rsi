@@ -2,8 +2,8 @@
 """Delete the pool requests of finished dataset runs (inode plan layer 3, approved 2026-09-24).
 
 A run is finished when its DatasetWorkflow is COMPLETED, or FAILED/TERMINATED while a later run of
-the same dataset is COMPLETED (a failed run keeps its requests until it is superseded, as it keeps
-its row on Periscope). Its requests are the lines of pool/by-workflow/<workflow id>.txt (written by
+the same dataset is COMPLETED and it ended FAILED_KEEP_SECONDS ago (a failed run keeps its requests,
+and so stays resumable, until it is superseded and a week old). Its requests are the lines of pool/by-workflow/<workflow id>.txt (written by
 warm_pool.state.submit) for the dataset workflow, its unit workflows and their stage workflows, found
 through Temporal's ParentWorkflowId. The deletion itself is a pool task (`warm_pool prune-list`) on a
 worker node; this process only decides and submits. Requests journaled before 2026-09-24 are not
@@ -26,19 +26,22 @@ from ecarsi.control.temporal import endpoint
 from ecarsi.warm_pool.state import digest, read, reference, save, status, submit
 
 FINISHED = {"COMPLETED", "FAILED", "TERMINATED"}
+FAILED_KEEP_SECONDS = 7 * 86400
 
 
 def log(message):
     print(time.strftime("%F %T"), message, flush=True)
 
 
-def prunable_runs(fleet):
+def prunable_runs(fleet, now=None):
     """dataset workflow id -> dataset name, for runs whose requests may go."""
+    now = time.time() if now is None else now
     datasets = {wid: w for wid, w in fleet.get("workflows", {}).items() if w.get("kind") == "DatasetWorkflow"}
     completed = {w.get("dataset_id") for w in datasets.values() if w.get("status") == "COMPLETED"}
     return {wid: w.get("dataset_id") or wid for wid, w in datasets.items()
             if w.get("status") == "COMPLETED"
-            or w.get("status") in FINISHED and w.get("dataset_id") in completed}
+            or w.get("status") in FINISHED and w.get("dataset_id") in completed
+            and (w.get("closed") or now) + FAILED_KEEP_SECONDS < now}
 
 
 async def workflow_ids(client, dataset_wid):
