@@ -285,55 +285,6 @@ def settings_timeout(attempt):
     return read(attempt["plan"]["path"])["timeout_seconds"]
 
 
-def credential_timeout(state):
-    """Recognize older credential-load timeouts from their accepted worker receipt."""
-    from ..warm_pool.state import verified
-    attempt = state.get('attempts', [])[-1:]
-    if not attempt:
-        return False
-    current = status(state['pool_root'], attempt[0]['pool_request_id'])
-    if current['state'] != 'succeeded':
-        return False
-    outputs = [o for o in current['receipt']['outputs'] if Path(o['path']).name == 'result.json']
-    if len(outputs) != 1:
-        return False
-    response = verified({k: outputs[0][k] for k in ('path', 'sha256')})
-    return (response.get('outcome') == 'local_error' and response.get('error') == 'TimeoutExpired'
-            and response.get('response') is None)
-
-
-def invalid_dispatch_snapshot(state):
-    """Recognize a historical unused snapshot that failed before any API call."""
-    from ..warm_pool.state import verified
-    from .session import validate_turn
-    attempt = state.get('attempts', [])[-1:]
-    if not attempt:
-        return False
-    current = status(state['pool_root'], attempt[0]['pool_request_id'])
-    if current['state'] != 'succeeded':
-        return False
-    output = next((o for o in current['receipt']['outputs'] if Path(o['path']).name == 'result.json'), None)
-    if output is None:
-        return False
-    response = verified({k: output[k] for k in ('path', 'sha256')})
-    if (response.get('outcome') != 'local_error' or response.get('response') is not None
-            or response.get('error') not in {'SyntaxError', 'IndentationError'}):
-        return False
-    plan = verified(attempt[0]['plan']); spec = plan['request']['spec']
-    session = verified(spec['session'])
-    if plan['adapter_sha256'] == session['adapter_sha256']:
-        return False
-    validate_turn(spec)  # The adapter that will actually execute must still validate.
-    path = Path(session['spec']['bridge_root']) / 'adapters' / (plan['adapter_sha256'] + '.py')
-    if file_digest(path) != plan['adapter_sha256']:
-        return False
-    try:
-        compile(path.read_bytes(), str(path), 'exec')
-    except SyntaxError:
-        return True
-    return False
-
-
 def completed_replacement(pool_root, request_id, bridge_root):
     """A fenced model-only attempt cannot block recovery after its reply succeeded."""
     from ..warm_pool.state import verified

@@ -428,48 +428,6 @@ def test_timeline_uses_worker_attempt_and_preserves_dependencies():
     assert tasks[1]['trace']['depends_on'] == ['model-worker']
 
 
-def test_invalid_unused_dispatch_snapshot_recovers_without_relaxing_session_pin(tmp_path, monkeypatch):
-    import pytest
-    from tests.test_agent_session import setup, completed_tool
-    import hashlib
-    spec, ref = setup(tmp_path)
-    root = Path(spec['bridge_root'])
-    save(root/'config.json', dict(read(root/'config.json'), pool_root=spec['pool_root']))
-    spec = dict(spec, session_id='snapshot-retry', output_root=str(tmp_path/'snapshot-retry'))
-    ref = session.create_session(spec)
-    turn = session.submit_turn(ref, 0)
-    bad = b'if True:\ninvalid indentation\n'
-    sha = hashlib.sha256(bad).hexdigest()
-    snapshot = root/'adapters'/(sha+'.py');snapshot.write_bytes(bad)
-    with monkeypatch.context() as m:
-        m.setattr(session, 'archive_adapter', lambda *a: reference(snapshot))
-        m.setattr(dispatch, 'enqueue', lambda *a: None)
-        bridge.serve(root, once=True)
-    state = bridge.status(root, turn); attempt = state['attempts'][0]
-    plan_path = Path(attempt['plan']['path'])
-    # Recreate the historical plan, before explicit portable upgrades existed.
-    historical = read(plan_path); historical.pop('portable_adapter', None)
-    save(plan_path, historical)
-    state['attempts'][0]['plan'] = reference(plan_path)
-    save(root/'requests'/turn/'state.json', state)
-    dispatch.enqueue(root/'requests'/turn, read(root/'config.json'), state['attempts'][0])
-    completed_tool(spec, dict(request_id=attempt['pool_request_id']),
-                   dict(outcome='local_error', error='IndentationError', response=None))
-    assert dispatch.invalid_dispatch_snapshot(state)
-    bridge.serve(root, once=True)
-    assert bridge.retry_turn(root, turn, reason='Validated session adapter; unused snapshot was invalid')['state'] == 'queued'
-    async def good(*args, **kwargs):
-        return dict(kind='final', final_output='complete', calls=[])
-    monkeypatch.setattr(session, 'run_turn', good)
-    monkeypatch.setattr(dispatch, 'load_worker_key', lambda *a: None)
-    monkeypatch.chdir(tmp_path);dispatch.execute(plan_path)
-    assert read(tmp_path/'result.json')['outcome'] == 'success'
-    saved = read(ref['path']);saved['adapter_sha256'] = sha
-    save(ref['path'], saved)
-    with pytest.raises(ValueError, match='Artifact changed'):
-        dispatch.invalid_dispatch_snapshot(state)
-
-
 def test_a_turn_folder_recreated_under_an_archived_name_is_served_again(tmp_path):
     """Eye 2026-09-17: recovery archived turn-0, the resume re-created it, and a name-keyed
     settled cache in the long-running bridge hid it for 14 hours."""

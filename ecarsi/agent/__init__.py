@@ -164,7 +164,7 @@ def status(root, request_id):
 def retry_turn(root, request_id, *, reason):
     """Explicit bounded recovery of a tool-free model turn, retaining failed attempts."""
     from ..warm_pool.state import immutable, verified, reference
-    from .dispatch import policy, credential_timeout, invalid_dispatch_snapshot
+    from .dispatch import policy
     from ..warm_pool.state import status as pool_status
     if not isinstance(reason, str) or not reason.strip():
         raise ValueError('A model recovery reason is required')
@@ -176,8 +176,7 @@ def retry_turn(root, request_id, *, reason):
         if (spec['operation_id'] != 'agent.turn' or verified(spec['session']).get('protocol', 1) < 2
                 or not result or result.get('state') != 'failed'
                 or (result.get('reason') not in {'timeout', 'provider_error', 'incomplete_submission',
-                                               'worker_failed', 'worker_lost', 'worker_setup_timeout'}
-                    and not (result.get('reason') == 'local_error' and (credential_timeout(state) or invalid_dispatch_snapshot(state))))):
+                                               'worker_failed', 'worker_lost', 'worker_setup_timeout'})):
             raise ValueError('Only failed, tool-free transient model requests can be retried')
         if state.get('retry_of') == digest(result):
             return status(root, request_id)
