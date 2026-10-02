@@ -15,9 +15,9 @@ from .persample import check_bundle, sealed
 from ..warm_pool.state import digest, read, save
 
 
-def data_from(bundle, name='integrated.h5ad'):
+def data_from(bundle, name='integrated.h5ad', backed=None):
     import anndata as an
-    return an.read_h5ad(artifact(bundle, name))
+    return an.read_h5ad(artifact(bundle, name), backed=backed)
 
 
 def accepted_plan(prepared, decision):
@@ -59,7 +59,9 @@ def subset(prepared, decision, index, destination):
     if not line['zoom']:
         raise ValueError('The plan did not authorize this lineage computation')
     source = verified(prepared)
-    data = data_from(verified(source['input']), 'annotated.h5ad')
+    # backed: one lineage's rows of X, not the whole matrix once per lineage (subset_for loads the selection).
+    # ponytail: layers and obsp still load whole in backed mode; anndata's read_lazy would avoid that but needs xarray
+    data = data_from(verified(source['input']), 'annotated.h5ad', backed='r')
     sub = subset_for(data, line['coarse_labels'], 'msp_ann_coarse', 'msp_ann_fine')
     if len(sub) != line['n_cells']:
         raise ValueError('Lineage membership changed')
