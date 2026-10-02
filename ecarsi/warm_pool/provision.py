@@ -84,7 +84,13 @@ def add_worker(root, host=None, *, host_python=None, job_id=None, cpu_ids=None, 
             command += ["--gpu" if gpu else "--no-gpu"]
         for path in binds or []:
             command += ["--bind", path]
-        result = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host, shlex.join(command)])
+        try:
+            # -n and no stdin: a remote worker that keeps the channel open must not hang the caller
+            # (2026-10-02, switch-images.sh waited until killed with all workers already online).
+            result = subprocess.run(["ssh", "-n", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host, shlex.join(command)],
+                                    stdin=subprocess.DEVNULL, timeout=wait_seconds + 60)
+        except subprocess.TimeoutExpired:
+            raise SystemExit(f"ssh {host} did not return within {wait_seconds + 60} s; the worker may be online: check the worker list")
         if result.returncode:
             # The remote command printed its own error. A local traceback on top of it is what the
             # keeper's three-line tail kept, and it hid five "worker is still starting" waits

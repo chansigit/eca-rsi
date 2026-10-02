@@ -102,16 +102,24 @@ def test_remote_command_preserves_paths_and_rejects_shell_hostname(tmp_path, mon
     tmp_path.chmod(0o700)
     save(tmp_path / "config.json", dict(runtime={"command": ["python"]}))
     calls = []
-    def run(command, **_):
+    def run(command, **kwargs):
         calls.append(command)
+        assert kwargs["stdin"] == provision.subprocess.DEVNULL and kwargs["timeout"] == 180
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(provision.subprocess, "run", run)
     provision.add_worker(tmp_path, "node1", host_python="/shared/a b/python", job_id="123", gpu=False)
+    assert calls[0][:2] == ["ssh", "-n"]
     command = shlex.split(calls[0][-1])
     assert "/shared/a b/python" in command and "--no-gpu" in command and command[command.index("--job-id") + 1] == "123"
     with pytest.raises(ValueError, match="hostname"):
         provision.add_worker(tmp_path, "node1; echo invalid")
     assert len(calls) == 1
+
+    def hang(command, **kwargs):
+        raise provision.subprocess.TimeoutExpired(command, kwargs["timeout"])
+    monkeypatch.setattr(provision.subprocess, "run", hang)
+    with pytest.raises(SystemExit, match="did not return"):
+        provision.add_worker(tmp_path, "node1")
 
 
 def test_timed_out_startup_is_reused_and_cannot_change_budget(tmp_path, monkeypatch):
