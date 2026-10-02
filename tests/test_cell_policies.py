@@ -518,3 +518,24 @@ def test_review_flags_a_rule_that_matched_nothing(tmp_path):
     )
     assert item.label == "plate in ['P9']"
     assert "matched no cell" in review.to_markdown([item], "unit", 0)
+
+
+def test_where_rule_matches_numbers_by_value_and_text_literally():
+    obs = pd.DataFrame(
+        {
+            "n": [3.0, None, 4.5],  # an int column read back from h5ad once it holds an NA
+            "cat": pd.Categorical([3.0, None, 4.0]),
+            "flag": [True, False, True],
+            "plate": ["03", "3", "P1"],
+        },
+        index=list("abc"),
+    )
+
+    def hits(col, value):
+        return P.rule_mask(obs, {"where": {col: [value]}, "reason": "r", "rationale": "x"}).tolist()
+
+    for value in (3, "3", 3.0, "3.0"):
+        assert hits("n", value) == [True, False, False] and hits("cat", value) == [True, False, False]
+    assert hits("n", "4.5") == [False, False, True]
+    assert hits("flag", "true") == hits("flag", True) == [True, False, True]
+    assert hits("plate", 3) == [False, True, False]  # text stays literal: "03" is not 3

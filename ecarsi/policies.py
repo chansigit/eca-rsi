@@ -103,12 +103,35 @@ def check_rule(rule, columns) -> None:
         raise ValueError(f"rule {name}: unknown obs column(s) {unknown}")
 
 
+def value_key(v) -> str:
+    """How a `where` value meets a numeric or boolean obs column: by value. A column read back
+    from h5ad turns 3 into 3.0 once it holds an NA, so 3, "3", 3.0 and "3.0" must agree; true,
+    True and "True" too. Text columns stay literal ("03" is not 3)."""
+    s = str(v).strip()
+    if s.lower() in ("true", "false"):
+        return s.lower()
+    try:
+        return str(int(s))
+    except ValueError:
+        pass
+    try:
+        f = float(s)
+    except ValueError:
+        return s
+    return str(int(f)) if f.is_integer() else repr(f)
+
+
 def rule_mask(obs: pd.DataFrame, rule: dict) -> pd.Series:
     check_rule(rule, obs.columns)
     if "where" in rule:
         m = pd.Series(True, index=obs.index)
         for col, values in rule["where"].items():
-            hit = obs[col].astype("string").str.strip().isin([str(v) for v in values])
+            column = obs[col]
+            kind = column.cat.categories if isinstance(column.dtype, pd.CategoricalDtype) else column
+            if pd.api.types.is_numeric_dtype(kind) or pd.api.types.is_bool_dtype(kind):
+                hit = column.map(value_key, na_action="ignore").isin({value_key(v) for v in values})
+            else:
+                hit = column.astype("string").str.strip().isin([str(v) for v in values])
             m &= hit.fillna(False).astype(bool)
         return m
     return pd.concat([normalize(obs[c]).isna() for c in rule["blank"]], axis=1).all(
