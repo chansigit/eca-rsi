@@ -48,3 +48,17 @@ def test_compact_tables_keeps_markers_graph_and_unknown_blocks():
     assert "0: 1 0.93" in out and "\n2: none" in out and "qc_summary.csv\nmetric,value" in out
     assert len(out) < len(text) / 2
     assert compact_tables(text[: len(text) // 3]).startswith("de_top_genes_leiden_r1.0.csv")  # a page cut mid-row
+
+
+def test_copy_light_replaces_a_same_size_stale_copy(tmp_path):
+    from ecarsi.warm_pool.state import file_digest
+
+    source, folder = tmp_path / "pool" / "report.md", tmp_path / "round"
+    source.parent.mkdir()
+    folder.mkdir()
+    (folder / "report.md").write_text("old session")
+    source.write_text("new session")  # same length as the stale copy
+    contract.copy_light({"report.md": {"path": str(source), "sha256": file_digest(source)},
+                         "x.h5ad": {"path": str(source), "sha256": "-"}}, folder)
+    assert (folder / "report.md").read_text() == "new session"
+    assert not (folder / "x.h5ad").exists()

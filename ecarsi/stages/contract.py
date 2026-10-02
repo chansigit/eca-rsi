@@ -19,6 +19,7 @@ import shutil
 from pathlib import Path
 
 from . import PROMPTS
+from ..warm_pool.state import file_digest
 
 # Matrices, and the machine-side inputs and caches a stage feeds its agent: a lineage's
 # deg_input/*.npy alone is 759 MiB, against ~50 MiB of tables and figures worth reading.
@@ -35,7 +36,8 @@ def copy_light(files, folder):
             continue
         target, source = folder / name, Path(ref["path"])
         try:
-            if target.is_file() and target.stat().st_size == source.stat().st_size:
+            # by content: a restarted session's report can have the old one's size
+            if target.is_file() and file_digest(target) == ref.get("sha256"):
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
             partial = target.with_name(target.name + ".part")
