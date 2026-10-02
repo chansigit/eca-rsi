@@ -71,10 +71,9 @@ Inside a dataset workflow, use `resume-dataset`. For standalone use, run:
 ```bash
 python -m ecarsi.control --service-root <control> --task-queue <queue> start-persample spec.json
 python -m ecarsi.control --service-root <control> --task-queue <queue> status-persample RUN_ID
-python -m ecarsi.control --service-root <control> --task-queue <queue> resume-persample RUN_ID
 ```
 
-`resume-persample` verifies the saved spec and input identity. It refuses unresolved failed or unknown requests. It follows the original request ids. It reuses completed samples and saved turns. It keeps a prior incomplete publication by content hash. While siblings continue, the parent checks failed samples for repaired receipts every 30 seconds. The parent replays each repaired sample once, within the in-flight limit.
+A stage resumes through its dataset with `resume-dataset`. The resume refuses unresolved failed or unknown requests. It follows the original request ids. It reuses completed samples and saved turns. It keeps a prior incomplete publication by content hash. While siblings continue, the parent checks failed samples for repaired receipts every 5 minutes. The parent replays each repaired sample once, within the in-flight limit.
 ## Adjust admission during a run
 
 ```bash

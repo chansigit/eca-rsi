@@ -525,7 +525,7 @@ async def main():
     p.add_argument('stage', choices=['cross-sample', 'zoom-in'])
     p.add_argument('run_id')
     p.add_argument('limit', type=int)
-    for name in ("status", "status-agent", "status-persample", "resume-persample", "status-crosssample", "resume-crosssample", "status-zoomin", "resume-zoomin", "status-dataset"):
+    for name in ("status", "status-agent", "status-persample", "status-crosssample", "status-zoomin", "status-dataset"):
         p = commands.add_parser(name)
         p.add_argument("run_id")
     args = parser.parse_args()
@@ -593,32 +593,6 @@ async def main():
         from ..warm_pool.state import identifier
         handle = await resume_dataset(client, 'dataset/' + identifier(args.run_id), args.task_queue, args.reason)
         print(json.dumps(dict(workflow_id=handle.id, run_id=handle.result_run_id)))
-    elif args.command in {"resume-persample", "resume-crosssample", "resume-zoomin"}:
-        from .persample import PersampleWorkflow
-        from .crosssample import CrosssampleWorkflow
-        from ..warm_pool.state import verified
-        from ..warm_pool.state import identifier, read, status
-        from ..agent import status as bridge_status
-        from .zoomin import ZoominWorkflow
-        prefix, run = {"resume-persample": ("persample/", PersampleWorkflow.run),
-                       "resume-crosssample": ("cross-sample/", CrosssampleWorkflow.run),
-                       "resume-zoomin": ("zoom-in/", ZoominWorkflow.run)}[args.command]
-        identity = prefix + identifier(args.run_id)
-        previous = client.get_workflow_handle(identity)
-        from .dataset import UNFINISHED
-        if (await previous.describe()).status.name not in UNFINISHED:
-            raise ValueError("Resume requires a failed, terminated, cancelled or timed-out workflow")
-        history = await previous.fetch_history()
-        spec, = await client.data_converter.decode(history.events[0].workflow_execution_started_event_attributes.input.payloads)
-        if read(Path(spec["output_root"]) / "spec.json") != spec:
-            raise ValueError("Saved workflow specification changed")
-        verified(spec["input_manifest" if args.command == "resume-persample" else "input"])
-        from .dataset import request_states, superseded_sessions
-        request_states(spec["pool_root"], spec["bridge_root"], {identity}, superseded_sessions(spec["output_root"]))
-        handle = await client.start_workflow(run, spec, id=identity,
-            task_queue=args.task_queue or history.events[0].workflow_execution_started_event_attributes.task_queue.name,
-            id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY)
-        print(handle.id)
     else:
         from ..warm_pool.state import identifier
         from .persample import PersampleWorkflow

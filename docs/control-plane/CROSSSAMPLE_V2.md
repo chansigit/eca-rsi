@@ -57,16 +57,15 @@ Inside a dataset workflow, the stage starts by itself. Run the stage standalone:
 ```bash
 python -m ecarsi.control --service-root <control> --task-queue <queue> start-crosssample spec.json
 python -m ecarsi.control --service-root <control> --task-queue <queue> status-crosssample RUN_ID
-python -m ecarsi.control --service-root <control> --task-queue <queue> resume-crosssample RUN_ID
 ```
 
-Restart the coordinator to resume open histories. The system retries confirmed local interruptions automatically, up to three times. Other failures need a recorded repair before you run `resume-crosssample`. The system never resubmits unresolved external outcomes blindly. The system verifies and reuses completed agent submissions on resume.
+Restart the coordinator to resume open histories. The system retries confirmed local interruptions automatically, up to three times. Other failures need a recorded repair before you run `resume-dataset` for the dataset. The system never resubmits unresolved external outcomes blindly. The system verifies and reuses completed agent submissions on resume.
 
 For a confirmed failed computation, keep its history and retry through the pool:
 
 ```bash
 python -m ecarsi.warm_pool --root <pool> retry REQUEST_ID --reason "Verified repair"   # --use-current-runtime only after an intended runtime upgrade
-python -m ecarsi.control --service-root <control> --task-queue <queue> resume-crosssample RUN_ID
+python -m ecarsi.control --service-root <control> resume-dataset DATASET_RUN_ID --reason "Verified repair"
 ```
 
 The retry command refuses changed inputs, completed or cancelled tasks, and unknown outcomes. Changing a pinned program or a scientific input requires a fresh run. Do not modify programs while active sessions reference their hashes.

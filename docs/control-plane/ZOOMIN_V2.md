@@ -30,7 +30,6 @@ The stage starts automatically inside a dataset workflow. For standalone use, ru
 ```bash
 python -m ecarsi.control --service-root <control> --task-queue <queue> start-zoomin spec.json
 python -m ecarsi.control --service-root <control> --task-queue <queue> status-zoomin RUN_ID
-python -m ecarsi.control --service-root <control> --task-queue <queue> resume-zoomin RUN_ID
 python -m ecarsi.control --service-root <control> set-deg-limit zoom-in RUN_ID 16
 ```
 
