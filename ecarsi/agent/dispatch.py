@@ -596,7 +596,7 @@ async def perform(plan, folder, *, setup=None):
     started = time.time()
     worker = dict(host=socket.gethostname().split(".")[0], pid=os.getpid())
     save(folder / "started.json", dict(started_at=started, worker=worker, model=plan["model"]))
-    outcome, response, error = "local_error", None, None
+    outcome, response, error, detail = "local_error", None, None, None
     try:
         spec = plan["request"]["spec"]
         turn, turn_options = run_turn, {}
@@ -628,7 +628,7 @@ async def perform(plan, folder, *, setup=None):
         except Exception as exc:
             # Model turns cannot execute tools. Failed turn outputs remain fenced
             # in this attempt, even if a remote model completes later.
-            error = type(exc).__name__
+            error, detail = type(exc).__name__, str(exc)[:2000]
             saved = read(folder / "turn-response.json")
             if saved is not None:
                 outcome, response = "success", saved
@@ -637,15 +637,15 @@ async def perform(plan, folder, *, setup=None):
     except subprocess.TimeoutExpired as exc:
         # Shell credential setup precedes the provider request. A transient
         # worker startup delay is retryable and must not poison model health.
-        outcome, error = 'worker_setup_timeout', type(exc).__name__
+        outcome, error, detail = 'worker_setup_timeout', type(exc).__name__, str(exc)[:2000]
     except Exception as exc:
-        error = type(exc).__name__
+        error, detail = type(exc).__name__, str(exc)[:2000]
     if (outcome == 'success' and spec['operation_id'] == 'agent.turn'
             and session['spec'].get('completion_tool') and response.get('kind') == 'final'):
         # This turn cannot execute tools. A free-text conclusion is not a
         # submitted scientific result; bounded model fallback can safely retry.
         outcome, error = 'incomplete_submission', 'Required completion tool was not called'
-    save(folder / "result.json", dict(outcome=outcome, response=response, error=error, worker=worker,
+    save(folder / "result.json", dict(outcome=outcome, response=response, error=error, error_detail=detail, worker=worker,
                                      elapsed_seconds=time.time()-started, model=plan["model"],
                                      provider_response=read(folder / 'provider-response.json')))
 

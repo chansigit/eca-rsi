@@ -73,7 +73,7 @@ async def run_one(marker, item):
         await perform(plan, turn_dir)
     except Exception as exc:  # noqa: BLE001 - the bridge reads result.json, never our stack
         if not (turn_dir / "result.json").exists():
-            save(turn_dir / "result.json", dict(outcome="local_error", response=None, error=type(exc).__name__,
+            save(turn_dir / "result.json", dict(outcome="local_error", response=None, error=type(exc).__name__, error_detail=str(exc)[:2000],
                                                  worker=dict(host=os.uname().nodename.split(".")[0], pid=os.getpid()),
                                                  elapsed_seconds=None, model=item.get("model"), provider_response=None))
         raise

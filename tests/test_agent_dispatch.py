@@ -164,6 +164,7 @@ def test_local_session_validation_does_not_poison_model_health(tmp_path, monkeyp
     dispatch.execute(plan)
     result = read(tmp_path/'result.json')
     assert result['outcome'] == 'local_error' and result['error'] == 'ValueError'
+    assert result['error_detail']  # the message, not only the class name (#22)
 
 
 def test_credential_timeout_retries_without_calling_or_penalizing_provider(tmp_path, monkeypatch):
