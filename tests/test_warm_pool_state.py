@@ -501,3 +501,35 @@ def test_memory_ceilings_come_from_the_table_and_the_pool_config(tmp_path):
     save(tmp_path / "config.json", {"runtime": {"command": ["/usr/bin/python3"]}, "ceilings": {"zoom-in.deg": 1280}})
     submit(tmp_path, deg)
     assert read(tmp_path / "requests/d/request.json")["spec"]["memory_mb"] == 1280
+
+
+def _immutable_writer(path, value, out):
+    from ecarsi.warm_pool.state import immutable
+    try:
+        immutable(path, value)
+        out.put(("ok", value))
+    except ValueError:
+        out.put(("conflict", value))
+
+
+def test_immutable_leaves_no_lock_and_one_writer_wins(tmp_path):
+    import multiprocessing
+    from ecarsi.warm_pool.state import immutable
+    record = tmp_path / "r.json"
+    immutable(record, {"v": 1})
+    immutable(record, {"v": 1})
+    with pytest.raises(ValueError):
+        immutable(record, {"v": 2})
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["r.json"]
+    # racing first writers: exactly one value is published, every other writer sees a conflict
+    context, raced = multiprocessing.get_context("spawn"), tmp_path / "raced.json"
+    out = context.Queue()
+    writers = [context.Process(target=_immutable_writer, args=(raced, {"v": i}, out)) for i in range(8)]
+    for w in writers:
+        w.start()
+    results = [out.get(timeout=60) for _ in writers]
+    for w in writers:
+        w.join()
+    winners = [v for state, v in results if state == "ok"]
+    assert len(winners) == 1 and read(raced) == winners[0]
+    assert not (tmp_path / "raced.json.lock").exists()

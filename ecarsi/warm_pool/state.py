@@ -364,13 +364,23 @@ def verified(ref):
 
 
 def immutable(path, value):
+    """Write a record once; a later call must carry the same content.
+
+    The lock only arbitrates the first write, so it is unlinked once the record is published
+    (it used to stay: ~40 % of a run's files were empty locks). Whoever still holds or waits
+    on the unlinked lock, and whoever creates a new one, reads the published record and only
+    compares. The lock stays if the write fails, so no record-less lock is ever removed."""
     path = Path(path)
-    with lock(path.with_suffix(path.suffix + ".lock")):
-        old = read(path)
-        if old is not None and digest(old) != digest(value):
-            raise ValueError("Conflicting durable content: " + str(path))
-        if old is None:
-            save(path, value)
+    old = read(path)  # published by atomic rename: complete or absent
+    if old is None:
+        guard = path.with_suffix(path.suffix + ".lock")
+        with lock(guard):
+            old = read(path)
+            if old is None:
+                save(path, value)
+            guard.unlink(missing_ok=True)
+    if old is not None and digest(old) != digest(value):
+        raise ValueError("Conflicting durable content: " + str(path))
     return reference(path)
 
 
