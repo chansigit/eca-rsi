@@ -114,6 +114,6 @@ Run the tests through `ops/runsci-dev.sh` to resolve imports. `tests/conftest.py
 ## History
 
 - Branch `primitive` holds the six-step prompt loop: Explore → Compute → Annotate → QC → Apply → Stop. In this loop, agents write their own analysis code. Directory [docs/history/primitive/](docs/history/primitive/) holds its `run.sh` and `steps/*.md`. The main line does not include its removal budgets and its `docs -> ../eca-cycle/docs` link.
-- `attic-v01` (schema + lint + skill, August 2026) was never in git. It is on Oak under `eca-rsi-archive/attic-v01/`.
+- `attic-v01` (schema + lint + skill, August 2026) was never in git. It is on Oak under `$OAK/eca-rsi/work/_batches/attic-v01/`, with the other archives listed in `$OAK/eca-rsi/INDEX.tsv`.
 - The project retired several rules. It no longer makes the main checkouts read-only during batches, because production now runs from images. Version 0.3.2 removed the Dask pool and `compute_policy`. The project retired batch admission before 0.3.0 (`eca-rsi batch`, node agents). It also retired the keeper autoscaler.
 - Dated records, acceptance reports, and the operational to-do live in [docs/history/](docs/history/) and in the deployment directory's `OPEN-ITEMS.md`.
