@@ -128,7 +128,13 @@ cd /tmp && APPTAINERENV_APPEND_PATH=$HOME/local/bin setsid nohup apptainer exec 
   > $SCRATCH/serve-8899.log 2>&1 < /dev/null &
 ```
 
-Add `--ngrok --domain <reserved domain>` for a public tunnel. `APPTAINERENV_APPEND_PATH` makes your `ngrok` binary visible inside the image.
+Add `--ngrok --domain <reserved domain>` for a public tunnel. `APPTAINERENV_APPEND_PATH` makes your `ngrok` binary visible inside the image. Add `--auth user:pass` before you expose it.
+
+Periscope serves the display zones it finds under the `display_roots` of `~/.config/ecarsi/periscope.json` (`--config` for another file), and the entries of `~/.config/ecarsi/registry.json`:
+
+```json
+{"display_roots": ["/oak/stanford/projects/eca/eca-rsi/display"]}
+```
 
 ### A.7 Add workers
 
@@ -292,6 +298,12 @@ cd /tmp
 apptainer exec --cleanenv --bind /scratch,/oak,/home,/lscratch --env PYTHONSAFEPATH=1 --env PYTHONPATH=/opt/eca-rsi:/opt/rsi-control \
   "$IMG" /usr/local/bin/python3 -m ecarsi.control --service-root $E/control/durable-control --task-queue ecarsi-durable-v2 start-dataset dataset.json
 # later: status-dataset RUN_ID, resume-dataset RUN_ID --reason "..."
+```
+
+`start-dataset` adds a `storage` key from `~/.config/ecarsi/storage.json` (`--storage` for another file) when the spec has none. With it, the run keeps its display zone up to date after every stage and archives its work tree when the dataset completes:
+
+```json
+{"display_root": "/oak/stanford/projects/eca/eca-rsi/display", "archive_root": "/oak/stanford/projects/eca/eca-rsi/work"}
 ```
 
 Follow progress on Periscope. A unit that stops on `loop_control.json` (`pause`, `stop_after_round`, `pause_after_stage`) ends as `PAUSED`. Clear the control. Then run `resume-dataset` on the unit.
