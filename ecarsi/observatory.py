@@ -144,10 +144,13 @@ async def temporal_view(service_root, now):
 
 
 def session_stats(bridge, pool, hours, now):
-    """Opt-in scan of recent request folders: turns per session and submission rejections."""
+    """Opt-in scan of recent request folders: turns per session and submission rejections. Paced like token_rows:
+    it shares the control node's Lustre client with the coordinators (#19)."""
     cutoff = now - hours * 3600
     turns, started = {}, set()
-    for entry in os.scandir(bridge / 'requests'):
+    for n, entry in enumerate(os.scandir(bridge / 'requests')):
+        if n % 20 == 0:
+            time.sleep(0.01)
         if '.turn-' not in entry.name or entry.stat().st_mtime < cutoff:
             continue
         session, number = entry.name.rsplit('.turn-', 1)
@@ -165,7 +168,9 @@ def session_stats(bridge, pool, hours, now):
         if session_file and (Path(session_file).parent / 'result.json').is_file():
             kind['finished'].append(turns[session])
     submissions = {}
-    for entry in os.scandir(pool / 'requests'):
+    for n, entry in enumerate(os.scandir(pool / 'requests')):
+        if n % 20 == 0:
+            time.sleep(0.01)
         if '.tool-' not in entry.name or entry.stat().st_mtime < cutoff:
             continue
         request = read(Path(entry.path) / 'request.json', {})

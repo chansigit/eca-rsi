@@ -57,7 +57,9 @@ def test_recovery_ignores_only_terminal_model_attempts_with_an_accepted_replacem
     root = Path(spec['bridge_root'])
     config = read(root / 'config.json')
     save(root / 'config.json', dict(config, pool_root=spec['pool_root']))
-    spec = dict(spec, session_id='recovery', output_root=str(tmp_path / 'recovery'),
+    from ecarsi.warm_pool.state import digest
+    # recovery finds a sample's session by annotation_spec's id
+    spec = dict(spec, session_id='osp-' + digest(['test', 'sample'])[:24], output_root=str(tmp_path / 'recovery'),
         trace=dict(workflow_id='persample/test', dataset_id=spec['dataset_id'],
                    unit_id='osp.annotate', sample_id='sample'))
     ref = session.create_session(spec)

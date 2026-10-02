@@ -54,25 +54,30 @@ def test_sample_size_selects_gpu_alternative_before_submission(tmp_path):
 
 def test_recovery_requires_resolved_receipts(tmp_path):
     from ecarsi.control.persample import sample_step
-    from ecarsi.warm_pool.state import submit
+    from ecarsi.warm_pool.state import digest, submit
     for name in ("pool", "bridge"):
         root = tmp_path / name
         root.mkdir(mode=0o700)
         (root / "requests").mkdir()
         save(root / "config.json", {"runtime": {}})
+        # Other runs' requests are never read (#19): this one would not even parse.
+        (root / "requests" / "other").mkdir()
+        (root / "requests" / "other" / "request.json").write_text("{")
     spec = dict(run_id="r", pool_root=str(tmp_path / "pool"), bridge_root=str(tmp_path / "bridge"))
+    assert not sample_step("recoverable", [spec, "s"])
     trace = dict(workflow_id="persample/r", dataset_id="D", unit_id="osp.compute", sample_id="s")
-    task = submit(spec["pool_root"], dict(request_id="c", operation_id="c", trace=trace,
+    compute = "r.compute-" + digest("s")[:20]
+    task = submit(spec["pool_root"], dict(request_id=compute, operation_id="c", trace=trace,
         args=["-c", "pass"], cpus=1, memory_mb=64, timeout_seconds=10, outputs=["x"]))
-    save(tmp_path / "pool/requests/c" / task["attempt_id"] / "receipt.json", {"state": "succeeded"})
-    turn = tmp_path / "bridge/requests/a"
+    save(tmp_path / "pool/requests" / compute / task["attempt_id"] / "receipt.json", {"state": "succeeded"})
+    turn = tmp_path / "bridge/requests" / ("osp-" + digest(["r", "s"])[:24] + "-r2.turn-0")
     turn.mkdir()
     save(turn / "request.json", {"submitted_at": 0, "spec": {"trace": trace}})
     save(turn / "state.json", {"state": "unknown_external_result"})
     assert not sample_step("recoverable", [spec, "s"])
     save(turn / "result.json", {"state": "reply_saved"})
     assert sample_step("recoverable", [spec, "s"])
-    save(tmp_path / "pool/requests/c" / task["attempt_id"] / "receipt.json", {"state": "failed"})
+    save(tmp_path / "pool/requests" / compute / task["attempt_id"] / "receipt.json", {"state": "failed"})
     assert not sample_step("recoverable", [spec, "s"])
 
 

@@ -122,23 +122,27 @@ def sample_step(action, args):
             raise ValueError("Annotation validation worker is no longer accepted")
         return {"path": result["output"]["path"], "parent": result["pool_request_id"]}
     if action == "recoverable":
+        # Only this sample's requests, found by name: reading every request.json of both trees took minutes on a
+        # large pool (#19). Session ids are annotation_spec's; its -r2 restart and tool calls share the prefix.
         from ..agent import status as bridge_status
+        from ..agent.dispatch import completed_replacement
         spec, sample = args
-        found = False
-        for root, inspect, allowed in (
-            (spec["pool_root"], status, {"succeeded"}),
-            (spec["bridge_root"], bridge_status, {"reply_saved", "queued", "running"}),
-        ):
-            for path in (Path(root) / "requests").glob("*/request.json"):
-                trace = read(path)["spec"].get("trace", {})
-                if trace.get("workflow_id") == "persample/" + spec["run_id"] and trace.get("sample_id") == sample:
-                    found = True
-                    if inspect(root, path.parent.name)["state"] not in allowed:
-                        from ..agent.dispatch import completed_replacement
-                        if root != spec['pool_root'] or not completed_replacement(
-                                root, path.parent.name, spec['bridge_root']):
-                            return False
-        return found
+        session, key = "osp-" + digest([spec["run_id"], sample])[:24], digest(sample)[:20]
+        named = lambda root, names: [n for n in names if (Path(root) / "requests" / n / "request.json").is_file()]
+        listed = lambda root: named(root, (p.name for p in (Path(root) / "requests").glob(session + "*")))
+        pool = named(spec["pool_root"], [spec["run_id"] + ".compute-" + key, spec["run_id"] + ".finalize-" + key])
+        pool += listed(spec["pool_root"])
+        turns = listed(spec["bridge_root"])
+        for name in turns:
+            turn = bridge_status(spec["bridge_root"], name)
+            if turn["state"] not in {"reply_saved", "queued", "running"}:
+                return False
+            pool += named(spec["pool_root"], [a["pool_request_id"] for a in turn.get("attempts", []) if "pool_request_id" in a])
+        for name in pool:
+            if status(spec["pool_root"], name)["state"] != "succeeded" and not completed_replacement(
+                    spec["pool_root"], name, spec["bridge_root"]):
+                return False
+        return bool(pool or turns)
     if action == "skipped":
         spec, computed, error = args
         bundle = read(computed)
@@ -378,7 +382,7 @@ class PersampleWorkflow:
                 await workflow.wait_condition(
                     lambda: self._in_flight_limit != limit or len(self._computed) != computed_count
                     or any(handle.done() for handle in pending),
-                    timeout=30 if recover and any(f["sample"] not in replayed for f in failed) else None)
+                    timeout=300 if recover and any(f["sample"] not in replayed for f in failed) else None)
             except asyncio.TimeoutError:
                 pass
             done = {handle for handle in pending if handle.done()}
