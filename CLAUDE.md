@@ -9,7 +9,7 @@ ECA-RSI is the `ecarsi/` package. Deterministic kernels (osp / msp / zmip) do th
 - **Production code is the snapshot inside the two images** in `$GROUP_HOME/chensj16/eca/images/`. Editing a checkout changes nothing in production. New code reaches production only through a rebuilt image (`ops/build-images-update.sh`, `ops/switch-images.sh` in the deployment directory).
 - **Change code like this:** Edit in `worktrees/eca-rsi-dev`. Run the tests inside the images. Fast-forward `main`. Rebuild and switch images when no execution is running.
 - **Test like this:** Run `bash $CONTROL/ops/runsci-dev.sh -m pytest -q tests`. This command runs the whole suite inside the compute image (~4 min). The script `runpy-dev.sh` uses the control image and cannot import the kernels. For pure document changes, run only `git diff --check` and a link check.
-- **Runtime state is in `$GROUP_SCRATCH/chensj16/eca/{control,pool,bridge,runs}`.** Set directories to mode 0700. Do not walk, `du`, or mass-delete there. The coordinators' Lustre client stalls under unpaced scans of the request folders.
+- **Runtime state is in `$GROUP_SCRATCH/chensj16/eca/{control,pool,bridge,runs}`.** Set directories to mode 0700. Do not scan `pool/requests` or `bridge/requests` unpaced, and do not `du` or mass-delete them: the coordinators' Lustre client stalls under unpaced scans of the request folders. A walk of one run directory is fine.
 - The working language with the owner is Chinese. Do not write Japanese.
 
 ## Package map
