@@ -114,6 +114,22 @@ def test_a_blocked_pool_request_shows_why_it_waits(tmp_path, monkeypatch):
     assert module.stage_with_waits(owner) == 'DEG comparisons'
 
 
+def test_a_time_limit_is_doubled_once(tmp_path):
+    # #18: doubled twice, a DEG batch asked for a whole node's time and waited as infeasible.
+    from ecarsi.control.coordinator import check_pool
+    from ecarsi.warm_pool.state import submit
+    tmp_path.chmod(0o700);(tmp_path/'requests').mkdir();save(tmp_path/'config.json',{'runtime':{}})
+    submit(tmp_path,dict(request_id='r',operation_id='deg',args=['-c','pass'],cpus=1,memory_mb=64,timeout_seconds=30,outputs=['result.json']))
+    folder=tmp_path/'requests/r'
+    for expected in ('waiting','failed'):
+        request=read(folder/'request.json')
+        save(folder/request['attempt_id']/'receipt.json',dict(state='failed',retryable=False,finished_at=1,
+            error='TimeoutError: execution time limit reached',attempt_id=request['attempt_id'],
+            request_digest=request['digest'],runtime_digest=request['runtime_digest']))
+        assert check_pool(str(tmp_path),'r','result.json')['state']==expected
+    assert read(folder/'request.json')['spec']['timeout_seconds']==60
+
+
 def test_uncertain_observation_waits_for_same_attempt_receipt(tmp_path):
     from ecarsi.control.coordinator import check_pool, check_bridge
     from ecarsi.warm_pool.state import submit

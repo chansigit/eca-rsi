@@ -124,7 +124,9 @@ def check_pool_once(root, request_id, output):
             elif error.startswith("MemoryError") and retryable:
                 retry(root, request_id, memory_mb=2 * spec["memory_mb"],
                       reason="Automatic retry at twice the budget after the RSS watchdog")
-            elif error.startswith("TimeoutError"):
+            elif error.startswith("TimeoutError") and not (request.get("retry") or {}).get("timeout_seconds"):
+                # Once: doubled twice, a DEG batch (7200 s -> 28 800 s) needed a whole 8 h node and
+                # waited as infeasible (#18). A second timeout fails with its error.
                 retry(root, request_id, timeout_seconds=2 * spec["timeout_seconds"],
                       reason="Automatic retry at twice the time limit after the execution deadline")
             elif retryable:
