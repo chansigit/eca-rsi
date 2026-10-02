@@ -1,88 +1,116 @@
-# ecarsi 控制面路径架构（原分支 `gen2`）
+# ECA-RSI control-plane path: architecture
 
-第一代（`main`：`eca-rsi run` 单进程流水线，含 0.3.0 的 Slurm pool / batch 准入）原样保留，本分支不改它的模块位置。
-第二代把同一套内核包装成可持久化、可并行的批量系统；2026-09-14 到 09-17 之间它以平铺在 `ecarsi/` 顶层的
-二十几个 `agent_*` / `*_workflow` / `*_v2` 文件存在，2026-09-17 收进下面的子包。模块名以代码为准。
+ECA-RSI has two execution paths. Both paths use the same kernels (osp, msp, zmip) and the same round policy.
 
-## 分层
+| Path | What it is | Status |
+|---|---|---|
+| Local path | `eca-rsi run <dir> <root>`: one process, one dataset | This path is not maintained. The tree keeps this path for reference. |
+| Control-plane path | This path uses Temporal workflows, a HyperQueue warm pool, and a model-turn service. It processes many datasets at once. | This path is the only supported way to run. Formerly, it was the `gen2` branch. |
+
+This document describes the control-plane path. Module names follow the code.
+
+## Layers
 
 ```
-运维            container/control-plane.sh（模板；部署副本在运行目录）· worker-keeper.sh
-────────────────────────────────────────────────────────────────────────────────
-控制面          ecarsi.control       Temporal 工作流树：dataset → unit → persample / crosssample / zoomin → agent
-────────────────────────────────────────────────────────────────────────────────
-Agent 回合服务  ecarsi.agent         模型回合的持久收件箱：session 契约、dispatch、parallel 批读（原 agent_bridge；
-                                     叫 agent 是为了让 bridge 只指外部包 agent-harness-bridge）
-Warm Pool       ecarsi.warm_pool     有界计算请求：state（文件协议）、backend（HyperQueue）、worker、budget
-────────────────────────────────────────────────────────────────────────────────
-Stage 程序      ecarsi.stages        organize / persample / crosssample / zoomin / release：在科学镜像里跑，
-                                     包装内核并在 host 侧校验每个提案；contract 是共享的模型契约（v4），
-                                     evidence / execution 是它们在 Pool 上的执行计划（session 按 planner 名字调用）
-────────────────────────────────────────────────────────────────────────────────
-内核（独立仓库） osp · msp · zmip · standissect-lite        模型运行时：agent-harness-bridge（`harness_bridge`）
-────────────────────────────────────────────────────────────────────────────────
-观测            ecarsi.observatory（页面 + `status` 命令行）· ecarsi.serve（Periscope，第一代，只读）
+Operations        container/control-plane.sh (launcher, extracted from the control image)
+                  container/worker-node.sh (a Slurm job that is itself a pool worker)
+                  ops scripts in the deployment directory (image build, image switch, Periscope start)
+──────────────────────────────────────────────────────────────────────────────────────
+Control           ecarsi.control     Temporal workflow tree: dataset → unit → persample / crosssample / zoomin → agent
+──────────────────────────────────────────────────────────────────────────────────────
+Model turns       ecarsi.agent       durable inbox for model turns: session contract, dispatch, parallel reads,
+                                     resident runners (one process per catalog model)
+Warm pool         ecarsi.warm_pool   bounded compute requests: state (file protocol), backend (HyperQueue),
+                                     worker, allocation, provision, budget
+──────────────────────────────────────────────────────────────────────────────────────
+Stage programs    ecarsi.stages      organize / persample / crosssample / zoomin / release. They run in the
+                                     compute image, wrap the kernels and validate every model proposal on the host.
+                                     contract is the shared model contract. evidence / execution plan the tool work.
+──────────────────────────────────────────────────────────────────────────────────────
+Kernels           osp · msp · zmip · standissect-lite        Model runtime: agent-harness-bridge (`harness_bridge`)
+──────────────────────────────────────────────────────────────────────────────────────
+Observation       Periscope (`ecarsi.serve`), with the control-plane page at `/_control/`;
+                  `ecarsi.observatory` provides that page and the `status` / `tokens` reports
 ```
 
-依赖方向自上而下：control 调 agent 和 warm_pool，agent 调 warm_pool，stages 只依赖 warm_pool.state
-的文件原语和第一代的库函数（校验、写盘、发布），不反向依赖 control 或 agent；agent 需要 stage 的执行计划时，
-按 session 里登记的 `planner` 模块名 import，没有静态依赖。
+Dependencies point downward. `control` calls `agent` and `warm_pool`. `agent` calls `warm_pool`. `stages` depends only on the file primitives of `warm_pool.state` and on library functions of the package. `stages` never imports `control` or `agent`. When `agent` needs a stage execution plan, it imports the `planner` module named in the session.
 
-## 模块对照
+## Images
 
-| 包 | 模块 | 原名 | 职责 |
+Everything runs from two Apptainer images.
+
+| Image | File | Contents | Runs |
 |---|---|---|---|
-| `ecarsi.control` | `coordinator` | work_coordinator | 活动、AgentWorkflow、CLI（`worker` / `start-*` / `resume-*` / `status-*`）、POLL_RETRY / SHORT |
-| | `temporal` | temporal_service | 托管 Temporal server + PostgreSQL，`service.json` 端点 |
-| | `dataset` `persample` `crosssample` `zoomin` | *_workflow | 各阶段工作流；`persample.saved_module` 让已存请求保留原程序 |
-| `ecarsi.agent` | `__init__` | agent_bridge | 回合请求的 submit / status / serve / reconcile；`adapter_path` 指向被 pin 的 host 代码 |
-| | `dispatch` | agent_dispatch | 把回合派到 Pool，inode 键的 finished 缓存 |
-| | `session` | agent_session | 会话契约：create / reset / validate_turn / continuation，重复拒绝停机（REPEAT_LIMIT） |
-| | `parallel` `tool_errors` | agent_* | 并行只读工具、参数拒绝 |
-| `ecarsi.warm_pool` | `state` `backend` `worker` `allocation` `provision` | 不变 | 文件协议（含 `reference` / `verified` / `immutable`）、HQ 适配、worker |
-| | `budget` | operation_budget | 按上游实测定预算、measured ceiling、resume 时回放 |
-| `ecarsi.stages` | `organize` `persample` `crosssample` `zoomin` | *_v2 | host 程序：计算、校验、发布 |
-| | `release` | dataset_release | 数据集发布（ledger / review / umap） |
-| | `contract` | crosssample_v3 / zoomin_v3 | 协议 v4 的共享件：无参数列表工具、deg_lookup 阈值、宽松 JSON、checklist |
-| | `evidence` `execution` | agent_evidence / agent_tool_execution | Pool 上的执行计划：证据批读、单工具精确计划、实测预算 |
-| `ecarsi` | `observatory` (+ `.html`) | dev_observatory | 状态页、时间线、`status` 文本报告（含 GPU 列） |
-| | `round_policy` | 同名 | 两代共用的轮次停机规则（第一代 loop 也用） |
-| | `prompts/` | 同名 | 两代共用的 prompt 与 checklist |
+| Control image | `rsi-control-<stamp>.sif` | Temporal, PostgreSQL, HQ, the control Python environment, a snapshot of eca-rsi at `/opt/eca-rsi` | temporal, hq, scheduler, bridge, runners, coordinators, fleet-status, pruner |
+| Compute image | `rsi-science-<stamp>.sif` | the kernels and numerical stack, HQ, the same eca-rsi snapshot | pool workers, Periscope |
 
-## 入口
+Set `CODE=<checkout>` in the launcher to put a checkout first on `PYTHONPATH`. This setting shadows the snapshot for development. Production code changes reach the plane only through a rebuilt image. See [container/README.md](../../container/README.md).
+
+## Module map
+
+| Package | Module | Role |
+|---|---|---|
+| `ecarsi.control` | `coordinator` | activities, `AgentWorkflow`, CLI (`worker`, `start-*`, `resume-*`, `status-*`), poll retry |
+| | `temporal` | hosts Temporal Server and PostgreSQL from the control image; publishes `service.json` |
+| | `dataset` `persample` `crosssample` `zoomin` | stage workflows |
+| `ecarsi.agent` | `__init__` | handles submit, status, serve, and reconcile of turn requests; `adapter_path` names the pinned host code |
+| | `dispatch` | sends a turn to the pool or to a resident runner; finished-cache keyed by inode |
+| | `runner` | resident model-turn runners, one process per catalog model |
+| | `session` | session contract: create, reset, validate_turn, and continuation; stops after repeated rejections |
+| | `parallel` `tool_errors` | parallel read-only tools, argument rejection |
+| `ecarsi.warm_pool` | `state` `backend` `worker` `allocation` `provision` | file protocol (`reference` / `verified` / `immutable`), HQ adapter, worker, Slurm probe, `add-worker` |
+| | `budget` `reservation` `measure` | budgets from measured runs, measured ceilings, half-hourly `measured.json` |
+| `ecarsi.stages` | `organize` `persample` `crosssample` `zoomin` | host programs: compute, validate, publish |
+| | `release` | dataset release (ledger, review, UMAP data) |
+| | `contract` | shared model contract: tools without parameter lists, `deg_lookup` thresholds, lenient JSON, checklists |
+| | `evidence` `execution` | execution plans on the pool: evidence batch reads, single-tool plans, measured budgets |
+| `ecarsi` | `observatory` (+ `.html`) | control-plane page, timeline, `status` and `tokens` reports |
+| | `round_policy` | round stopping rules and `loop_control.json`, shared by both paths |
+| | `prompts/` | prompts and checklists, shared by both paths |
+
+## Entry points
 
 ```bash
 python -m ecarsi.control.temporal --root <control> --postgres-bin … --temporal-dir … --schema-dir … --bind <ip>
-python -m ecarsi.warm_pool --root <pool> scheduler --host <node>          # HyperQueue 调度器；add-worker 加节点
-python -m ecarsi.agent serve <bridge>                                      # 模型回合服务（运行目录里仍叫 bridge）
-python -m ecarsi.control --service-root <control> --task-queue <q> worker  # 协调器（可多份）
-python -m ecarsi.serve --control-plane <base> --bind <ip> --port 8765 --temporal-service-root <control>
+python -m ecarsi.warm_pool --root <pool> hq-server --host <node>          # HyperQueue server, apart from the scheduler
+python -m ecarsi.warm_pool --root <pool> scheduler --host <node>          # releases requests to HQ
+python -m ecarsi.agent serve <bridge>                                      # model-turn service (the directory is still called bridge)
+python -m ecarsi.agent runners <bridge>                                    # resident runners, one per catalog model
+python -m ecarsi.control --service-root <control> --task-queue <q> worker  # coordinator (several may run)
 python -m ecarsi.control --service-root <control> --task-queue <q> start-dataset|resume-dataset|status-dataset <run_id>
+python -m ecarsi serve --control-plane <base> --control-pool-root … --control-bridge-root … --control-temporal-root …   # Periscope
 ```
 
-`container/control-plane.sh` 把这六条封装成 `start|stop|restart|status|report`。`eca-rsi` 命令行仍是第一代入口。
+`container/control-plane.sh start|stop|restart|status|report|tokens` wraps these commands. Start Periscope from the compute image with `ops/start-periscope.sh` in the deployment directory.
 
-## 不变量
+Workers join in one of two ways:
 
-- **按内容 pin。** control 提交的每个请求都把它依赖的程序文件写进 `inputs`（`stages.program()`），agent 把
-  `agent/session.py` 的哈希写进会话（`adapter_path`）。会话在飞时这些文件不能改；改契约要等没有会话在飞时切换
-  （v3 那种叠新文件的做法已经折回，不再保留）。
-- **请求身份是重放键。** Pool / Bridge 里已存在的请求 id 一律回放已存内容，差异只记进 `resubmitted.json`；
-  所以旧布局的已存请求（`-m ecarsi.zoomin_v3` 等）在新布局下会回放失败——切换前让批次跑完，或把相关请求归档后 resume。
-- **只有轮询。** Pool / Bridge 是文件协议，协调器用活动轮询（POLL_RETRY 约 35 分钟容忍）；控制面节点上不要
-  无节制扫描 requests 目录，它会拖垮同一 Lustre 客户端上的协调器。
-- **部署参数不进包。** 节点、镜像、路径、并发上限都在 `control-plane.sh` / 环境变量 / 请求 spec 里。
+- `container/worker-node.sh` runs as the body of a Slurm job. The job itself is the worker (`warm_pool slurm-worker`).
+- Run `python -m ecarsi.warm_pool --root <pool> add-worker <host> --job-id <job>` for an allocation that already exists.
 
-## 和最初设计的差别
+The owner requests the nodes. The system has no autoscaler and no keeper.
 
-最初的设计只有三块：agent 的 bridge、warm pool、以及 OSP / MSP / ZMIP 内核。现在多了：
+## Invariants
 
-1. **Temporal 控制面**——每个数据集是一棵持久工作流树，resume 靠请求身份回放而不是重算。
-2. **Stage 程序层**——内核不直接暴露给模型；每个阶段一个程序做 host 校验，`contract` 是它们共享的模型契约。
-3. **资源策略**——`warm_pool.budget` / `warm_pool.reservation` 按实测定内存，OOM 翻倍重试。
-4. **观测**——`observatory` 并入 Periscope，在 `/_control/` 下。
-5. **准入**——第一代的 batch 准入（节点代理、OSP compute-ahead、driver 内存租借）在本分支撤掉，数据集只由控制面准入。
+- **Pin by content.** Every request lists the program files that it depends on in `inputs` (`stages.program()`). A session records the hash of `agent/session.py` as `adapter_path`. Do not change these files while a session is in flight. Change the contract only when no session is in flight.
+- **The request id is the replay key.** A request id that already exists in the pool or the bridge replays the stored content. The system records differences only in `resubmitted.json`.
+- **Polling only.** The pool and the bridge use file protocols. The coordinator polls through activities and tolerates about 35 minutes of poll failures. Do not scan the request directories without pacing on the control-plane node. The control-plane node shares the Lustre client with the coordinators.
+- **Deployment parameters stay out of the package.** `control-plane.sh`, environment variables, and request specs define nodes, images, paths, and concurrency limits.
 
-## 接缝（还剩的）
+## Runtime mechanisms at a glance
 
-- 第一代的 Dask pool 已在 0.3.2 删除；它的节点清单与内存账本留作 `warm_pool.slurm` / `warm_pool.reservation`。
+| Mechanism | What it does | Code |
+|---|---|---|
+| HQ priority | Every request receives a native HQ priority. This priority equals the class base (agent 1000, tool 800, work 0) plus 10 × cpus. HQ orders the queue. The system has no hold, drain, or backlog layer. | `warm_pool/backend.py`: `PRIORITY_BASE`, `hq_priority` |
+| Feasibility gate | The gate does not submit a request that no live worker can hold. The gate checks cpus, memory, a required GPU, and the worker's remaining time against `time_request_seconds`. The system marks the request as `infeasible: <reason>`. The system retries the request every tick. | `warm_pool/backend.py`: `worker_capacity`, `infeasible` |
+| DEG batching | One pool request runs up to 8 DEG comparisons (`deg-batch`). The request timeout is twice the per-comparison budget. Both cross-sample and zoom-in stages batch comparisons. | `control/persample.py`: `DEG_BATCH_SIZE`; `stages/crosssample.py`: `deg_batch` |
+| Session restart and skip | A failed agent session restarts once as a new session (`-r2`, same evidence). A second failure skips the sample or lineage. A stage fails when skipped cells exceed 10 % of its input. | `control/coordinator.py`: `run_agent`; `control/persample.py`: `SKIPPED_CELL_LIMIT` |
+| Continue-as-new | Cross-sample and zoom-in workflows continue as new past 5,000 history events. These workflows carry finished results. | `control/persample.py`: `HISTORY_LIMIT`; `control/zoomin.py`, `control/crosssample.py` |
+| Resident runners | One process per catalog model keeps many turns in flight in one event loop. The bridge configuration `service.models` lists the models. An empty list disables runners. | `agent/runner.py`, `agent/dispatch.py`: `runner_ready` |
+| Pruner | The pruner deletes the pool requests of finished dataset runs. A worker executes this deletion as a pool task. | `container/request-pruner.py`; `warm_pool/state.py`: `prune_list` |
+| Pinned-file rule | Deploying a changed stage file fails queued requests and in-flight sessions that pinned the old content. Deploy changes only when zero executions run. | `stages/__init__.py`: `program` |
+| Manual controls | The system reads `<unit>/loop_control.json` at every round boundary: `cap`, `rounds`, `extra_rounds_after_convergence`, `max_removed`, `pause`, `stop_after_round`, `pause_after_stage`. A pause ends the unit workflow with a `PAUSED` non-retryable failure. Resume execution with `resume-dataset`. | `round_policy.py`: `read_control`; `control/dataset.py` |
+
+## History
+
+The control-plane path was developed on the `gen2` branch between 2026-09-14 and 2026-09-17 and merged into `main` on 2026-09-18. Acceptance records and the original design drafts are in [docs/history/](../history/).
