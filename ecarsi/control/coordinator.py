@@ -90,7 +90,7 @@ def long_poll(check):
         if result["state"] != "waiting" or time.monotonic() >= deadline:
             return result
         try:
-            activity.heartbeat()
+            activity.heartbeat()  # no heartbeat_timeout is set: this is how a cancellation reaches the poll
         except RuntimeError:
             pass  # not inside an activity (direct call in tests)
         time.sleep(POLL_STEP_SECONDS)
