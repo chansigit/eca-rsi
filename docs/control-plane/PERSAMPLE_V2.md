@@ -1,19 +1,18 @@
 # Per-sample stage
 
-One Temporal workflow consumes an accepted Organize analysis unit. It uses the published experiment mapping; no agent identifies the samples again. Each sample has its own child workflow.
+One Temporal workflow consumes an accepted Organize analysis unit. It uses the published experiment mapping. No agent identifies the samples again. Each sample has its own child workflow.
 
 | Step | Runs on | Work |
 | --- | --- | --- |
-| `persample.partition` | pool worker | Verify the Organize identities and prepare a bounded batch of sample inputs. |
+| `persample.partition` | pool worker | Verify the Organize identities. Prepare a bounded batch of sample inputs. |
 | `osp.compute` | pool worker | Run OSP QC, Scrublet, DecontX, clustering, UMAP and DEG for one sample. |
-| `osp.annotate` | model-turn service and worker tools | Read figures and tables, verify markers and QC, optionally refine a cluster, submit a validated annotation. |
-| `osp.finalize` | pool worker | Apply the accepted labels and QC proposals, render the report, verify cell conservation. |
+| `osp.annotate` | model-turn service and worker tools | Read figures and tables. Verify markers and QC. Optionally refine a cluster. Submit a validated annotation. |
+| `osp.finalize` | pool worker | Apply the accepted labels and QC proposals. Render the report. Verify cell conservation. |
 
-Samples and datasets overlap. A model wait consumes no pool grant; a tool consumes no model slot. All matrix operations run on workers, including agent-requested subclustering. Figures reach the model as images. Subclustering saves a new immutable matrix version; proposals for an older version are rejected. The model must read the required evidence and check markers and QC before its submission is accepted.
-
+Samples and datasets overlap. A model wait consumes no pool grant. A tool consumes no model slot. Workers perform all matrix operations, including agent-requested subclustering. Figures reach the model as images. Subclustering saves a new immutable matrix version. Reject proposals for an older version. Submission acceptance requires the model to read the required evidence. It also requires the model to check markers and QC.
 ## Spec
 
-The dataset spec carries this block under `per_sample`. Standalone:
+The dataset spec contains this block under `per_sample`. Standalone:
 
 ```json
 {
@@ -34,9 +33,15 @@ The dataset spec carries this block under `per_sample`. Standalone:
 }
 ```
 
-The output root must be fresh. `batch_size` limits preparation per grant. `max_in_flight_samples` bounds sample computation; an accepted compute receipt releases the slot before annotation starts. `max_prepared_samples` bounds all unfinished sample children, including model waits (default `max(32, 4 * max_in_flight_samples)`). `max_batch_bytes` bounds each prepared batch on disk. Partition loads the organized matrix once per batch; its memory budget must cover that matrix. Start `compute_budget.memory_mb` at 16384 or more for large samples; the 8192 default has failed on PanSci samples.
+Use a fresh output root. `batch_size` limits preparation per grant. `max_in_flight_samples` limits sample computation. An accepted compute receipt releases the slot before annotation starts.
 
-For marker, QC and annotation checks and for finalization, an accepted compute peak can shrink an oversized reservation: twice the measured peak plus 1 GiB, rounded up to 256 MiB, with a 2 GiB floor and never above the declaration. Re-clustering keeps its original budget. RSS sampling can miss spikes; there is no automatic escalation after an OOM.
+`max_prepared_samples` limits all unfinished sample children, including model waits. Its default is `max(32, 4 * max_in_flight_samples)`. `max_batch_bytes` limits the size of each prepared batch on disk.
+
+Partition loads the organized matrix once per batch. Set its memory budget to cover that matrix. Start `compute_budget.memory_mb` at 16384 or more for large samples. The 8192 default has failed on PanSci samples.
+
+An accepted compute peak can reduce oversized reservations for marker, QC, and annotation checks. It can also reduce oversized reservations for finalization. The calculation adds 1 GiB to twice the measured peak. It then rounds the result up to 256 MiB. A 2 GiB floor applies. The reservation never exceeds the declaration.
+
+Re-clustering keeps its original budget. RSS sampling can miss spikes. No automatic escalation occurs after an OOM.
 
 ### CPU and GPU
 
@@ -48,21 +53,20 @@ Add to `config`:
 "gpu_memory_mb": 8192
 ```
 
-`auto` makes eligible samples prefer a GPU and allows CPU when no GPU is free. `rapids` requires a GPU. `cpu`, and older specs without the field, stay on CPU. RAM, CPUs and time still come from `compute_budget`. RAPIDS runs PCA, neighbors and UMAP; QC, HVG, Leiden, DEG and reporting stay on CPU. GPU and CPU clusters need not be identical.
+`auto` makes eligible samples prefer a GPU. It allows CPU use when no GPU is free. `rapids` requires a GPU. `cpu` keeps computation on CPU. Older specs without this field also keep computation on CPU.
 
+RAM, CPUs, and time still come from `compute_budget`. RAPIDS runs PCA, neighbors, and UMAP. QC, HVG, Leiden, DEG, and reporting stay on CPU. GPU and CPU clusters can differ.
 ## Sessions
 
-A sample whose session fails restarts once with a fresh session (`-r2`). A second failure skips the sample: its labels become `unannotated` and needs_review records `agent_skipped`. The stage fails when skipped samples hold more than 10 % of the input cells.
-
+If a sample's session fails, the sample restarts once with a fresh session (`-r2`). A second failure skips the sample. The skipped sample's labels become `unannotated`. needs_review records `agent_skipped` for the skipped sample. The stage fails if skipped samples contain more than 10 % of the input cells.
 ## Outputs
 
-`publication.json` holds verified references to each sample bundle with input, retained and removed cell counts. Bundle paths point at accepted pool attempt outputs on shared storage. Each QC removal is in `cell_exclusions.csv.gz` with the original source cell id, sample, reason, run and input version. Annotation QC actions stay proposals; cross-sample applies them.
-
+`publication.json` contains verified references to each sample bundle, with input, retained, and removed cell counts. Bundle paths point to accepted pool attempt outputs on shared storage. `cell_exclusions.csv.gz` records each QC removal with the original source cell id, sample, reason, run, and input version. Annotation QC actions remain proposals. Cross-sample applies these actions.
 ## Recovery
 
-Stable request ids and receipts let a coordinator restart without repeating computation or model turns. A failed sample does not cancel its siblings. When they finish, the parent publishes an `incomplete` record and fails visibly. Confirmed local interruptions retry up to two times. Scientific errors and memory-limit failures stay visible.
+Stable request ids and receipts let a coordinator restart without repeating computation or model turns. A failed sample does not cancel its siblings. After the siblings finish, the parent publishes an `incomplete` record. The parent then fails visibly. Confirmed local interruptions trigger up to two retries. Scientific errors and memory-limit failures stay visible.
 
-Inside a dataset workflow, use `resume-dataset`. Standalone:
+Inside a dataset workflow, use `resume-dataset`. For standalone use, run:
 
 ```bash
 python -m ecarsi.control --service-root <control> --task-queue <queue> start-persample spec.json
@@ -70,16 +74,18 @@ python -m ecarsi.control --service-root <control> --task-queue <queue> status-pe
 python -m ecarsi.control --service-root <control> --task-queue <queue> resume-persample RUN_ID
 ```
 
-`resume-persample` verifies the saved spec and input identity, refuses unresolved failed or unknown requests, and follows the original request ids. Completed samples and saved turns are reused. A prior incomplete publication is kept by content hash. While siblings continue, the parent checks failed samples for repaired receipts every 30 seconds and replays a repaired sample once, within the in-flight limit.
-
+`resume-persample` verifies the saved spec and input identity. It refuses unresolved failed or unknown requests. It follows the original request ids. It reuses completed samples and saved turns. It keeps a prior incomplete publication by content hash. While siblings continue, the parent checks failed samples for repaired receipts every 30 seconds. The parent replays each repaired sample once, within the in-flight limit.
 ## Adjust admission during a run
 
 ```bash
 python -m ecarsi.control --service-root <control> set-persample-limit PER_SAMPLE_RUN_ID 16
 ```
 
-The value must be at least `batch_size`. Increasing it wakes admission; decreasing it drains children without cancelling them. The update survives restarts and is recorded in Temporal history. `python tests/check_persample_capacity.py HOST:PORT` exercises this on an isolated task queue without model calls.
+Set the value to at least `batch_size`. Increasing the value wakes admission. Decreasing the value drains children without cancelling them.
 
+The update survives restarts. Temporal history records the update.
+
+`python tests/check_persample_capacity.py HOST:PORT` tests this behavior on an isolated task queue. The test makes no model calls.
 ## History
 
-Acceptance records of September 2026 are in [docs/history/PERSAMPLE_ACCEPTANCE_20260914.md](../history/PERSAMPLE_ACCEPTANCE_20260914.md).
+The September 2026 acceptance records are in [docs/history/PERSAMPLE_ACCEPTANCE_20260914.md](../history/PERSAMPLE_ACCEPTANCE_20260914.md).
