@@ -1,6 +1,8 @@
 """Bounded Organize computation commands for Warm Pool v2."""
 import argparse
+import errno
 import json
+import shutil
 from pathlib import Path
 
 from .. import layout as L
@@ -209,7 +211,18 @@ def publish(output: Path, destination: Path):
         if target == run:
             if destination.exists():
                 raise ValueError("Organize output destination already exists")
-            run.rename(destination)
+            try:
+                run.rename(destination)
+            except OSError as exc:
+                if exc.errno != errno.EXDEV:
+                    raise
+                # pool and runs on two filesystems: copy beside the destination and publish that by rename,
+                # so a retry never takes a half-copied destination for the published one
+                staging = destination.with_name("." + destination.name + ".partial")
+                shutil.rmtree(staging, ignore_errors=True)
+                shutil.copytree(run, staging, symlinks=True)
+                staging.rename(destination)
+                shutil.rmtree(run)
         if manifest != relocated:
             write_json(L.organize_manifest(destination), relocated)
         # The Pool receipt still names this small worker output after the unit

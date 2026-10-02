@@ -64,3 +64,24 @@ def test_reject_modified_worker_manifest(tmp_path):
     with pytest.raises(ValueError, match='worker manifest changed'):
         organize.publish(output, destination)
     assert not destination.exists()
+
+
+def test_publish_across_filesystems_copies_then_renames(tmp_path, monkeypatch):
+    import errno
+    from pathlib import Path
+
+    output, destination = outputs(tmp_path)
+    original_rename = Path.rename
+
+    def cross_device(self, target):
+        if self == output.resolve() / 'run':
+            raise OSError(errno.EXDEV, 'Invalid cross-device link')
+        return original_rename(self, target)
+
+    monkeypatch.setattr(Path, 'rename', cross_device)
+    assert organize.publish(output, destination) == str(destination)
+    unit = L.unit_dir(destination, 'unit')
+    assert L.input_h5ad(unit).read_bytes() == b'unchanged scientific output'
+    assert not destination.with_name('.published.partial').exists()
+    assert read(destination / 'publication.json')['worker_manifest'] == file_identity(L.organize_manifest(output / 'run'))
+    assert organize.publish(output, destination) == str(destination)
