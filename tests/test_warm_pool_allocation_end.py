@@ -27,6 +27,16 @@ def test_future_or_unknown_grants_are_not_over(tmp_path):
     assert not allocation_ended(tmp_path, dict(host="h9"), live_hosts=[], now=now)
 
 
+def test_a_later_job_on_the_same_host_does_not_keep_a_dead_jobs_attempt(tmp_path):
+    now = time.time()
+    _identity(tmp_path, "h1-a", "h1", now - 1000)  # job A: ended, its attempt orphaned
+    _identity(tmp_path, "h1-b", "h1", now + 9000)  # job B: same host, other CPUs, connected
+    orphan = dict(host="h1", worker_id="h1-a", started_at=now - 2000)
+    assert allocation_ended(tmp_path, orphan, live_hosts=["h1.int"], now=now)
+    assert not allocation_ended(tmp_path, dict(orphan, worker_id="h1-b"), live_hosts=["h1.int"], now=now)
+    assert not allocation_ended(tmp_path, orphan, live_hosts=[], now=now - 900)  # inside the grace window
+
+
 def test_worker_lost_receipt_is_retryable_and_keeps_identity():
     request = dict(spec=dict(request_id="r"), attempt_id="a", digest="d", runtime_digest="rt")
     receipt = worker_lost_receipt(request, dict(started_at=1.0), "WorkerLost: test")

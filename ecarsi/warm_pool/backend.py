@@ -245,8 +245,15 @@ def allocation_ended(root, accepted, live_hosts, now=None, grace=300):
     """The Slurm grant that accepted this attempt is over and nothing from that host is connected.
 
     Nobody else can write the receipt then: the executor died with the node and no worker
-    from the host will run reconcile_local. A connected worker on the host keeps ownership."""
+    from the host will run reconcile_local. A connected worker on the host keeps ownership.
+
+    An attempt that names its worker is decided by that worker's own grant: a later job on the
+    same host neither ran it nor adopts it (reconcile_local only takes attempts on its own CPUs),
+    so keying on the host left such an attempt unreceipted forever (#17)."""
     now = time.time() if now is None else now
+    own = read(Path(root) / "workers" / accepted["worker_id"] / "identity.json", {}) if accepted.get("worker_id") else {}
+    if own:
+        return (own.get("expires_at") or float("inf")) + grace < now
     host = accepted.get("host")
     if any(str(name).split(".")[0] == host for name in live_hosts):
         return False
