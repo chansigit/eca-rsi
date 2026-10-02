@@ -1,69 +1,52 @@
-# ECA-PP → organize → persample 接入与续跑
+# Front half: ECA-PP input → organize → persample → OSP
 
-前半程（ECA-PP 输入 → organize → persample → OSP）的接入规则、sample map 策略与续跑语义。
-后半程（MSP / ZMIP）的升级记录见 [history/DOWNSTREAM_INTEGRATION.md](history/DOWNSTREAM_INTEGRATION.md)；
-只验证前半程可用分步命令，或 `run --stop-after persample`。
+This document states the input rules, the sample-map policies and the resume semantics of the front half. The MSP and ZMIP upgrade record is in [history/DOWNSTREAM_INTEGRATION.md](history/DOWNSTREAM_INTEGRATION.md). The validated OSP version is 0.1.7; `pyproject.toml` accepts `osp-sc>=0.1.3,<0.2`.
 
-## 输入与组织
+The commands below are the local path's. The control-plane path runs the same programs as pool tasks ([control-plane/ORGANIZE_V2.md](control-plane/ORGANIZE_V2.md), [control-plane/PERSAMPLE_V2.md](control-plane/PERSAMPLE_V2.md)); the rules are identical.
+
+## Input and organize
 
 ```bash
 eca-rsi organize /path/to/eca-pp-output /path/to/new-run
-# 已有明确的分析单元划分时，可跳过规划模型：
-eca-rsi organize /path/to/eca-pp-output /path/to/new-run --plan-json plan.json
+eca-rsi organize /path/to/eca-pp-output /path/to/new-run --plan-json plan.json   # skip the planning model
 ```
 
-`plan.json` 沿用 `ecarsi.plan.PLAN_SCHEMA`。每个单元必须只有一种已解析物种，
-所有接受来源的细胞必须恰好分配一次。主流程也会在真正写出结果前校验模型提交。
+`plan.json` follows `ecarsi.plan.PLAN_SCHEMA`. Each unit must have exactly one resolved species. Every cell of an accepted source must be assigned exactly once. The main flow validates the model's submission before it writes results.
 
-- 读取 schema 2，包括磁盘上已有的 0.2.x 和当前 0.5.x 结果；未知 schema 拒绝。
-- `ok/0`、`needs_review/0` 接受，后者的原因随来源保存。
-  ECA-PP `0576683` 起直接信任扩展后的 `.raw`，不再生成 HVG counts 交叉比对及其复核原因。
-  RSI 不依赖这些可选字段，也不补做该比对；旧结果已有的 `counts_check` 和复核原因仍原样保留。
-- `rejected/2` 且无输出，列入 `organize/source_inventory.json`，不纳入计算。
-- error、blocked、状态矛盾、缺文件、缺 counts 层或非法矩阵，会阻止整个输入集合继续。
-- 只跳过 ECA-PP 步骤目录内约定的 `.history`；其他未声明 H5AD 仍报错。
-- `input/upstream/<source>/` 保存完整结果 JSON、派生 TSV 和完整来源 obs。
-  TSV 在合并改名之前按原始细胞 ID 对齐；重复、缺失、额外 ID 均拒绝。
-- `organized.h5ad` 保留原始 metadata，并新增 `source_unit`、`eca_source_cell_id`、
-  可选 `eca_pp_batch`、`eca_pp_cell_type`。这些列名保留给 RSI；输入发生重名会报错。
-  表达只在 `layers["counts"]`（整数宽于 4 字节则转 int32）；X 是空 csr 占位（`uns["X_placeholder"]`），
-  上游的归一化 X 不保留——`validate_matrix` 不认 X 为 counts，OSP/MSP 都从 counts 重建 X（0.2.6 起，eca-rsi#2）。
+Input rules:
 
-`organize/manifest.json` 先记计划和 running 状态，逐单元登记输出指纹，全部完成后才记 complete。
-同输入、同适配代码的中断可继续完成剩余单元；旧目录或已修改的输入、计划、代码要求新目录。
-内容 SHA-256 每次驱动入口计算一次，不在每个样本子进程重复哈希整个来源大文件。
-每单元保留完整来源 obs 以检查实验池是否被器官拆分，因此多单元时会增加 metadata 存储。
+- Schema 2 is read, including 0.2.x and 0.5.x results on disk. Unknown schemas are rejected.
+- `ok/0` and `needs_review/0` are accepted. Review reasons are kept per source. From ECA-PP `0576683` the expanded `.raw` is trusted directly; the HVG counts cross-check and its review reason are no longer generated. Existing `counts_check` records stay as they are.
+- `rejected/2` without output is listed in `organize/source_inventory.json` and excluded.
+- `error`, `blocked`, contradictory states, missing files, a missing counts layer or an invalid matrix stop the whole input set.
+- Only `.history` inside an ECA-PP step directory is skipped. Any other undeclared H5AD is an error.
+- `input/upstream/<source>/` keeps the full result JSON, the derived TSV and the full source obs. The TSV is aligned by original cell id before any renaming; duplicate, missing or extra ids are rejected.
+- `organized.h5ad` keeps the original metadata and adds `source_unit`, `eca_source_cell_id`, and optionally `eca_pp_batch` and `eca_pp_cell_type`. These column names are reserved; an input that already has them is an error. Expression lives only in `layers["counts"]` (integers wider than 4 bytes become int32). `X` is an empty CSR placeholder (`uns["X_placeholder"]`). The upstream normalized `X` is not kept: `validate_matrix` does not accept `X` as counts, and OSP and MSP rebuild `X` from counts.
 
-## 实验样本映射
+`organize/manifest.json` first records the plan and the `running` state, then each unit's output fingerprint, and `complete` only when every unit is done. An interrupted run with the same input and adapter code can finish the remaining units. A changed input, plan or code needs a new directory. Content SHA-256 is computed once per driver entry, not per sample subprocess. Each unit keeps the full source obs to check whether an experiment pool was split by organ.
+
+## Experiment mapping
 
 ```bash
-# 明确知道 sample 是物理实验列；同名值只在同一来源内分组。
-eca-rsi persample /path/to/new-run/units/UNIT --sample-column sample
-
-# 确认单个来源就是一套完整实验时：
-eca-rsi persample /path/to/new-run/units/UNIT --single-sample
-
-# 只保存/检查映射，不运行 OSP：
-eca-rsi persample /path/to/new-run/units/UNIT --sample-map samples.json --plan-only
+eca-rsi persample /path/to/new-run/units/UNIT --sample-column sample      # `sample` is the physical experiment column; equal values group only within one source
+eca-rsi persample /path/to/new-run/units/UNIT --single-sample             # one source is one complete experiment
+eca-rsi persample /path/to/new-run/units/UNIT --sample-map samples.json --plan-only   # save and check the map, do not run OSP
 ```
 
-省略映射参数时，逐来源向窄决策模型提供 obs 画像及上游分类、候选、嵌套、校正和 warning 证据。
-批次列不直接当作实验列，`batch=null` 或 `correction=unnecessary` 不推导为单实验。
-模型选择 null 时必须有 `confirmed_single=true` 及依据；分组未知会停止，需提供明确映射。
-不设 200 个实验的硬上限。空字符串和常见缺失占位不能成为伪样本。
+Without a mapping argument, a narrow decision model receives, per source, the obs profile and the upstream classification, candidates, nesting, correction and warning evidence. A batch column is not taken as the experiment column by itself. `batch=null` or `correction=unnecessary` does not imply a single experiment. A `null` choice needs `confirmed_single=true` with a reason. Unknown grouping stops the run and asks for an explicit map. There is no hard limit of 200 experiments. Empty strings and common missing placeholders cannot become samples.
 
-显式配置优先；`sources` 必须完整覆盖当前单元来源。跨来源合池必须单独声明：
+An explicit map wins. `sources` must cover every source of the unit. Pooling across sources needs an explicit `merges` entry:
 
 ```json
 {
   "sources": {
-    "source-A": {"sample_column": "library", "rationale": "原始文库编号"},
-    "source-B": {"sample_column": "eca_pp_batch", "rationale": "已核对 TSV 值为原始文库编号"}
+    "source-A": {"sample_column": "library", "rationale": "original library id"},
+    "source-B": {"sample_column": "eca_pp_batch", "rationale": "TSV values verified to be the original library ids"}
   },
   "merges": [
     {
       "sample_id": "library-7",
-      "evidence": "A 的 L7 和 B 的 run7 是同一 GEM well 分成的两个细胞文件",
+      "evidence": "L7 in A and run7 in B are the same GEM well split into two cell files",
       "members": [
         {"source": "source-A", "value": "L7"},
         {"source": "source-B", "value": "run7"}
@@ -73,18 +56,13 @@ eca-rsi persample /path/to/new-run/units/UNIT --sample-map samples.json --plan-o
 }
 ```
 
-合并后的实验 ID 只能使用字母、数字、点、下划线和连字符。一个来源分组只能参与一个合并；
-同一实验内重复的原始 cell ID 拒绝，需先解决重叠来源。没有显式 merges 时，不同来源的 `S1` 始终分开。
-完整映射写入 `persample/sample_mapping.csv.gz`，包括当前 cell ID、原始 ID、来源、原始分组值、`eca_sample_id`。
-OSP 子集才新增 `eca_sample_id`，不覆写原始 `sample` 列。
+A merged experiment id may use letters, digits, dots, underscores and hyphens. A source group can take part in one merge only. Duplicate original cell ids inside one experiment are rejected. Without `merges`, `S1` in two sources stays two experiments. The full map is written to `persample/sample_mapping.csv.gz` with current cell id, original id, source, original group value and `eca_sample_id`. Only the OSP subset gets `eca_sample_id`; the original `sample` column is untouched.
 
-若完整来源 obs 表明该实验还有细胞在另一个组织单元，拒绝在局部池独立运行 QC。
-当前不实现跨器官共享的实验级 QC；完整实验池含义仍依赖输入数据与明确实验信息。
+If the full source obs shows that an experiment has cells in another tissue unit, QC on the partial pool is refused. Cross-organ experiment-level QC is not implemented.
 
-## 细胞策略：`exclude_cells` 与 `batch_key`
+## Cell policies: `exclude_cells` and `batch_key`
 
-映射文件另有两个顶层键，都是**声明式**的：host 确定性地执行并逐细胞记账，不做自动推断
-（`ecarsi/policies.py`；未知顶层键报错）。Tabula Muris FACS 的例子：
+The map file has two more top-level keys. Both are declarative: the host applies them deterministically and accounts for every cell (`ecarsi/policies.py`; unknown top-level keys are errors). Tabula Muris FACS example:
 
 ```json
 {
@@ -92,96 +70,56 @@ OSP 子集才新增 `eca_sample_id`，不覆写原始 `sample` 列。
   "exclude_cells": [
     {"blank": ["mouse.id", "subtissue", "cell_ontology_class"],
      "reason": "upstream_qc_blank",
-     "rationale": "作者 QC 丢弃的 well 只剩空 metadata（eca-pp 改写成 'missing'）；下游 91% 会再次被删"}
+     "rationale": "wells the authors dropped in QC keep only empty metadata (eca-pp rewrites it as 'missing'); 91 % are removed again downstream"}
   ],
   "batch_key": "mouse.id"
 }
 ```
 
-`exclude_cells`：规则列表，在 organize→persample 交接处、切任何 OSP subset 之前按顺序应用（先命中的规则记账）。
+`exclude_cells` is a list of rules. They run after organize and before any OSP subset is cut, in order. A cell is charged to the first rule that matches it.
 
-- `{"where": {"<列>": ["值", ...]}, "reason", "rationale"}`：原始字符串精确匹配（去首尾空白），多列取 AND；
-  字面量 `"missing"` 匹配 `"missing"`。
-- `{"blank": ["列1", "列2", ...], "reason", "rationale"}`：所列**全部**列都属缺失家族
-  （空串 / NA / nan / none / null / missing，同 `upstream.normalize`）。
-- `reason` 是 slug（`[a-z0-9_-]`，≤40，列表内唯一），`rationale` 非空。**未知列报错**；**匹配 0 细胞只记 warning**
-  （同一份映射可能共用于多个器官），写进 manifest 与 needs_review；某来源被删空报错。
-- 被删细胞留在 `persample/sample_mapping.csv.gz`（`excluded_reason` 列，`eca_sample_id` 为空）并单独写
-  `persample/excluded_cells.csv`（cell, source_unit, source_cell_id, reason, proposed_by）；ledger 把它们记为
-  `osp_status = removed:persample-policy:<reason>`，细胞守恒检查要求 OSP 幸存 + OSP QC 删除 + policy 删除 = organized 输入。
-  release 的 needs_review 以 `policy_excluded` 一节按规则列出数量与 rationale。
-- 规则进入映射身份：表里的 `excluded_reason` 列改变 `mapping_identity`，映射文件本身进 `explicit_mapping`；
-  改规则 = 新输出目录。样本列的 NA 检查在排除之后进行（FACS 空 well 的 `plate.barcode` 也空，排除后该列即完整分区）。
+- `{"where": {"<column>": ["value", ...]}, "reason", "rationale"}`: exact string match after trimming; several columns are combined with AND; the literal `"missing"` matches `"missing"`.
+- `{"blank": ["col1", "col2", ...], "reason", "rationale"}`: every listed column is in the missing family (empty, NA, nan, none, null, missing; same as `upstream.normalize`).
+- `reason` is a slug (`[a-z0-9_-]`, at most 40 characters, unique in the list). `rationale` is non-empty. An unknown column is an error. A rule that matches zero cells is a warning, written to the manifest and needs_review, because one map may serve several organs. A source that ends up empty is an error.
+- Excluded cells stay in `persample/sample_mapping.csv.gz` (`excluded_reason` set, `eca_sample_id` empty) and are listed in `persample/excluded_cells.csv` (cell, source_unit, source_cell_id, reason, proposed_by). The ledger records them as `osp_status = removed:persample-policy:<reason>`. Conservation requires OSP survivors + OSP QC removals + policy removals = organized input. The release's needs_review lists them per rule under `policy_excluded`.
+- Rules are part of the mapping identity: the `excluded_reason` column changes `mapping_identity`, and the map file itself enters `explicit_mapping`. A changed rule needs a new output directory. The sample column's NA check runs after exclusion.
 
-`batch_key`：Harmony 校正列（默认仍是 `eca_sample_id`）。host 校验它是 organized.h5ad 的 obs 列，在**每个** OSP 实验内恒定
-（缺失家族按 NA 忽略；一个实验里出现两个非 NA 值报错；整个实验全 NA 报错），且单元内 ≥2 个取值。
-每样本常量写进该样本的 OSP subset（NA 细胞随其实验），记录在 `sample_mapping.batch_key`
-（`column` / `of_sample` / `n_filled`）。crosssample 以此作 MSP `--batch-col`，round manifest 的
-`integration_policy.selection = "sample_map"`；显式 `MSP_BATCH_COL` 仍优先（`explicit`），与映射声明不一致则报错。
+`batch_key` names the Harmony correction column (default `eca_sample_id`). The host checks that it is an obs column of `organized.h5ad`, constant within every OSP experiment (missing values are ignored and filled per experiment; two non-NA values in one experiment is an error; an all-NA experiment is an error), and that it has at least two values in the unit. The per-sample constant is written into the OSP subset and recorded in `sample_mapping.batch_key` (`column`, `of_sample`, `n_filled`). Cross-sample passes it to MSP as `--batch-col`; the round manifest records `integration_policy.selection = "sample_map"`. An explicit `MSP_BATCH_COL` still wins (`explicit`); a conflict with the map is an error.
 
-没有映射文件时（agent 识别样本列的路径），样本列 agent 可以在提交里附带同形状的 `exclude_cells` 提案；
-host 用当前来源的 obs 当场校验（列存在、命中 ≥1 细胞、不超过来源一半，`policies.AGENT_EXCLUDE_MAX_FRAC`），
-不合格就要求重交，合格后照用户规则执行并记 `proposed_by: "agent"`。若未声明 `batch_key` 而 study design
-（`ecarsi.design`：每样本恒定的列）有 ≥2 列，host 另发一次小的 agent 调用**推荐** `batch_key`，
-只写进 `persample/needs_review` 与 manifest 的 `batch_key_recommendation`，绝不应用；该调用失败不影响 persample。
+Without a map file, the sample-column agent may attach an `exclude_cells` proposal of the same shape. The host checks it against the source obs (column exists, at least one cell matches, at most half of the source: `policies.AGENT_EXCLUDE_MAX_FRAC`), asks for a resubmission if it fails, and applies it with `proposed_by: "agent"`. If no `batch_key` is declared and the study design (`ecarsi.design`: columns constant per sample) has two or more columns, the host makes one small agent call that **recommends** a `batch_key`. The recommendation goes to `persample/needs_review` and the manifest's `batch_key_recommendation`; it is never applied. A failure of that call does not affect per-sample.
 
-## OSP 配置与状态
+## OSP configuration and status
 
 ```bash
-eca-rsi persample /path/to/new-run/units/UNIT --sample-column sample \
-  --resolution 0.8 --language Chinese --effort high
-
-# 调试时可显式关闭；默认 QC 两项均开启，注释也开启。
-eca-rsi persample /path/to/another-run/units/UNIT --sample-column sample \
-  --no-scrublet --no-decontx --no-annotate
+eca-rsi persample /path/to/new-run/units/UNIT --sample-column sample --resolution 0.8 --language Chinese --effort high
+eca-rsi persample /path/to/another-run/units/UNIT --sample-column sample --no-scrublet --no-decontx --no-annotate   # debugging; QC and annotation are on by default
 ```
 
-单实验与多实验统一通过 `ecarsi.osp_worker` 子进程调用 OSP 公共 Python API，
-显式传入 Scrublet、DecontX、resolution、species、tissue、language、effort、model。
-resolution 默认 1.0；harness 继承环境。`OSP_PYTHON` 可选择内核解释器。
-RSI 不复制 OSP 的 QC、聚类或注释实现，也不修改共享 bridge 的预算和重试策略。
+Single and multiple experiments both call the OSP public Python API through the `ecarsi.osp_worker` subprocess, with Scrublet, DecontX, resolution, species, tissue, language, effort and model passed explicitly. The default resolution is 1.0. `OSP_PYTHON` selects the kernel interpreter. ECA-RSI does not copy OSP's QC, clustering or annotation code, and does not change the shared bridge's budgets or retries.
 
-每样本 `request.json` 和 `run_state.json` 记录输入/配置身份、解释器、包版本、源码提交与源码内容指纹、
-attempt、阶段、退出码、失败类别、校验结果及输出指纹。一个驱动和一个样本目录各有进程锁。
-正常完成需要成功状态、零退出，并校验：
+Each sample's `request.json` and `run_state.json` record the input and configuration identity, the interpreter, package versions, source commit and content digest, attempt, stage, exit code, failure class, validation results and output fingerprints. The driver and each sample directory hold a process lock. A sample is complete when the run succeeded with exit 0 and these checks pass:
 
-- 可读的 `clustered.h5ad`、有效 HTML、QC 汇总、`qc_removed.csv`；注释开启时还要 proposal。
-- 输入细胞 = 幸存细胞与删除细胞的不重叠并集，无重复、无外来 cell ID，汇总数量相同。
-- proposal 实际 `cluster_key` 存在，簇覆盖、coarse/fine 标签和 QC action 与 H5AD 一致。
+- a readable `clustered.h5ad`, a valid HTML report, a QC summary and `qc_removed.csv`; a proposal when annotation is on;
+- input cells = survivors ∪ removed cells, disjoint, with no duplicates or foreign ids, and matching summary counts;
+- the proposal's `cluster_key` exists, and its cluster coverage, coarse and fine labels and QC actions agree with the H5AD.
 
-确定性错误不自动重算；明确的临时连接/超时错误最多再试一次。未分类错误保持失败，不能从文字猜测可重试。
-QC 零幸存与不足三细胞分别记录；都使单元未完成，不制造占位 H5AD，也不静默排除以强行进入 MSP。
-注释失败保留经校验的计算快照，同身份恢复只执行注释。成功后清理 subset 和恢复用计算快照。
+Deterministic errors are not recomputed. Explicit transient connection or timeout errors are retried once. Unclassified errors stay failed; text is not used to guess retryability. Zero QC survivors and fewer than three cells are recorded separately; both leave the unit incomplete, with no placeholder H5AD and no silent exclusion. An annotation failure keeps the validated compute snapshot; a resume with the same identity runs only the annotation. Success deletes the subset and the snapshot.
 
-相同配置续跑验证内容后跳过成功样本；输入、映射、计算参数、模型、解释器或源码变更要求新输出目录。
-`--allow-agent-change` 不覆盖此新版前半程身份要求。旧输出和 `.pruned` 仍可浏览，不能作为新计算的成功依据。
-整体目录可搬迁；结果文件中的旧绝对路径只作来源记录，读取使用当前目录内相对定位。
+A resume with the same configuration validates and skips successful samples. A changed input, map, compute parameter, model, interpreter or source needs a new output directory. Old outputs and `.pruned` markers can be browsed but are not evidence of success. The directory can be moved; old absolute paths in result files are provenance only.
 
-上游 review/warnings 和 OSP 退化、失败信息写入 `persample/needs_review.{json,md}`，
-单元页面和后续既有 review 汇总会显示。页面读取已记录的成功状态；实际续跑另做内容校验。
+Upstream review and warnings, OSP degradation and failure messages go to `persample/needs_review.{json,md}` and appear on the unit page and in the release review.
 
-## 独立验证
+## Checks
 
 ```bash
 LC_ALL=C LANG=C PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider \
   tests/test_front_integration.py tests/test_osp_worker.py tests/test_agent_selection.py
 ```
 
-这些测试独立于 MSP/ZMIP。原有跨内核 harness/resources 检查保留，仍单独暴露冻结中的不一致。
-已测配套源码见 [docs/history/FRONT_COMPATIBILITY.json](history/FRONT_COMPATIBILITY.json)，实际运行结果见
-[docs/history/FRONT_VALIDATION.md](history/FRONT_VALIDATION.md)。ECA-PP 仍自带 harness 的迁移由上游独立协调。
+These tests do not need MSP or ZMIP. The September 2026 validation record is in [history/FRONT_VALIDATION.md](history/FRONT_VALIDATION.md); the source revisions tested then are in [history/FRONT_COMPATIBILITY.json](history/FRONT_COMPATIBILITY.json).
 
-## bridge 0.2.0 适配
+## Bridge compatibility layer
 
-`ecarsi.harness` 保留拆分前 14 个公共接口及旧常量的对象身份，作为旧导入路径的兼容层。
-新代码直接从 `harness_bridge` 导入；shim 不承诺转出上游未来新增的每个接口。
-测试明确固定旧接口集合，同时允许兼容层增加导出；删除旧接口、遗漏声明或对象不一致仍应失败。
+`ecarsi.harness` keeps the object identity of the 14 public interfaces and the old constants from before the split, as a compatibility layer for old import paths. New code imports from `harness_bridge` directly. The tests pin the old interface set and allow additions; a removed interface or a mismatched object fails.
 
-RSI CLI 在入口调用 `configure_logging("ecarsi", stream=sys.stderr)`，OSP worker 入口配置
-`ecarsi`、`osp` 和共享 bridge 的日志。重复初始化替换 bridge 自己的 handler；
-库函数不主动重配日志，bridge `run_agent` 的 `ensure_logging` 尊重调用方已有 handler。
-bridge 保留向 root logger 传播，应用自己额外安装的 root handler 仍会收到记录。
-这里只配置 logging，旧代码原有 print 不会自动改道；worker 状态仍写 JSON 文件。
-
-RSI/OSP 源码依赖 bridge `>=0.2.0,<0.3`。bridge 0.2.0 已发布 PyPI，OSP 依赖修改
-仍在本地源码，见 INSTALL.md。输入/内核/bridge 身份检查保留，升级后使用新运行目录。
+The CLI calls `configure_logging("ecarsi", stream=sys.stderr)` at entry. The OSP worker configures `ecarsi`, `osp` and the bridge's logging. Library functions do not reconfigure logging; the bridge's `ensure_logging` respects existing handlers. The source dependency is `agent-harness-bridge[all]>=0.2.14,<0.3`.
