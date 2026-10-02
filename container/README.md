@@ -1,5 +1,37 @@
 # Container environment for the ecarsi chain
 
+# Two-image deployment (2026-10-01)
+
+A deployment needs two images and a short launcher; nothing is installed on the host.
+
+| Image | Carries |
+|---|---|
+| control (`rsi-control-<stamp>.sif`, ~160 MB) | Python control environment (`/opt/rsi-control`), Temporal server, sql-tool and ui-server with the PostgreSQL v12 schema (`/opt/rsi-services/temporal`), PostgreSQL 16 (`/opt/rsi-services/postgres`, RUNPATH relative), HQ (`/opt/rsi-bin/hq`), eca-rsi snapshot (`/opt/eca-rsi`, `BUILD.json` names the commit) |
+| science (`rsi-science-<stamp>.sif`, ~4 GB) | the kernels and numerical stack (`/opt/rsi-python`), `/opt/rsi-control`, HQ, the same eca-rsi snapshot; Periscope runs here |
+
+The launcher exports the directories and the two images and runs the control image's own `control-plane.sh`:
+
+```bash
+export BASE=<control dir> IMG=<control.sif> SCIENCE_IMG=<science.sif> POOL=<pool dir> BRIDGE=<bridge dir>
+export CONTROL=$BASE/durable-control HOSTPY=python3
+apptainer exec "$IMG" cat /opt/eca-rsi/container/control-plane.sh > "$BASE/.control-plane.from-image.sh"
+exec bash "$BASE/.control-plane.from-image.sh" "$@"
+```
+
+- `control-plane.sh start` logs which eca-rsi runs (`control-logs/identity.log`): the image snapshot, or a checkout.
+  Set `CODE=<checkout>` to develop: it comes first on `PYTHONPATH` and shadows `/opt/eca-rsi`.
+- The pool's runtime (`warm_pool configure-runtime`, run inside the science image) names the science image and
+  `pythonpath: ["/opt/eca-rsi", "/opt/rsi-control", "/opt/rsi-python"]`; `config.json` `hq` is `/opt/rsi-bin/hq`.
+- Host-side helpers (worker launch, `add-worker`) call `scontrol`, `nvidia-smi` and `ssh`, which the images lack:
+  `control-plane.sh host-code` unpacks the image snapshot to `$BASE/image-code`, and
+  `POOL=… SCIENCE_IMG=… sbatch … $BASE/image-code/container/worker-node.sh` makes a Slurm job a pool worker.
+- Rebuild by extracting the current images into a sandbox on node-local disk, replacing `/opt/eca-rsi`, packing the
+  sandbox with `mksquashfs` by hand and wrapping it with `apptainer sif new` + `sif add --datatype 4 --parttype 2
+  --partfs 1 --partarch 2 --groupid 1` (apptainer's own pack step segfaults on the 6.6 GB science sandbox).
+- Moving Temporal or PostgreSQL into an image changes the binaries' bytes (RUNPATH); the Temporal launcher then refuses
+  the existing state directory until its `runtime.json` is moved aside, which is the explicit operator step.
+
+
 ## Worker model calls
 
 [Agent Worker manifest](agent-worker-runtime-20260915.json) extends the pinned
