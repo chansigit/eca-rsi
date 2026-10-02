@@ -51,6 +51,21 @@ def server_config(address, port, database_port, user, password):
                 rpcName='frontend', rpcAddress=f'{address}:{port}')}))
 
 
+def runtime_record(binaries, schema_dir):
+    """The installed Temporal and PostgreSQL release, by name and content: the same files at another
+    path (the binaries moved into the control image, 2026-10-01) are the same runtime."""
+    record = {p.name: file_digest(p) for p in binaries}
+    record.update({'schema/' + str(p.relative_to(schema_dir)): file_digest(p)
+                   for p in sorted(schema_dir.rglob('*')) if p.is_file()})
+    return record
+
+
+def same_runtime(installed, runtime):
+    """Equal records, or a record of the same files kept under their old absolute paths (before
+    2026-10-01 the keys were paths): an upgrade changes content, a move does not."""
+    return installed == runtime or sorted(installed.values()) == sorted(runtime.values())
+
+
 async def serve(args):
     from google.protobuf.duration_pb2 import Duration
     from temporalio.api.workflowservice.v1 import RegisterNamespaceRequest
@@ -77,15 +92,14 @@ async def serve(args):
         raise ValueError('Explicit installed PostgreSQL and Temporal binaries are required')
     if not args.schema_dir.is_absolute() or not (args.schema_dir / 'temporal/versioned').is_dir():
         raise ValueError('Use matching Temporal release schema/postgresql/v12 directory')
-    runtime = {str(p): file_digest(p) for p in binaries}
-    runtime.update({str(p): file_digest(p) for p in sorted(args.schema_dir.rglob('*')) if p.is_file()})
+    runtime = runtime_record(binaries, args.schema_dir)
     env = dict(os.environ, LC_ALL='C', LANG='C', GOMAXPROCS='2')
     # Never allow inherited database credentials/settings to select another store.
     env = {k: v for k, v in env.items() if not k.startswith(('PG', 'SQL_', 'TEMPORAL_'))}
     os.umask(0o077)
     with lock(root / 'owner.lock', blocking=False) as ownership:
         installed = read(root / 'runtime.json')
-        if installed is not None and installed != runtime:
+        if installed is not None and not same_runtime(installed, runtime):
             raise ValueError('Runtime changed; explicit offline database upgrade is required')
         save(root / 'runtime.json', runtime)
         password_file = root / 'database-password'
