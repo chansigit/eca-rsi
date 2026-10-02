@@ -10,7 +10,14 @@
 set -u
 : "${BASE:?run directory holding the pool, bridge and control state}"
 : "${IMG:?control image (.sif)}"
-CODE=${CODE:-$(cd "$(dirname "$0")/.." && pwd)}       # checkout that PYTHONPATH points at
+# Everything runs from the images (2026-10-01): the control image carries Temporal, PostgreSQL, HQ and a snapshot
+# of eca-rsi at /opt/eca-rsi; the science image carries HQ and the same snapshot. Set CODE to a checkout only to
+# develop: it comes first on PYTHONPATH and shadows the snapshot. SCIENCE_IMG is the science image (Periscope).
+CODE=${CODE:-}
+if [ -n "$CODE" ]; then CODE_IN=$CODE; HOST_CD=$CODE; else CODE_IN=/opt/eca-rsi; HOST_CD=/tmp; fi
+POSTGRES_BIN=${POSTGRES_BIN:-/opt/rsi-services/postgres/bin}
+TEMPORAL_DIR=${TEMPORAL_DIR:-/opt/rsi-services/temporal}
+SCHEMA_DIR=${SCHEMA_DIR:-/opt/rsi-services/temporal/schema/postgresql/v12}
 CONTROL=${CONTROL:-$BASE/durable-control}; POOL=${POOL:-$BASE/pool}; BRIDGE=${BRIDGE:-$BASE/bridge}
 LOGS=$BASE/control-logs; mkdir -p "$LOGS"
 COORDINATORS=${COORDINATORS:-4}; TASK_QUEUE=${TASK_QUEUE:-ecarsi-durable-v2}
@@ -21,7 +28,7 @@ BINDS=${BINDS:-/scratch,/oak,/home,/lscratch}
 HOST_IP=$(hostname -I | awk '{print $1}')
 HOSTPY=${HOSTPY:-python3}                                 # Periscope (with the control-plane monitor at /_control/) runs on a host interpreter
 PY=(apptainer exec --cleanenv --bind "$BINDS" --env LC_ALL=C --env LANG=C
-    --env "PYTHONPATH=$CODE:/opt/rsi-control" --env PYTHONNOUSERSITE=1 --env PYTHONSAFEPATH=1
+    --env "PYTHONPATH=$CODE_IN:/opt/rsi-control" --env PYTHONNOUSERSITE=1 --env PYTHONSAFEPATH=1
     --env PYTHONDONTWRITEBYTECODE=1 --env OPENBLAS_NUM_THREADS=1 --env OMP_NUM_THREADS=1
     "$IMG" /usr/local/bin/python3)
 
@@ -36,7 +43,23 @@ pattern() { case $1 in temporal) echo "ecarsi.control.temporal --root $CONTROL";
 # Skip container wrappers, interactive `bash -c` shells and this script's own subshells: a shell whose
 # command text merely mentions a component (an editor, a heredoc) must never count as, or be killed as, that component.
 pids() { pgrep -u "$USER" -f "$(pattern "$1")" | while read -r p; do tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -qE 'apptainer|bash -c|control-plane\.sh' || echo "$p"; done; }
-launch() { local name=$1; shift; (cd "$CODE" && exec setsid nohup "$@" >>"$LOGS/$name.log" 2>&1 < /dev/null) & }
+launch() { local name=$1; shift; (cd "$HOST_CD" && exec setsid nohup "$@" >>"$LOGS/$name.log" 2>&1 < /dev/null) & }
+# Which eca-rsi runs: a checkout (path + commit) or the image snapshot (its BUILD.json). Logged at every start,
+# because a checkout and a snapshot can carry the same version number with different source.
+identity() {
+  if [ -n "$CODE" ]; then echo "eca-rsi: checkout $CODE @ $(git -C "$CODE" log -1 --format='%h %cs' 2>/dev/null || echo '?')"
+  else echo "eca-rsi: image snapshot $("${PY[@]}" -c 'print(open("/opt/eca-rsi/BUILD.json").read().strip())' 2>/dev/null)"; fi
+}
+# Host-side helpers (worker launch, add-worker) need eca-rsi on the host: they call scontrol, nvidia-smi and ssh,
+# which the images do not have. Unpack the image snapshot next to the control state once per start.
+host_code() {
+  [ -n "$CODE" ] && { echo "$CODE"; return; }
+  local dest=$BASE/image-code
+  rm -rf "$dest.new"; mkdir -p "$dest.new"
+  apptainer exec "$IMG" tar -C /opt/eca-rsi -cf - . | tar -C "$dest.new" -xf -
+  rm -rf "$dest.old"; [ -d "$dest" ] && mv "$dest" "$dest.old"; mv "$dest.new" "$dest"; rm -rf "$dest.old"
+  echo "$dest"
+}
 
 start() {
   [ "$1" != coordinators ] && pids "$1" | grep -q . && return 0   # coordinators top up to COORDINATORS below
@@ -53,13 +76,14 @@ start() {
     coordinators) local n; n=$(pids coordinators | wc -l)
         for ((i=n; i<COORDINATORS; i++)); do launch "coordinator-$i" env "APPTAINERENV_ECA_RSI_STAGE_LIMIT_FLOORS=$STAGE_LIMIT_FLOORS" \
             "${PY[@]}" -m ecarsi.control --service-root "$CONTROL" --task-queue "$TASK_QUEUE" worker --workflow-slots 2; done ;;
-    observatory) launch observatory env PYTHONPATH="$CODE" "$HOSTPY" -m ecarsi.serve --registry "$BASE/periscope-registry.json" --control-plane "$BASE" \
+    observatory) launch observatory apptainer exec --cleanenv --bind "$BINDS" --env "PYTHONPATH=$CODE_IN:/opt/rsi-control:/opt/rsi-python" \
+        "${SCIENCE_IMG:?science image for Periscope}" /usr/local/bin/python3.12 -m ecarsi.serve --registry "$BASE/periscope-registry.json" --control-plane "$BASE" \
         --control-pool-root "$POOL" --control-bridge-root "$BRIDGE" --control-temporal-root "$CONTROL" --bind "$HOST_IP" --port "${OBSERVATORY_PORT:-8765}" ;;
-    fleet-status) launch fleet-status "${PY[@]}" "$CODE/container/fleet-status.py" --service-root "$CONTROL" --out "$BASE/fleet-status.json" ;;
+    fleet-status) launch fleet-status "${PY[@]}" "$CODE_IN/container/fleet-status.py" --service-root "$CONTROL" --out "$BASE/fleet-status.json" ;;
     runners) launch runners "${PY[@]}" -m ecarsi.agent runners "$BRIDGE" ;;
-    pruner) launch request-pruner "${PY[@]}" "$CODE/container/request-pruner.py" --service-root "$CONTROL" --pool-root "$POOL" \
+    pruner) launch request-pruner "${PY[@]}" "$CODE_IN/container/request-pruner.py" --service-root "$CONTROL" --pool-root "$POOL" \
         --fleet-status "$BASE/fleet-status.json" --interval "${PRUNE_INTERVAL:-3600}" ;;
-    keeper) launch worker-keeper env CODE="$CODE" HOSTPY="$HOSTPY" "$CODE/container/worker-keeper.sh" "$POOL" ;;
+    keeper) local hc; hc=$(host_code); launch worker-keeper env CODE="$hc" HOSTPY="$HOSTPY" "$hc/container/worker-keeper.sh" "$POOL" ;;
   esac
 }
 stop() {
@@ -71,12 +95,14 @@ status() { for c in temporal hq scheduler bridge runners coordinators observator
 cmd=${1:-status}; shift || true
 comps=("$@"); [ ${#comps[@]} -eq 0 ] && comps=(temporal hq scheduler bridge runners coordinators observatory fleet-status pruner keeper)
 case $cmd in
-  start) for c in "${comps[@]}"; do start "$c"; done; sleep 2; status ;;
+  start) identity | tee -a "$LOGS/identity.log"; host_code >/dev/null; for c in "${comps[@]}"; do start "$c"; done; sleep 2; status ;;
   stop) for c in "${comps[@]}"; do stop "$c"; done; status ;;
-  restart) for c in "${comps[@]}"; do stop "$c"; done; for c in "${comps[@]}"; do start "$c"; done; sleep 3; status ;;
+  restart) identity | tee -a "$LOGS/identity.log"; host_code >/dev/null; for c in "${comps[@]}"; do stop "$c"; done; for c in "${comps[@]}"; do start "$c"; done; sleep 3; status ;;
+  identity) identity ;;
+  host-code) host_code ;;   # the eca-rsi that host-side helpers (worker-node.sh, add-worker) should put on PYTHONPATH
   status) status ;;
   report) (cd /tmp && "${PY[@]}" -m ecarsi.observatory status --root "$BASE" --pool-root "$POOL" --bridge-root "$BRIDGE" --temporal-service-root "$CONTROL" "$@") ;;
   tokens) (cd /tmp && "${PY[@]}" -m ecarsi.observatory tokens --bridge-root "$BRIDGE" "$@") ;;   # per-dataset token totals; one paced walk of the bridge
   productivity|timeline) (cd /tmp && "${PY[@]}" -m ecarsi.observatory "$cmd" --root "$BASE" --pool-root "$POOL" "$@") ;;   # the Operations page's tables, on the command line
-  *) echo "usage: $0 start|stop|restart|status [component...] | report [--sessions HOURS] [--json] | tokens [--json] | productivity [--json] | timeline [--hours H] [--host NODE] [--dataset SUBSTR] [--running] [--json]"; exit 2 ;;
+  *) echo "usage: $0 start|stop|restart|status [component...] | identity | host-code | report [--sessions HOURS] [--json] | tokens [--json] | productivity [--json] | timeline [--hours H] [--host NODE] [--dataset SUBSTR] [--running] [--json]"; exit 2 ;;
 esac
