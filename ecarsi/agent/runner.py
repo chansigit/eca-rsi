@@ -67,18 +67,30 @@ async def serve_runner(root, model, *, once=False, max_calls=MAX_CALLS):
 async def run_one(marker, item):
     turn_dir = Path(item["turn_dir"])
     try:
+        if (turn_dir / "started.json").exists():
+            # An earlier runner died inside this turn (SIGKILL, OOM) and left its marker. Running it again
+            # would call the provider twice; worker_lost makes the bridge retry it as a new attempt.
+            if not (turn_dir / "result.json").exists():
+                unfinished(turn_dir, item, "worker_lost")
+            return
         plan = read(item["plan"])
         if plan is None:
             raise FileNotFoundError(item["plan"])
         await perform(plan, turn_dir)
     except Exception as exc:  # noqa: BLE001 - the bridge reads result.json, never our stack
         if not (turn_dir / "result.json").exists():
-            save(turn_dir / "result.json", dict(outcome="local_error", response=None, error=type(exc).__name__, error_detail=str(exc)[:2000],
-                                                 worker=dict(host=os.uname().nodename.split(".")[0], pid=os.getpid()),
-                                                 elapsed_seconds=None, model=item.get("model"), provider_response=None))
+            unfinished(turn_dir, item, "local_error", exc)
         raise
     finally:
         marker.unlink(missing_ok=True)
+
+
+def unfinished(turn_dir, item, outcome, exc=None):
+    """result.json for a turn perform() did not finish; the bridge reads only this file."""
+    save(turn_dir / "result.json", dict(outcome=outcome, response=None, error=exc and type(exc).__name__,
+                                         error_detail=exc and str(exc)[:2000],
+                                         worker=dict(host=os.uname().nodename.split(".")[0], pid=os.getpid()),
+                                         elapsed_seconds=None, model=item.get("model"), provider_response=None))
 
 
 def supervise(root, interval=5):

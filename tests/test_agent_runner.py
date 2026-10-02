@@ -99,3 +99,17 @@ def test_runner_performs_routed_turns_and_a_lost_runner_falls_back_to_the_pool(t
         bridge.serve(root, once=True)  # a fresh process would load the same file; the loop keeps it current
     finally:
         server.shutdown()
+
+
+def test_a_turn_started_by_a_dead_runner_is_settled_lost_not_run_again(tmp_path, monkeypatch):
+    """#22: a SIGKILLed runner leaves its queue marker; the restarted runner re-ran perform() on
+    the same turn, calling the provider twice."""
+    import pytest
+    import ecarsi.agent.runner as runner
+    monkeypatch.setattr(runner, 'perform', lambda *a: pytest.fail('the started turn was performed again'))
+    turn_dir, marker = tmp_path / 'turn', tmp_path / 'queue' / 't.json'
+    turn_dir.mkdir(); marker.parent.mkdir()
+    save(turn_dir / 'started.json', dict(started_at=1.0))
+    save(marker, dict(plan=str(tmp_path / 'plan.json'), turn_dir=str(turn_dir)))
+    asyncio.run(runner.run_one(marker, read(marker)))
+    assert read(turn_dir / 'result.json')['outcome'] == 'worker_lost' and not marker.exists()
