@@ -84,7 +84,7 @@ For details, see [docs/control-plane/ARCHITECTURE.md](docs/control-plane/ARCHITE
 | `OPENAI_AGENTS_API` | The options are `responses` and `chat_completions`. The default value is `responses`. |
 | `OPENAI_AGENTS_MAX_NUDGES`, `OPENAI_AGENTS_MAX_CONTEXT_RESETS` | The default value is 2 for each variable. |
 | `OPENAI_AGENTS_SERVER_STATE` | The default value is 1. This value enables incremental Responses continuation. |
-| `AGENT_WALL_MIN` | Specifies the wall-clock budget per agent call for all backends. The default value is 180 min. |
+| `AGENT_WALL_MIN` | Specifies the wall-clock budget per agent run on the local path (the bridge harnesses). The default value is 180 min. The control-plane path does not read it: there a session is bounded by `max_turns` × the per-turn response timeout (bridge `response_timeout_seconds`, 900 s). |
 | `AGENT_MODEL_POOL` | Specifies an ordered fallback list of `harness:model,...`. Set `AGENT_MODEL_POOL_ROTATE=1` to rotate the start per subprocess. This setting is off by default. |
 | `PERSAMPLE_PARALLEL`, `PERSAMPLE_MEM_PER_CELL_MB`, `ZMIP_PARALLEL` | Configures local-path concurrency. The control-plane path budgets per request instead. |
 | `MSP_BATCH_COL` | Specifies the explicit batch column. Keep this value constant within each OSP experiment. |

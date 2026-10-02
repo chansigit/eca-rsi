@@ -262,7 +262,7 @@ Agent backends:
 | `OPENAI_AGENTS_MAX_NUDGES` | Reminders in the same history when the agent does not submit. The default is 2. |
 | `OPENAI_AGENTS_MAX_CONTEXT_RESETS` | Recoveries from an over-long context. The default is 2. |
 | `OPENAI_AGENTS_SERVER_STATE` | The default is 1. When set to 1, Responses continues with `previous_response_id`. |
-| `AGENT_WALL_MIN` | Wall-clock budget for one agent call. The default is 180 minutes. |
+| `AGENT_WALL_MIN` | Wall-clock budget for one agent run on the local path. The default is 180 minutes. The control-plane path bounds a session by `max_turns` × the per-turn response timeout (900 s) instead. |
 | `AGENT_MODEL_POOL` / `AGENT_MODEL_POOL_ROTATE` | Ordered fallback list formatted as `harness:model,...`. Set `ROTATE=1` to stagger the start model per subprocess. |
 | `DSH_BIN` | The dsh binary for `HARNESS=deepseek`. |
 
