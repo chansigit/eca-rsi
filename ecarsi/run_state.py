@@ -109,7 +109,13 @@ def runtime_identity() -> dict:
         # content only: the checkout path and git commit are provenance (see
         # source_provenance), not identity — a doc-only commit or the same
         # source at another path must not invalidate a resume
-        result["packages"][module] = {"version": importlib.metadata.version(dist), "source_sha256": source}
+        # A checkout on PYTHONPATH (the control-plane containers) has no distribution metadata; the
+        # version is then None, as in source_provenance -- the source digest is what identifies it.
+        try:
+            version = importlib.metadata.version(dist)
+        except importlib.metadata.PackageNotFoundError:
+            version = None
+        result["packages"][module] = {"version": version, "source_sha256": source}
     return result
 
 

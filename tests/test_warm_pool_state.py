@@ -99,6 +99,11 @@ def test_recovery_cache_keeps_live_orphan_resources_reserved(tmp_path):
         proc.wait(timeout=5)
 
 
+# A live worker for the fake `hq worker list`: the scheduler submits nothing while no worker could hold it.
+LIVE_WORKER = {"configuration": {"resources": {"resources": [{"kind": "list", "name": "cpus", "values": list(range(8))},
+                                                             {"kind": "sum", "name": "mem", "size": 32768 * 10000}]}}}
+
+
 def test_dispatch_cache_revisits_retries_cancellation_and_replayed_jobs(tmp_path, monkeypatch):
     from ecarsi.warm_pool.backend import HyperQueue
     from ecarsi.warm_pool.state import retry
@@ -119,6 +124,8 @@ def test_dispatch_cache_revisits_retries_cancellation_and_replayed_jobs(tmp_path
         calls.append(args)
         if args[:2] == ('job', 'list'):
             return [dict(name='rsi.r.' + request['attempt_id'], id=1, task_stats=dict(waiting=1, running=0))]
+        if args[:2] == ('worker', 'list'):
+            return [LIVE_WORKER]
         return {'id': 2}
     monkeypatch.setattr(backend, 'call', call)
     info = dict(server_uid='one', pid=1, start_date='one')
@@ -314,6 +321,8 @@ def test_dispatch_submits_concurrently_and_resubmits_a_failed_submission(tmp_pat
                 done = _os.path.exists(_os.path.join(str(tmp_path), 'requests', request_id, attempt, 'receipt.json'))
                 return dict(waiting=0 if done else 1, running=0, finished=1 if done else 0)
             return [dict(name=name, id=7, task_stats=stats(name)) for name in known]
+        if args[:2] == ('worker', 'list'):
+            return [LIVE_WORKER]
         if args[0] == 'submit':
             name = args[args.index('--name') + 1]
             if name.split('.')[1] in broken:
@@ -465,6 +474,8 @@ def test_a_submission_stranded_by_an_earlier_server_generation_is_submitted_agai
         calls.append(args)
         if args[:2] == ('job', 'list'):
             return [dict(name=name, id=9, task_stats=dict(waiting=1, running=0, finished=0)) for name in known]
+        if args[:2] == ('worker', 'list'):
+            return [LIVE_WORKER]
         if args[0] == 'submit':
             known.append(args[args.index('--name') + 1])
             return {'id': 9}
