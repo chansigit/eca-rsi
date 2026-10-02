@@ -492,6 +492,7 @@ def dataset_step(action, args):
         from .. import stages
         spec, label, final = args
         key = digest([label, bool(final)])[:16]
+        (Path(spec['output_root']) / 'display-sync').mkdir(exist_ok=True)
         packet = immutable(Path(spec['output_root']) / 'display-sync' / (key + '.json'),
                            dict(zone(spec), root=spec['output_root'], final=bool(final), label=label))
         programs = [stages.program('display'), stages.PACKAGE / 'display.py', stages.PACKAGE / 'archive.py']

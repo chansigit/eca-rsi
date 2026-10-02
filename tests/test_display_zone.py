@@ -115,3 +115,21 @@ def test_a_display_sync_rides_the_tool_priority_class():
     from ecarsi.warm_pool.backend import request_class
     assert request_class({"operation_id": "dataset.display", "request_id": "run.display-0123"}) == "tool"
     assert request_class({"operation_id": "dataset.release", "request_id": "run.release-0123"}) == "work"
+
+
+def test_the_display_activity_writes_its_packet_and_submits_a_tool_class_request(tmp_path, monkeypatch):
+    """The activity itself, not a stand-in: its first call in a run must create display-sync/ (it did not, 2026-10-02)."""
+    import ecarsi.control.dataset as module
+    import ecarsi.warm_pool.state as state
+    submitted = []
+    monkeypatch.setattr(state, "submit", lambda root, request: submitted.append((root, request)))
+    out = tmp_path / "runs" / "11_Shietal"
+    out.mkdir(parents=True)
+    spec = dict(storage=STORAGE, run_id="t1", dataset_id="T", output_root=str(out), pool_root=str(tmp_path / "pool"),
+                input_root="/oak/sc/chondroatlas/eca-pp/11_Shietal/standardize")
+    result = module.dataset_step("display", [spec, "organize", False])
+    (root, request), = submitted
+    assert result == {"id": request["request_id"], "output": "synced.json"} and ".display-" in request["request_id"]
+    packet = json.loads(Path(request["inputs"][0]["path"]).read_text())
+    assert packet["dest"] == "/oak/eca/display/chondroatlas/11_Shietal/t1" and packet["root"] == str(out) and not packet["final"]
+    assert request["cpus"] == 1 and module.dataset_step("display", [spec, "published", True])["id"] != result["id"]
