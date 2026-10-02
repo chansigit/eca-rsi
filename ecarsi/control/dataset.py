@@ -576,10 +576,12 @@ class AnalysisUnitWorkflow:
             # reader should not have to wait for the release to see where the cells went.
             try:
                 request = await call(dataset_step, 'round-ledger', [spec, unit, progress])
-                result = await await_pool(spec, request)
+                # Bounded: the next round waits on this report, and an infeasible request held it forever (#18).
+                limit = 2 * spec['zoom_in']['merge_budget']['timeout_seconds']
+                result = await asyncio.wait_for(await_pool(spec, request), limit)
                 await call(dataset_step, 'round-ledger-published', [spec, unit, progress, result])
             except Exception as exc:  # a report is not worth failing a finished round over
-                print(f'[round] ledger not published: {exc}', flush=True)
+                print(f'[round] ledger not published: {exc!r}', flush=True)
         if progress.get('paused'):
             # The round is complete and published, with its ledger; only the next one is withheld.
             # Failing is how a unit stops without releasing and stays resumable -- the same

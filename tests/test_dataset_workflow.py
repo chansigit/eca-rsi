@@ -170,6 +170,30 @@ def test_unit_waits_for_accepted_pool_release_before_completing(monkeypatch):
     assert actions[-3:] == ['release', 'await release', 'released']
 
 
+def test_a_ledger_that_never_runs_does_not_hold_the_unit(monkeypatch):
+    # #18: the round-ledger wait is bounded (2x its budget); on expiry the unit carries on.
+    import ecarsi.control.dataset as module
+    actions = []
+    async def call(fn, action, args):
+        actions.append(action)
+        return {'round-ledger': {'id': 'ledger', 'output': 'ledger.json'}, 'release': {'id': 'release', 'output': 'r.json'},
+                'round': {'publication': 'unit.json'}, 'stage': {'run_id': action}}.get(action)
+    async def pool(spec, request):
+        if request['id'] == 'ledger':
+            await asyncio.sleep(5)  # stands for an infeasible request; unbounded, the ledger would publish
+        return 'result.json'
+    async def child(*args, **kwargs):
+        return 'stage.json'
+    monkeypatch.setattr(module, 'call', call)
+    monkeypatch.setattr(module, 'await_pool', pool)
+    monkeypatch.setattr(module.workflow, 'execute_child_workflow', child)
+    monkeypatch.setattr(module.workflow, 'patched', lambda name: True)
+    spec = {'zoom_in': {'merge_budget': {'timeout_seconds': 0.01}}}
+    progress = dict(per_sample='per.json', input='zoom.json', stats=[{}], rounds=[{}])
+    assert asyncio.run(AnalysisUnitWorkflow().run(spec, {}, progress)) == 'unit.json'
+    assert 'round-ledger-published' not in actions and actions[-2:] == ['release', 'released']
+
+
 def test_completed_stage_requires_same_input_spec_and_accepted_result(tmp_path, monkeypatch):
     import ecarsi.control.coordinator as coordinator
     pool = tmp_path / 'pool'
