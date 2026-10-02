@@ -1,3 +1,8 @@
+from datetime import datetime, timezone
+import math
+
+import pytest
+
 from ecarsi.warm_pool.backend import cpu_capable, gpu_jobfile, hq_priority, hq_version, release_plan, unpin_due, worker_capacity
 
 
@@ -40,7 +45,10 @@ def test_worker_capacity_reads_hq_json():
         {"kind": "list", "name": "cpus", "values": ["0", "1", "2", "3"]},
         {"kind": "sum", "name": "mem", "size": 294910000},
         {"kind": "list", "name": "gpuSlot/0", "values": ["uuid#0"]}]}}}
-    assert worker_capacity([w, dict(w, ended="x")]) == [(4, 29491.0, 1)]
+    assert worker_capacity([w, dict(w, ended="x")]) == [(4, 29491.0, 1, math.inf)]
+    timed = dict(w, started="2026-10-02T06:33:17.785409871Z", configuration=dict(w["configuration"], time_limit=7979.0))
+    started = datetime(2026, 10, 2, 6, 33, 17, 785409, tzinfo=timezone.utc).timestamp()
+    assert worker_capacity([timed], now=started + 1565)[0][3] == pytest.approx(6414)
 
 
 def test_a_vanished_request_is_skipped_not_submitted(tmp_path):
@@ -197,12 +205,16 @@ def test_hq_version_accepts_the_release_and_source_builds():
 def test_a_request_no_worker_can_hold_is_marked_infeasible_not_queued(tmp_path):
     from ecarsi.warm_pool.backend import infeasible
     from ecarsi.warm_pool.state import observation, read, save
-    small, big = (6, 24576.0, 0), (64, 118000.0, 1)
+    small, big = (6, 24576.0, 0, math.inf), (64, 118000.0, 1, math.inf)
     assert infeasible(dict(cpus=4, memory_mb=8192), [small]) is None
     assert infeasible(dict(cpus=12, memory_mb=8192), [small]).startswith("no worker holds 12 cpus / 8192 MB (largest 6 cpus")
     assert infeasible(dict(cpus=1, memory_mb=1024, gpu=dict(mode="required")), [small]).endswith("+ a GPU (largest 6 cpus / 24576 MB)")
     assert infeasible(dict(cpus=1, memory_mb=1024, gpu=dict(mode="required")), [small, big]) is None
     assert infeasible(dict(cpus=1, memory_mb=1024), []) == "no live worker"
+    ending = (16, 29491.0, 0, 6414.0)
+    assert infeasible(dict(cpus=4, memory_mb=12288, time_request_seconds=7230), [ending]) == \
+        "no worker that holds 4 cpus / 12288 MB has 7230 s left"
+    assert infeasible(dict(cpus=4, memory_mb=12288, time_request_seconds=7230), [ending, small]) is None
     # through _release: the observation names the reason, nothing is submitted, and a fitting worker frees it
     hq = bare()
     folder, attempt = tmp_path / "r", tmp_path / "r" / "a"

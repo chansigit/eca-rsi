@@ -318,8 +318,10 @@ RELEASE_DEFAULTS = dict(
 MEASURE_INTERVAL = 1800  # seconds between runs of the journal measurement
 
 
-def worker_capacity(workers):
-    """Live HQ workers as (cpus, memory_mb, gpu_slots) from `hq worker list` JSON."""
+def worker_capacity(workers, now=None):
+    """Live HQ workers as (cpus, memory_mb, gpu_slots, seconds_left) from `hq worker list` JSON;
+    seconds_left is inf for a worker without a time limit."""
+    now = time.time() if now is None else now
     out = []
     for w in workers or []:
         if w.get("ended"):
@@ -332,7 +334,9 @@ def worker_capacity(workers):
                 mem = r.get("size", 0) / 10000
             elif r["name"].startswith("gpuSlot/"):
                 gpus += len(r.get("values") or []) or 1
-        out.append((cpus, mem, gpus))
+        limit = w["configuration"].get("time_limit")
+        left = datetime.fromisoformat(w["started"]).timestamp() + limit - now if limit else math.inf
+        out.append((cpus, mem, gpus, left))
     return out
 
 
@@ -341,13 +345,18 @@ def infeasible(spec, capacity):
     HQ can never place would wait in its queue for good (2,700 of the 352k requests of 2026-09-24 in the
     replay; a wide zoom-in.apply behind six-core test workers); marking it here keeps it out of HQ and
     names the reason in its observation and in scheduler.json, and it is re-tried every tick, so a
-    worker joining later picks it up."""
+    worker joining later picks it up. HQ also places a task only on a worker with its time_request left
+    (2026-10-02: a 2 h cross-sample compute queued behind three warm-pool workers with 1.5 h left). The
+    reasons name only the request, so they stay the same from tick to tick."""
     if not capacity:
         return "no live worker"
     gpu = (spec.get("gpu") or {}).get("mode") == "required"
-    if any(c[0] >= spec["cpus"] and c[1] >= spec["memory_mb"] and (c[2] or not gpu) for c in capacity):
+    fits = [c for c in capacity if c[0] >= spec["cpus"] and c[1] >= spec["memory_mb"] and (c[2] or not gpu)]
+    if any(c[3] >= spec.get("time_request_seconds", 0) for c in fits):
         return None
-    cpus, mem, _ = max(capacity, key=lambda c: (c[0], c[1]))
+    if fits:
+        return f"no worker that holds {spec['cpus']} cpus / {spec['memory_mb']} MB has {spec['time_request_seconds']} s left"
+    cpus, mem, *_ = max(capacity, key=lambda c: (c[0], c[1]))
     return f"no worker holds {spec['cpus']} cpus / {spec['memory_mb']} MB{' + a GPU' if gpu else ''} (largest {cpus} cpus / {int(mem)} MB)"
 
 
