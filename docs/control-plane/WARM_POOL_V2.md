@@ -420,7 +420,7 @@ counts, plus current and 5-minute GPU/VRAM measurements (30-second samples,
 10-second page refresh). Busy counts mean granted tasks, not utilization.
 
 The scientific image contains both CPU and RAPIDS dependencies; its package
-and OSP source manifest is [container/science-runtime-20260915.json](../container/science-runtime-20260915.json).
+and OSP source manifest is [container/science-runtime-20260915.json](../../container/science-runtime-20260915.json).
 Validation records are under
 `/scratch/users/chensj16/eca-runs/warmpool-v2-development/gpu-integration-20260915-004458`:
 `scheduling-acceptance.json`, `science-acceptance.json`, and `monitor-during-gpu.json`.

@@ -116,7 +116,7 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
 - persample 前半程接入已升级：逐来源实验映射、`eca_sample_id`、上游快照、完整实验池检查；
   同名样本默认跨来源隔离，跨文件合池须显式映射。统一 `ecarsi.osp_worker` 子进程调用 OSP 公共 API。
   每样本成功状态、内容指纹和 QC 细胞守恒共同决定完成；只自动重试明确临时错误，注释失败可单独恢复。
-  参数、迁移及测试见 [FRONT_INTEGRATION.md](FRONT_INTEGRATION.md)。MSP/ZMIP 冻结已解除；后段升级记录见 [DOWNSTREAM_INTEGRATION.md](DOWNSTREAM_INTEGRATION.md)。
+  参数、迁移及测试见 [docs/front-integration.md](docs/front-integration.md)。MSP/ZMIP 冻结已解除；后段升级记录见 [docs/history/DOWNSTREAM_INTEGRATION.md](docs/history/DOWNSTREAM_INTEGRATION.md)。
 - zmip plan 有 host 连通性校验:`lineage_islands.csv`(UMAP 2D kNN 连通分量)——把分开的岛并成一个 lineage 直接打回;
   同一岛拆成多个 lineage 打回一次,agent 可带 `confirm_shared_islands: true` 重交,记入 plan 的 `host_warnings` 与 needs_review。
 - 历史测试与服务记录（使用前核对当前目录和进程）：`$SCRATCH/eca-runs/_organize_test/fu2022/fu2022-meniscus` 是旧结构的真实跑(不迁移);
@@ -167,7 +167,7 @@ eca-rsi <step> ... / eca-rsi run ...                # console 入口(ecarsi/__ma
   ZMIP 同岛拆分要求 `shared_island_reviews`。不把缺失 DEG 或固定混合百分比当作强制合并依据。
 - `MSP_BATCH_COL` 可显式选择校正列，完整 OSP 实验内必须只有一个值；默认仍为 `eca_sample_id`，
   不自动推断 biological condition 应被校正，不将校正分组用于重切 OSP 实验池。
-- sample map 的两个声明式细胞策略（`ecarsi/policies.py`，见 FRONT_INTEGRATION.md）：`exclude_cells`
+- sample map 的两个声明式细胞策略（`ecarsi/policies.py`，见 docs/front-integration.md）：`exclude_cells`
   （`where` 精确匹配 / `blank` 所列列全缺失；切 OSP subset 之前执行；未知列报错、命中 0 细胞记 warning；
   每个细胞写 `persample/excluded_cells.csv`，ledger 记 `removed:persample-policy:<reason>`，守恒检查含此项，
   needs_review 有 `policy_excluded` 节；规则进映射身份）和 `batch_key`（host 校验每个 OSP 实验内恒定、NA 忽略并按实验回填、
@@ -210,7 +210,7 @@ python -m pytest -q tests/test_downstream.py tests/test_downstream_state.py test
   改页面不该让在跑的阶段作废——那正是 2026-09-07 两次重算的原因。`run_state.PRESENTATION` 是这条规则,
   按目录而非文件清单;`ecarsi/{serve,index,umapdata}.py` 只剩 shim,保住 `python -m ecarsi.serve` 这个拼写(部署脚本在用)。
 
-## 控制面路径：durable 控制面（0.3.1 起在 main，原 `gen2` 分支 2026-09-17 起；细节见 [docs-gen2/ARCHITECTURE.md](docs-gen2/ARCHITECTURE.md)）
+## 控制面路径：durable 控制面（0.3.1 起在 main，原 `gen2` 分支 2026-09-17 起；细节见 [docs/control-plane/ARCHITECTURE.md](docs/control-plane/ARCHITECTURE.md)）
 
 同一套内核，包装成 Temporal + HyperQueue + Bridge 的批量系统；本地路径的模块位置不动，控制面的代码收进子包：
 
@@ -228,7 +228,7 @@ ecarsi/observatory.py   控制面监视器（2026-09-18 起并入 Periscope：`e
   `ecarsi.serve --control-plane <run dir>`（Periscope 侧栏多一项 Control plane）；`container/control-plane.sh` 是启动模板，部署副本放运行目录并在那里配路径。
 - 请求按内容 pin 程序文件、按请求 id 回放已存内容：会话在飞时不改 stages / agent/session.py；旧布局的已存请求
   在新布局下不能回放，切换只在没有会话在飞时做（或归档相关请求后 resume）。
-- 控制面路径的文档在 `docs-gen2/`（AGENT_BRIDGE_V2、WARM_POOL_V2、DURABLE_CONTROL、DATASET_V2 …），`design/` 是设计页。
+- 控制面路径的文档在 `docs/control-plane/`（AGENT_BRIDGE_V2、WARM_POOL_V2、DURABLE_CONTROL、DATASET_V2 …），`docs/design/` 是设计页，`docs/diagrams/` 是架构图，`docs/history/` 是过时文档与验收记录。
 - 控制面节点上不要无节制扫描 pool / bridge 的 requests 目录（会拖垮协调器的 Lustre 客户端）。
 - **会话死亡**（2026-09-18 起）：任何 agent 会话失败先自动重开一次全新会话（`-r2`，同一份证据）；再失败时样本跳过
   （不注释、先验标签 `unannotated`，needs_review `agent_skipped`）或 lineage 跳过（保留 cross-sample 标签，写进 plan reason），

@@ -2,10 +2,10 @@
 
 审查日期：2026-09-04。状态：用户已授权实施，A/B/C 已落地，D 已完成前半程验收。
 
-下文第 2–6 节保留实施前的审查证据。新版行为见 [FRONT_INTEGRATION.md](../../FRONT_INTEGRATION.md)，
+下文第 2–6 节保留实施前的审查证据。新版行为见 [FRONT_INTEGRATION.md](../front-integration.md)，
 实际验收与剩余边界见 [FRONT_VALIDATION.md](FRONT_VALIDATION.md)。
 2026-09-05 更新：用户已解除 MSP/ZMIP 冻结；最新源码审查、复现与 E1–E4 实施规划见
-[DOWNSTREAM_INTEGRATION.md](../../DOWNSTREAM_INTEGRATION.md)。下文冻结措辞保留为前阶段历史记录。
+[DOWNSTREAM_INTEGRATION.md](DOWNSTREAM_INTEGRATION.md)。下文冻结措辞保留为前阶段历史记录。
 
 本次覆盖 `eca-pp → organize → persample → osp`，以及共享 `agent-harness-bridge` 的接入边界。
 MSP、ZMIP 及其 crosssample / zoomin 调用适配暂缓，等用户通知其开发完成后再审查和实施。

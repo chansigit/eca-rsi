@@ -84,7 +84,7 @@ RSI aligns that evidence to the original cell IDs and identifies experiments
 within each source. Two sources both using `sample=S1` remain separate OSP
 inputs. A technical batch column is not automatically an experimental sample
 column; explicit sample mappings are supported. See
-[FRONT_INTEGRATION.md](FRONT_INTEGRATION.md) for mapping formats.
+[docs/front-integration.md](docs/front-integration.md) for mapping formats.
 
 A sample map can also declare two cell policies that the host applies
 deterministically and never infers (`ecarsi/policies.py`):
@@ -179,9 +179,9 @@ eca-rsi run /path/to/eca-pp-output /path/to/eca-runs/new-study --stop-after pers
 
 For explicit experiment mappings and OSP options, run `organize` and
 `persample` separately. The front and downstream integration records are in
-[FRONT_INTEGRATION.md](FRONT_INTEGRATION.md) and
-[DOWNSTREAM_INTEGRATION.md](DOWNSTREAM_INTEGRATION.md).
-`FRONT_COMPATIBILITY.json` records the earlier front-only validation snapshot;
+[docs/front-integration.md](docs/front-integration.md) and
+[docs/history/DOWNSTREAM_INTEGRATION.md](docs/history/DOWNSTREAM_INTEGRATION.md).
+`docs/history/FRONT_COMPATIBILITY.json` records the earlier front-only validation snapshot;
 it is not the current full-workflow dependency list.
 
 ### Processing stages
@@ -411,13 +411,13 @@ run, from 81,079 to 75,394 cells. Clayton used historical ECA-PP 0.2 inputs;
 fixes received targeted validation rather than a complete repeat of all model
 decisions. These checks establish engineering behavior, not independently
 validated biological accuracy. Details and remaining review items are in
-[DOWNSTREAM_INTEGRATION.md](DOWNSTREAM_INTEGRATION.md).
+[docs/history/DOWNSTREAM_INTEGRATION.md](docs/history/DOWNSTREAM_INTEGRATION.md).
 
 ## Development and history
 
 See [CLAUDE.md](CLAUDE.md) for source layout, operating conventions, and targeted
 checks. See [CHANGELOG.md](CHANGELOG.md) for release changes and
-[docs/history/TODO.md](docs/history/TODO.md) for the policy discussions deferred in September. The [architecture diagram](diagrams/architecture.html) illustrates the
+[docs/history/TODO.md](docs/history/TODO.md) for the policy discussions deferred in September. The [architecture diagram](docs/diagrams/architecture.html) illustrates the
 main package flow; consult this README and the source for current runtime and
 resume behavior.
 
@@ -429,5 +429,5 @@ workflow. An older v0.1 archive (`attic-v01/`, never in git) is kept outside the
 
 The gen-1 Dask warm pool (`ecarsi.pool`, its Periscope panel and the `pool` / `auto` OSP compute endpoints) was removed in 0.3.2:
 generation 2 schedules every stage through HyperQueue (`ecarsi.warm_pool`). msp's own `MSP_COMPUTE_ENDPOINT=dask` is unaffected.
-The control-plane path is documented under [docs-gen2/](docs-gen2/ARCHITECTURE.md); its scheduler and DEG batching as of
+The control-plane path is documented under [docs/control-plane/](docs/control-plane/ARCHITECTURE.md); its scheduler and DEG batching as of
 2026-09-28 are summarised at the top of the changelog.

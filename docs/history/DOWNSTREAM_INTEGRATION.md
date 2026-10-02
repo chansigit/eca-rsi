@@ -8,7 +8,7 @@
 
 - RSI 输入交接、状态校验、细胞台账、续跑身份及跨轮发布保护已落地，资源副本已同步。
 - 最终发布组合：bridge **0.2.3**、OSP **0.1.2**、MSP/ZMIP **0.3.3**，均已同步
-  PyPI 与 GitHub Release。安装命令见 [INSTALL.md](INSTALL.md)。
+  PyPI 与 GitHub Release。安装命令见 [INSTALL.md](../../INSTALL.md)。
 - 最终验证：RSI **129 passed / 2 skipped**（不适用的首次发布故障注入），MSP
   **201 passed**，ZMIP **149 passed**，bridge **84 passed**。新鲜 Pandas 3 / AnnData
   0.13 的正常依赖安装与回归另有记录。

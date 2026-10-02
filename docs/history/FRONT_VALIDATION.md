@@ -14,7 +14,7 @@ MSP / ZMIP 的内核和 crosssample / zoomin 适配未修改，未运行后续�
 
 代码入口：[organize.py](../../ecarsi/organize.py)、[sample_mapping.py](../../ecarsi/sample_mapping.py)、
 [persample.py](../../ecarsi/persample.py)、[osp_worker.py](../../ecarsi/osp_worker.py)、[osp_contract.py](../../ecarsi/osp_contract.py)。
-使用方式：[FRONT_INTEGRATION.md](../../FRONT_INTEGRATION.md)。
+使用方式：[FRONT_INTEGRATION.md](../front-integration.md)。
 
 ## 自动检查
 
@@ -86,7 +86,7 @@ organize 保留完整文件，没有先按器官或任意细胞数裁样。
 - 初审上游为 `9c3c8c2`；实施期间 ECA-PP 新增 `6c025a7` 的 `.raw` 扩展。
   已核对变更：文件/schema/counts 契约不变，新增 `metrics.raw_expansion` 及复核原因由完整快照保留。
   构造结果的回归覆盖新增字段；未把实际 0.2.0 数据结果声称为新版重新生成。
-- OSP 仍为 `32bd68e`，bridge 仍为 `6a063c2`。精确记录见 [FRONT_COMPATIBILITY.json](../../FRONT_COMPATIBILITY.json)。
+- OSP 仍为 `32bd68e`，bridge 仍为 `6a063c2`。精确记录见 [FRONT_COMPATIBILITY.json](FRONT_COMPATIBILITY.json)。
 - 跨器官拆开同一实验时，新驱动会阻止局部池 QC；共享实验级 QC 尚未设计。
   没有实验依据的跨来源合池、派生 barcode 分组仍需明确实验信息，不能靠校正指标自动推断。
 - OSP 零幸存/不可聚类样本当前使 unit 未完成；其后续纳入、整合 batch 与物理样本的区别，继续等 MSP 定约。

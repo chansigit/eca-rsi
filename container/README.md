@@ -171,7 +171,7 @@ The second-generation modules live in subpackages: `ecarsi.control` (Temporal wo
 `ecarsi.agent` (`python -m ecarsi.agent serve`), `ecarsi.stages` (the programs the pool runs), `ecarsi.warm_pool` and
 `ecarsi.observatory`. [agent-worker-runtime-20260917.json](agent-worker-runtime-20260917.json) is the science runtime for that
 layout (the import list names the new modules); [control-plane.sh](control-plane.sh) is the launcher template the run
-directory copies and configures. See `docs-gen2/ARCHITECTURE.md`.
+directory copies and configures. See `docs/control-plane/ARCHITECTURE.md`.
 
 ## Science image 20260917-1 (OSP 0.1.7)
 

@@ -1,7 +1,8 @@
 # ECA-PP → organize → persample 接入与续跑
 
-本次升级止于 OSP 完成。MSP / ZMIP 及 crosssample / zoomin 适配仍待联合升级；
-新组合验证请使用分步命令，或 `run --stop-after persample`。
+前半程（ECA-PP 输入 → organize → persample → OSP）的接入规则、sample map 策略与续跑语义。
+后半程（MSP / ZMIP）的升级记录见 [history/DOWNSTREAM_INTEGRATION.md](history/DOWNSTREAM_INTEGRATION.md)；
+只验证前半程可用分步命令，或 `run --stop-after persample`。
 
 ## 输入与组织
 
@@ -167,8 +168,8 @@ LC_ALL=C LANG=C PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovide
 ```
 
 这些测试独立于 MSP/ZMIP。原有跨内核 harness/resources 检查保留，仍单独暴露冻结中的不一致。
-已测配套源码见 [FRONT_COMPATIBILITY.json](FRONT_COMPATIBILITY.json)，实际运行结果见
-[docs/history/FRONT_VALIDATION.md](docs/history/FRONT_VALIDATION.md)。ECA-PP 仍自带 harness 的迁移由上游独立协调。
+已测配套源码见 [docs/history/FRONT_COMPATIBILITY.json](history/FRONT_COMPATIBILITY.json)，实际运行结果见
+[docs/history/FRONT_VALIDATION.md](history/FRONT_VALIDATION.md)。ECA-PP 仍自带 harness 的迁移由上游独立协调。
 
 ## bridge 0.2.0 适配
 

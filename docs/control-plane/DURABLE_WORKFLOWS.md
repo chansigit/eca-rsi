@@ -6,7 +6,7 @@ The [first Warm Pool implementation](WARM_POOL_V2.md) verifies local recovery
 and Scheduler relocation between two Slurm hosts before scientific or Temporal integration.
 Current implementation entries: [dataset orchestration and iteration](DATASET_V2.md),
 [shared Temporal persistence and recovery](DURABLE_CONTROL.md),
-[cross-sample acceptance](CROSSSAMPLE_V2_ACCEPTANCE.md), and [Zoom-in acceptance](ZOOMIN_V2.md).
+[cross-sample acceptance](../history/CROSSSAMPLE_V2_ACCEPTANCE.md), and [Zoom-in acceptance](ZOOMIN_V2.md).
 
 ## Component names and proposed responsibility boundary
 
@@ -398,6 +398,6 @@ the v2 prototype, with auto-allocation disabled by user policy.
 - [Temporal integration and intermittent-host constraints (HTML)](../design/work-coordinator/temporal.html)
 - [Warm Pool Scheduler / Worker contracts (HTML)](../design/warm-pool/index.html)
 - [Agent Bridge shared routing, conversations and recovery (HTML)](../design/agent-bridge/index.html)
-- [HyperQueue evidence, recovery gaps and prototype acceptance](HYPERQUEUE_REVIEW.zh-CN.md)
+- [HyperQueue evidence, recovery gaps and prototype acceptance](../history/HYPERQUEUE_REVIEW.zh-CN.md)
 
 These are design documents, not implemented backend or recovery guarantees.

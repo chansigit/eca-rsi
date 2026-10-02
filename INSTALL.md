@@ -133,10 +133,10 @@ editable 安装的 `__file__` 应指向预期源码目录；wheel 安装应指�
 
 ## 前半程的历史验收记录
 
-[FRONT_COMPATIBILITY.json](FRONT_COMPATIBILITY.json) 保留前半程独立验收时的
+[docs/history/FRONT_COMPATIBILITY.json](docs/history/FRONT_COMPATIBILITY.json) 保留前半程独立验收时的
 源码版本与环境，属于历史基线，不是本轮安装锁定文件。不要把旧 OSP 提交与当前
 `[front]` extra 的新版本下限混用。样本映射、新参数和恢复规则见
-[FRONT_INTEGRATION.md](FRONT_INTEGRATION.md)。读取 ECA-PP 结果不要求安装整套上游。
+[docs/front-integration.md](docs/front-integration.md)。读取 ECA-PP 结果不要求安装整套上游。
 
 ## 5. 运行配置
 
@@ -171,7 +171,7 @@ editable 安装的 `__file__` 应指向预期源码目录；wheel 安装应指�
 | `AGENT_LIMIT_WAIT_MIN` / `AGENT_LIMIT_WAIT_MAX_H` | 额度等待间隔（分钟）/ 总预算（小时），默认 10 / 12 |
 
 `--allow-agent-change` 已移除；换模型/后端自动记录，不再拦截续跑。
-第二代的暖池（`ecarsi.warm_pool`，HyperQueue）同样使用你手动申请的 Slurm 作业，不会自动申请或归还资源；见 [docs-gen2/WARM_POOL_V2.md](docs-gen2/WARM_POOL_V2.md)。
+第二代的暖池（`ecarsi.warm_pool`，HyperQueue）同样使用你手动申请的 Slurm 作业，不会自动申请或归还资源；见 [docs/control-plane/WARM_POOL_V2.md](docs/control-plane/WARM_POOL_V2.md)。
 
 后端细节由共享 bridge 管理。更换解释器时，也要在对应环境安装兼容的内核和
 bridge。并非内核的全部 CLI 参数都能经由 `eca-rsi run` 传入，以驱动的帮助为准。
