@@ -136,7 +136,8 @@ def check_pool_once(root, request_id, output):
         return {"state": "waiting", "detail": "unknown_external_result"}
     if state["state"] in {"failed", "cancelled"}:
         return {"state": state["state"], "detail": (state["receipt"] or {}).get("error")}
-    return {"state": "waiting"}
+    why = state["backend"].get("infeasible")  # the scheduler's feasibility gate, shown by the waiting workflow (#18)
+    return {"state": "waiting", "detail": "infeasible: " + why} if why else {"state": "waiting"}
 
 
 @activity.defn

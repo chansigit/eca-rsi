@@ -8,7 +8,7 @@ from pathlib import Path
 from temporalio import activity, workflow
 from temporalio.exceptions import ApplicationError
 
-from .persample import await_pool, call
+from .persample import await_pool, call, stage_with_waits
 
 
 def validate_spec(spec):
@@ -543,7 +543,7 @@ async def pause_if_asked(spec, unit, stage):
 class AnalysisUnitWorkflow:
     @workflow.query
     def stage(self):
-        return getattr(self, '_stage', 'created')
+        return stage_with_waits(self)
 
     @workflow.run
     async def run(self, spec, unit, progress=None, resume=False):
@@ -601,7 +601,7 @@ class AnalysisUnitWorkflow:
 class DatasetWorkflow:
     @workflow.query
     def stage(self):
-        return getattr(self, '_stage', 'created')
+        return stage_with_waits(self)
 
     @workflow.run
     async def run(self, spec, resume=False):

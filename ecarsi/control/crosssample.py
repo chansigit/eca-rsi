@@ -5,7 +5,7 @@ from pathlib import Path
 from temporalio import activity, workflow
 from temporalio.exceptions import ApplicationError
 
-from .persample import DEG_BATCH_SIZE, HISTORY_LIMIT, await_pool, call, handoff
+from .persample import DEG_BATCH_SIZE, HISTORY_LIMIT, await_pool, call, handoff, stage_with_waits
 
 
 def validate_spec(spec, *, resume=False):
@@ -188,7 +188,7 @@ class CrosssampleWorkflow:
 
     @workflow.query
     def stage(self):
-        return getattr(self, '_stage', 'created')
+        return stage_with_waits(self)
 
     @workflow.run
     async def run(self, spec, progress=None):

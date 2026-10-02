@@ -88,6 +88,32 @@ def test_confirmed_worker_interruption_recovers_with_a_finite_attempt_budget(tmp
         assert check_pool(str(tmp_path),'r','result.json')['state']==('waiting' if retry_number<2 else 'failed')
 
 
+def test_a_blocked_pool_request_shows_why_it_waits(tmp_path, monkeypatch):
+    # #18: the scheduler's infeasible reason reaches the waiting workflow's stage query.
+    from ecarsi.control.coordinator import check_pool
+    import ecarsi.control.persample as module
+    from ecarsi.warm_pool.backend import observe
+    from ecarsi.warm_pool.state import submit
+    tmp_path.chmod(0o700); (tmp_path/'requests').mkdir(); save(tmp_path/'config.json', {'runtime': {}})
+    submit(tmp_path, dict(request_id='r', operation_id='compute', args=['-c', 'pass'], cpus=1,
+        memory_mb=64, timeout_seconds=30, outputs=['result.json']))
+    folder, why = tmp_path/'requests/r', 'no worker that holds 1 cpus / 64 MB has 60 s left'
+    observe(folder, read(folder/'request.json'), dict(state='queued', infeasible=why))
+    assert check_pool(str(tmp_path), 'r', 'result.json') == dict(state='waiting', detail='infeasible: ' + why)
+    owner, seen = SimpleNamespace(_stage='DEG comparisons'), []
+    answers = iter([check_pool(str(tmp_path), 'r', 'result.json'), dict(state='ready', path='/done')])
+    async def call(fn, *args):
+        return next(answers)
+    async def sleep(seconds):
+        seen.append(module.stage_with_waits(owner))
+    monkeypatch.setattr(module, 'call', call)
+    monkeypatch.setattr(module.workflow, 'instance', lambda: owner)
+    monkeypatch.setattr(module.workflow, 'sleep', sleep)
+    assert asyncio.run(module.await_pool(dict(pool_root=str(tmp_path)), dict(id='r', output='result.json'))) == '/done'
+    assert seen == ['DEG comparisons; waiting: infeasible: ' + why]
+    assert module.stage_with_waits(owner) == 'DEG comparisons'
+
+
 def test_uncertain_observation_waits_for_same_attempt_receipt(tmp_path):
     from ecarsi.control.coordinator import check_pool, check_bridge
     from ecarsi.warm_pool.state import submit

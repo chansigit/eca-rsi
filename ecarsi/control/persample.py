@@ -262,19 +262,38 @@ async def call(fn, *args):
     return await workflow.execute_activity(fn, args=args, start_to_close_timeout=SHORT, retry_policy=activity_retry(fn))
 
 
+def stage_with_waits(owner):
+    """A workflow's stage query: its stage plus why its pool requests wait (#18), e.g. 'DEG comparisons;
+    waiting: infeasible: no worker that holds 4 cpus / 12288 MB has 7230 s left'."""
+    waits = sorted(set(getattr(owner, '_waits', {}).values()))
+    return '; '.join([getattr(owner, '_stage', 'created')] + ['waiting: ' + why for why in waits])
+
+
 async def await_pool(spec, request):
     from .coordinator import check_pool
-    while True:
-        result = await call(check_pool, spec["pool_root"], request["id"], request["output"])
-        if result["state"] == "ready":
-            return result["path"]
-        if result["state"] != "waiting":
-            raise ApplicationError(f"{request['id']}: {result['state']}: {result.get('detail')}", non_retryable=True)
-        await workflow.sleep(2)
+    waits = workflow.instance().__dict__.setdefault('_waits', {})
+    try:
+        while True:
+            result = await call(check_pool, spec["pool_root"], request["id"], request["output"])
+            if result["state"] == "ready":
+                return result["path"]
+            if result["state"] != "waiting":
+                raise ApplicationError(f"{request['id']}: {result['state']}: {result.get('detail')}", non_retryable=True)
+            if result.get("detail"):
+                waits[request["id"]] = result["detail"]
+            else:
+                waits.pop(request["id"], None)
+            await workflow.sleep(2)
+    finally:
+        waits.pop(request["id"], None)
 
 
 @workflow.defn
 class SampleWorkflow:
+    @workflow.query
+    def stage(self) -> str:
+        return stage_with_waits(self)
+
     @workflow.run
     async def run(self, spec, entry, parent, notify_computed=False):
         request = await call(sample_step, "compute", [spec, entry, parent])
@@ -328,7 +347,7 @@ class PersampleWorkflow:
 
     @workflow.query
     def stage(self):
-        return getattr(self, "_stage", "created")
+        return stage_with_waits(self)
 
     @workflow.run
     async def run(self, spec):
