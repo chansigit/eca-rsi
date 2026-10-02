@@ -22,8 +22,8 @@ Repository = "https://github.com/chansigit/agent-harness-bridge"
 Issues = "https://github.com/chansigit/agent-harness-bridge/issues"
 
 [project.optional-dependencies]
-openai = ["openai-agents==0.22.0"]
-claude = ["claude-agent-sdk>=0.2.152"]
+openai = ["openai-agents==0.22.3"]
+claude = ["claude-agent-sdk>=0.2.163"]
 deepseek = [
     "mcp>=1.19,<2",
     "PyYAML>=6",
@@ -31,8 +31,8 @@ deepseek = [
     "sse-starlette>=3,<4",
 ]
 all = [
-    "openai-agents==0.22.0",
-    "claude-agent-sdk>=0.2.152",
+    "openai-agents==0.22.3",
+    "claude-agent-sdk>=0.2.163",
     "mcp>=1.19,<2",
     "PyYAML>=6",
     "uvicorn>=0.30",

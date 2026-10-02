@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.15 - 2026-10-01
+
+- Track the current agent SDKs: `openai-agents==0.22.3` (with openai 3.23) and `claude-agent-sdk>=0.2.163`.
+  openai-agents 0.22.1+ validates every saved message when a RunState is restored, so callers that persist
+  Ark/Doubao output (text without `annotations`) must fill the empty list before `RunState.from_json`
+  (eca-rsi does this in `ecarsi.agent.sdk_restore_compat`).
+
 ## 0.2.14 - 2026-09-12
 
 - Add cooperative SIGTERM pause requests shared with child processes and host-controlled safe points (exit 3).
