@@ -168,6 +168,10 @@ def test_a_run_outside_the_fleet_tree_joins_the_collection_of_its_input(tmp_path
     assert index.collection_of(oak / 'chondroatlas' / '08_Yan' / 'standardize') == 'chondroatlas'
     assert index.collection_of(plane / 'loose') == '' and index.collection_of(plane / 'nospec') == ''
     assert index.collection_of(plane / 'broken') == ''
+    # a display-zone copy (ops/display-zone.py) names its collection in display.json; the footer says whose copy it is
+    save(tmp_path / 'display' / 'hcl' / 'AdultAdipose' / 'gen1' / 'display.json', {'collection': 'hcl', 'source': '/oak/x/rsi'})
+    assert index.collection_of(tmp_path / 'display' / 'hcl' / 'AdultAdipose' / 'gen1') == 'hcl'
+    assert 'from the display copy of /oak/x/rsi by' in index._page('t', tmp_path / 'display' / 'hcl' / 'AdultAdipose' / 'gen1', '')
 
 
 def test_publish_copies_the_sample_reports_into_the_unit_and_the_page_links_them(tmp_path):

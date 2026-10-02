@@ -975,6 +975,8 @@ def collection_of(path: Path) -> str:
     path = Path(path)
     if coll := _tree_collection(path):
         return coll
+    if coll := _json(path / L.DISPLAY, {}).get("collection"):  # a display-zone copy records its own
+        return coll
     try:
         root = json.loads((path / L.GEN2_SPEC).read_text()).get("input_root")
     except (OSError, ValueError, AttributeError):
@@ -1494,7 +1496,9 @@ def _page(title: str, where: Path, body: str) -> str:
 
     fmt = "%Y-%m-%d %H:%M:%S"
     src = mirror.copy_notice(where)
-    origin = f"a mirror copy of {_h.escape(src)}" if src else "the run directory"
+    shown = _json(L.base_of(where) / L.DISPLAY, {}).get("source")
+    origin = (f"the display copy of {_h.escape(shown)}" if shown
+              else f"a mirror copy of {_h.escape(src)}" if src else "the run directory")
     t = state_mtime(where)
     updated = f" · run state updated {time.strftime(fmt, time.localtime(t))}" if t else ""
     return (f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
