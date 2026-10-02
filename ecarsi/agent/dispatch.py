@@ -200,8 +200,13 @@ def _reconcile_pool(root, folder, config, events):
     attempt = state["attempts"][-1]
     if attempt.get("execution") == "service":
         return _reconcile_service(root, folder, config, events, state, attempt)
-    enqueue(folder, config, attempt)
-    current = status(state["pool_root"], attempt["pool_request_id"])
+    try:
+        current = status(state["pool_root"], attempt["pool_request_id"])
+    except KeyError:
+        # Not submitted yet (dispatch died before enqueue) or archived. Submitting is idempotent but takes
+        # a lock, a mkdir and a directory fsync, too much for every 0.5 s tick of every pool turn.
+        enqueue(folder, config, attempt)
+        current = status(state["pool_root"], attempt["pool_request_id"])
     output_dir = Path(state["pool_root"]) / "requests" / attempt["pool_request_id"] / current["attempt_id"] / "outputs"
     started = read(output_dir / "started.json", {})
     elapsed = time.time() - started["started_at"] if started else None

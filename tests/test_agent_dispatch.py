@@ -529,3 +529,22 @@ def test_a_queued_turn_whose_run_directory_was_removed_fails_instead_of_killing_
     real = bridge.status
     monkeypatch.setattr(bridge, 'status', lambda r, name: (_ for _ in ()).throw(KeyError(name)) if name == turn else real(r, name))
     bridge.serve(root, once=True, finished={})
+
+
+def test_reconciling_a_pool_turn_submits_only_a_missing_request(tmp_path, monkeypatch):
+    """#22: _reconcile_pool re-submitted every in-flight pool turn on every 0.5 s tick."""
+    from tests.test_agent_session import setup
+    spec, ref = setup(tmp_path)
+    root = Path(spec['bridge_root'])
+    save(root / 'config.json', dict(read(root / 'config.json'), pool_root=spec['pool_root']))
+    calls, real_submit = [], dispatch.submit
+    monkeypatch.setattr(dispatch, 'submit', lambda *a, **k: calls.append(a[1]['request_id']) or real_submit(*a, **k))
+    turn = session.submit_turn(ref, 0)
+    bridge.serve(root, once=True)
+    bridge.serve(root, once=True)
+    pool_request = bridge.status(root, turn)['attempts'][0]['pool_request_id']
+    assert calls == [pool_request]
+    requests = Path(spec['pool_root']) / 'requests'
+    (requests / pool_request).rename(requests.parent / 'archived')
+    bridge.serve(root, once=True)
+    assert calls == [pool_request] * 2 and (requests / pool_request / 'request.json').is_file()
