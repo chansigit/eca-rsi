@@ -58,6 +58,28 @@ def test_round_uses_legacy_convergence_and_conserves_cell_counts(tmp_path):
         progress = updated
 
 
+def test_resume_after_pause_decides_again_and_keeps_earlier_decisions(tmp_path):
+    # #15: a resume re-drives every round; 'round' used to decide again and conflict with its record.
+    policy = dict(rounds=None, cap=10, extra_rounds_after_convergence=0, max_removed=1000)
+    spec, unit, sample = dict(output_root=str(tmp_path), round_policy=policy), dict(name='U'), tmp_path/'per-sample.json'
+    save(sample, dict(state='complete', n_input=2000, n_survived=1900, n_removed=100))
+    progress = dict(per_sample=str(sample), input=str(sample), stats=[], rounds=[])
+    directory = tmp_path/'units/U/rounds/round01'
+    directory.mkdir(parents=True)
+    cross, zoom, control = directory/'cross.json', directory/'zoom.json', tmp_path/'units/U/loop_control.json'
+    save(cross, dict(state='complete', input=reference(str(sample)), n_input=1900, n_survived=1860, n_removed=40))
+    save(zoom, dict(state='complete', input=reference(cross), n_input=1860, n_survived=1850, n_removed=10))
+    args = [spec, unit, progress, str(cross), str(zoom)]
+    save(control, dict(pause=True))
+    assert 'paused' in dataset_step('round', args)
+    save(control, {})  # the owner clears the stop and resumes
+    resumed = dataset_step('round', args)
+    assert 'paused' not in resumed and resumed['stats'][-1]['decision'] == 'continue'
+    assert len(list(directory.glob('publication-*.json'))) == 1  # the paused record is kept
+    save(control, dict(cap=1))  # would force a release now; the stored decision stands
+    assert dataset_step('round', args) == resumed
+
+
 def test_next_round_does_not_repeat_organize_or_per_sample(monkeypatch):
     import ecarsi.control.dataset as module
 

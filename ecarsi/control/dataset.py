@@ -444,15 +444,29 @@ def dataset_step(action, args):
         # decision is made. Generation 1 has worked this way since the start; the durable control
         # plane froze the policy into workflow input, which left no way to move a limit mid-run.
         unit_root = Path(spec['output_root']) / 'units' / unit['name']
-        notes = []
-        control = read_control(unit_root, on_error=notes.append)
-        policy = resolve(spec['round_policy'], control)
-        decision, reason = decide_with_control(n, stats, spec['round_policy'], control)
-        stats[-1].update(decision=decision, reason=reason)
         directory = unit_root / 'rounds' / f'round{n:02d}'
-        record = immutable(directory / 'publication.json', dict(round=n, stats=stats[-1],
-            cross_sample=reference(cross_path), zoom_in=reference(zoom_path), policy=policy,
-            **({'control': control} if control else {}), **({'control_notes': notes} if notes else {})))
+        path, notes = directory / 'publication.json', []
+        stored = read(path)
+        if stored and stored['stats']['decision'] == 'pause':
+            # Resuming a paused unit: the stop was answered by clearing the control, so this round
+            # is decided again (#15). The paused record stays under its digest.
+            immutable(directory / ('publication-' + digest(stored) + '.json'), stored)
+            path.unlink()
+            stored = None
+        if stored and (stored['cross_sample'], stored['zoom_in']) == (reference(cross_path), reference(zoom_path)):
+            # Decided already (a resume re-drives every round): the decision stands even if
+            # loop_control changed since, or deciding again would conflict with the record (#15).
+            stats[-1], policy = stored['stats'], stored['policy']
+            decision, reason = stats[-1]['decision'], stats[-1]['reason']
+            record = reference(path)
+        else:
+            control = read_control(unit_root, on_error=notes.append)
+            policy = resolve(spec['round_policy'], control)
+            decision, reason = decide_with_control(n, stats, spec['round_policy'], control)
+            stats[-1].update(decision=decision, reason=reason)
+            record = immutable(path, dict(round=n, stats=stats[-1],
+                cross_sample=reference(cross_path), zoom_in=reference(zoom_path), policy=policy,
+                **({'control': control} if control else {}), **({'control_notes': notes} if notes else {})))
         result = dict(per_sample=progress['per_sample'], input=zoom_path, stats=stats, rounds=progress['rounds'] + [record])
         for note in notes:
             print(f'[round {n}] {note}', flush=True)
