@@ -187,14 +187,6 @@ def test_sdk_checkpoint_worker_handoff_and_resume(tmp_path):
         assert not list((Path(spec["pool_root"]) / "requests").iterdir())
         with pytest.raises(ValueError, match="Only the first"):
             session.submit_turn(ref, 1)
-        # A paused session's model request is terminal, so another session can
-        # acquire the sole Bridge slot while its worker tool is still pending.
-        other_spec = {**spec, "session_id": "another", "output_root": str(tmp_path / "another")}
-        other = session.create_session(other_spec)
-        other_id = session.submit_turn(other, 0)
-        with patch.object(bridge, "launch", return_value=None) as launch:
-            bridge.serve(root, once=True)
-            assert launch.call_args.args[1].name == other_id
         item = session.tool_request(ref, reply, 0)
         assert session.tool_request(ref, reply, 0) == item  # activity replay is idempotent
         accepted = completed_tool(spec, item)

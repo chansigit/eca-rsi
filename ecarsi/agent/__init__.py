@@ -5,13 +5,11 @@ No model secrets are stored. Unknown executions are never retried implicitly.
 """
 import argparse
 import asyncio
-from collections import Counter
 from contextlib import contextmanager
 import copy
 import os
 from pathlib import Path
 import stat
-import subprocess
 import sys
 import time
 
@@ -257,6 +255,8 @@ def recover_result(folder, reason):
 
 
 def execute(root, request_id):
+    """Run one request in this process. Production turns run on the pool (dispatch.perform); the
+    session tests drive run_turn through this durable record."""
     folder = root_path(root) / "requests" / identifier(request_id)
     with lock(folder / "execution.lock", blocking=False):
         # A replacement service may have reconciled an unstarted launch as unknown.
@@ -324,97 +324,12 @@ def confirm_stopped(root, request_id, *, reason):
     return status(root, request_id)
 
 
-def launch(root, folder, catalog):
-    from ..model_web import normalized_models, PROVIDERS
-    models = normalized_models(catalog)
-    if not models:
-        raise ValueError("No models configured")
-    env = dict(os.environ)
-    env["AGENT_MODEL_POOL"] = ",".join(m["harness"] + ":" + m["model"] for m in models)
-    for backend, (_, variable) in PROVIDERS.items():
-        found = next((m for m in models if m["harness"] == backend and m["url"]), None)
-        if found:
-            env[variable] = found["url"]
-    save(folder / "state.json", {"state": "running", "started_at": time.time(),
-                                 "models": models, "catalog_digest": digest(catalog)})
-    with (folder / "execution.log").open("ab") as log:
-        return subprocess.Popen([sys.executable, "-m", "ecarsi.agent", "_execute",
-                                 str(root), folder.name], env=env, stdin=subprocess.DEVNULL,
-                                stdout=log, stderr=log, start_new_session=True)
-
-
 def serve(root, *, once=False, finished=None):
     root = root_path(root)
-    if read(root / "config.json").get("pool_root"):
-        from .dispatch import serve as serve_pool
-        return serve_pool(root, once=once, finished=finished)
-    children, finished = {}, ({} if finished is None else finished)
-    with lock(root / "service.lock", blocking=False):
-        while True:
-            scanning = time.monotonic()
-            config = read(root / "config.json")
-            limit = config["concurrency"]
-            if type(limit) is not int or limit < 1:
-                raise ValueError("concurrency must be a positive integer")
-            # Terminal requests are immutable; rebuild this cache after restart.
-            # ponytail: still list names per tick; index them if directory listing dominates.
-            # Cached by (name, inode): a folder re-created under an archived name is new work.
-            folders = [(Path(e.path), (e.name, e.inode())) for e in sorted(os.scandir(root / "requests"), key=lambda e: e.name)]
-            for name, child in list(children.items()):
-                if child.poll() is not None:
-                    del children[name]
-            queued, active = [], 0
-            for folder, key in folders:
-                if key in finished or not (folder / "request.json").is_file():
-                    continue
-                record = status(root, folder.name)
-                if record["state"] == "running":
-                    if folder.name not in children:
-                        reconcile(folder)
-                    if status(root, folder.name)["state"] in {"running", "unknown_external_result"}:
-                        active += 1
-                elif record["state"] == "queued":
-                    queued.append((record["submitted_at"], folder))
-                elif record["state"] == "unknown_external_result":
-                    # Provider work may still exist even when its local caller vanished.
-                    if (folder / 'turn-response.json').is_file() or (folder / 'proposal.json').is_file():
-                        reconcile(folder)
-                    if status(root, folder.name)['state'] == 'unknown_external_result':
-                        active += 1
-            error = None
-            for _, folder in sorted(queued):
-                if active >= limit:
-                    break
-                try:
-                    # New dispatches read the existing catalog, not a second model list.
-                    catalog = read(Path(config["catalog"]))
-                    children[folder.name] = launch(root, folder, catalog)
-                    active += 1
-                except Exception as exc:
-                    error = type(exc).__name__
-                    import traceback
-                    with (folder / "execution.log").open("a") as log:
-                        traceback.print_exc(file=log)
-                    if status(root, folder.name)["state"] == "running":
-                        reconcile(folder)
-                    break
-            counts = Counter(finished.values())
-            for folder, key in folders:
-                if key in finished or not (folder / "request.json").is_file():
-                    continue
-                state = status(root, folder.name)['state']
-                counts[state] += 1
-                if state in {'reply_saved', 'failed'}:
-                    finished[key] = state
-            save(root / "summary.json", {"updated_at": time.time(), "counts": dict(counts),
-                                         "dispatch_scan_seconds": time.monotonic() - scanning,
-                                         "concurrency": limit, "dispatch_error": error,
-                                         "running": counts['running'],
-                                         "unresolved": counts['unknown_external_result'],
-                                         "available": max(0, limit-counts['running']-counts['unknown_external_result'])})
-            if once:
-                return children  # Test/embedding caller owns reaping any launched children.
-            time.sleep(1)
+    if not read(root / "config.json").get("pool_root"):
+        raise ValueError("Bridge config has no pool_root; run init with --pool-root")
+    from .dispatch import serve as serve_pool
+    return serve_pool(root, once=once, finished=finished)
 
 
 def main():
@@ -438,20 +353,18 @@ def main():
     p.add_argument('root')
     p.add_argument('request_id')
     p.add_argument('--reason', required=True)
-    for name in ("serve", "submit", "status", "cancel", "_execute"):
+    for name in ("serve", "submit", "status", "cancel"):
         p = commands.add_parser(name)
         p.add_argument("root")
         if name == "submit":
             p.add_argument("request_file")
-        if name in {"status", "cancel", "_execute"}:
+        if name in {"status", "cancel"}:
             p.add_argument("request_id")
     args = parser.parse_args()
     if args.command == "init":
         init(args.root, args.catalog, args.concurrency, pool_root=args.pool_root)
     elif args.command == "serve":
         serve(args.root)
-    elif args.command == "_execute":
-        execute(args.root, args.request_id)
     elif args.command == "runner":
         import asyncio
         import json
