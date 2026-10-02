@@ -59,3 +59,29 @@ def test_a_settled_registry_proposes_no_renames():
     a, b = paths("mca1.1")[0], paths("mca3.0")[0]
     settled = {"mca1.1-Bladder": a, "mca3.0-Bladder": b}
     assert _scan_names([], settled) == {a: "mca1.1-Bladder", b: "mca3.0-Bladder"}
+
+
+def test_display_roots_in_the_config_serve_every_display_zone_under_its_recorded_name(tmp_path):
+    """ops/display-zone.py copies a run's pages to <root>/<collection>/<dataset>/<run>/ with a display.json;
+    listing the root in periscope.json serves them all, under the file and the command line."""
+    import json
+    from ecarsi.ui.serve import Registry
+    root = tmp_path / "display"
+    for coll, ds, run, name in (("3ca", "Durante", "gen2-20260917", "3ca-Durante"), ("hcl", "Adipose", "gen1", "hcl-Adipose"),
+                                ("hcl", "Adipose", "gen1-copy", "hcl-Adipose")):
+        (root / coll / ds / run).mkdir(parents=True)
+        (root / coll / ds / run / "display.json").write_text(json.dumps({"name": name, "collection": coll}))
+    (root / "hcl" / "Broken" / "gen1").mkdir(parents=True)
+    (root / "hcl" / "Broken" / "gen1" / "display.json").write_text("{")
+    config = tmp_path / "periscope.json"
+    config.write_text(json.dumps({"display_roots": [str(root), str(tmp_path / "gone")]}))
+    registry_file = tmp_path / "registry.json"
+    registry_file.write_text(json.dumps({"3ca-Durante": str(tmp_path / "elsewhere"), "kept": str(root / "hcl" / "Adipose" / "gen1")}))
+    reg = Registry(registry_file, config=config)
+    assert reg.snapshot() == {"3ca-Durante": tmp_path / "elsewhere", "kept": root / "hcl" / "Adipose" / "gen1"}  # not scanned yet
+    reg.scan_display()
+    # the file wins by name and by path; the second claim on a name loses; a broken record is skipped
+    assert reg.snapshot() == {"3ca-Durante": tmp_path / "elsewhere", "kept": root / "hcl" / "Adipose" / "gen1"}
+    registry_file.write_text("{}")
+    assert reg.snapshot() == {"3ca-Durante": root / "3ca" / "Durante" / "gen2-20260917", "hcl-Adipose": root / "hcl" / "Adipose" / "gen1"}
+    assert Registry(registry_file, config=tmp_path / "missing.json").snapshot() == {}

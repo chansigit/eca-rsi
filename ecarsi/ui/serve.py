@@ -31,6 +31,12 @@ without talking to the running process. Kill and restart the server on any
 host and the same list comes back. Directories given on the `serve`
 command line are served in addition, for this process only.
 
+A fourth source, under the file and the command line, is the DISPLAY ZONES: the config file
+(default $XDG_CONFIG_HOME/ecarsi/periscope.json, `--config`) may list `display_roots`; every
+`<root>/<collection>/<dataset>/<run>/display.json` there (ops/display-zone.py) is served under the
+name it records. The server rescans them every 10 minutes in the background and re-reads the
+config file each time, so a new display zone or root appears without a restart.
+
 `dump` copies the registry file elsewhere (or prints it); `reload` merges
 another such file into it (`--replace` to swap the whole list) — handy for
 keeping several lists, e.g. one per project.
@@ -82,6 +88,29 @@ def default_registry() -> Path:
     return base / "ecarsi" / "registry.json"
 
 
+def default_config() -> Path:
+    return default_registry().with_name("periscope.json")
+
+
+def display_zones(config: Path | None) -> dict[str, Path]:
+    """name -> display-zone copy, for every <root>/<collection>/<dataset>/<run>/display.json under the
+    config file's display_roots. A name that two copies claim keeps the first, in path order."""
+    try:
+        roots = json.loads(Path(config).read_text()).get("display_roots", []) if config else []
+    except (OSError, ValueError, AttributeError):
+        return {}
+    found: dict[str, Path] = {}
+    for root in roots:
+        for record in sorted(Path(root).glob("*/*/*/" + L.DISPLAY)):
+            try:
+                name = json.loads(record.read_text()).get("name")
+            except (OSError, ValueError, AttributeError):
+                continue
+            if name and "/" not in name:
+                found.setdefault(name, record.parent)
+    return found
+
+
 # ---------------------------------------------------------------- registry
 
 
@@ -100,9 +129,13 @@ class Registry:
     bind/unbind. `extra` are per-process additions (serve's positional
     dirs) that are never written to the file."""
 
+    DISPLAY_RESCAN_SECONDS = 600  # ponytail: a timed rescan; watch the roots if new zones must show sooner
+
     def __init__(self, path: Path, extra: dict[str, Path] | None = None,
-                 published: "Callable[[], dict[str, Path]] | None" = None) -> None:
+                 published: "Callable[[], dict[str, Path]] | None" = None, config: Path | None = None) -> None:
         self.path = Path(path)
+        self._config = config
+        self._display: dict[str, Path] = {}  # replaced whole by the warmer, never modified in place
         self._extra = dict(extra or {})
         # Runs the control plane publishes about itself (ControlVerdicts.runs): a dataset is on the
         # page from the moment it is submitted, with nobody registering anything. Lowest priority --
@@ -176,7 +209,9 @@ class Registry:
         chondro runs on the page twice, the bare copies under "other" (2026-09-24)."""
         mine = {**self._file, **self._extra}
         bound = set(mine.values())
-        return {**{k: v for k, v in published.items() if v not in bound}, **mine}
+        shown = {k: v for k, v in self._display.items() if v not in bound}
+        bound |= set(shown.values())
+        return {**{k: v for k, v in published.items() if v not in bound}, **shown, **mine}
 
     def get(self, name: str) -> Path | None:
         return self.snapshot().get(name)
@@ -186,10 +221,17 @@ class Registry:
         # _file is replaced atomically, not modified in place.
         return self._merge(self._published())
 
+    def scan_display(self) -> None:
+        self._display = display_zones(self._config)
+
     def start(self) -> None:
         def refresh():
+            scanned = 0.0
             while True:
                 try:
+                    if time.monotonic() - scanned > self.DISPLAY_RESCAN_SECONDS:
+                        self.scan_display()  # the warmer scans; a request never waits on the roots
+                        scanned = time.monotonic()
                     self.snapshot()
                 except OSError as exc:
                     sys.stderr.write(f'[serve] registry refresh: {exc}\n')
@@ -1595,7 +1637,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
         verdicts = ControlVerdicts(base / 'fleet-status.json')
     # The plane's own list of runs is the third source of rows, under the file and the command line:
     # a submitted dataset is on the page at once, and nobody registers anything by hand.
-    registry = Registry(reg_path, extra, published=verdicts.runs)
+    registry = Registry(reg_path, extra, published=verdicts.runs, config=Path(args.config).expanduser())
+    registry.scan_display()
     items = registry.snapshot()
     registry.start()
     cache_key = hashlib.sha256(str(reg_path).encode()).hexdigest()[:16]
@@ -1972,6 +2015,12 @@ def main(argv: list[str]) -> int:
     )
     ap.add_argument(
         "--domain", default=None, help="reserved ngrok domain (implies --ngrok)"
+    )
+    ap.add_argument(
+        "--config",
+        default=str(default_config()),
+        metavar="FILE",
+        help="Periscope config, JSON {\"display_roots\": [DIR, ...]} (default $XDG_CONFIG_HOME/ecarsi/periscope.json)",
     )
     ap.add_argument(
         "--auth",
