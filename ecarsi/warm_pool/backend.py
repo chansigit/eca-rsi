@@ -468,9 +468,11 @@ class HyperQueue:
         self._saved = len(self.settled)
 
     def _release(self, candidates, jobs, hq_workers, generation, gpu_waiting=0, gpu_busy=0, gpu_queue_seconds=0.0):
-        if not candidates:
-            return []
         hq_waiting = sum(1 for j in jobs if j["task_stats"]["waiting"])
+        if not candidates:  # publish the idle state too, or the last busy tick's numbers stay up for good
+            self.release_state = dict(self.release_state, released=0, skipped={}, infeasible={}, candidates=0,
+                                      hq_waiting=hq_waiting, measured_at=self.measured.get("generated_at"))
+            return []
         capacity = worker_capacity(hq_workers())
         gpu_slots = sum(c[2] for c in capacity)
         # The card's queue is what waits for it plus what runs on it now, in measured seconds (2026-09-24 a

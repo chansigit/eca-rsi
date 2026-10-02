@@ -217,3 +217,11 @@ def test_a_request_no_worker_can_hold_is_marked_infeasible_not_queued(tmp_path):
     assert hq.release_state["infeasible"] == {"no worker holds 12 cpus / 8192 MB (largest 6 cpus / 24576 MB)": 1}
     assert observation(folder, read(folder / "request.json"))["infeasible"].startswith("no worker holds 12 cpus")
     assert len(hq._release([cand], [], lambda: [worker(16)], "g")) == 1 and hq.release_state["infeasible"] == {}
+
+
+def test_an_idle_tick_publishes_the_idle_state():
+    hq = bare()
+    hq.release_state = dict(candidates=15, released=15, hq_waiting=27, infeasible={"x": 1}, gpu_slots=1)
+    assert hq._release([], [{"task_stats": {"running": 0, "waiting": 0}}], lambda: [], "g") == []
+    assert hq.release_state["hq_waiting"] == 0 and hq.release_state["candidates"] == 0 and hq.release_state["infeasible"] == {}
+    assert hq.release_state["gpu_slots"] == 1   # what the idle tick did not look at keeps its last value
