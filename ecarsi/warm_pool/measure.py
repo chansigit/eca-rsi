@@ -1,6 +1,7 @@
 """What the pool's own task journals say each operation takes: the release layer's constants come from
 here rather than from guesses (2026-09-25, D8 step 2). One paced sequential read of the workers'
 `tasks-<day>.jsonl` files; run it as `warm_pool measure`, the scheduler does so every half hour."""
+import calendar
 import json
 import time
 from pathlib import Path
@@ -26,7 +27,7 @@ def measure(pool_root, days=DAYS, now=None):
     since = now - days * 86400
     per, recent, work = {}, 0, []
     for path in sorted(Path(pool_root, "workers").glob("*/tasks-????-??-??.jsonl")):
-        day = time.mktime(time.strptime(path.stem[len("tasks-"):], "%Y-%m-%d"))
+        day = calendar.timegm(time.strptime(path.stem[len("tasks-"):], "%Y-%m-%d"))  # worker.py names them by UTC day
         if day + 86400 < since:
             continue
         with path.open(encoding="utf-8") as stream:
