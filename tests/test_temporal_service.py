@@ -55,7 +55,11 @@ def test_coordinator_reconnects_without_resubmitting_work(monkeypatch):
         stopped = []
         slots = []
 
+        stale = False
+
         def discover(root):
+            if stale:
+                raise ConnectionError('service.json older than 30 s')
             return dict(generation=generation, endpoint=generation)
 
         async def connect(address):
@@ -100,6 +104,11 @@ def test_coordinator_reconnects_without_resubmitting_work(monkeypatch):
         try:
             await reached(entered)
             entered.clear()
+            # A Lustre pause leaves service.json stale: the Worker keeps running, it is not rebuilt.
+            stale = True
+            await asyncio.sleep(0.2)
+            assert connected == ['first'] and stopped == []
+            stale = False
             generation = 'second'
             await reached(entered)
             assert connected == ['first', 'second']

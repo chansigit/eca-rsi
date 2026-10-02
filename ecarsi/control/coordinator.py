@@ -486,7 +486,7 @@ async def follow_service(root, task_queue, workflow_slots=None, activity_slots=N
                     if endpoint(root)['generation'] == current['generation']:
                         continue
                 except ConnectionError:
-                    pass
+                    continue  # a stale service.json (a Lustre pause) is no handover; only a new generation is
                 break
         finally:
             running.cancel()
