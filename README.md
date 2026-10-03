@@ -193,7 +193,7 @@ Intermediate matrices live in the pool requests that computed them. The pruner d
 
 ## Validation
 
-The test suite contains 462 tests. It runs inside the compute image. See [INSTALL.md](INSTALL.md#b3-run-the-tests).
+The test suite contains 463 tests. It runs inside the compute image. See [INSTALL.md](INSTALL.md#b3-run-the-tests).
 
 The latest end-to-end regression ran on 2026-10-02. The run used dataset 11_Shietal on the `20261002-1` image pair: two fixed rounds, 9,163 to 4,941 cells, with the display zone synced after every stage and the work tree archived at completion.
 

@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 
+from ..contracts import check
 from ..files import digest, file_digest, lock, read, save
 from .state import observation, pool_root
 
@@ -265,10 +266,10 @@ def allocation_ended(root, accepted, live_hosts, now=None, grace=300):
 
 
 def worker_lost_receipt(request, accepted, error):
-    return dict(state="failed", outputs=[], retryable=True, error=error,
+    return check("receipt", dict(state="failed", outputs=[], retryable=True, error=error,
                 request_id=request["spec"]["request_id"], attempt_id=request["attempt_id"],
                 request_digest=request["digest"], runtime_digest=request["runtime_digest"],
-                started_at=accepted["started_at"], finished_at=time.time())
+                started_at=accepted["started_at"], finished_at=time.time()))
 
 
 MODEL_CALLS_PER_CPU = 2  # pool/config.json `worker.model_calls_per_cpu` overrides; read at each HQ worker start

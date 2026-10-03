@@ -40,3 +40,9 @@ def test_periscope_skips_a_display_record_that_breaks_the_contract(tmp_path):
     results = tmp_path / "results.json"
     results.write_text(json.dumps({"display_root": str(tmp_path / "zones")}))
     assert set(display_zones(results)) == {"good"}
+
+
+def test_a_receipt_names_one_of_three_endings():
+    assert check("receipt", dict(state="failed", outputs=[], error="WorkerLost"))
+    with pytest.raises(ValueError, match="state is 'timeout'"):
+        check("receipt", dict(state="timeout", outputs=[]))

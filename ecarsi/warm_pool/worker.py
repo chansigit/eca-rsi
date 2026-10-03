@@ -15,6 +15,7 @@ from .backend import check_runtime, parent_death_signal
 
 GPU_BLIND_LIMIT = 120  # seconds nvidia-smi may keep failing before the attempt is given up
 USAGE_SECONDS = 5  # usage.json cadence: status() calls an attempt stale after 15 s; the RSS watchdog still samples every 0.25 s
+from ..contracts import check
 from ..files import digest, file_digest, lock, read, save, sync_directory
 from .state import identifier, pool_root
 
@@ -179,11 +180,11 @@ def reconcile_local(root, cpu_ids, gpu_ids=(), shared=False):
                     continue
                 # No live owner, inherited execution lock, or recorded process
                 # group remains. Do not start a new numerical attempt here.
-                save(attempt / "receipt.json", dict(state="failed", outputs=[], retryable=True,
+                save(attempt / "receipt.json", check("receipt", dict(state="failed", outputs=[], retryable=True,
                      error="WorkerLost: previous local executor stopped without a completion receipt",
                      request_id=request["spec"]["request_id"], attempt_id=request["attempt_id"],
                      request_digest=request["digest"], runtime_digest=request["runtime_digest"],
-                     started_at=accepted["started_at"], finished_at=time.time()))
+                     started_at=accepted["started_at"], finished_at=time.time())))
                 marker.unlink(missing_ok=True)
         except BlockingIOError:
             if not neighbour:
@@ -478,7 +479,7 @@ def run(folder, request, ownership):
             with path.open("rb") as stream:
                 os.fsync(stream.fileno())
         receipt["finished_at"] = time.time()
-        save(attempt / "receipt.json", receipt)
+        save(attempt / "receipt.json", check("receipt", receipt))
         (attempt / "usage.json").unlink(missing_ok=True)  # the receipt carries the peak; status() reads usage only before a receipt exists
         journal(folder, request, receipt)
 

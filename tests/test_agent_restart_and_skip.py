@@ -213,13 +213,13 @@ def test_resume_treats_requests_of_superseded_sessions_as_settled(tmp_path):
     trace = dict(workflow_id='persample/r', dataset_id='D', unit_id='osp.tool')
     task = submit(str(tmp_path / 'pool'), dict(request_id='osp-a.tool-1', operation_id='osp.tool', trace=trace,
                                              args=['-c', 'pass'], cpus=1, memory_mb=64, timeout_seconds=10, outputs=['x']))
-    save(tmp_path / 'pool/requests/osp-a.tool-1' / task['attempt_id'] / 'receipt.json', {'state': 'failed'})
+    save(tmp_path / 'pool/requests/osp-a.tool-1' / task['attempt_id'] / 'receipt.json', {'outputs': [], 'state': 'failed'})
     with pytest.raises(ValueError, match='Reconcile osp-a.tool-1'):
         request_states(str(tmp_path / 'pool'), str(tmp_path / 'bridge'), {'persample/r'}, set(), {'osp-a'})
     states = request_states(str(tmp_path / 'pool'), str(tmp_path / 'bridge'), {'persample/r'}, {'osp-a'}, {'osp-a'})
     assert states == [dict(service='pool_root', request_id='osp-a.tool-1', state='superseded_session')]
     # a tool call that failed for good is a consumed result, not unfinished work
-    save(tmp_path / 'pool/requests/osp-a.tool-1' / task['attempt_id'] / 'receipt.json', {'state': 'failed', 'retryable': False})
+    save(tmp_path / 'pool/requests/osp-a.tool-1' / task['attempt_id'] / 'receipt.json', {'outputs': [], 'state': 'failed', 'retryable': False})
     states = request_states(str(tmp_path / 'pool'), str(tmp_path / 'bridge'), {'persample/r'}, set(), {'osp-a'})
     assert states == [dict(service='pool_root', request_id='osp-a.tool-1', state='settled_tool_failure')]
 

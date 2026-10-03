@@ -143,7 +143,7 @@ def test_retry_can_raise_a_memory_budget_without_losing_request_identity(tmp_pat
     first = state.submit(str(pool), spec)
     folder = pool / "requests" / "prepare-1"
     request = state.read(folder / "request.json")
-    state.save(folder / request["attempt_id"] / "receipt.json", dict(state="failed", finished_at=1.0,
+    state.save(folder / request["attempt_id"] / "receipt.json", dict(outputs=[], state="failed", finished_at=1.0,
         attempt_id=request["attempt_id"], request_digest=request["digest"],
         runtime_digest=request["runtime_digest"], error="MemoryError"))
     with pytest.raises(ValueError, match="exceed"):

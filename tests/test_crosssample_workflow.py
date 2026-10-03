@@ -84,7 +84,7 @@ def test_confirmed_worker_interruption_recovers_with_a_finite_attempt_budget(tmp
     for retry_number in range(3):
         request=read(folder/'request.json')
         assert request.get('retry_count',0)==retry_number
-        save(folder/request['attempt_id']/'receipt.json',dict(state='failed',retryable=True,finished_at=1,
+        save(folder/request['attempt_id']/'receipt.json',dict(outputs=[], state='failed',retryable=True,finished_at=1,
             attempt_id=request['attempt_id'],request_digest=request['digest'],runtime_digest=request['runtime_digest']))
         assert check_pool(str(tmp_path),'r','result.json')['state']==('waiting' if retry_number<2 else 'failed')
 
@@ -124,7 +124,7 @@ def test_a_time_limit_is_doubled_once(tmp_path):
     folder=tmp_path/'requests/r'
     for expected in ('waiting','failed'):
         request=read(folder/'request.json')
-        save(folder/request['attempt_id']/'receipt.json',dict(state='failed',retryable=False,finished_at=1,
+        save(folder/request['attempt_id']/'receipt.json',dict(outputs=[], state='failed',retryable=False,finished_at=1,
             error='TimeoutError: execution time limit reached',attempt_id=request['attempt_id'],
             request_digest=request['digest'],runtime_digest=request['runtime_digest']))
         assert check_pool(str(tmp_path),'r','result.json')['state']==expected
@@ -140,7 +140,7 @@ def test_a_changed_output_or_pinned_input_fails_at_once(tmp_path):
     submit(tmp_path,dict(request_id='r',operation_id='compute',args=['-c','pass'],cpus=1,memory_mb=64,timeout_seconds=30,
         inputs=[reference(pinned)],outputs=['result.json']))
     folder=tmp_path/'requests/r';request=read(folder/'request.json');attempt=folder/request['attempt_id']
-    save(attempt/'receipt.json',dict(state='failed',retryable=True,finished_at=1,
+    save(attempt/'receipt.json',dict(outputs=[], state='failed',retryable=True,finished_at=1,
         attempt_id=request['attempt_id'],request_digest=request['digest'],runtime_digest=request['runtime_digest']))
     save(pinned,{'v':2})
     result=check_pool(str(tmp_path),'r','result.json')

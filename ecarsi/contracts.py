@@ -25,6 +25,8 @@ KINDS = {
                "forced_release": bool, "reason": str, **COUNTS},
     # <run>/publication.json: the dataset (control/dataset)
     "dataset/1": {"state": STATE, "dataset_id": str, "units": list, "failed_units": list, "forced_release": bool, **COUNTS},
+    # <pool>/requests/<id>/<attempt>/receipt.json: the pool worker, read by status() for control, agents and Periscope
+    "receipt/1": {"state": ("succeeded", "failed", "cancelled"), "outputs": list},
     # <run>/degraded/*.json: ecarsi.degraded, read by release and Periscope
     "degraded/1": {"what": str, "error": str, "at": int, "id": str},
 }

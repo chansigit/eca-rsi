@@ -24,7 +24,7 @@ def test_recovery_cache_skips_terminal_history_but_rechecks_retry_and_live_owner
         requests[name] = read(tmp_path / 'requests' / name / 'request.json')
     old = requests['finished']
     folder = tmp_path / 'requests/finished'
-    save(folder / old['attempt_id'] / 'receipt.json', dict(state='failed', finished_at=1,
+    save(folder / old['attempt_id'] / 'receipt.json', dict(outputs=[], state='failed', finished_at=1,
         attempt_id=old['attempt_id'], request_digest=old['digest'], runtime_digest=old['runtime_digest']))
     live = tmp_path / 'requests/live' / requests['live']['attempt_id']
     accepted = dict(host=socket.gethostname().split('.')[0], cpu_ids=[cpu],
@@ -117,7 +117,7 @@ def test_dispatch_cache_revisits_retries_cancellation_and_replayed_jobs(tmp_path
     folder = tmp_path / 'requests/r'
     request = read(folder / 'request.json')
     def finish(request):
-        save(folder / request['attempt_id'] / 'receipt.json', dict(state='failed', finished_at=1,
+        save(folder / request['attempt_id'] / 'receipt.json', dict(outputs=[], state='failed', finished_at=1,
             attempt_id=request['attempt_id'], request_digest=request['digest'], runtime_digest=request['runtime_digest']))
     finish(request)
     backend, calls = HyperQueue(tmp_path), []
@@ -350,7 +350,7 @@ def test_dispatch_submits_concurrently_and_resubmits_a_failed_submission(tmp_pat
     # A succeeded request is settled: later ticks do not even stat it.
     for name in ('a', 'b'):
         request = read(tmp_path / f'requests/{name}/request.json')
-        save(tmp_path / f'requests/{name}' / request['attempt_id'] / 'receipt.json', dict(state='succeeded', finished_at=1,
+        save(tmp_path / f'requests/{name}' / request['attempt_id'] / 'receipt.json', dict(outputs=[], state='succeeded', finished_at=1,
              attempt_id=request['attempt_id'], request_digest=request['digest'], runtime_digest=request['runtime_digest']))
     backend.dispatch(info)
     assert {name for name, _inode in backend.settled} == {'a', 'b'}

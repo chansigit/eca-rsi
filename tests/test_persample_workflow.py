@@ -70,7 +70,7 @@ def test_recovery_requires_resolved_receipts(tmp_path):
     compute = "r.compute-" + digest("s")[:20]
     task = submit(spec["pool_root"], dict(request_id=compute, operation_id="c", trace=trace,
         args=["-c", "pass"], cpus=1, memory_mb=64, timeout_seconds=10, outputs=["x"]))
-    save(tmp_path / "pool/requests" / compute / task["attempt_id"] / "receipt.json", {"state": "succeeded"})
+    save(tmp_path / "pool/requests" / compute / task["attempt_id"] / "receipt.json", {"outputs": [], "state": "succeeded"})
     turn = tmp_path / "bridge/requests" / ("osp-" + digest(["r", "s"])[:24] + "-r2.turn-0")
     turn.mkdir()
     save(turn / "request.json", {"submitted_at": 0, "spec": {"trace": trace}})
@@ -78,7 +78,7 @@ def test_recovery_requires_resolved_receipts(tmp_path):
     assert not sample_step("recoverable", [spec, "s"])
     save(turn / "result.json", {"state": "reply_saved"})
     assert sample_step("recoverable", [spec, "s"])
-    save(tmp_path / "pool/requests" / compute / task["attempt_id"] / "receipt.json", {"state": "failed"})
+    save(tmp_path / "pool/requests" / compute / task["attempt_id"] / "receipt.json", {"outputs": [], "state": "failed"})
     assert not sample_step("recoverable", [spec, "s"])
 
 

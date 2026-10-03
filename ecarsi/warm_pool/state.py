@@ -11,6 +11,7 @@ import stat
 import time
 import uuid
 
+from ..contracts import check
 from ..files import digest, file_digest, lock, read, save, sync_directory
 
 
@@ -258,6 +259,8 @@ def status(root, request_id=None):
         raise KeyError(request_id)
     attempt = folder / request["attempt_id"]
     receipt = read(attempt / "receipt.json")
+    if receipt is not None:
+        check("receipt", receipt)
     accepted = read(attempt / "accepted.json")
     cancellation = read(folder / "cancel.json")
     backend = observation(folder, request)
