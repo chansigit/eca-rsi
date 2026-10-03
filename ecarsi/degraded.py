@@ -14,6 +14,7 @@ import time
 import uuid
 from pathlib import Path
 
+from .contracts import check
 from .layout import UNITS
 
 STRICT = "ECARSI_STRICT"
@@ -44,7 +45,7 @@ def save(where, records, **context) -> None:
         folder = root / DIRECTORY
         folder.mkdir(mode=0o700, exist_ok=True)
         path = folder / f"{record['at']}-{record['id']}.json"
-        path.write_text(json.dumps({**record, **unit, **context}, sort_keys=True))
+        path.write_text(json.dumps(check("degraded", {**record, **unit, **context}), sort_keys=True))
 
 
 def read(root) -> list[dict]:

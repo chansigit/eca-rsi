@@ -8,6 +8,7 @@ from pathlib import Path
 from temporalio import activity, workflow
 from temporalio.exceptions import ApplicationError
 
+from ..contracts import check
 from .persample import await_pool, call, stage_with_waits
 
 
@@ -467,9 +468,9 @@ def dataset_step(action, args):
             policy = resolve(spec['round_policy'], control)
             decision, reason = decide_with_control(n, stats, spec['round_policy'], control)
             stats[-1].update(decision=decision, reason=reason)
-            record = immutable(path, dict(round=n, stats=stats[-1],
+            record = immutable(path, check('round', dict(round=n, stats=stats[-1],
                 cross_sample=reference(cross_path), zoom_in=reference(zoom_path), policy=policy,
-                **({'control': control} if control else {}), **({'control_notes': notes} if notes else {})))
+                **({'control': control} if control else {}), **({'control_notes': notes} if notes else {}))))
         result = dict(per_sample=progress['per_sample'], input=zoom_path, stats=stats, rounds=progress['rounds'] + [record])
         for note in notes:
             print(f'[round {n}] {note}', flush=True)
@@ -478,10 +479,10 @@ def dataset_step(action, args):
         if decision == 'release':
             first = verified(reference(progress['per_sample']))
             path = directory.parent.parent / 'publication.json'
-            immutable(path, dict(state='complete', unit=unit, per_sample=reference(progress['per_sample']),
+            immutable(path, check('unit', dict(state='complete', unit=unit, per_sample=reference(progress['per_sample']),
                 rounds=result['rounds'], final=reference(zoom_path), policy=policy,
                 n_input=first['n_input'], n_survived=n_out, n_removed=first['n_input']-n_out,
-                forced_release=reason.startswith('FORCED:'), reason=reason))
+                forced_release=reason.startswith('FORCED:'), reason=reason)))
             result['publication'] = str(path)
         return result
     if action == 'display':
@@ -548,12 +549,13 @@ def dataset_step(action, args):
     if action == 'publish':
         spec, results, failures = args
         publications = [reference(p) for p in sorted(results)]
-        units = [verified(p) for p in publications]
+        units = [check('unit', verified(p)) for p in publications]
         path = Path(spec['output_root']) / 'publication.json'
         publication = dict(state='incomplete' if failures else 'complete', dataset_id=spec['dataset_id'],
             units=publications, failed_units=failures, forced_release=any(u['forced_release'] for u in units),
             n_input=sum(u['n_input'] for u in units), n_survived=sum(u['n_survived'] for u in units),
             n_removed=sum(u['n_removed'] for u in units))
+        check('dataset', publication)
         # Same revision contract as per-sample: retain failed publications and seal successes.
         with lock(path.parent / 'publication.lock'):
             previous = read(path)

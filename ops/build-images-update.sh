@@ -24,23 +24,25 @@ for name in control science; do
   tar -C "sb-$name/opt/eca-rsi" -xf eca-rsi.tar
   printf '{"eca_rsi_commit": "%s", "built": "%s", "image_stamp": "%s", "from": "%s"}\n' "$COMMIT" "$(date -Iseconds)" "$STAMP" "$FROM" > "sb-$name/opt/eca-rsi/BUILD.json"
   if [ -n "$WHEELS" ]; then
+    # A wheel replaces its distribution wherever this image has it (the kernels live in /opt/rsi-python of the
+    # science image only, the bridge in both sites); a distribution the image lacks is not added.
     for whl in "$WHEELS"/*.whl; do
-      dist=$(basename "$whl" | cut -d- -f1)   # e.g. openai_agents
+      dist=$(basename "$whl" | cut -d- -f1)   # e.g. openai_agents, msp_sc
+      sites=()
       for site in "sb-$name/opt/rsi-control" "sb-$name/opt/rsi-python"; do
         [ -d "$site" ] || continue
         # the distribution's files, by its RECORD: top-level entries it owns, plus the dist-info itself
         for info in "$site"/"$dist"-*.dist-info; do
           [ -d "$info" ] || continue
-          [ "$site" = "sb-$name/opt/rsi-python" ] && [ "$dist" != agent_harness_bridge ] && continue
+          sites+=("$site")
           # only the package's own top-level entries: never "..", "bin" (shared console scripts) or hidden names
           for top in $(cut -d, -f1 "$info/RECORD" | cut -d/ -f1 | sort -u | grep -vxE '\.\.?|bin|__pycache__|\..*'); do
             [ -e "$site/$top" ] && mv "$site/$top" "replaced/$name-$(basename "$site")-$top-$RANDOM"
           done
         done
       done
-      "$HP" -m pip install -q --no-deps --no-compile --target "sb-$name/opt/rsi-control" "$whl"
-      [ "$dist" = agent_harness_bridge ] && [ -d "sb-$name/opt/rsi-python" ] && \
-        "$HP" -m pip install -q --no-deps --no-compile --target "sb-$name/opt/rsi-python" "$whl"
+      [ ${#sites[@]} -eq 0 ] && echo "$name: $dist is not in this image; $(basename "$whl") skipped"
+      for site in ${sites[@]+"${sites[@]}"}; do "$HP" -m pip install -q --no-deps --no-compile --target "$site" "$whl"; done
     done
   fi
   echo "$(date +%T) pack $name"

@@ -50,10 +50,10 @@ def test_release_conservation_retry_and_corruption(tmp_path):
     per = record('per.json', dict(state='complete', failed_samples=[], samples=[sample],
         partition_exclusions=csv('partition.csv', dict(cell_id=['e'], excluded_reason=['confirmed policy'])),
         n_input=5, n_survived=3, n_removed=2))
-    cross = record('cross.json', dict(state='complete', input=per, n_input=3, n_survived=2, n_removed=1,
+    cross = record('cross.json', dict(state='complete', result=record('cross-final.json', {}), input=per, n_input=3, n_survived=2, n_removed=1,
         files={'annotated.h5ad': matrix('cross.h5ad', ['001', 'NA']),
                'cell_exclusions.csv.gz': gone('cross-gone.csv', ['c'], '[{"code":"fragment_qc"}]')}))
-    zoom = record('zoom.json', dict(state='complete', input=cross, n_input=2, n_survived=1, n_removed=1,
+    zoom = record('zoom.json', dict(state='complete', result=record('zoom-final.json', {}), input=cross, n_input=2, n_survived=1, n_removed=1,
         files={'annotated_zmip.h5ad': matrix('zoom.h5ad', ['001']),
                'cell_exclusions.csv.gz': gone('zoom-gone.csv', ['NA'], json.dumps([
                    {'code': 'low-quality', 'decision': {'confidence': 'medium'}}]))}))
@@ -82,7 +82,7 @@ def test_release_conservation_retry_and_corruption(tmp_path):
     cross_value = verified(cross)
     cross_value['files']['cell_exclusions.csv.gz'] = reference(tmp_path / 'cross-gone.csv')
     cross = record('cross.json', cross_value)
-    round_ref = record('round.json', dict(round=1, cross_sample=cross, zoom_in=zoom))
+    round_ref = record('round.json', dict(verified(round_ref), cross_sample=cross))
     value = verified(unit)
     value['rounds'] = [round_ref]
     unit = record('publication.json', value)

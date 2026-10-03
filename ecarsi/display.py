@@ -18,6 +18,7 @@ import uuid
 from pathlib import Path
 
 from . import layout as L
+from .contracts import check
 
 _touched: set[str] = set()
 _installed = False
@@ -108,6 +109,7 @@ def sync(root: Path, dest: Path, record: dict) -> dict:
         copied += 1
     dest.mkdir(parents=True, exist_ok=True)
     partial = dest / f"{L.DISPLAY}.{uuid.uuid4().hex}.partial"
-    partial.write_text(json.dumps(dict(record, synced_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"), files=len(need)), indent=1) + "\n")
+    record = check("display", dict(record, schema="display/1", synced_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"), files=len(need)))
+    partial.write_text(json.dumps(record, indent=1) + "\n")
     os.replace(partial, dest / L.DISPLAY)
     return dict(dest=str(dest), files=len(need), copied=copied, seconds=round(time.time() - start, 1))

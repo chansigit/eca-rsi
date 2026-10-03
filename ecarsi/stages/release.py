@@ -8,6 +8,7 @@ from ..warm_pool.state import reference, verified
 from .crosssample import artifact
 from .persample import sealed
 from ..warm_pool.state import lock, read, save
+from ..contracts import check
 
 
 def collect(unit_ref, *, complete=True):
@@ -21,7 +22,7 @@ def collect(unit_ref, *, complete=True):
     from ..run_state import file_identity
     from ..sample_mapping import SAMPLE_KEY
 
-    unit = verified(unit_ref) if complete else unit_ref
+    unit = check('unit', verified(unit_ref)) if complete else unit_ref
     if complete and (unit['state'] != 'complete' or not unit['rounds']):
         raise ValueError('Release requires a completed analysis unit')
     source = Path(unit['unit']['path']) / 'input/organized.h5ad'
@@ -78,7 +79,7 @@ def collect(unit_ref, *, complete=True):
 
     labels = ['source_unit', 'eca_source_cell_id', '_ann_coarse', '_ann_fine',
               'msp_ann_coarse', 'msp_ann_fine', 'zmip_ann_coarse', 'zmip_ann_fine']
-    per = verified(unit['per_sample'])
+    per = check('per-sample', verified(unit['per_sample']))
     if per['state'] != 'complete' or per['failed_samples']:
         raise ValueError('Per-sample is incomplete')
     ref = per['partition_exclusions']
@@ -105,13 +106,13 @@ def collect(unit_ref, *, complete=True):
           alive, 0, unit['per_sample'], per)
     previous = unit['per_sample']
     for number, round_ref in enumerate(unit['rounds'], 1):
-        record = verified(round_ref)
+        record = check('round', verified(round_ref))
         if record['round'] != number:
             raise ValueError('Rounds must be consecutive')
         for kind, filename, prefix in (('cross_sample', 'annotated.h5ad', 'msp_ann'),
                                         ('zoom_in', 'annotated_zmip.h5ad', 'zmip_ann')):
             ref = record[kind]
-            bundle = verified(ref)
+            bundle = check('stage', verified(ref))
             if bundle['state'] != 'complete' or bundle['input'] != previous:
                 raise ValueError('Broken publication dependency chain')
             final_path = artifact(bundle, filename)
@@ -174,7 +175,7 @@ def local_link(root, entry):
     else:
         rel = Path(L.ROUNDS) / f"round{entry['round']:02d}" / (L.GEN2_CROSS if entry['stage'] == 'cross-sample' else L.GEN2_ZOOM)
         if entry['stage'] == 'zoom-in' and entry['scope']:
-            from zmip.report import slug
+            from zmip.api import slug
             rel = rel / slug(entry['scope'])
         rel = rel / name
     copy = Path(root) / rel

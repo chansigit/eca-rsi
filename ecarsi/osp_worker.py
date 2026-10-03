@@ -28,8 +28,7 @@ def compute_sample(request, source: Path, outdir: Path):
     """The same OSP science for both local and pooled execution."""
     cfg = request["config"]
     import anndata as ad
-    from osp import generate_report, run_one_sample_pipeline
-    from osp.report import write_report_context
+    from osp.api import generate_report, run_one_sample_pipeline, write_report_context
     from .upstream import validate_matrix
 
     if file_identity(source / "subset.h5ad") != request["subset_identity"]:

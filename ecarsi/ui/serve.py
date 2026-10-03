@@ -79,6 +79,7 @@ from pathlib import Path
 
 from typing import Callable
 from . import index
+from ..contracts import check
 from .. import layout as L
 
 SUBCOMMANDS = ("scan-add", "remove", "list", "dump", "reload")
@@ -106,10 +107,11 @@ def display_zones(config: Path | None) -> dict[str, Path]:
     for root in roots:
         for path in sorted(Path(root).glob("*/*/*/" + L.DISPLAY)):
             try:
-                record = json.loads(path.read_text())
-            except (OSError, ValueError):
+                record = check("display", json.loads(path.read_text()))
+            except (OSError, ValueError) as exc:
+                sys.stderr.write(f"[serve] {path} skipped: {exc}\n")
                 continue
-            if isinstance(record, dict) and record.get("name") and "/" not in record["name"]:
+            if "/" not in record["name"]:
                 records.append((record.get("synced_at") or record.get("copied_at") or "", record, path.parent))
     found: dict[str, Path] = {}
     for _, record, path in sorted(records, key=lambda r: r[0], reverse=True):

@@ -5,6 +5,7 @@ from pathlib import Path
 from temporalio import activity, workflow
 from temporalio.exceptions import ApplicationError
 
+from ..contracts import check
 from .persample import DEG_BATCH_SIZE, HISTORY_LIMIT, await_pool, call, handoff, stage_with_waits
 
 
@@ -104,7 +105,7 @@ def crosssample_step(action, args):
         if bundle['state'] != 'complete' or bundle['input'] != spec['input'] or bundle['n_input'] != bundle['n_survived'] + bundle['n_removed']:
             raise ValueError('Cross-sample publication did not conserve the accepted input')
         publication = Path(spec['output_root']) / 'publication.json'
-        immutable(publication, {**bundle, 'result': reference(path)})
+        immutable(publication, check('stage', {**bundle, 'result': reference(path)}))
         from .artifacts import copy_light
         from ..degraded import save
         root = Path(spec['output_root'])

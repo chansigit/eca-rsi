@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.2 — 2026-10-02
+
+Make the system smaller to explain and harder to break silently.
+
+- **Degraded steps leave a record** ([decision 0013](docs/decisions/0013-degraded-results-are-recorded.md)): a
+  report, a copy of readable files, a display sync or a round ledger that fails without failing the run is kept
+  under `<run>/degraded/`, listed first in `needs_review` (`degraded`) and marked on Periscope ("N degraded").
+  The tests run with `ECARSI_STRICT=1`, where such a failure raises.
+- **Boundaries are tested** ([decision 0014](docs/decisions/0014-boundaries-are-tested.md)): the stage programs
+  reach osp / msp / zmip only through their new `api` modules (OSP 0.1.8, MSP 0.5.3, ZMIP 0.3.10), which alias
+  the 27 private kernel functions eca-rsi used; `tests/test_layers.py` enforces that and which subsystem may
+  import which. `ecarsi/contracts.py` names the fields of every shared JSON file; writers and readers check them.
+- **Deployment scripts in the repository** (`ops/`, linked from `$BASE/ops`), reading every path from
+  `deployment.env`. `build-images-update.sh` replaces a wheel's distribution wherever the image has it (the
+  kernels live in the science image's `/opt/rsi-python`). The unused `observatory` component of
+  `control-plane.sh` and the `ecarsi/serve.py` shim are gone.
+
 ## 0.4.1 — 2026-10-02
 
 - **Explicit sample maps on the control plane**: the dataset spec's `organize.sample_map` (`sources`, `merges`,

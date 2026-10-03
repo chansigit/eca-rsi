@@ -145,15 +145,15 @@ def compute(bundle_ref, destination):
             "validation": {"n_input": request["n_cells"], "n_survived": 0, "n_removed": request["n_cells"]}
                           if empty else validate_outputs(folder, False)}
     if not empty:
-        from osp.annotate import _detect_primary_key, _system_prompt, _PROPOSAL_SCHEMA_DOC
+        from osp.api import detect_primary_key, system_prompt, PROPOSAL_SCHEMA_DOC
         from ..downstream import _data
-        key = _detect_primary_key(str(folder))
+        key = detect_primary_key(str(folder))
         data = _data(folder / "clustered.h5ad")
         try:
             clusters = sorted(set(data.obs[key].astype(str)))
         finally:
             data.file.close()
-        info.update(key=key, proposal_schema=_PROPOSAL_SCHEMA_DOC, prompt=_system_prompt(str(folder), key, clusters,
+        info.update(key=key, proposal_schema=PROPOSAL_SCHEMA_DOC, prompt=system_prompt(str(folder), key, clusters,
             request["config"]["species"], request["config"]["tissue"], "English"))
     result = sealed(folder, destination / "computed.json", **info)
     if not empty:
@@ -241,21 +241,21 @@ def tool(name, state_path, arguments_path, destination):
                 state["seen"]["tables"] = sorted(set(state["seen"]["tables"]) | {offset})
         else:
             import scanpy as sc
-            from osp.annotate import _gene_table, _qc_table, _subcluster_once, _validate_proposal
+            from osp.api import gene_table, qc_table, subcluster_once, validate_proposal
             data = sc.read_h5ad(state["data"]["path"])
             key = state["key"]
             clusters = sorted(set(data.obs[key].astype(str)))
             if name == "check_genes":
-                response["text"] = _gene_table(data, arguments["genes"], key)
+                response["text"] = gene_table(data, arguments["genes"], key)
                 state["seen"]["genes"] = True
             elif name == "check_qc_scores":
-                response["text"] = _qc_table(data, key)
+                response["text"] = qc_table(data, key)
                 state["seen"]["qc"] = True
             elif name == "subcluster":
                 if arguments["cluster"] not in clusters:
                     raise ValueError("Unknown cluster in current version")
                 new_key = "ann_sub" + str(state["version"] + 1)
-                n, response["text"] = _subcluster_once(data, key, arguments["cluster"], arguments["resolution"], new_key)
+                n, response["text"] = subcluster_once(data, key, arguments["cluster"], arguments["resolution"], new_key)
                 if n >= 2:
                     data.write_h5ad(destination / "clustered.h5ad")
                     state.update(data=reference(destination / "clustered.h5ad"), key=new_key, version=state["version"] + 1)
@@ -269,7 +269,7 @@ def tool(name, state_path, arguments_path, destination):
                         set(range(0, max(1, len(tables)), 60000)) - set(seen["tables"])):
                     raise ValueError("Read all required figures/tables and verify current markers and QC before submitting")
                 proposal = json.loads(arguments["proposal_json"])
-                problems = _validate_proposal(proposal, clusters, data.obs)
+                problems = validate_proposal(proposal, clusters, data.obs)
                 if problems:
                     raise ValueError("; ".join(problems))
                 proposal["cluster_key"] = key
@@ -305,8 +305,8 @@ def finalize(computed_ref, annotation_ref, destination):
         data.write_h5ad(folder / "clustered.h5ad")
         validation = validate_outputs(folder, False)
     elif not bundle["empty"]:
-        from osp.annotate import _validate_proposal, _apply_proposal, _plot_annotation
-        from osp.report import generate_report
+        from osp.api import validate_proposal, apply_proposal, plot_annotation
+        from osp.api import generate_report
         import scanpy as sc
         accepted = verified(annotation_ref)
         state = verified(accepted["state"])
@@ -318,11 +318,11 @@ def finalize(computed_ref, annotation_ref, destination):
         proposal = accepted["proposal"]
         if proposal["cluster_key"] != state["key"]:
             raise ValueError("Annotation clustering version mismatch")
-        problems = _validate_proposal(proposal, sorted(set(data.obs[state["key"]].astype(str))), data.obs)
+        problems = validate_proposal(proposal, sorted(set(data.obs[state["key"]].astype(str))), data.obs)
         if problems:
             raise ValueError("; ".join(problems))
-        _apply_proposal(data, state["key"], proposal)
-        _plot_annotation(data, str(folder / "figures"))
+        apply_proposal(data, state["key"], proposal)
+        plot_annotation(data, str(folder / "figures"))
         data.write_h5ad(folder / "clustered.h5ad")
         generate_report(str(folder), annotation_proposal=proposal)
         save(folder / "annotation_proposal.json", proposal)

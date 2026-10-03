@@ -5,6 +5,8 @@ from pathlib import Path
 from temporalio import activity, workflow
 from temporalio.exceptions import ApplicationError
 
+from ..contracts import check
+
 SKIPPED_CELL_LIMIT = 0.10  # a stage whose skipped samples or lineages hold more of its input cells fails instead
 # Continue as new past this many history events, at a point with nothing in flight. A Zoomin round
 # reached 20-38k events; replaying that after a coordinator restart took 15-60 s against a 10 s
@@ -177,6 +179,7 @@ def sample_step(action, args):
             "samples": [reference(p) for p in results], "failed_samples": failed, "skipped_samples": skipped,
             "n_input": totals["n_input"], "n_survived": n_kept,
             "n_removed": n_removed + totals["n_excluded"], "partition_exclusions": totals["exclusions"]}
+        check("per-sample", publication)
         with lock(root / "publication.lock"):
             previous = read(root / "publication.json")
             if previous and previous != publication:

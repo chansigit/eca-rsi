@@ -67,10 +67,12 @@ def test_display_roots_in_the_config_serve_every_display_zone_under_its_recorded
     import json
     from ecarsi.ui.serve import Registry
     root = tmp_path / "display"
+    def record(name, coll, ds, run):  # what ecarsi.display.sync writes (ecarsi.contracts display/1)
+        return dict(name=name, collection=coll, dataset=ds, run=run, source=f"/runs/{name}", work=f"/work/{run}.tar.gz")
     for coll, ds, run, name in (("3ca", "Durante", "gen2-20260917", "3ca-Durante"), ("hcl", "Adipose", "gen1", "hcl-Adipose"),
                                 ("hcl", "Adipose", "gen1-copy", "hcl-Adipose")):
         (root / coll / ds / run).mkdir(parents=True)
-        (root / coll / ds / run / "display.json").write_text(json.dumps({"name": name, "collection": coll}))
+        (root / coll / ds / run / "display.json").write_text(json.dumps(record(name, coll, ds, run)))
     (root / "hcl" / "Broken" / "gen1").mkdir(parents=True)
     (root / "hcl" / "Broken" / "gen1" / "display.json").write_text("{")
     config = tmp_path / "results.json"
@@ -87,7 +89,8 @@ def test_display_roots_in_the_config_serve_every_display_zone_under_its_recorded
     assert reg.snapshot() == {"3ca-Durante": root / "3ca" / "Durante" / "gen2-20260917", "hcl-Adipose": root / "hcl" / "Adipose" / "gen1",
                               "hcl-Adipose-gen1-copy": root / "hcl" / "Adipose" / "gen1-copy"}
     # a dataset run again: the newest copy takes the name
-    (root / "hcl" / "Adipose" / "gen1-copy" / "display.json").write_text(json.dumps({"name": "hcl-Adipose", "synced_at": "2026-10-05"}))
+    (root / "hcl" / "Adipose" / "gen1-copy" / "display.json").write_text(
+        json.dumps(dict(record("hcl-Adipose", "hcl", "Adipose", "gen1-copy"), synced_at="2026-10-05")))
     reg.scan_display()
     assert reg.snapshot()["hcl-Adipose"] == root / "hcl" / "Adipose" / "gen1-copy"
     assert Registry(registry_file, config=tmp_path / "missing.json").snapshot() == {}

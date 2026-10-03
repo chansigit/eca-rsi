@@ -28,7 +28,7 @@ def accepted_plan(prepared, decision):
 
 
 def prepare(spec, destination):
-    from zmip.plan import lineage_evidence
+    from zmip.api import lineage_evidence
     publication = check_bundle(spec['input'])
     if publication.get('state') != 'complete':
         raise ValueError('Zoom-in requires a completed cross-sample publication')
@@ -42,7 +42,7 @@ def prepare(spec, destination):
 
 
 def markers(prepared, decision, destination):
-    from zmip.foreign import lineage_markers
+    from zmip.api import lineage_markers
     plan = accepted_plan(prepared, decision)
     source = verified(prepared)
     data = data_from(verified(source['input']), 'annotated.h5ad')
@@ -53,7 +53,7 @@ def markers(prepared, decision, destination):
 
 
 def subset(prepared, decision, index, destination):
-    from zmip.lineage import subset_for
+    from zmip.api import subset_for
     plan = accepted_plan(prepared, decision)
     line = plan['lineages'][index]
     if not line['zoom']:
@@ -70,7 +70,7 @@ def subset(prepared, decision, index, destination):
 
 
 def compute(subset_ref, marker_ref, destination):
-    from zmip.scheduled import compute_lineage
+    from zmip.api import compute_lineage
     source, shared = check_bundle(subset_ref), check_bundle(marker_ref)
     if any(source[key] != shared[key] for key in ('prepared', 'decision')):
         raise ValueError('Lineage and markers belong to different plans')
@@ -98,7 +98,7 @@ def numerical_reasons(bundle, data):
     osp_proposal: OSP's drop advice is applied there, in round 1, so no such cell reaches a lineage;
     one that did would have no reason here and fail loudly rather than be recorded vaguely."""
     import pandas as pd
-    from msp.evidence import load_removal_mask
+    from msp.api import load_removal_mask
     mask = load_removal_mask(artifact(bundle, 'preannotation_removal.csv').parent, data)
     fragments = pd.read_csv(artifact(bundle, 'minor_sibling_qc.csv'), dtype=str, keep_default_na=False)
     bad = set(fragments.loc[fragments.recommend_removal.str.lower().eq('true'), 'subcluster'])
@@ -161,7 +161,7 @@ def reassign_problem(n_cells, share, core, target, previous):
 
 
 def apply_lineage(evidence, decision, destination):
-    from zmip.scheduled import apply_decisions
+    from zmip.api import apply_decisions
     bundle, accepted = check_bundle(evidence), verified(decision)
     if accepted.get('accepted') is not True or accepted['evidence'] != evidence:
         raise ValueError('Lineage decision belongs to different evidence')
@@ -205,8 +205,8 @@ def lineage_report(bundle, data, kept, destination):
     the last thing a lineage does and the least important: a report that will not draw must
     not throw away an accepted annotation. Returns the degradations (ecarsi.degraded)."""
     import anndata as an
-    from msp.evidence import plot_annotation
-    from msp.report import compose_title, generate_report
+    from msp.api import plot_annotation
+    from msp.api import compose_title, generate_report
     from .contract import copy_light
     from ..degraded import note
     name, notes = bundle['lineage']['name'], []
@@ -246,8 +246,8 @@ def plan_without(plan, skipped):
 
 def merge(prepared, decision, results, destination, skipped=()):
     import pandas as pd
-    from zmip.merge import merge_back
-    from zmip.report import slug
+    from zmip.api import merge_back
+    from zmip.api import slug
     from .contract import copy_light
     plan = plan_without(accepted_plan(prepared, decision), skipped)
     source = verified(prepared)
@@ -296,7 +296,7 @@ def cluster_order(name):
 
 def inline_context(bundle, kind):
     """What list_evidence and annotation_status answer at turn 0, so the first turn reads evidence."""
-    from zmip.scheduled import TYPE_KEY, QUALITY_KEY
+    from zmip.api import TYPE_KEY, QUALITY_KEY
     paths = evidence_paths(bundle)
     lines = ['Evidence files (read_evidence paths): ' + json.dumps(paths),
              'UMAP figures: ' + json.dumps([p for p in paths if p.endswith('.png') and 'umap' in p])]
@@ -310,10 +310,10 @@ def inline_context(bundle, kind):
 
 
 def agent_spec(spec, evidence, kind, parent):
-    from zmip.plan import _PLAN_SCHEMA_DOC
-    from zmip.annotate import _CLUSTER_SCHEMA_DOC
-    from zmip.scheduled import TYPE_KEY
-    from msp.evidence import DEG_TOOL_DOC, DEG_SQL_DOC
+    from zmip.api import PLAN_SCHEMA_DOC
+    from zmip.api import CLUSTER_SCHEMA_DOC
+    from zmip.api import TYPE_KEY
+    from msp.api import DEG_TOOL_DOC, DEG_SQL_DOC
     bundle = verified(evidence)
     props = {
         'list_evidence': (schema({'offset': {'type': 'integer', 'minimum': 0}}), 'List evidence paths (the prompt already lists the first ones). Follow next_offset until null.', False),
@@ -322,7 +322,7 @@ def agent_spec(spec, evidence, kind, parent):
         prompt = PROMPTS.joinpath('zoomin-plan.md').read_text()
         prompt += '\nConfirmed counts: ' + json.dumps(bundle['counts'])
         prompt += '\nMinimum lineage size: ' + str(spec['config']['min_cells'])
-        props['submit_plan'] = (schema({'proposal_json': {'type':'string'}}), 'Submit the lineage plan: '+_PLAN_SCHEMA_DOC, False)
+        props['submit_plan'] = (schema({'proposal_json': {'type':'string'}}), 'Submit the lineage plan: '+PLAN_SCHEMA_DOC, False)
         completion = 'submit_plan'
     else:
         prompt = PROMPTS.joinpath('zoomin-annotation.md').read_text()
@@ -336,7 +336,7 @@ def agent_spec(spec, evidence, kind, parent):
             'deg_sql': (schema({'query':{'type':'string'}}), DEG_SQL_DOC, False),
             'check_genes': (schema({'key':{'type':'string'},'cluster':{'type':'string'},'genes':{'type':'array','items':{'type':'string'},'minItems':1,'maxItems':80}}), 'Read expression by the explicitly selected clustering.', False),
             'check_qc_scores': (schema({}), 'Read QC for resolution 2.0.', False),
-            'submit_types': (schema({'proposal_json':{'type':'string'}}), 'Save {"cluster_key":"msp_leiden_r1.0","clusters":[entries]}. Use action=keep for identity; quality controls removals/reassignments. Each entry: '+_CLUSTER_SCHEMA_DOC, False),
+            'submit_types': (schema({'proposal_json':{'type':'string'}}), 'Save {"cluster_key":"msp_leiden_r1.0","clusters":[entries]}. Use action=keep for identity; quality controls removals/reassignments. Each entry: '+CLUSTER_SCHEMA_DOC, False),
             'submit_quality': (schema({'proposal_json':{'type':'string'}}), 'Save {"cluster_key":"msp_leiden_r2.0","clusters":[{"cluster_id":"QC id","decisions":[{"type_clusters":["type ids"],"action":"keep|remove|reassign","confidence":"high|medium|low","evidence":"specific evidence","rationale":"reason"}]}]}. Each QC group must cover its present 1.0 intersections exactly once. remove needs remove_reason (doublet|low-quality|ambient|stress|dissociation|dying|batch|other). reassign needs reassign_to and fine_label. After a budget warning add removal_review explaining evidence and scope. An accepted quality proposal completes the session.', False)})
         completion = 'submit_quality'
     prompt += '\nTissue/species and integration context: '+json.dumps(spec['config'])
@@ -360,7 +360,7 @@ def agent_spec(spec, evidence, kind, parent):
 
 
 def coverage_hint(obs, state, own, other):
-    from zmip.scheduled import TYPE_KEY, QUALITY_KEY, partitions
+    from zmip.api import TYPE_KEY, QUALITY_KEY, partitions
     table = partitions(obs)
     intersections = {str(q): {str(t): int(n) for t, n in row.items() if n} for q, row in table.iterrows()}
     if state.get('types_complete'):
@@ -401,13 +401,13 @@ def error_hint(name, content, state, bundle):
 
 
 def refine_evidence(state, args, destination):
-    from msp.inspect import _subcluster_once
-    from msp.evidence import load_removal_mask
-    from msp.integrate.deg import prepare_deg, save_deg_input
-    from msp.integrate.qc import _qc_outputs
-    from msp.plots import save_single_umap, slug
-    from zmip.scheduled import TYPE_KEY, QUALITY_KEY, partitions
-    from zmip.annotate import components
+    from msp.api import subcluster_once
+    from msp.api import load_removal_mask
+    from msp.api import prepare_deg, save_deg_input
+    from msp.api import qc_outputs
+    from msp.api import save_single_umap, slug
+    from zmip.api import TYPE_KEY, QUALITY_KEY, partitions
+    from zmip.api import components
     import math
     if type(args['resolution']) not in (int,float) or not math.isfinite(args['resolution']) or args['resolution'] <= 0:
         raise ValueError('Resolution must be finite and positive')
@@ -421,7 +421,7 @@ def refine_evidence(state, args, destination):
     if args['cluster'] not in set(data.obs[key].astype(str)):
         raise ValueError('Refinement must name a cluster of the selected partition')
     mask = load_removal_mask(artifact(bundle,'preannotation_removal.csv').parent,data)
-    count, message = _subcluster_once(data,key,args['cluster'],args['resolution'],'_zoom_refined',mask,compute_markers=False)
+    count, message = subcluster_once(data,key,args['cluster'],args['resolution'],'_zoom_refined',mask,compute_markers=False)
     if not count:
         return message
     previous = {str(e['cluster_id']):e for e in (state['types'] or {}).get('clusters',[])}
@@ -438,8 +438,8 @@ def refine_evidence(state, args, destination):
     values.obs_names=eligible.obs_names.copy();save_deg_input(values,output/'deg_input')
     save(output/'deg_plan.json',{**plan,'keys':keys,'top_n_de':50})
     figures=output/'figures';figures.mkdir()
-    _qc_outputs(data,data.uns['msp']['batch_col'],'standissect_product',str(output),str(figures),keys,[1.,2.])
-    from zmip.foreign import score_foreign
+    qc_outputs(data,data.uns['msp']['batch_col'],'standissect_product',str(output),str(figures),keys,[1.,2.])
+    from zmip.api import score_foreign
     shared=verified(bundle['shared'])
     score_foreign(data,shared['markers'],bundle['lineage']['name'],keys,str(output),str(figures))
     for k in keys:save_single_umap(data,k,str(figures/('umap_'+slug(k)+'.png')),repel=True)
@@ -462,8 +462,8 @@ def refine_evidence(state, args, destination):
 
 
 def tool(name, state_path, args_path, destination):
-    from zmip.scheduled import TYPE_KEY, QUALITY_KEY, partitions, validate_types, validate_quality, apply_decisions
-    from msp.evidence import DegTables, gene_table, qc_table
+    from zmip.api import TYPE_KEY, QUALITY_KEY, partitions, validate_types, validate_quality, apply_decisions
+    from msp.api import DegTables, gene_table, qc_table
     state, args = read(state_path), read(args_path)
     if name == 'deg_lookup':
         args = lookup_arguments(args, TYPE_KEY)
@@ -488,7 +488,7 @@ def tool(name, state_path, args_path, destination):
             state['read'] = sorted(set(state['read']) | {args['path']})
         elif name == 'submit_plan':
             import pandas as pd
-            from zmip.plan import validate_plan
+            from zmip.api import validate_plan
             if not any(p.endswith('.png') for p in state['read']):
                 raise ValueError('Read the lineage UMAP before planning')
             def frame(name):
@@ -565,7 +565,7 @@ def tool(name, state_path, args_path, destination):
                         raise ValueError(problem)
             pre = numerical_reasons(bundle,data)
             _, removed, _, _ = apply_decisions(data.obs,state['types'],proposal,own,other,bundle['lineage']['name'],pre)
-            from zmip.annotate import REMOVE_BUDGET
+            from zmip.api import REMOVE_BUDGET
             fraction = len(set(removed.cell)-set(pre))/len(data)
             if fraction > REMOVE_BUDGET:
                 if not state.get('budget_warning'):
