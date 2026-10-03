@@ -203,13 +203,18 @@ def lineage_report(bundle, data, kept, destination):
     (QC tables, DEG tables, embeddings) is staged next to the decision first. Rendering is
     the last thing a lineage does and the least important: a report that will not draw must
     not throw away an accepted annotation."""
+    import anndata as an
     from msp.evidence import plot_annotation
     from msp.report import compose_title, generate_report
     from .contract import copy_light
     name = bundle['lineage']['name']
     try:
         copy_light(bundle['files'], destination)
-        plot_annotation(data, kept, str(destination/'figures'))
+        # msp draws categorical labels (and recolours what it draws); zmip's apply_decisions
+        # returns plain strings, so every lineage report failed here (2026-10-02, #26).
+        # Draw from a light copy: annotated.h5ad is written from kept, untouched.
+        labels = kept.obs[['msp_ann_coarse', 'msp_ann_fine']].astype('category')
+        plot_annotation(data, an.AnnData(obs=labels, obsm={'X_umap': kept.obsm['X_umap']}), str(destination/'figures'))
         generate_report(str(destination), title=compose_title('zoom-in lineage (zmip)', str(destination), subject=name))
     except Exception as exc:                      # noqa: BLE001 - any drawing failure, never fatal
         print(f'[zoom-in] warning: no report for lineage {name}: {type(exc).__name__}: {exc}', flush=True)

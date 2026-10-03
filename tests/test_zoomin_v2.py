@@ -60,6 +60,8 @@ def test_zoom_handoffs_and_exact_global_conservation(tmp_path):
     assert final['n_input']==n and len(kept)+len(ledger)==n
     assert set(kept.obs_names)|set(ledger.cell_uid)==set(data.obs_names)
     assert set(data.obs_names[80:])<=set(kept.obs_names)  # skipped lineage stays
+    # the lineage page is drawn and published where the round report links it (#26)
+    assert (applied/'report.html').is_file() and (merged/'Epithelial'/'report.html').is_file()
     state=immutable(tmp_path/'state.json',dict(evidence=evidence,kind='lineage',read=[],lookups=[],qc=False,types=None,quality=None))
     args=tmp_path/'args.json';save(args,{})
     status=folder('status');tool('annotation_status',state['path'],str(args),status)
