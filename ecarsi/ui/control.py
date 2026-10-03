@@ -12,7 +12,6 @@ Operator reports (`ecarsi.observatory` status/releases/tokens) are on the other 
 may query Temporal directly. A human running a report is not a web page.
 """
 import json
-import os
 from pathlib import Path
 import re
 import socket
@@ -20,7 +19,6 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
-from ..agent import status as bridge_status
 from . import records
 from ..warm_pool.state import read
 

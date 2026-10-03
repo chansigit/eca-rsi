@@ -54,7 +54,7 @@ At each round boundary, the unit workflow:
 
 1. checks upstream publication identity and cell-count conservation;
 2. reads `<unit>/loop_control.json` and applies it over the spec `round_policy`;
-3. decides `continue` or `release` with the shared `round_policy.decide` (also used by the local path);
+3. decides `continue` or `release` with `round_policy.decide`;
 4. writes `rounds/roundNN/publication.json` with `stats`, the effective `policy`, and the raw `control`;
 5. runs `dataset.round-ledger` on a pool worker to write the round cell ledger and Sankey data under `rounds/roundNN/ledger/`;
 6. continues as new to keep the Temporal history of the unit bounded.

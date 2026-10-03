@@ -6,8 +6,6 @@ No scientific implementation is duplicated here.
 from __future__ import annotations
 
 import errno
-import os
-import sys
 from pathlib import Path
 
 from .osp_contract import validate_outputs
@@ -50,32 +48,3 @@ def compute_sample(request, source: Path, outdir: Path):
     )
     generate_report(str(outdir))
     validate_outputs(outdir, False)
-
-
-def run_compute(request, outdir):
-    mode = os.environ.get("OSP_COMPUTE_ENDPOINT", "local")
-    if mode != "local":
-        # The gen-1 Dask pool that served remote OSP compute is gone; gen-2
-        # schedules whole stages through the warm pool instead.
-        raise ValueError(f"OSP_COMPUTE_ENDPOINT={mode!r} is no longer supported; use 'local'")
-    return compute_sample(request, outdir, outdir)
-
-
-def run(request_path: Path, *, compute_only: bool = False) -> int:
-    from .osp_stage import run as run_stage
-    return run_stage(request_path, compute_only=compute_only)
-
-
-def main(argv: list[str] | None = None) -> int:
-    import argparse
-    from harness_bridge import configure_logging
-    configure_logging("ecarsi", "osp", stream=sys.stderr)
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("request", type=Path)
-    parser.add_argument("--compute-only", action="store_true")
-    args = parser.parse_args(argv)
-    return run(args.request.resolve(), compute_only=args.compute_only)
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

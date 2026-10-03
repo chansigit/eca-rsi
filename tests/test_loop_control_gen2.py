@@ -3,7 +3,6 @@ immutable workflow spec, so loop_control.json is the one thing allowed to move i
 import json
 from pathlib import Path
 
-import pytest
 
 from ecarsi import round_policy
 from ecarsi.ui import index
@@ -15,13 +14,10 @@ def control(unit: Path, **values):
     return unit
 
 
-def test_the_reader_is_shared_by_both_generations_and_never_fails_a_run(tmp_path):
+def test_the_reader_never_fails_a_run(tmp_path):
     unit = control(tmp_path / 'u', cap=20, rounds=None, pause=True)
     assert round_policy.read_control(unit) == {'cap': 20, 'rounds': None, 'pause': True}
     assert round_policy.read_control(tmp_path / 'absent') == {}
-    # generation 1 keeps its name and its progress.log reporting, reading the same file
-    from ecarsi import loop
-    assert loop.read_control(unit) == {'cap': 20, 'rounds': None, 'pause': True}
     for bad, why in [('[]', 'not a JSON object'), ('{"nope": 1}', 'unknown key'),
                      ('{"cap": 0}', 'must be >= 1'), ('{"cap": true}', 'must be an integer'),
                      ('{"pause": 1}', 'pause must be a boolean'), ('not json', 'Expecting')]:

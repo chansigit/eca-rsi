@@ -3,7 +3,6 @@ import argparse
 import asyncio
 from collections import Counter, deque
 from contextlib import nullcontext
-import json
 import os
 from pathlib import Path
 import socket

@@ -2,11 +2,15 @@
 
 Every ecarsi step derives its paths from here, never by spelling directory
 names itself, so the whole run of one dataset is a single tree that can be
-served as-is (ecarsi.serve) and rendered from disk alone (ecarsi.index):
+served as-is (ecarsi.serve) and rendered from disk alone (ecarsi.index).
+
+Two layouts. The control plane writes generation 2 (00-organize/, 01-per-sample/, rounds/roundNN/
+{02-cross-sample,03-zoom-in}/, publication.json files; the GEN2_* names below). Generation 1 is the
+layout of the local path, removed in 0.4.0; its runs are still shown from their display zones, so
+the pages keep reading it:
 
     <root>/                                  organize's out_root = one dataset run
       index.html                             root landing page (ecarsi.index)
-      mirror.json                            where --mirror copies this root (ecarsi.mirror)
       organize/manifest.json                 detection, profiles, plan, audit
       units/<unit>/
         index.html                           unit landing page (ecarsi.index)
@@ -21,7 +25,7 @@ served as-is (ecarsi.serve) and rendered from disk alone (ecarsi.index):
           ledger/                            cell_ledger.csv + sankeys (all rounds so far)
           stats.txt  decision.txt
         release/{final.h5ad, summary.md, needs_review.{md,json}, cell_ledger.csv, sankey_coarse.png}
-                                             + pruned.json once ecarsi.prune has dropped the round h5ads
+                                             + pruned.json once the local path had dropped the round h5ads
                                              (each leaves <file>.pruned; labelled ones also <file>.obs.parquet)
 
 A unit is an analysis unit organize carved out of the input (e.g. one tissue
@@ -52,23 +56,16 @@ MANIFEST = "manifest.json"
 RUN_STATE = "run_state.json"
 UPSTREAM = "upstream"
 SAMPLE_MAPPING = "sample_mapping.csv.gz"
-MIRROR = "mirror.json"
 DISPLAY = "display.json"  # root of a display-zone copy: {collection, dataset, run, source, work} (ops/display-zone.py)
-LOOP_CONTROL = "loop_control.json"  # <unit>/: manual overrides the loop reads at every round boundary
 EXCLUDED_CELLS = "excluded_cells.csv"  # persample/: cells a sample-map policy dropped before OSP (ledger source)
 
 # step contracts — a step is complete when every file exists
 PS_CONTRACT = ("report.html", "clustered.h5ad")
-PS_ANNOTATE_CONTRACT = PS_CONTRACT + ("annotation_proposal.json",)
 # Strong front-pipeline validation uses these in addition to PS_CONTRACT.
 # Legacy display and the frozen downstream contracts stay readable.
 PS_QC_CONTRACT = ("qc_summary.csv", "qc_removed.csv")
-MSP_CONTRACT = ("integrated.h5ad", "report.html", "inspection_proposal.json",
-                "annotation_proposal.json", "annotated.h5ad")
-ZMIP_CONTRACT = ("zmip_plan.json", "annotated_zmip.h5ad", "report.html")
-ZMIP_LINEAGE_CONTRACT = ("annotation_proposal.json", "annotated.h5ad", "report.html")
 # What a landing page may rely on to tell a step is finished: only the light
-# files a --mirror copy carries (never an h5ad), one per step, all written at
+# files a display copy carries (never an h5ad), one per step, all written at
 # that step's end. Computation keeps validating against the full contracts.
 PS_LIGHT = ("report.html", "qc_summary.csv")
 PS_ANNOTATE_LIGHT = PS_LIGHT + ("annotation_proposal.json",)
@@ -151,12 +148,8 @@ def fleet_place(path: Path) -> tuple[str, str] | None:
 
 def base_of(target: Path) -> Path:
     """The tree one run of one dataset occupies: the root, or a bare unit
-    run outside any root. This is what ecarsi.mirror copies as a whole."""
+    run outside any root: what a display zone copies from."""
     return target if is_root(target) else (root_of(target) or target) if is_unit(target) else target
-
-
-def mirror_file(base: Path) -> Path:
-    return base / MIRROR
 
 
 # ---------------------------------------------------------------- unit parts
@@ -182,18 +175,6 @@ def sample_dir(unit: Path, entry: dict) -> Path:
     persample/ by its basename — the manifest records an absolute path,
     which must not break when a run directory is moved or copied."""
     return persample_root(unit) / Path(entry["dir"]).name
-
-
-def sample_dirs(unit: Path) -> list[Path]:
-    """Sample dirs from the persample manifest (else any dir with a report)."""
-    import json
-
-    mp = persample_manifest(unit)
-    if mp.is_file():
-        with open(mp) as f:
-            return [sample_dir(unit, s) for s in json.load(f).get("samples", [])]
-    pr = persample_root(unit)
-    return sorted(p for p in pr.iterdir() if p.is_dir() and (p / "report.html").is_file()) if pr.is_dir() else []
 
 
 def rounds_root(unit: Path) -> Path:
@@ -253,17 +234,6 @@ def present(p: Path) -> bool:
 
 def complete(d: Path, contract: tuple[str, ...]) -> bool:
     return all(present(d / f) for f in contract)
-
-
-def report_context(unit: Path, rdir: Path | None = None) -> str:
-    """Text the kernels put in their report titles (--report-context):
-    'round N · <unit>' inside a round, else '<unit>'."""
-    if rdir is not None:
-        try:
-            return f"round {round_number(rdir)} · {unit.name}"
-        except ValueError:
-            pass
-    return unit.name
 
 
 # ---------------------------------------------------------------- progress log

@@ -41,7 +41,8 @@ KINDS: list[tuple[str, str, str]] = [
      "A round resumed with a different {harness, model} than the one its earlier stages used "
      "(deliberately allowed since 2026-09-10 -- switching mid-run to a stronger model is a legitimate "
      "operator move). Not itself a defect: a unit annotated by two different models is a fact the "
-     "reader should see, not something the loop blocks."),
+     "reader should see, not something the loop blocks. Written by the local path only (removed 2026-10); "
+     "kept so its releases still render."),
     ("upstream_review", "Input and per-sample review",
      "Upstream quality flags, OSP execution or QC warnings and advisory batch-key recommendations "
      "(never applied); see persample/needs_review.json."),
@@ -242,29 +243,9 @@ def _zoomin_items(n: int, zdir: Path, unit: Path) -> list[Item]:
     return items
 
 
-def _agent_config_items(unit: Path) -> list[Item]:
-    """'round N agent config changed: ...' lines from progress.log (written
-    by loop.py when check_agent_config finds a mismatch on resume) become
-    review items -- the log is the only durable record of a live mid-run
-    switch, review.collect() otherwise only reads disk artifacts per round."""
-    items = []
-    for _, event in L.read_log(unit):
-        if not event.startswith("round "):
-            continue
-        n_str, _, rest = event.partition(" ")[2].partition(" agent config changed: ")
-        if not rest:
-            continue
-        try:
-            n = int(n_str)
-        except ValueError:
-            continue
-        items.append(Item("agent_config_changed", n, "loop", note=rest))
-    return items
-
-
 def collect(unit: Path, rounds: list[Path], stats: list[dict], forced: bool) -> list[Item]:
     """All review items of a unit, ordered by section then round."""
-    items: list[Item] = _agent_config_items(unit)
+    items: list[Item] = []
     front = L.persample_root(unit) / "needs_review.json"
     if front.is_file():
         for entry in _json(front).get("items", []):

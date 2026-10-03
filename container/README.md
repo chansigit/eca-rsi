@@ -86,7 +86,6 @@ Moving Temporal or PostgreSQL into an image changed the binary bytes because of 
 - **Equal version numbers are not equal code.** An image once contained msp and zmip with matching checkout version numbers, but 11 source files differed. Compare source digests in `/opt/rsi-runtime.json` rather than version numbers.
 - **Never edit the live code path.** Pool tasks import eca-rsi for each task. A draft edit in the live worktree caused 21 tasks to fail in one minute. Develop in a separate worktree, run tests, and then build a new image.
 - **Deploy pinned stage files only with zero running executions.** Requests pin program files by content. A modified file causes queued requests and active sessions to fail.
-- **The image needs no `git`.** The `runtime_identity()` function treats the commit as provenance and tolerates a missing git binary. Identity depends only on content.
 - **`pandas<3` is pinned.** In pandas 3, Copy-on-Write returns read-only arrays from `Series.values`. This behavior broke OSP quality control actions, even though every test passed.
 - **`scikit-image` is installed explicitly.** The scrublet path in scanpy imports `scikit-image`. The osp package does not declare `scanpy[scrublet]`.
 - **`HARNESS=claude` needs the Claude Code CLI.** The control image includes claude-agent-sdk with the bundled CLI. The default configuration `HARNESS=openai` requires no extra packages.

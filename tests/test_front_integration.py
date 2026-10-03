@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from tests.bridge_contract import BRIDGE_LEGACY_API
 
-import json
-from pathlib import Path
 
 import anndata as ad
 import numpy as np
@@ -12,9 +10,11 @@ import pandas as pd
 import pytest
 from scipy import sparse
 
-from ecarsi import layout as L, organize, persample
-from ecarsi.osp_contract import INPUT_CELLS, is_done, output_identities, validate_outputs
-from ecarsi.run_state import file_identity, read_json, write_json, writer_lock
+from pathlib import Path
+
+from ecarsi import layout as L, organize as O
+from ecarsi.osp_contract import INPUT_CELLS, validate_outputs
+from ecarsi.run_state import read_json, write_json, writer_lock
 from ecarsi.sample_mapping import SAMPLE_KEY, build_mapping
 from ecarsi.upstream import column_values, inspect_unit
 
@@ -49,6 +49,17 @@ def plan_file(path, names=("A",), split=False):
     return path
 
 
+def organize(root, out, plan):
+    """Organize with a given plan, as the control plane does: its stage's prepare, then the shared
+    execute_plan (the stage's execute adds the sample-mapping checks; these plans name no mapping)."""
+    from ecarsi.execute import execute_plan
+    from ecarsi.stages.organize import prepare
+    prepared = prepare(Path(root), Path(out).parent / (Path(out).name + "-prepared.json"))
+    plan = plan if isinstance(plan, dict) else read_json(Path(plan))
+    execute_plan(prepared["records"], prepared["profiles"], plan, Path(out), records=prepared["records"],
+                 input_identity=prepared["source_identity"], adapter_identity="test")
+
+
 @pytest.fixture(autouse=True)
 def no_index(monkeypatch):
     monkeypatch.setattr("ecarsi.ui.index.write_all", lambda *args: None)
@@ -63,7 +74,7 @@ def organize_two(tmp_path):
             a.obs_names = [f"B-{c}" for c in a.obs_names]
             a.write_h5ad(step / "standardized.h5ad")
     plan = plan_file(tmp_path / "plan.json", ("A", "B"))
-    assert organize.main([str(root), str(out), "--plan-json", str(plan)]) == 0
+    organize(root, out, plan)
     return L.unit_dir(out, "test-unit")
 
 
@@ -72,29 +83,32 @@ def test_history_is_pruned_but_other_h5ad_rejected(tmp_path):
     history = step / ".history" / "standardize-old"
     history.mkdir(parents=True)
     (history / "standardized.h5ad").write_bytes(b"old")
-    units, violations = organize.find_ecapp_units(tmp_path)
+    units, violations = O.find_ecapp_units(tmp_path)
     assert len(units) == 1 and violations == []
     extra = step / "extra.h5ad"
     extra.write_bytes(b"extra")
-    assert organize.find_ecapp_units(tmp_path)[1] == [extra]
+    assert O.find_ecapp_units(tmp_path)[1] == [extra]
 
 
 @pytest.mark.parametrize("status,code", [("error", 1), ("needs_review", 3), ("ok", 1)])
 def test_failed_upstream_blocks_even_with_h5ad(tmp_path, status, code):
     source(tmp_path, status=status, code=code)
-    u = organize.find_ecapp_units(tmp_path)[0][0]
+    u = O.find_ecapp_units(tmp_path)[0][0]
     with pytest.raises(ValueError, match="not ready"):
         inspect_unit(u)
 
 
-def test_review_and_rejected_inventory_survive(tmp_path):
+def test_review_survives_and_a_rejected_source_is_refused(tmp_path):
     root, out = tmp_path / "in", tmp_path / "out"
     source(root, status="needs_review")
     source(root, "rejected", status="rejected", code=2, write_h5=False)
     plan = plan_file(tmp_path / "p.json")
-    assert organize.main([str(root), str(out), "--plan-json", str(plan)]) == 0
-    gm = read_json(L.organize_manifest(out))
-    assert [r["state"] for r in gm["source_inventory"]] == ["accepted", "rejected"]
+    # the control plane refuses an input set with a rejected source; the local path used to skip it
+    with pytest.raises(ValueError, match="every source must have accepted"):
+        organize(root, out, plan)
+    import shutil
+    shutil.rmtree(root / "rejected")
+    organize(root, out, plan)
     um = read_json(L.input_manifest(L.unit_dir(out, "test-unit")))
     assert um["upstream"]["A"]["standardize"]["reasons"] == ["review me"]
 
@@ -117,7 +131,7 @@ def test_upstream_validation(tmp_path, problem):
     a.write_h5ad(step / "standardized.h5ad")
     write_json(step / "result.json", result)
     with pytest.raises(ValueError):
-        inspect_unit(organize.find_ecapp_units(tmp_path)[0][0])
+        inspect_unit(O.find_ecapp_units(tmp_path)[0][0])
 
 
 def test_mixed_species_plan_is_rejected(tmp_path):
@@ -125,7 +139,8 @@ def test_mixed_species_plan_is_rejected(tmp_path):
     source(root, "A")
     source(root, "B", species="human")
     plan = plan_file(tmp_path / "p.json", ("A", "B"))
-    assert organize.main([str(root), str(tmp_path / "out"), "--plan-json", str(plan)]) == 3
+    with pytest.raises((ValueError, RuntimeError)):
+        organize(root, tmp_path / "out", plan)
 
 
 def test_derived_tsv_aligns_original_ids_and_rejects_bad_coverage(tmp_path):
@@ -156,13 +171,6 @@ def test_same_name_samples_separate_unless_explicit_merge(tmp_path):
         build_mapping(h5, unit, spec, None)
 
 
-def test_unknown_is_not_single_and_many_groups_allowed():
-    p = {"obs_columns": {"sample": {"n_unique": 201, "n_na": 0}}}
-    assert persample._validate_sample_column({"sample_column": "sample", "rationale": "201 libraries"}, p) is None
-    assert persample._validate_sample_column({"sample_column": None, "rationale": "missing metadata"}, p)
-    assert persample._validate_sample_column({"sample_column": None, "confirmed_single": True, "rationale": "one GEM well"}, p) is None
-
-
 def test_split_experiment_cannot_run_local_qc(tmp_path):
     root, out = tmp_path / "in", tmp_path / "out"
     step = source(root)
@@ -172,13 +180,14 @@ def test_split_experiment_cannot_run_local_qc(tmp_path):
     plan = {"analysis_units": [{"name": tissue, "members": [{"source": "A", "obs_filter": {"column": "tissue", "values": [tissue]}}]} for tissue in ("liver", "blood")]}
     path = tmp_path / "plan.json"
     write_json(path, plan)
-    assert organize.main([str(root), str(out), "--plan-json", str(path)]) == 0
+    organize(root, out, path)
     unit = L.unit_dir(out, "liver")
     with pytest.raises(ValueError, match="split an experiment"):
         build_mapping(L.input_h5ad(unit), unit, None, None, column="sample")
 
 
-def publish(out, annotate=True):
+def publish(out):
+    """An OSP sample directory as osp publishes it: 6 survivors, 1 QC removal, an annotation proposal."""
     out.mkdir(parents=True, exist_ok=True)
     a = matrix(6)
     a.obs["ann_sub1"] = ["a"] * 3 + ["b"] * 3
@@ -192,22 +201,7 @@ def publish(out, annotate=True):
     pd.DataFrame({"cell_id": list(a.obs_names) + ["removed"]}).to_csv(out / INPUT_CELLS, index=False)
     write_json(out / "annotation_proposal.json", {"cluster_key": "ann_sub1", "qc_actions": [], "clusters": [
         {"cluster": k, "label_coarse": label, "label_fine": label} for k, label in (("a", "T"), ("b", "B"))]})
-    write_json(out / L.RUN_STATE, {"identity": "expected", "annotate": annotate, "state": "complete", "exit_code": 0,
-                                  "outputs": output_identities(out, annotate)})
     return a
-
-
-def test_completion_checks_content_status_and_dynamic_clusters(tmp_path):
-    for f in ("report.html", "clustered.h5ad", "annotation_proposal.json"):
-        (tmp_path / f).touch()
-    assert not is_done(tmp_path, True)
-    publish(tmp_path)
-    assert is_done(tmp_path, True, "expected")
-    assert not is_done(tmp_path, True, "wrong-input")
-    state = read_json(tmp_path / L.RUN_STATE)
-    state["exit_code"] = 1
-    write_json(tmp_path / L.RUN_STATE, state)
-    assert not is_done(tmp_path, True)
 
 
 def test_osp_contract_does_not_materialize_expression(tmp_path, monkeypatch):
@@ -225,62 +219,6 @@ def test_osp_contract_does_not_materialize_expression(tmp_path, monkeypatch):
         del f['layers/counts']
     with pytest.raises(ValueError, match='counts'):
         validate_outputs(tmp_path, True)
-
-
-@pytest.mark.parametrize("fault", ["missing", "foreign", "overlap", "duplicate", "summary", "labels"])
-def test_qc_and_annotation_must_agree(tmp_path, fault):
-    a = publish(tmp_path)
-    if fault == "missing":
-        (tmp_path / "qc_removed.csv").unlink()
-    elif fault in ("foreign", "overlap", "duplicate"):
-        ids = ["foreign"] if fault == "foreign" else ["cell0"] if fault == "overlap" else ["removed", "removed"]
-        pd.DataFrame({"cell": ids, "qc_reason": "bad"}).to_csv(tmp_path / "qc_removed.csv", index=False)
-    elif fault == "summary":
-        pd.Series({"n_cells": 123, "n_low_quality": 1}).to_csv(tmp_path / "qc_summary.csv")
-    else:
-        a.obs["_ann_coarse"] = "wrong"
-        a.write_h5ad(tmp_path / "clustered.h5ad")
-    with pytest.raises((ValueError, FileNotFoundError)):
-        validate_outputs(tmp_path, True)
-    assert not is_done(tmp_path, True)
-
-
-def test_resume_identity_and_failed_drive_are_not_masked(tmp_path, monkeypatch):
-    h5 = tmp_path / "input.h5ad"
-    matrix().write_h5ad(h5)
-    out = tmp_path / "ps"
-    monkeypatch.setattr(persample, "_kernel_runtime", lambda py: {"version": "test"})
-    args = [str(h5), str(out), "--sample-column", "sample", "--no-annotate"]
-    assert persample.main(args + ["--plan-only"]) == 0
-    driven = []
-    def failed_with_files(entries, *args, **kwargs):
-        driven.append(True)
-        return entries
-    monkeypatch.setattr(persample, "drive", failed_with_files)
-    monkeypatch.setattr(persample, "is_done", lambda *args: bool(driven))
-    assert persample.main(args) == 1
-    assert read_json(out / L.MANIFEST)["state"] == "failed"
-    assert persample.main(args + ["--resolution", "0.8"]) == 1
-    assert persample.main(args + ["--no-scrublet"]) == 1
-    matrix(7).write_h5ad(h5)
-    assert persample.main(args) == 1
-
-
-def test_organize_resume_verifies_all_units(tmp_path, monkeypatch):
-    root, out = tmp_path / "in", tmp_path / "out"
-    source(root)
-    plan = plan_file(tmp_path / "p.json")
-    (out / L.UNITS).mkdir(parents=True)
-    args = [str(root), str(out), "--plan-json", str(plan)]
-    assert organize.main(args) == 0
-    assert organize.main(args) == 0
-    gm = read_json(L.organize_manifest(out))
-    gm["state"] = "running"
-    write_json(L.organize_manifest(out), gm)
-    monkeypatch.setattr("ecarsi.plan.propose_plan", lambda *_: pytest.fail("must reuse persisted plan"))
-    assert organize.main([str(root), str(out)]) == 0
-    L.input_h5ad(L.unit_dir(out, "test-unit")).write_bytes(b"broken")
-    assert organize.main(args) == 3
 
 
 def test_writer_lock_rejects_concurrent_writer(tmp_path):
@@ -307,43 +245,6 @@ def test_unit_page_renders_before_and_after_front_review(tmp_path):
     assert "check input counts" in render_unit(unit)
 
 
-def test_partial_two_unit_organize_resumes_remaining_plan(tmp_path, monkeypatch):
-    from ecarsi import execute
-    root, out = tmp_path / "in", tmp_path / "out"
-    for src in ("A", "B"):
-        source(root, src)
-    path = tmp_path / "plan.json"
-    write_json(path, {"analysis_units": [
-        {"name": src.lower(), "members": [{"source": src, "obs_filter": None}]}
-        for src in ("A", "B")]})
-    original = execute._load_member
-    def interrupt_second(units, member):
-        if member["source"] == "B":
-            raise OSError("simulated interruption while writing second unit")
-        return original(units, member)
-    monkeypatch.setattr(execute, "_load_member", interrupt_second)
-    assert organize.main([str(root), str(out), "--plan-json", str(path)]) == 3
-    first = file_identity(L.input_h5ad(L.unit_dir(out, "a")))
-    assert read_json(L.organize_manifest(out))["state"] == "running"
-    monkeypatch.setattr(execute, "_load_member", original)
-    monkeypatch.setattr("ecarsi.plan.propose_plan", lambda *_: pytest.fail("must reuse persisted plan"))
-    assert organize.main([str(root), str(out)]) == 0
-    gm = read_json(L.organize_manifest(out))
-    assert {u["name"] for u in gm["units_written"]} == {"a", "b"}
-    assert file_identity(L.input_h5ad(L.unit_dir(out, "a"))) == first
-
-
-def test_input_and_output_roots_can_move_without_losing_identity(tmp_path):
-    root, out = tmp_path / "in", tmp_path / "out"
-    source(root)
-    p = plan_file(tmp_path / "p.json")
-    assert organize.main([str(root), str(out), "--plan-json", str(p)]) == 0
-    moved_root, moved_out = tmp_path / "moved-in", tmp_path / "moved-out"
-    root.rename(moved_root)
-    out.rename(moved_out)
-    assert organize.main([str(moved_root), str(moved_out)]) == 0
-
-
 def test_dense_sources_with_different_genes_merge_as_zero_counts(tmp_path):
     root, out = tmp_path / "in", tmp_path / "out"
     for name in ("A", "B"):
@@ -355,7 +256,7 @@ def test_dense_sources_with_different_genes_merge_as_zero_counts(tmp_path):
             a.var_names = ["0", "1", "2", "B-only"]
         a.write_h5ad(step / "standardized.h5ad")
     p = plan_file(tmp_path / "p.json", ("A", "B"))
-    assert organize.main([str(root), str(out), "--plan-json", str(p)]) == 0
+    organize(root, out, p)
     a = ad.read_h5ad(L.input_h5ad(L.unit_dir(out, "test-unit")))
     assert np.isfinite(a.layers["counts"]).all()
     assert (a[a.obs.source_unit == "A", "B-only"].layers["counts"] == 0).all()
@@ -371,7 +272,7 @@ def test_organized_h5ad_is_a_slim_counts_carrier(tmp_path):
     a.layers["counts"] = a.layers["counts"].astype(np.int64)
     a.write_h5ad(step / "standardized.h5ad")
     p = plan_file(tmp_path / "p.json")
-    assert organize.main([str(root), str(out), "--plan-json", str(p)]) == 0
+    organize(root, out, p)
     path = L.input_h5ad(L.unit_dir(out, "test-unit"))
     o = ad.read_h5ad(path)
     assert o.X.nnz == 0 and o.X.shape == a.shape and "X_placeholder" in o.uns
@@ -400,25 +301,11 @@ def test_raw_expansion_results_are_preserved(tmp_path, legacy_check):
     result["reasons"] = ["raw/reference counts differ"] if legacy_check else []
     write_json(step / "result.json", result)
     p = plan_file(tmp_path / "p.json")
-    assert organize.main([str(root), str(out), "--plan-json", str(p)]) == 0
+    organize(root, out, p)
     unit = L.unit_dir(out, "test-unit")
     entry = read_json(L.input_manifest(unit))["upstream"]["A"]
     assert entry["standardize"] == result
     assert read_json(L.input_manifest(unit).parent / entry["dir"] / "standardize.json") == result
-
-
-def test_agent_can_report_unknown_without_being_pushed_to_guess(monkeypatch):
-    import asyncio
-    from types import SimpleNamespace
-    decision = {"sample_column": None, "confirmed_single": False, "rationale": "no experiment metadata"}
-    profile = {"n_obs": 10, "obs_columns": {}}
-    async def agent(**kwargs):
-        response = await kwargs["tools"][0].handler({"decision_json": json.dumps(decision)})
-        assert response["is_error"] is False
-        return SimpleNamespace(submitted=response["_submitted"], cost_usd=None, tokens_in=None, tokens_out=None)
-    monkeypatch.setattr("ecarsi.harness.run_agent", agent)
-    assert asyncio.run(persample._identify(profile)) == decision
-    assert persample._validate_sample_column(decision, profile) is not None
 
 
 @pytest.mark.parametrize("dtype", ["object", "string", "category"])
@@ -429,9 +316,9 @@ def test_profile_preserves_low_cardinality_text_evidence(tmp_path, monkeypatch, 
     data.obs["numeric_score"] = np.array([1, 1, 2, 2, 1, 2])
     monkeypatch.setattr(ad.settings, "allow_write_nullable_strings", True)
     data.write_h5ad(step / "standardized.h5ad", convert_strings_to_categoricals=False)
-    units, violations = organize.find_ecapp_units(tmp_path)
+    units, violations = O.find_ecapp_units(tmp_path)
     assert not violations
-    profile = organize.profile_unit(units[0])
+    profile = O.profile_unit(units[0])
     assert profile["obs_columns"]["tissue"]["value_counts"] == {"bone": 3, "blood": 3}
     assert "value_counts" not in profile["obs_columns"]["numeric_score"]
 
@@ -442,58 +329,8 @@ def test_profile_nullable_string_missing_values_do_not_hide_tissue(tmp_path, mon
     data.obs["tissue"] = pd.array(["bone", "bone", "blood", None, "bone", "blood"], dtype="string")
     monkeypatch.setattr(ad.settings, "allow_write_nullable_strings", True)
     data.write_h5ad(step / "standardized.h5ad", convert_strings_to_categoricals=False)
-    units, _ = organize.find_ecapp_units(tmp_path)
-    assert organize.profile_unit(units[0])["obs_columns"]["tissue"]["value_counts"] == {"bone": 3, "blood": 2}
-
-
-@pytest.mark.parametrize('namespace', ['ecarsi', 'eca_test_stages'])
-def test_separate_osp_dispatch_preserves_identity_and_finalizes(tmp_path, monkeypatch, namespace):
-    import importlib
-    import shutil
-    if namespace != 'ecarsi':
-        package = tmp_path/namespace
-        package.mkdir()
-        (package/'__init__.py').touch()
-        for name in ('osp_dispatch.py', 'osp_stage.py'):
-            shutil.copy2(Path(__file__).parents[1]/'ecarsi'/name, package/name)
-        monkeypatch.syspath_prepend(str(tmp_path))
-    osp_dispatch = importlib.import_module(namespace+'.osp_dispatch')
-    unit = organize_two(tmp_path)
-    mapping = tmp_path/'mapping.json'
-    write_json(mapping, {'sources': {s: {'sample_column': 'sample', 'rationale': 'verified'} for s in ('A', 'B')}})
-    monkeypatch.setattr(persample, '_recommend_batch_key', lambda *a: None)
-    monkeypatch.setattr(persample, '_kernel_runtime', lambda *a: {'version': 'pinned'})
-    calls = []
-    def complete(entries, out, annotate, on_done):
-        calls.append(len(entries))
-        for e in entries:
-            assert e['command'][2] == namespace+'.osp_stage'
-            p = Path(e['outdir'])
-            request = read_json(p/'request.json')
-            assert request['identity'] == e['identity']
-            assert request['runtime'] == {'version': 'pinned'}
-            a = ad.read_h5ad(p/persample.SUBSET_FILE)
-            a.obs['c'] = 'a'
-            a.obs['_ann_coarse'] = a.obs['_ann_fine'] = 'T'
-            a.obs['_qc_action'] = 'keep'
-            a.write_h5ad(p/'clustered.h5ad')
-            (p/'report.html').write_text('<html>report</html>')
-            pd.Series({'n_cells': a.n_obs, 'n_low_quality': 0}).to_csv(p/'qc_summary.csv')
-            pd.DataFrame(columns=['cell', 'qc_reason']).to_csv(p/'qc_removed.csv', index=False)
-            write_json(p/'annotation_proposal.json', {'cluster_key': 'c', 'qc_actions': [],
-                       'clusters': [{'cluster': 'a', 'label_coarse': 'T', 'label_fine': 'T'}]})
-            write_json(p/L.RUN_STATE, dict(identity=e['identity'], annotate=True, state='complete',
-                       exit_code=0, outputs=output_identities(p, True)))
-        return []
-    monkeypatch.setattr(osp_dispatch, 'drive', complete)
-    args = [str(unit), '--sample-map', str(mapping)]
-    assert osp_dispatch.main(args) == 0
-    before = read_json(L.persample_root(unit)/L.MANIFEST)
-    assert before['state'] == 'complete' and before['runtime_check'] == 'ok'
-    assert osp_dispatch.main(args) == 0
-    after = read_json(L.persample_root(unit)/L.MANIFEST)
-    assert calls == [2] and before['identity'] == after['identity']
-    assert before['samples'] == after['samples']
+    units, _ = O.find_ecapp_units(tmp_path)
+    assert O.profile_unit(units[0])["obs_columns"]["tissue"]["value_counts"] == {"bone": 3, "blood": 2}
 
 
 def test_organize_prepare_reads_counts_in_chunks_without_eager_layers(tmp_path, monkeypatch):

@@ -2,15 +2,12 @@
 
 This document describes input rules, sample-map policies, and resume semantics for the front half. The MSP and ZMIP upgrade record is in [history/DOWNSTREAM_INTEGRATION.md](history/DOWNSTREAM_INTEGRATION.md). The validated OSP version is 0.1.7. `pyproject.toml` accepts `osp-sc>=0.1.3,<0.2`.
 
-The commands below apply to the local path. The control-plane path runs the same programs as pool tasks ([control-plane/ORGANIZE_V2.md](control-plane/ORGANIZE_V2.md), [control-plane/PERSAMPLE_V2.md](control-plane/PERSAMPLE_V2.md)). Both paths follow the same rules.
+On the control plane, organize and per-sample run as pool tasks ([control-plane/ORGANIZE_V2.md](control-plane/ORGANIZE_V2.md), [control-plane/PERSAMPLE_V2.md](control-plane/PERSAMPLE_V2.md)); their options are keys of the dataset spec. The `eca-rsi organize` and `eca-rsi persample` commands of the local path were removed in 0.4.0.
+
+**Explicit sample maps have no control-plane input yet.** The organize plan decides each source's experiment column (`sample_column`, `confirmed_single`, `rationale`; `plan.validate_sample_mapping`). A map file with `merges`, `exclude_cells` or `batch_key` (the sections below) was an input of the local path's `persample --sample-map`; `ecarsi/sample_mapping.py` and `ecarsi/policies.py` still apply it, but no spec key passes one in.
 ## Input and organize
 
-```bash
-eca-rsi organize /path/to/eca-pp-output /path/to/new-run
-eca-rsi organize /path/to/eca-pp-output /path/to/new-run --plan-json plan.json   # skip the planning model
-```
-
-`plan.json` follows `ecarsi.plan.PLAN_SCHEMA`. Each unit must have exactly one resolved species. Assign every cell of an accepted source exactly once. The main flow validates the model's submission before it writes results.
+The organize plan follows `ecarsi.plan.PLAN_SCHEMA`. Each unit must have exactly one resolved species. Assign every cell of an accepted source exactly once. The main flow validates the model's submission before it writes results.
 
 Input rules:
 
@@ -22,16 +19,10 @@ Input rules:
 - `input/upstream/<source>/` keeps the full result JSON, the derived TSV and the full source obs. Input processing aligns the TSV by original cell ID before any renaming. It rejects duplicate, missing or extra IDs.
 - `organized.h5ad` keeps the original metadata. It adds `source_unit` and `eca_source_cell_id`. It optionally adds `eca_pp_batch` and `eca_pp_cell_type`. Input processing reserves these column names. An input that already contains them causes an error. Expression lives only in `layers["counts"]`. Integers wider than 4 bytes become int32. `X` is an empty CSR placeholder (`uns["X_placeholder"]`). Input processing does not keep the upstream normalized `X`. `validate_matrix` does not accept `X` as counts. OSP and MSP rebuild `X` from counts.
 
-`organize/manifest.json` first records the plan and the `running` state. It then records each unit's output fingerprint. It records `complete` only when every unit is done. An interrupted run can finish the remaining units if the input and adapter code remain unchanged. Use a new directory if the input, plan or code changes. The driver computes content SHA-256 once per driver entry, not per sample subprocess. Each unit keeps the full source obs to check whether an experiment pool was split by organ.
+`organize/manifest.json` first records the plan and the `running` state. It then records each unit's output fingerprint. It records `complete` only when every unit is done. An interrupted run can finish the remaining units if the input and adapter code remain unchanged. Use a new directory if the input, plan or code changes. Each unit keeps the full source obs to check whether an experiment pool was split by organ.
 ## Experiment mapping
 
-```bash
-eca-rsi persample /path/to/new-run/units/UNIT --sample-column sample      # `sample` is the physical experiment column; equal values group only within one source
-eca-rsi persample /path/to/new-run/units/UNIT --single-sample             # one source is one complete experiment
-eca-rsi persample /path/to/new-run/units/UNIT --sample-map samples.json --plan-only   # save and check the map, do not run OSP
-```
-
-Without a mapping argument, a narrow decision model receives the obs profile for each source. It also receives upstream classification, candidates, nesting, correction and warning evidence for each source. A batch column alone does not identify the experiment column. Neither `batch=null` nor `correction=unnecessary` implies a single experiment. A `null` choice requires `confirmed_single=true` and a reason. Unknown grouping stops the run and triggers a request for an explicit map. There is no hard limit of 200 experiments. Empty strings and common missing placeholders cannot become samples.
+Without an explicit map, a narrow decision model receives the obs profile for each source. It also receives upstream classification, candidates, nesting, correction and warning evidence for each source. A batch column alone does not identify the experiment column. Neither `batch=null` nor `correction=unnecessary` implies a single experiment. A `null` choice requires `confirmed_single=true` and a reason. Unknown grouping stops the run and triggers a request for an explicit map. There is no hard limit of 200 experiments. Empty strings and common missing placeholders cannot become samples.
 
 An explicit map takes precedence. Include every source of the unit in `sources`. Add an explicit `merges` entry to pool across sources:
 
@@ -85,41 +76,33 @@ Tabula Muris FACS example:
 
 `batch_key` names the Harmony correction column. The default is `eca_sample_id`. The host checks that this column exists in the obs of `organized.h5ad`. The host checks that the column is constant within every OSP experiment. It ignores missing values during this check. It fills missing values per experiment. Two non-NA values in one experiment cause an error. An all-NA experiment causes an error. The host also checks that the column has at least two values in the unit.
 
-The host writes the per-sample constant into the OSP subset. It also records this constant in `sample_mapping.batch_key` (`column`, `of_sample`, `n_filled`). Cross-sample passes the correction column to MSP as `--batch-col`. The round manifest records `integration_policy.selection = "sample_map"`. An explicit `MSP_BATCH_COL` takes precedence (`explicit`). A conflict with the map causes an error.
+The host writes the per-sample constant into the OSP subset. It also records this constant in `sample_mapping.batch_key` (`column`, `of_sample`, `n_filled`). Cross-sample passes the correction column to MSP as `--batch-col`. The round manifest records `integration_policy.selection = "sample_map"`.
 
 Without a map file, the sample-column agent may attach an `exclude_cells` proposal with the same structure. The host checks the proposal against the source obs. The column must exist. At least one cell must match. The proposal must exclude at most half of the source: `policies.AGENT_EXCLUDE_MAX_FRAC`. If a check fails, the host requests a resubmission. The host applies valid proposals with `proposed_by: "agent"`.
 
-The study design (`ecarsi.design`) contains columns that are constant per sample. If no `batch_key` declaration exists and the study design has two or more columns, the host makes one small agent call. This call **recommends** a `batch_key`. The host records the recommendation in `persample/needs_review` and the manifest's `batch_key_recommendation`. The host never applies the recommendation. A failure of this call does not affect per-sample.
 ## OSP configuration and status
 
-```bash
-eca-rsi persample /path/to/new-run/units/UNIT --sample-column sample --resolution 0.8 --language Chinese --effort high
-eca-rsi persample /path/to/another-run/units/UNIT --sample-column sample --no-scrublet --no-decontx --no-annotate   # debugging; QC and annotation are on by default
-```
+Every experiment is one pool task that calls the OSP public Python API (`ecarsi.osp_worker.compute_sample`) with Scrublet, DecontX, resolution, species and tissue passed explicitly (the spec's `per_sample.config`). The default resolution is 1.0. ECA-RSI does not copy OSP's QC, clustering or annotation code. ECA-RSI does not change the shared bridge's budgets or retries.
 
-Single and multiple experiments call the OSP public Python API through the `ecarsi.osp_worker` subprocess. Both pass Scrublet, DecontX, resolution, species, tissue, language, effort and model explicitly. The default resolution is 1.0. `OSP_PYTHON` selects the kernel interpreter. ECA-RSI does not copy OSP's QC, clustering or annotation code. ECA-RSI does not change the shared bridge's budgets or retries.
-
-Each sample's `request.json` and `run_state.json` record the input and configuration identity, interpreter and package versions. They also record the source commit and content digest, attempt, stage, exit code, failure class, validation results and output fingerprints. The driver and each sample directory hold a process lock. A sample is complete when the run succeeds with exit 0 and passes these checks:
+A sample is complete when its OSP run succeeds and passes these checks (`ecarsi.osp_contract.validate_outputs`):
 
 - The sample has a readable `clustered.h5ad`. It has a valid HTML report. It has a QC summary and `qc_removed.csv`. A proposal exists when annotation is on.
 - Input cells = survivors ∪ removed cells. Survivors and removed cells are disjoint. Neither set contains duplicates or foreign ids. The summary counts match.
 - The proposal's `cluster_key` exists. The proposal's cluster coverage, coarse and fine labels and QC actions agree with the H5AD.
 
-ECA-RSI does not recompute deterministic errors. ECA-RSI retries explicit transient connection or timeout errors once. Unclassified errors stay failed. ECA-RSI does not use text to guess retryability. ECA-RSI records zero QC survivors and fewer than three cells separately. Both conditions leave the unit incomplete. In both cases, ECA-RSI creates no placeholder H5AD and does not silently exclude the unit. An annotation failure keeps the validated compute snapshot. A resume with the same identity runs only the annotation. Success deletes the subset and the snapshot.
+A failed sample records its failure class (`ecarsi.osp_worker.classify_error`): explicit transient connection or timeout errors are retryable; deterministic and unclassified errors stay failed; text is never used to guess. A sample whose every cell QC removed, or whose survivors are fewer than clustering needs, is empty only when every input cell is booked in `qc_removed.csv` with a reason (`osp_contract.is_empty`); no placeholder H5AD is written.
 
-A resume with the same configuration validates and skips successful samples. If the input, map, compute parameter, model, interpreter or source changes, use a new output directory. You can browse old outputs and `.pruned` markers. They do not provide evidence of success. You can move the directory. Old absolute paths in result files provide provenance only.
-
-Upstream review and warnings go to `persample/needs_review.{json,md}`. OSP degradation and failure messages also go to that location. These items appear on the unit page and in the release review.
+Upstream review items and OSP degradation messages appear on the unit page and in the release review.
 ## Checks
 
 ```bash
-LC_ALL=C LANG=C PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider \
-  tests/test_front_integration.py tests/test_osp_worker.py tests/test_agent_selection.py
+bash $CONTROL/ops/runsci-dev.sh -m pytest -q tests/test_front_integration.py tests/test_osp_worker.py tests/test_empty_samples.py \
+  tests/test_cell_policies.py tests/test_organize_v2_contract.py tests/test_persample_v2.py
 ```
 
-These tests do not need MSP or ZMIP. [history/FRONT_VALIDATION.md](history/FRONT_VALIDATION.md) contains the September 2026 validation record. [history/FRONT_COMPATIBILITY.json](history/FRONT_COMPATIBILITY.json) lists the source revisions tested during that validation.
+[history/FRONT_VALIDATION.md](history/FRONT_VALIDATION.md) contains the September 2026 validation record. [history/FRONT_COMPATIBILITY.json](history/FRONT_COMPATIBILITY.json) lists the source revisions tested during that validation.
 ## Bridge compatibility layer
 
 `ecarsi.harness` provides a compatibility layer for old import paths. It preserves the object identity of the 14 public interfaces and the old constants from before the split. New code imports from `harness_bridge` directly. The tests pin the old interface set. They allow additions. Removed interfaces or mismatched objects cause test failures.
 
-The CLI calls `configure_logging("ecarsi", stream=sys.stderr)` at entry. The OSP worker configures logging for `ecarsi`, `osp` and the bridge. Library functions do not reconfigure logging. The bridge's `ensure_logging` respects existing handlers. The source dependency is `agent-harness-bridge[all]>=0.2.14,<0.3`.
+The CLI calls `configure_logging("ecarsi", stream=sys.stderr)` at entry. Library functions do not reconfigure logging. The bridge's `ensure_logging` respects existing handlers. The source dependency is `agent-harness-bridge[all]>=0.2.14,<0.3`.

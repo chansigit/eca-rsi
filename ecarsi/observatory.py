@@ -5,7 +5,6 @@ the boundary matters). These commands are a human at a terminal, so they may que
 """
 import argparse
 import asyncio
-from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -13,8 +12,7 @@ import re
 import socket
 import time
 
-from .agent import status as bridge_status
-from .warm_pool.state import lock, read, status as pool_status
+from .warm_pool.state import lock, read
 # Re-exported so existing callers and tests keep their import path.
 from .ui.control import (MAX_WINDOW, ControlPlane, resource_history,  # noqa: F401
                          snapshot, summarize_resources, task_timeline, worker_inventory)
@@ -115,7 +113,7 @@ def worker_rows(pool, hq, now):
 
 
 async def temporal_view(service_root, now):
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timezone
     from temporalio.client import Client
     from temporalio.runtime import Runtime, TelemetryConfig
     from .control.temporal import endpoint

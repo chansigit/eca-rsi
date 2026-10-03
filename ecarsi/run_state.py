@@ -68,90 +68,9 @@ def writer_lock(path: Path):
             fcntl.flock(f, fcntl.LOCK_UN)
 
 
-def developer_mode() -> bool:
-    """ECA_RSI_DEVELOPER_MODE=1 -- developer mode: do not compare the recorded runtime
-    identity (interpreter, package versions, source digests) on resume or at
-    stage verification. Input and configuration identity are still compared.
-    A development switch: while packages are edited between stages of one
-    run, the runtime comparison fails the run on every edit -- a version bump,
-    a docstring, a refreshed editable install -- without protecting anything
-    the input/config checks do not already protect. Every skip is printed and
-    recorded in the stage state as ``runtime_check: skipped``."""
-    return os.environ.get("ECA_RSI_DEVELOPER_MODE", "0").strip() == "1"
-
-
 #: Subpackages that render results rather than produce them. Excluded from the
 #: identity digest so a stylesheet edit cannot invalidate a stage that is
 #: verifying at that second -- which cost two recomputations on 2026-09-07 and
 #: has kept four checkouts read-only for the length of every batch since
 #: (eca-rsi#10). A directory, not a file list: the rule stays one line, and
 #: anything added to it is presentation by construction.
-PRESENTATION = ("ui",)
-
-
-def _presentation(path: Path, root: Path) -> bool:
-    return path.relative_to(root).parts[0] in PRESENTATION
-
-
-def runtime_identity() -> dict:
-    """No kernel imports: also runs in OSP_PYTHON before any analysis."""
-    import importlib.metadata
-    import importlib.util
-    import subprocess
-    import sys
-
-    # agent-harness-bridge is deliberately NOT here: it is the agent runtime,
-    # not the computation. Changing the backend or model mid-run is allowed and
-    # only recorded (check_agent_config), and a bridge patch release is the
-    # same kind of change -- a 0.2.11 -> 0.2.12 bump invalidated every in-flight
-    # unit on 2026-09-12. Its version and checkout go to source_provenance().
-    result = {"python": sys.version, "executable": str(Path(sys.executable).resolve()), "packages": {}}
-    for module, dist in (("ecarsi", "ecarsi"), ("osp", "osp-sc")):
-        spec = importlib.util.find_spec(module)
-        if spec is None or spec.origin is None:
-            raise RuntimeError(f"{module} is not installed in {sys.executable}")
-        folder = Path(spec.origin).parent
-        files = sorted(p for p in folder.rglob("*") if p.suffix in (".py", ".md", ".json")
-                       and "__pycache__" not in p.parts and not _presentation(p, folder))
-        source = digest({str(p.relative_to(folder)): file_identity(p) for p in files})
-        # content only: the checkout path and git commit are provenance (see
-        # source_provenance), not identity — a doc-only commit or the same
-        # source at another path must not invalidate a resume
-        # A checkout on PYTHONPATH (the control-plane containers) has no distribution metadata; the
-        # version is then None, as in source_provenance -- the source digest is what identifies it.
-        try:
-            version = importlib.metadata.version(dist)
-        except importlib.metadata.PackageNotFoundError:
-            version = None
-        result["packages"][module] = {"version": version, "source_sha256": source}
-    return result
-
-
-_DISTS = {"ecarsi": "ecarsi", "osp": "osp-sc", "msp": "msp-sc", "zmip": "zmip", "harness_bridge": "agent-harness-bridge"}
-
-
-def source_provenance(modules=("ecarsi", "osp", "msp", "zmip", "harness_bridge")) -> dict:
-    """Where each importable package came from (path + git HEAD + version),
-    for humans reading a manifest. Recorded next to the identity, never
-    compared -- for harness_bridge this is the only record."""
-    import importlib.metadata
-    import importlib.util
-    import subprocess
-
-    result = {}
-    for module in modules:
-        spec = importlib.util.find_spec(module)
-        if spec is None or spec.origin is None:
-            continue
-        folder = Path(spec.origin).parent
-        try:
-            version = importlib.metadata.version(_DISTS.get(module, module))
-        except importlib.metadata.PackageNotFoundError:
-            version = None
-        try:
-            git = subprocess.run(["git", "-C", str(folder), "rev-parse", "HEAD"], capture_output=True, text=True)
-            commit = git.stdout.strip() if git.returncode == 0 else None
-        except OSError:  # no git binary (e.g. inside a slim container): provenance is informational, never required
-            commit = None
-        result[module] = {"path": str(folder.resolve()), "commit": commit, "version": version}
-    return result

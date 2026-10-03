@@ -4,11 +4,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from . import layout as L
-from .run_state import file_identity, read_json
+from .run_state import read_json
 
 INPUT_CELLS = "input_cells.csv.gz"
-COMPUTE_STATE = "compute_state.json"
-REQUEST = "request.json"
 
 
 def validate_outputs(outdir: Path, annotate: bool) -> dict:
@@ -87,13 +85,6 @@ def validate_outputs(outdir: Path, annotate: bool) -> dict:
         a.file.close()
 
 
-def output_identities(outdir: Path, annotate: bool) -> dict:
-    names = L.PS_CONTRACT + L.PS_QC_CONTRACT + (INPUT_CELLS,)
-    if annotate:
-        names += ("annotation_proposal.json",)
-    return {name: file_identity(outdir / name) for name in names}
-
-
 EMPTY_KIND = "qc_zero_survivors"
 TOO_FEW_KIND = "qc_too_few_survivors"
 EMPTY_KINDS = (EMPTY_KIND, TOO_FEW_KIND)
@@ -137,25 +128,5 @@ def is_empty(outdir: Path, identity: str | None = None) -> bool:
         if "cell" not in removed or "qc_reason" not in removed or removed["qc_reason"].eq("").any():
             return False
         return len(expected) == n and set(removed["cell"]) == set(expected) and not removed["cell"].duplicated().any()
-    except (OSError, ValueError, KeyError, TypeError, IndexError):
-        return False
-
-
-def is_finished(outdir: Path, annotate: bool = False, identity: str | None = None) -> bool:
-    """Complete with outputs, or complete-and-empty (see is_empty)."""
-    return is_done(outdir, annotate, identity) or is_empty(outdir, identity)
-
-
-def is_done(outdir: Path, annotate: bool = False, identity: str | None = None) -> bool:
-    try:
-        state = read_json(outdir / L.RUN_STATE)
-        if state.get("state") != "complete" or state.get("exit_code") != 0 or state.get("annotate") != annotate:
-            return False
-        if identity is not None and state.get("identity") != identity:
-            return False
-        if state.get("outputs") != output_identities(outdir, annotate):
-            return False
-        validate_outputs(outdir, annotate)
-        return True
     except (OSError, ValueError, KeyError, TypeError, IndexError):
         return False

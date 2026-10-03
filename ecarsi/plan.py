@@ -60,18 +60,6 @@ PLAN_SCHEMA = {
 }
 
 
-def propose_plan(profiles: list[dict]) -> dict:
-    from .agent_retry import run_with_retry
-
-    # validation lives inside the retried coroutine: a plan the agent produced
-    # with an unresolvable source reference is the same kind of transient
-    # malformed output as a dropped connection — retry the whole proposal.
-    async def _propose_validated() -> dict:
-        return await _propose(profiles)
-
-    return run_with_retry(_propose_validated, label="organize plan")
-
-
 async def _propose(profiles: list[dict], *, brief=None, cwd=None, full_result=False,
                    on_submitted=None, require_sample_mapping=False):
     if brief is None:

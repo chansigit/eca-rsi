@@ -19,13 +19,12 @@ import csv
 import hashlib
 import html as _h
 import json
-import os
 import re
 import sys
 from pathlib import Path
 
 from .. import layout as L
-from .. import mirror, review
+from .. import review
 
 CSS = """
 /* warm paper by day, dark by night (prefers-color-scheme); everything below reads these variables */
@@ -480,7 +479,7 @@ def persample_state(unit: Path) -> dict:
     samples = []
     for s in man.get("samples", []):
         d = L.sample_dir(unit, s)
-        contract = L.PS_ANNOTATE_LIGHT if man.get("annotate", True) else L.PS_LIGHT  # light: renders from a mirror
+        contract = L.PS_ANNOTATE_LIGHT if man.get("annotate", True) else L.PS_LIGHT  # light: renders from a display copy
         done = L.complete(d, contract)
         if man.get("schema_version") == 2:
             # Display the recorded validation; actual resume rehashes and
@@ -501,7 +500,7 @@ def persample_state(unit: Path) -> dict:
 
 def _round_step(rdir: Path) -> str:
     """What a round without a decision is currently doing, from the light
-    step markers only — the page must say the same thing on a --mirror copy,
+    step markers only — the page must say the same thing on a display copy,
     which carries no h5ad."""
     cdir, zdir = L.crosssample_dir(rdir), L.zoomin_dir(rdir)
     if not L.complete(cdir, L.MSP_LIGHT):
@@ -536,7 +535,7 @@ def rounds_state(unit: Path) -> list[dict]:
             r["decision"] = dec_p.read_text().strip()
         else:
             r["step"] = _round_step(rdir)
-            n_in = _round_input_cells(unit, n)  # from progress.log, so a mirror copy knows it too
+            n_in = _round_input_cells(unit, n)  # from progress.log, so a display copy knows it too
             if n_in is None and (cdir / "integrated.h5ad").is_file():
                 n_in = _n_obs(cdir / "integrated.h5ad")
             if n_in is not None:
@@ -883,7 +882,7 @@ def unit_state(unit: Path) -> dict:
         stage, cls = f"round {rounds[-1]['n']} · {rounds[-1]['step']}", "running"
     elif rounds:
         nxt = _round_started_after(log, rounds[-1]["n"])
-        if nxt:  # a mirror copy carries the log line before any file of the new round
+        if nxt:  # a display copy carries the log line before any file of the new round
             stage, cls = f"round {nxt[0]} · crosssample (since {nxt[1][11:16]})", "running"
         else:
             stage, cls = f"round {rounds[-1]['n']} done, next round pending", "running"
@@ -1441,7 +1440,7 @@ def render_root(root: Path, name: str | None = None) -> str:
 
 
 # the files a page is derived from: their newest mtime is "when the run state
-# last changed" — and, since ecarsi.mirror copies with mtimes, how fresh a copy is
+# last changed" — and, since the display sync (ecarsi.display) copies with mtimes, how fresh a copy is
 STATE_GLOBS = (L.PROGRESS, f"{L.UNITS}/*/{L.PROGRESS}", f"{L.ORGANIZE}/{L.MANIFEST}", f"{L.INPUT}/{L.MANIFEST}",
                f"{L.PERSAMPLE}/{L.MANIFEST}", f"{L.PERSAMPLE}/*/{L.RUN_STATE}", f"{L.ROUNDS}/*/{L.MANIFEST}",
                f"{L.ROUNDS}/*/{L.STATS}", f"{L.ROUNDS}/*/{L.DECISION}", f"{L.RELEASE}/summary.json", f"{L.RELEASE}/pruned.json",
@@ -1469,9 +1468,9 @@ STATE_GLOBS = (L.PROGRESS, f"{L.UNITS}/*/{L.PROGRESS}", f"{L.ORGANIZE}/{L.MANIFE
 # which a working stage does constantly, and one stat per stage directory is cheap where a walk over
 # its thousands of agent files would not be.
 # Directory mtimes were tried here as a proxy for "work is happening" and withdrawn (2026-09-22).
-# `ecarsi.mirror` copies files with copy2, preserving their mtime, but creates the directories with
-# mkdir -- so every directory in a mirror is as new as the last sync, and a run dead for a week read
-# as fresh on exactly the copy the mirror exists to serve. A long per-sample really can write nothing
+# A copy (the display sync, ecarsi.display, and the --mirror copies before it) keeps files' mtimes but
+# creates the directories with mkdir -- so every directory in a copy is as new as the last sync, and a
+# run dead for a week read as fresh on exactly the copy that exists to be served. A long per-sample really can write nothing
 # into the run directory for half an hour; that gap is answered by the control plane's verdict, which
 # knows the run is alive, and not by a filesystem signal that cannot tell work from a copy.
 
@@ -1491,10 +1490,8 @@ def _page(title: str, where: Path, body: str) -> str:
     import time
 
     fmt = "%Y-%m-%d %H:%M:%S"
-    src = mirror.copy_notice(where)
     shown = _json(L.base_of(where) / L.DISPLAY, {}).get("source")
-    origin = (f"the display copy of {_h.escape(shown)}" if shown
-              else f"a mirror copy of {_h.escape(src)}" if src else "the run directory")
+    origin = f"the display copy of {_h.escape(shown)}" if shown else "the run directory"
     t = state_mtime(where)
     updated = f" · run state updated {time.strftime(fmt, time.localtime(t))}" if t else ""
     return (f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -1534,7 +1531,6 @@ def write_all(target: Path) -> list[Path]:
         written.append(write_root_index(target))
     else:
         raise SystemExit(f"{target} is neither an organize root nor a unit dir")
-    mirror.sync(target)  # no-op without <root>/mirror.json; a failure is a warning
     return written
 
 

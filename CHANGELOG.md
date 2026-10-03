@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.0 — 2026-10-02
+
+The control plane is the only way ECA-RSI runs; the local path is gone.
+
+- **Removed the local path**: the CLI commands `run`, `organize`, `persample`, `crosssample`, `zoomin`, `loop`,
+  `ledger`, `prune` (`eca-rsi` keeps `serve`, `index`, `umapdata`), `run-eca-rsi.sh`, the modules `loop`, `zoomin`,
+  `persample`, `osp_dispatch`, `prune`, `service`, `mirror` (`--mirror`), `agent_retry`, `osp_stage`, and the parts
+  of `crosssample`, `downstream`, `ledger`, `design`, `cost`, `policies`, `organize`, `osp_contract`, `osp_worker`,
+  `resources`, `run_state` and `layout` only it reached: about 3,900 lines of package code and 2,000 of tests, found by a module-qualified
+  reachability walk from the code the control plane runs. With it went the runtime-identity digest
+  (`runtime_identity`, `ECA_RSI_DEVELOPER_MODE`) and the environment variables only it read (`AGENT_WALL_MIN`,
+  `PERSAMPLE_PARALLEL`, `ZMIP_PARALLEL`, `MSP_BATCH_COL`, `MSP_PYTHON`/`ZMIP_PYTHON`/`OSP_PYTHON`, `ECA_RSI_PAUSE_FILE`, ...).
+- Pages still read the local path's layout (generation 1): its runs are served from their display zones.
+- Found on the way, not changed: on the control plane the organize plan sets only each source's experiment column,
+  so explicit sample maps (`merges`, `exclude_cells`, `batch_key`) have no input; and the study-design context for
+  the agents (`ecarsi.design`) was only ever passed by the local path.
+
 ## Unreleased — 2026-09-28
 
 The warm-pool scheduler after a week of gen-2 batches (2026-09-24 to 09-28): the two-day maintenance sprint of

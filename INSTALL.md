@@ -27,7 +27,7 @@ The file `container/control-requirements.lock` defines the pinned Python environ
 
 | Package | Version |
 |---|---|
-| ecarsi | 0.3.2 |
+| ecarsi | 0.4.0 |
 | agent-harness-bridge | 0.2.15 |
 | osp-sc (`osp`) | 0.1.7 |
 | msp-sc (`msp`) | 0.5.2 |
@@ -239,7 +239,7 @@ Use an editable install only for IDEs and quick experiments on a host with Pytho
 python -m pip install -e $GROUP_HOME/$USER/eca/src/eca-rsi --no-deps
 ```
 
-Re-run it after every version bump. Otherwise, `runtime_identity()` reads the old version from `importlib.metadata`. The kernels are separate packages. Install each kernel the same way with `pip install -e`. Dependency ranges are in `pyproject.toml`. The images contain the versions that are tested together (A.2).
+The kernels are separate packages. Install each kernel the same way with `pip install -e`. Dependency ranges are in `pyproject.toml`. The images contain the versions that are tested together (A.2).
 
 ### B.5 Rebuild the images
 
@@ -266,39 +266,19 @@ A full rebuild (`ops/build-images-20261001.sh`) downloads Temporal and PostgreSQ
 
 ## C. Run-time configuration
 
-Agent backends:
+Agent models come from the catalog `~/.config/ecarsi/models.json` (A.4): harness, model and URL, in calling order. The model-turn service sets the bridge's selection for every call itself. The variables left to you:
 
 | Variable | Meaning / default |
 |---|---|
-| `HARNESS` / `--harness` | `openai` (default, Doubao through Ark), `openai@ark`, `openai@openrouter`, `openai@vllm`, `claude`, `deepseek` |
-| `MODEL` / `--model` | The CLI option overrides the environment variable. Default for openai and deepseek is `doubao-seed-2-1-turbo-260628`. Default for claude is `claude-sonnet-5`. |
-| `ARK_API_KEY` / `DOUBAO_BASE_URL` | Ark key and endpoint. The default endpoint is the Beijing region `/api/v3`. |
-| `OPENROUTER_API_KEY` / `OPENROUTER_BASE_URL` | OpenRouter key and endpoint. The default endpoint is `https://openrouter.ai/api/v1`. |
-| `VLLM_API_KEY` / `VLLM_BASE_URL` | vLLM key and endpoint. The default endpoint is `http://127.0.0.1:8000/v1`. `MODEL` must match the served name. |
+| `ARK_API_KEY` | Ark key (`openai`, `openai@ark`). Endpoint from the catalog URL, else `DOUBAO_BASE_URL`, else the Beijing region `/api/v3`. |
+| `OPENROUTER_API_KEY` | OpenRouter key (`openai@openrouter`). Default endpoint `https://openrouter.ai/api/v1`. |
+| `VLLM_API_KEY` | vLLM key (`openai@vllm`). Default endpoint `http://127.0.0.1:8000/v1`. |
 | `OPENAI_AGENTS_API` | API type: `responses` (default) or `chat_completions` (text only). |
 | `OPENAI_AGENTS_MAX_NUDGES` | Reminders in the same history when the agent does not submit. The default is 2. |
 | `OPENAI_AGENTS_MAX_CONTEXT_RESETS` | Recoveries from an over-long context. The default is 2. |
 | `OPENAI_AGENTS_SERVER_STATE` | The default is 1. When set to 1, Responses continues with `previous_response_id`. |
-| `AGENT_WALL_MIN` | Wall-clock budget for one agent run on the local path. The default is 180 minutes. The control-plane path bounds a session by `max_turns` × the per-turn response timeout (900 s) instead. |
-| `AGENT_MODEL_POOL` / `AGENT_MODEL_POOL_ROTATE` | Ordered fallback list formatted as `harness:model,...`. Set `ROTATE=1` to stagger the start model per subprocess. |
-| `DSH_BIN` | The dsh binary for `HARNESS=deepseek`. |
 
-Kernels and concurrency:
-
-| Variable | Meaning / default |
-|---|---|
-| `OSP_PYTHON` / `MSP_PYTHON` / `ZMIP_PYTHON` | Kernel interpreters. The default is the current interpreter. `ZMIP_PYTHON` falls back to `MSP_PYTHON`. |
-| `PERSAMPLE_PARALLEL` / `PERSAMPLE_MEM_PER_CELL_MB` | Per-sample concurrency and memory estimate. Defaults derive from available CPUs and memory. |
-| `ZMIP_PARALLEL` | Lineage concurrency. A value of 1 runs lineages in sequence. |
-| `ZMIP_MIN_CELLS` | Smallest lineage to zoom into. The default is 800. |
-| `MSP_BATCH_COL` | Harmony correction column. The default is `eca_sample_id`. This value must be constant within every OSP experiment. |
-| `MSP_N_PCS` / `MSP_N_TOP_GENES` / `MSP_N_NEIGHBORS` | Integration parameters for every round. |
-| `MSP_RESOLUTIONS` / `ZMIP_RESOLUTIONS` | Space-separated or comma-separated values. You must include 1 and 2. |
-| `MSP_HARMONY` / `ZMIP_HARMONY` | JSON object, for example `{"theta": 1}`. This parameter is part of the run identity. |
-| `MSP_LANGUAGE` / `ZMIP_LANGUAGE` | Report prose language. The default is `English`. Labels stay English. |
-| `MSP_EFFORT` / `ZMIP_EFFORT` / `MSP_MAX_TURNS` / `ZMIP_MAX_TURNS` | Agent reasoning and budget settings. |
-| `MSP_COMPUTE_ENDPOINT` | The control-plane path pins this value to `local`. |
-| `ECA_RSI_DEVELOPER_MODE=1` | Local path only: skip RSI's source-digest comparison and record `runtime_check: skipped`. The control-plane path ignores this setting. Its guard is the content pin of every request. |
+Put the keys in `~/.bashrc`; the runners read them from there. A session is bounded by `max_turns` × the per-turn response timeout (bridge `routing.response_timeout_seconds`, 900 s). Kernel settings (for example `resolution`, `n_pcs`, `n_top_genes`, `n_neighbors`, the zoom-in `min_cells`) are keys of each stage's `config` in the dataset spec, not environment variables; see [docs/control-plane/DATASET_V2.md](docs/control-plane/DATASET_V2.md).
 
 ## D. Submit a dataset
 
@@ -314,5 +294,3 @@ apptainer exec --cleanenv --bind "$BINDS" --env PYTHONSAFEPATH=1 --env PYTHONPAT
 `start-dataset` adds a `storage` key from `display_root` and `archive_root` of `~/.config/ecarsi/results.json` (`--results` for another file) when the spec has none. With it, the run keeps its display zone up to date after every stage and archives its work tree when the dataset completes.
 
 Follow progress on Periscope. A unit that stops on `loop_control.json` (`pause`, `stop_after_round`, `pause_after_stage`) ends as `PAUSED`. Clear the control. Then run `resume-dataset` on the unit.
-
-The local path (`eca-rsi run <eca-pp output> <root>`) is not maintained. Its CLI still exists for single-machine experiments. README.md documents its semantics because the control-plane path shares them. These shared semantics include round policy, `loop_control.json`, release layout, and `needs_review`.

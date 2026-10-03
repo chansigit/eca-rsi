@@ -1,7 +1,5 @@
-"""Compatibility entry point: the code lives in `ecarsi.ui.serve`, outside the
-identity hash (eca-rsi#10). Kept so `python -m ecarsi.serve` still works -- the
-deployed control-plane launchers and every doc use that spelling. Import the
-real module directly; this file must stay trivial, because it is hashed."""
+"""Compatibility entry point: the code lives in `ecarsi.ui.serve`. Kept so `python -m ecarsi.serve`
+still works -- launchers and docs use that spelling. Import the real module directly."""
 import sys
 
 from .ui.serve import main

@@ -1,13 +1,6 @@
 # ECA-RSI control-plane path: architecture
 
-ECA-RSI has two execution paths. Both paths use the same kernels (osp, msp, zmip) and the same round policy.
-
-| Path | What it is | Status |
-|---|---|---|
-| Local path | `eca-rsi run <dir> <root>`: one process, one dataset | This path is not maintained. The tree keeps this path for reference. |
-| Control-plane path | This path uses Temporal workflows, a HyperQueue warm pool, and a model-turn service. It processes many datasets at once. | This path is the only supported way to run. Formerly, it was the `gen2` branch. |
-
-This document describes the control-plane path. Module names follow the code.
+The control plane is the only way ECA-RSI runs: Temporal workflows, a HyperQueue warm pool, and a model-turn service, processing many datasets at once (formerly the `gen2` branch). The local path (`eca-rsi run`, one process per dataset) was removed in 0.4.0. Module names follow the code.
 
 ## Layers
 

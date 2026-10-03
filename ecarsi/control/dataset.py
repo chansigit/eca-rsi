@@ -169,8 +169,7 @@ async def resume_dataset(client, identity, task_queue, reason):
     no coordinator polls sits at its first workflow task forever (2026-09-16, Eye)."""
     from temporalio.common import WorkflowIDReusePolicy
     from ..warm_pool.state import immutable, reference
-    from ..warm_pool.state import read, status, digest
-    from ..agent import status as bridge_status
+    from ..warm_pool.state import read, digest
     if not reason.strip():
         raise ValueError('A recovery reason is required')
     previous = client.get_workflow_handle(identity)

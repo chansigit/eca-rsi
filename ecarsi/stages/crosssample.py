@@ -573,7 +573,6 @@ def tool(name,state_path,args_path,destination):
 
 
 def finalize(evidence_ref,types_ref,quality_ref,destination):
-    import numpy as np
     import pandas as pd
     from msp.annotate import _apply,_plot,_validate_final
     from msp.inspect import _apply_proposal,_validate_proposal

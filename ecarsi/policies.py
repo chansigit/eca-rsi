@@ -22,44 +22,18 @@ batch_key       obs column Harmony corrects by instead of eca_sample_id. Must
 
 from __future__ import annotations
 
-import json
-import os
 import re
-from pathlib import Path
 
 import pandas as pd
 
 from .upstream import normalize
 
-STEP = "persample-policy"
 REASON_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}")
 AGENT_EXCLUDE_MAX_FRAC = (
     0.5  # ponytail: one ceiling for agent proposals; an explicit sample map has none
 )
 RULE_KEYS = {"where", "blank", "reason", "rationale"}
 SPEC_KEYS = {"sources", "merges", "exclude_cells", "batch_key"}
-
-RULE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "where": {
-            "type": "object",
-            "additionalProperties": {"type": "array", "items": {"type": "string"}},
-        },
-        "blank": {"type": "array", "items": {"type": "string"}},
-        "reason": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,39}$"},
-        "rationale": {"type": "string"},
-    },
-    "required": ["reason", "rationale"],
-}
-BATCH_KEY_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "batch_key": {"type": ["string", "null"]},
-        "rationale": {"type": "string"},
-    },
-    "required": ["batch_key", "rationale"],
-}
 
 
 # ---------------------------------------------------------------- exclude_cells
@@ -212,75 +186,3 @@ def resolve_batch_key(obs: pd.DataFrame, sample: pd.Series, key) -> dict:
 
 
 # ---------------------------------------------------------------- agent: batch_key recommendation
-
-
-def recommend_batch_key(design: str, columns: list[str]) -> dict:
-    """Advisory only: {"batch_key": col|None, "rationale"} from the study
-    design table; recorded in needs_review, never applied."""
-    from .agent_retry import run_with_retry
-
-    return run_with_retry(
-        lambda: _recommend(design, columns), label="batch key recommendation"
-    )
-
-
-async def _recommend(design: str, columns: list[str]) -> dict:
-    from . import model
-    from .harness import ToolSpec, run_agent
-
-    brief = (Path(__file__).parent / "prompts" / "batch_key.md").read_text()
-    prompt = (
-        brief
-        + "\n\n## Study design\n\n"
-        + design
-        + "\n\nFinish by calling submit_batch_key with a JSON string matching the schema above."
-    )
-
-    def err(text):
-        return {
-            "content": [{"type": "text", "text": text + " — fix and resubmit"}],
-            "is_error": True,
-        }
-
-    async def submit_batch_key(args: dict) -> dict:
-        try:
-            decision = json.loads(args["decision_json"])
-        except json.JSONDecodeError as exc:
-            return err(f"JSON parse error: {exc}")
-        if (
-            not isinstance(decision, dict)
-            or "batch_key" not in decision
-            or not str(decision.get("rationale", "")).strip()
-        ):
-            return err("batch_key (column or null) and rationale are required")
-        key = decision["batch_key"]
-        if key is not None and key not in columns:
-            return err(
-                f"{key!r} is not a sample-constant column; choose from {columns} or null"
-            )
-        return {
-            "content": [{"type": "text", "text": "recorded"}],
-            "is_error": False,
-            "_submitted": decision,
-        }
-
-    tool = ToolSpec(
-        name="submit_batch_key",
-        description="Submit the batch-key recommendation. decision_json is a JSON string with this schema:\n"
-        + json.dumps(BATCH_KEY_SCHEMA, indent=1),
-        input_schema={"decision_json": str},
-        handler=submit_batch_key,
-    )
-    result = await run_agent(
-        tools=[tool],
-        submit_tool="submit_batch_key",
-        prompt=prompt,
-        cwd=os.getcwd(),
-        model=model(),
-        max_turns=4,
-        allowed_builtin=(),
-        label="batch key recommendation",
-    )
-    recommend_batch_key.last_cost = result.cost_usd  # type: ignore[attr-defined]
-    recommend_batch_key.last_tokens = (result.tokens_in, result.tokens_out)  # type: ignore[attr-defined]
-    return result.submitted

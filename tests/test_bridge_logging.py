@@ -5,38 +5,29 @@ import sys
 import pytest
 
 
-@pytest.mark.parametrize('entry', ['cli', 'worker'])
-def test_entry_logging_streams_and_repeat_initialization(entry):
+def test_cli_logging_streams_and_repeat_initialization():
     script = '''
-import logging
+import logging, sys, types
 from harness_bridge import ensure_logging
-from ecarsi import __main__ as cli, osp_worker
+from ecarsi import __main__ as cli
 
-def work(*args, **kwargs):
-    ensure_logging('ecarsi', 'osp')
+def work(argv):
+    ensure_logging('ecarsi')
     logging.getLogger('harness_bridge.smoke').info('bridge-marker')
     logging.getLogger('ecarsi.smoke').info('rsi-marker')
-    if ENTRY == 'worker':
-        logging.getLogger('osp.smoke').info('osp-marker')
     print('{"ok": true}')
     return 0
 
-if ENTRY == 'cli':
-    cli.run = work
-    for _ in range(2):
-        assert cli.main(['run']) == 0
-else:
-    osp_worker.run = work
-    for _ in range(2):
-        assert osp_worker.main(['request.json']) == 0
+sys.modules['smoke_command'] = types.SimpleNamespace(main=work)
+cli.COMMANDS['smoke'] = 'smoke_command'
+for _ in range(2):
+    assert cli.main(['smoke']) == 0
 '''
-    result = subprocess.run([sys.executable, '-c', f'ENTRY = {entry!r}\n' + script],
-                            capture_output=True, text=True)
+    result = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == ['{"ok": true}'] * 2
     assert result.stderr.count('bridge-marker') == 2
     assert result.stderr.count('rsi-marker') == 2
-    assert result.stderr.count('osp-marker') == (2 if entry == 'worker' else 0)
 
 
 def test_shim_exception_is_catchable_as_shared_exception():
