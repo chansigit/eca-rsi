@@ -1,6 +1,6 @@
 # ECA-RSI control-plane path: architecture
 
-The control plane is the only way ECA-RSI runs: Temporal workflows, a HyperQueue warm pool, and a model-turn service, processing many datasets at once (formerly the `gen2` branch). The local path (`eca-rsi run`, one process per dataset) was removed in 0.4.0. Module names follow the code.
+The control plane is the only way ECA-RSI runs: Temporal workflows, a HyperQueue warm pool, and a model-turn service, processing many datasets at once (formerly the `gen2` branch). The local path (`eca-rsi run`, one process per dataset) was removed in 0.4.0. Module names follow the code. Start with [OVERVIEW.md](../OVERVIEW.md); the reasons behind the design are in [decisions/](../decisions/README.md).
 
 ## Layers
 
@@ -58,8 +58,8 @@ Set `CODE=<checkout>` in the launcher to put a checkout first on `PYTHONPATH`. T
 | | `contract` | shared model contract: tools without parameter lists, `deg_lookup` thresholds, lenient JSON, checklists |
 | | `evidence` `execution` | execution plans on the pool: evidence batch reads, single-tool plans, measured budgets |
 | `ecarsi` | `observatory` (+ `.html`) | control-plane page, timeline, `status` and `tokens` reports |
-| | `round_policy` | round stopping rules and `loop_control.json`, shared by both paths |
-| | `prompts/` | prompts and checklists, shared by both paths |
+| | `round_policy` | round stopping rules and `loop_control.json` |
+| | `prompts/` | prompts and checklists of the agent sessions |
 
 ## Entry points
 
@@ -88,7 +88,7 @@ The owner requests the nodes. The system has no autoscaler and no keeper.
 - **Pin by content.** Every request lists the program files that it depends on in `inputs` (`stages.program()`). A session records the hash of `agent/session.py` as `adapter_path`. Do not change these files while a session is in flight. Change the contract only when no session is in flight.
 - **The request id is the replay key.** A request id that already exists in the pool or the bridge replays the stored content. The system records differences only in `resubmitted.json`.
 - **Polling only.** The pool and the bridge use file protocols. The coordinator polls through activities and tolerates about 35 minutes of poll failures. Do not scan the request directories without pacing on the control-plane node. The control-plane node shares the Lustre client with the coordinators.
-- **Deployment parameters stay out of the package.** `control-plane.sh`, environment variables, and request specs define nodes, images, paths, and concurrency limits.
+- **Deployment parameters stay out of the package.** `~/.config/ecarsi/deployment.env`, the dataset specs and the service configs define nodes, images, paths, and concurrency limits ([decision 0011](../decisions/0011-settings-in-one-directory.md)).
 
 ## Runtime mechanisms at a glance
 

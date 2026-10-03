@@ -4,6 +4,7 @@ ECA-RSI is the `ecarsi/` package. Deterministic kernels (osp / msp / zmip) do th
 
 ## Read this first
 
+- **New to the code:** [docs/OVERVIEW.md](docs/OVERVIEW.md) (one page: six parts, one dataset start to finish), then [docs/decisions/](docs/decisions/README.md) (why each design choice was made).
 - **One supported way to run: the control-plane path.** Start Temporal, the HyperQueue (HQ) warm pool, and the bridge from `container/control-plane.sh`. It is the only path: 0.4.0 removed the local path (`eca-rsi run`, `run-eca-rsi.sh`, `--mirror`). Its old runs are still shown from their display zones, so `ecarsi/ui` and `layout.py` keep reading their layout (generation 1).
 - **Code lives in `$GROUP_HOME/chensj16/eca/src/`** (eca-rsi, osp, msp, zmip, agent-harness-bridge, standissect-lite). Worktrees are in `$GROUP_HOME/chensj16/eca/worktrees/`. The paths in `$SCRATCH/projects/*` are symlinks to these checkouts.
 - **Production code is the snapshot inside the two images** in `$GROUP_HOME/chensj16/eca/images/`. Editing a checkout changes nothing in production. New code reaches production only through a rebuilt image (`ops/build-images-update.sh`, `ops/switch-images.sh` in the deployment directory).
@@ -20,11 +21,11 @@ ecarsi/agent/       model-turn service: dispatch, session, parallel, tool_errors
 ecarsi/warm_pool/   bounded compute requests, HQ adapter, scheduler, provisioning (add-worker, slurm-worker), measure
 ecarsi/stages/      programs that run in the pool: organize, persample, crosssample, zoomin, release, contract, evidence, execution
 ecarsi/ui/          Periscope (serve, index, umapdata)
-ecarsi/layout.py    the only place that defines the run directory layout; no step builds paths by hand
+ecarsi/layout.py    the run directory layout (control/dataset.py still spells the generation-2 stage directories itself)
 ecarsi/observatory.py   status / releases / tokens reports; the data behind Periscope's /_control/ page
 ```
 
-The kernels are osp, msp, and zmip. The osp kernel performs per-sample QC, clustering, and annotation. The msp kernel performs cross-sample integration, inspection, and annotation. The zmip kernel performs lineage zoom-in. The zmip kernel reuses the DEG, evidence, and report code from the msp kernel. The bridge (agent-harness-bridge) is the agent runtime. It provides provenance and is not part of the run identity.
+The kernels are osp, msp, and zmip. The osp kernel performs per-sample QC, clustering, and annotation. The msp kernel performs cross-sample integration, inspection, and annotation. The zmip kernel performs lineage zoom-in. The zmip kernel reuses the DEG, evidence, and report code from the msp kernel. The bridge (agent-harness-bridge) is the agent runtime.
 
 Run directory layout (one run = one dataset):
 
@@ -36,29 +37,21 @@ Run directory layout (one run = one dataset):
   release/{final.h5ad, summary.json, needs_review.md, needs_review.json, cell_ledger.csv.gz, cell_exclusions.csv.gz, decisions.json, sankey.json, umap.json, receipt.json}
 ```
 
-## Control-plane path
+## Control plane
 
-For details, see [docs/control-plane/ARCHITECTURE.md](docs/control-plane/ARCHITECTURE.md).
+Layers, module map and mechanisms: [docs/control-plane/ARCHITECTURE.md](docs/control-plane/ARCHITECTURE.md). The numbers below refer to [docs/decisions/](docs/decisions/README.md).
 
-**Components.** The command `control-plane.sh start|stop|status` manages several components: temporal, hq, scheduler, bridge, runners, coordinators, fleet-status, and pruner. Temporal includes Temporal Server and PostgreSQL from `/opt/rsi-services`. The HQ server runs separately so scheduler restarts keep workers connected. Runners are resident model-call processes. Coordinators are 4 Temporal workers. Start Periscope from the compute image with `ops/start-periscope.sh`. The control-plane page for Periscope is `/_control/`. Periscope serves every display zone under `display_root` and `more_display_roots` of `~/.config/ecarsi/results.json` (rescanned every 10 min), plus the entries of `~/.config/ecarsi/periscope-datasets.json`.
-
-**Configuration.** Every setting the owner edits lives in `~/.config/ecarsi/`: `deployment.env` (images, state directory, `BINDS`, host Python, ports; everything machine-specific, template `examples/deployment.env`), `results.json`, `models.json` (model catalog), `periscope-datasets.json`, `temporal.yaml`, and the secrets `periscope-password` and `models-admin-key`. Model API keys stay in `~/.bashrc`. The package names no machine path; INSTALL.md A.4 has the table.
-
-**Images.** The image `rsi-control-*.sif` holds Temporal, PostgreSQL, HQ, the agent SDKs, and the ecarsi snapshot at `/opt/eca-rsi`. The compute image `rsi-science-*.sif` holds the kernels at `/opt/rsi-python`, HQ, and the same snapshot. In the launcher, `CODE=<checkout>` shadows the snapshot for development. The command `control-plane.sh host-code` unpacks the snapshot to `control/image-code` for host-side helpers. Run `warm_pool configure-runtime` inside the compute image.
-
-**Workers.** The owner requests Slurm nodes. There is no autoscaler. The script `container/worker-node.sh` makes the job itself the worker (`slurm-worker`). Run `warm_pool add-worker <host> --job-id <id>` to join a running allocation. Workers advertise a runtime digest. When you switch images, stop the worker supervisors and add the workers again. The plane node itself can be a 6-core test worker. Stop it before a real batch. Do not touch the owner's `warmpool-gpu` jobs.
-
-**Scheduler.** Every request goes to HQ with a native priority. The priority formula is class base + 10 × cpus. The class base values are 1000 for agent, 800 for tool, and 0 for work. There is no hold, drain, or backlog layer. The scheduler marks a request as `infeasible: <reason>` if no live worker can hold it (cpus, memory, required GPU, or worker time left ≥ `time_request`). The scheduler retries the request every tick. DEG runs in batches of 8 comparisons per request (`DEG_BATCH_SIZE` in `ecarsi/control/persample.py`). A batch timeout is twice the per-comparison budget.
-
-**Requests pin program files by content.** Do not fast-forward a stage file (`ecarsi/stages/*`, `ecarsi/agent/session.py`) while sessions are in flight. Fast-forwarding kills queued requests and sessions. Deploy pinned files only with zero running executions. For images, switch images only when `ops/count-wf.py` reports 0 running executions.
-
-**Sessions.** New sessions use protocol 2 (portable history). Legacy protocol-1 restores fill `annotations: []` for every SDK version. A failed session restarts once (`-r2`, same evidence). A second failure skips the sample (label `unannotated`, needs_review `agent_skipped`) or the lineage (keeps cross-sample labels). Cross-sample sessions restart but never skip. If skipped cells exceed 10 % of the stage input (`SKIPPED_CELL_LIMIT`), the stage fails. Superseded sessions count as `superseded` in resume preflight. Crosssample and Zoomin workflows continue-as-new past 5 000 history events. Run `ops/replay-check.py` before you deploy any `control/` workflow change.
-
-**Two zones.** A run's work tree (`output_root`, on scratch) holds everything the system needs to resume and replay it. Its display zone holds what Periscope shows: pages, stage reports, the release. The spec key `storage` (`{display_root, archive_root}`; `start-dataset` fills it from `~/.config/ecarsi/results.json`) places the zone at `<display_root>/<collection>/<dataset>/<run_id>/`. After every stage, a small pool task (`dataset.display`, tool class) renders the run's pages and copies the files they need (`ecarsi/display.py`). When a dataset completes, the last sync also archives the whole work tree to `<archive_root>/<collection>/<dataset>/<run_id>.tar.gz` (`ecarsi/archive.py`). Syncs are submitted, not awaited; a failed sync never fails a run. The scratch work tree stays until the owner deletes it. Old runs were normalized the same way into `$OAK/eca-rsi/{display,work}` (`ops/display-zone.py`, `.tar.zst`).
-
-**Pruner.** The script `container/request-pruner.py` deletes the pool requests of finished runs. Failed runs keep their requests and their Periscope row until a later run of the same dataset completes.
-
-**Manual controls.** The dataset workflow reads `<unit>/loop_control.json` at every round boundary. This file controls `cap`, `rounds`, `extra_rounds_after_convergence`, `max_removed`, `pause`, `stop_after_round`, and `pause_after_stage: crosssample|zoomin`. A pause ends the unit workflow with a `PAUSED: …` non-retryable failure. To recover, clear the control and run `resume-dataset <run_id> --reason …`. Periscope shows PAUSED in the wait colour, not the failure colour.
+- **Components** (`control-plane.sh start|stop|restart|status|report`): temporal, hq, scheduler, bridge, runners, coordinators (4; 0008), fleet-status, pruner. Periscope runs from the compute image (`ops/start-periscope.sh`); its control-plane page is `/_control/`. It serves the display zones under `display_root` and `more_display_roots` of `~/.config/ecarsi/results.json` (rescanned every 10 min) plus `~/.config/ecarsi/periscope-datasets.json`.
+- **Settings** (0011): everything in `~/.config/ecarsi/`; `deployment.env` holds every machine path, template `examples/deployment.env`; the table is INSTALL.md A.4. Model API keys stay in `~/.bashrc`.
+- **Images** (0010): `CODE=<checkout>` in the launcher shadows the snapshot for development. `control-plane.sh host-code` unpacks the snapshot to `control/image-code` for host-side helpers. Run `warm_pool configure-runtime` inside the compute image.
+- **Workers** (0006): the owner requests Slurm nodes; there is no autoscaler. `container/worker-node.sh` makes the job itself the worker; `warm_pool add-worker <host> --job-id <id>` joins a running allocation (a worker directory keeps its CPU slice: pass the same `--cpus`). Re-add the workers after an image switch. The plane node can be a 6-core test worker; stop it before a real batch. Do not touch the owner's `warmpool-gpu` jobs.
+- **Scheduling** (0006): HQ priority = class base (agent 1000, tool 800, work 0) + 10 × cpus; `infeasible: <reason>` when no live worker can hold a request. DEG runs 8 comparisons per request (`DEG_BATCH_SIZE`).
+- **Pinned files** (0005): never fast-forward a stage file (`ecarsi/stages/*`, `ecarsi/agent/session.py`) while sessions are in flight; switch images only when `ops/count-wf.py` reports 0 running executions.
+- **Workflows** (0003): run `ops/replay-check.py` before deploying any `control/` change. Cross-sample and zoom-in continue as new past 5,000 history events.
+- **Sessions**: protocol 2 (portable history; legacy protocol-1 restores fill `annotations: []`). A failed session restarts once (`-r2`, same evidence); a second failure skips the sample (label `unannotated`, needs_review `agent_skipped`) or the lineage (keeps cross-sample labels). Cross-sample sessions never skip. A stage fails when skipped cells exceed 10 % of its input (`SKIPPED_CELL_LIMIT`).
+- **Two zones** (0009): `start-dataset` fills the spec key `storage` from `results.json`. A `dataset.display` pool task (tool class) syncs the display zone after every stage; the final sync archives the work tree to `<archive_root>/<collection>/<dataset>/<run_id>.tar.gz`. Syncs are not awaited; a failed sync never fails a run. Old runs were normalized into `$OAK/eca-rsi/{display,work}` (`.tar.zst`).
+- **Pruner**: deletes the pool requests of finished runs. Failed runs keep their requests and their Periscope row until a later run of the same dataset completes.
+- **Manual controls**: `<unit>/loop_control.json`, read at every round boundary: `cap`, `rounds`, `extra_rounds_after_convergence`, `max_removed`, `pause`, `stop_after_round`, `pause_after_stage: crosssample|zoomin`. A pause ends the unit workflow as `PAUSED: …`; clear the control and run `resume-dataset <run_id> --reason …`. Periscope shows PAUSED in the wait colour.
 
 ## Scientific rules
 
