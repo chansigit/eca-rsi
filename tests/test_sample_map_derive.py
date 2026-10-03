@@ -20,7 +20,7 @@ def _spec(**src):
 
 
 def test_derive_from_cell_id(tmp_path):
-    table, decision = build_mapping(_h5ad(tmp_path), None, _spec(derive_from_cell_id=r"^([^.]+)\."), None)
+    table, decision = build_mapping(_h5ad(tmp_path), None, _spec(derive_from_cell_id=r"^([^.]+)\."))
     assert list(table["source_value"]) == ["AdultBrain_1", "AdultBrain_1", "AdultBrain_2", "FetalBrain_1"]
     assert table[SAMPLE_KEY].nunique() == 3
     assert decision["sources"]["input"]["sample_column"] is None
@@ -28,15 +28,15 @@ def test_derive_from_cell_id(tmp_path):
 
 def test_derive_rejects_unmatched_and_bad_regex(tmp_path):
     with pytest.raises(ValueError, match="does not match"):
-        build_mapping(_h5ad(tmp_path), None, _spec(derive_from_cell_id=r"^(Fetal[^.]+)\."), None)
+        build_mapping(_h5ad(tmp_path), None, _spec(derive_from_cell_id=r"^(Fetal[^.]+)\."))
     with pytest.raises(ValueError, match="one capture group"):
-        build_mapping(_h5ad(tmp_path), None, _spec(derive_from_cell_id=r"^[^.]+\."), None)
+        build_mapping(_h5ad(tmp_path), None, _spec(derive_from_cell_id=r"^[^.]+\."))
 
 
 def test_missing_as_keeps_unlabelled_cells(tmp_path):
     with pytest.raises(ValueError, match="leaves 2 cells NA"):
-        build_mapping(_h5ad(tmp_path), None, _spec(sample_column="plate"), None)
-    table, _ = build_mapping(_h5ad(tmp_path), None, _spec(sample_column="plate", missing_as="missing"), None)
+        build_mapping(_h5ad(tmp_path), None, _spec(sample_column="plate"))
+    table, _ = build_mapping(_h5ad(tmp_path), None, _spec(sample_column="plate", missing_as="missing"))
     assert list(table["source_value"]) == ["P1", "P1", "missing", "missing"]
     with pytest.raises(ValueError, match="non-empty label"):
-        build_mapping(_h5ad(tmp_path), None, _spec(sample_column="plate", missing_as=" "), None)
+        build_mapping(_h5ad(tmp_path), None, _spec(sample_column="plate", missing_as=" "))

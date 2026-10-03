@@ -4,7 +4,7 @@ Output layout (see ecarsi.layout — one directory per analysis unit, ready
 to hand to persample and the loop):
 
     <out_root>/
-      index.html                     # root landing page (ecarsi.index)
+      index.html                     # root landing page (ecarsi.ui.index)
       organize/manifest.json         # global: detection, profiles, plan, warnings
       units/<unit_name>/input/
         organized.h5ad               # merged (+ filtered) cells, provenance in obs
@@ -303,7 +303,7 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
             for key in ("exclude_cells", "batch_key"):
                 if key in explicit:
                     mapping_spec[key] = explicit[key]
-            table, decision = build_mapping(L.input_h5ad(unit), unit, mapping_spec, None)
+            table, decision = build_mapping(L.input_h5ad(unit), unit, mapping_spec)
             unmapped = table[SAMPLE_KEY].eq("") & table["excluded_reason"].eq("")
             if len(table) != merged.n_obs or unmapped.any():
                 raise ValueError(f"{name}: confirmed experiment mapping does not cover every cell")

@@ -2,8 +2,6 @@
 import subprocess
 import sys
 
-import pytest
-
 
 def test_cli_logging_streams_and_repeat_initialization():
     script = '''
@@ -29,9 +27,3 @@ for _ in range(2):
     assert result.stderr.count('bridge-marker') == 2
     assert result.stderr.count('rsi-marker') == 2
 
-
-def test_shim_exception_is_catchable_as_shared_exception():
-    from ecarsi.harness import AgentIncompleteError
-    from harness_bridge import AgentIncompleteError as SharedError
-    with pytest.raises(SharedError):
-        raise AgentIncompleteError('submit missing')

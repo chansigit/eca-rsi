@@ -6,7 +6,7 @@ and must call submit_plan with a plan conforming to PLAN_SCHEMA — the tool
 handler validates it (both structurally and, via _validate, against the
 actual profiles) before accepting, so the executor never parses prose. This
 submit-tool shape (rather than a harness-native structured-output mode) is
-what makes this call portable across HARNESS backends — see ecarsi.harness.
+what makes this call portable across HARNESS backends — see harness_bridge.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import os
 import re
 from pathlib import Path
 
-from .harness import ToolSpec, run_agent
+from harness_bridge import ToolSpec, run_agent
 
 PLAN_SCHEMA = {
     "type": "object",

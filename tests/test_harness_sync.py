@@ -42,12 +42,10 @@ def sibling(name: str) -> Path:
 
 
 def test_legacy_harness_modules_reexport_shared_objects():
-    # msp.harness was removed in msp 0.4 (last consumer-free deprecation
-    # shim); ecarsi and osp still carry theirs.
-    from ecarsi import harness as ecarsi_harness
+    # msp.harness was removed in msp 0.4 and ecarsi.harness in ecarsi 0.4.3; osp still carries its shim.
     from osp import harness as osp_harness
 
-    for shim in (ecarsi_harness, osp_harness):
+    for shim in (osp_harness,):
         for name in BRIDGE_LEGACY_API:
             assert getattr(shim, name) is getattr(harness_bridge, name), name
         for name in LEGACY_SHIM_EXPORTS:

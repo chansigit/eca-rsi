@@ -286,7 +286,7 @@ def dataset_step(action, args):
         if Path(path).resolve() != (root / 'publication.json').resolve() or unit['state'] != 'complete':
             raise ValueError('Release requires this dataset\'s completed unit')
         from .. import stages
-        programs = [stages.program('release'), *(stages.PACKAGE / name for name in ('release_state.py', 'ledger.py', 'review.py', 'umapdata.py'))]
+        programs = [stages.program('release'), *(stages.PACKAGE / name for name in ('release_state.py', 'ledger.py', 'review.py', 'ui/umapdata.py'))]
         packet = immutable(root / 'release-input.json', dict(input=source))
         request_id = spec['run_id'] + '.release-' + digest(source)[:16]
         parent = Path(verified(unit['final'])['result']['path']).relative_to(Path(spec['pool_root']) / 'requests').parts[0]

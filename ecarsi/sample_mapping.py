@@ -63,7 +63,7 @@ def obs_profile(obs) -> dict:
     return {"n_obs": len(obs), "obs_columns": cols}
 
 
-def build_mapping(h5ad: Path, unit: Path | None, spec: dict | None, identify,
+def build_mapping(h5ad: Path, unit: Path | None, spec: dict | None,
                   column: str | None = None, single: bool = False):
     from . import policies as P
     import anndata as ad
@@ -109,17 +109,7 @@ def build_mapping(h5ad: Path, unit: Path | None, spec: dict | None, identify,
         elif single:
             decision = {"sample_column": None, "confirmed_single": True, "rationale": "explicit --single-sample"}
         else:
-            decision = identify(profile, part)
-            from . import cost
-            tin, tout = getattr(identify, "last_tokens", (None, None))
-            cost.record(unit or h5ad.parent, f"{L.PERSAMPLE}/identify/{source}",
-                        getattr(identify, "last_cost", None), "identify experiment column", tin, tout)
-            if decision.get("exclude_cells"):
-                # the agent's proposal, re-applied by the host exactly like a user rule
-                rules += P.apply_rules(part, decision["exclude_cells"], excluded, "agent", strict=True)
-                part = part.loc[excluded.reindex(part.index).eq("")]
-                profile = obs_profile(part)
-                profile.update(source=source, upstream=evidence)
+            raise ValueError("a sample mapping needs a spec, a sample column or a single sample")
         derive = decision.get("derive_from_cell_id") if spec is not None else None
         missing_as = decision.get("missing_as") if spec is not None else None
         if derive is not None:

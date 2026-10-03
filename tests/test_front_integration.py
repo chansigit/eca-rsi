@@ -157,16 +157,16 @@ def test_derived_tsv_aligns_original_ids_and_rejects_bad_coverage(tmp_path):
 def test_same_name_samples_separate_unless_explicit_merge(tmp_path):
     unit = organize_two(tmp_path)
     h5 = L.input_h5ad(unit)
-    table, _ = build_mapping(h5, unit, None, None, column="sample")
+    table, _ = build_mapping(h5, unit, None, column="sample")
     assert sorted(table[SAMPLE_KEY].value_counts()) == [6, 6]
     spec = {"sources": {s: {"sample_column": "sample", "rationale": "verified library metadata"} for s in ("A", "B")},
             "merges": [{"sample_id": "library-1", "evidence": "two cell shards of the same GEM well",
                         "members": [{"source": s, "value": "S1"} for s in ("A", "B")]}]}
-    table, _ = build_mapping(h5, unit, spec, None)
+    table, _ = build_mapping(h5, unit, spec)
     assert table[SAMPLE_KEY].value_counts().to_dict() == {"library-1": 12}
     spec["merges"][0]["evidence"] = ""
     with pytest.raises(ValueError, match="evidence"):
-        build_mapping(h5, unit, spec, None)
+        build_mapping(h5, unit, spec)
 
 
 def test_split_experiment_cannot_run_local_qc(tmp_path):
@@ -181,7 +181,7 @@ def test_split_experiment_cannot_run_local_qc(tmp_path):
     organize(root, out, path)
     unit = L.unit_dir(out, "liver")
     with pytest.raises(ValueError, match="split an experiment"):
-        build_mapping(L.input_h5ad(unit), unit, None, None, column="sample")
+        build_mapping(L.input_h5ad(unit), unit, None, column="sample")
 
 
 def publish(out):
@@ -228,10 +228,9 @@ def test_writer_lock_rejects_concurrent_writer(tmp_path):
 
 def test_front_bridge_identity():
     import harness_bridge
-    from ecarsi import harness as rsi
     from osp import harness as osp
     for key in BRIDGE_LEGACY_API:
-        assert getattr(rsi, key) is getattr(osp, key) is getattr(harness_bridge, key)
+        assert getattr(osp, key) is getattr(harness_bridge, key)
 
 
 def test_unit_page_renders_before_and_after_front_review(tmp_path):

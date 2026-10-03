@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 
 
-from ecarsi import harness
-from ecarsi.harness import AgentRunResult, ToolSpec
+import harness_bridge as harness
+from harness_bridge import AgentRunResult, ToolSpec
 
 
 def test_default_agent_config_is_openai_turbo(monkeypatch):

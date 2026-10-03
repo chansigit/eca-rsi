@@ -177,7 +177,7 @@ Its display zone, `<display_root>/<collection>/<dataset>/<run_id>/` (from `~/.co
 
 Report labels and explanatory text default to English. This default does not depend on the language used to discuss or launch the analysis. Other prose languages require an explicit configuration override.
 
-The final UMAP includes its plotting data in the HTML. Zoom, hover, and legend filtering work offline when you enable JavaScript. To write a run's pages as static files, run `python -m ecarsi.index /path/to/root-or-unit`. This command does not rerun any analysis.
+The final UMAP includes its plotting data in the HTML. Zoom, hover, and legend filtering work offline when you enable JavaScript. To write a run's pages as static files, run `python -m ecarsi index /path/to/root-or-unit`. This command does not rerun any analysis.
 
 Periscope serves the display zones under `display_root` and `more_display_roots` of `~/.config/ecarsi/results.json`, plus the runs listed in `~/.config/ecarsi/periscope-datasets.json` (`eca-rsi serve scan-add <run dir>` adds one). It picks up changes to both without a restart. `--ngrok`, `--domain`, and `--auth-file` support remote access.
 

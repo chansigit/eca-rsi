@@ -1,6 +1,6 @@
-"""ecarsi.index — landing pages generated from the artefacts on disk.
+"""ecarsi.ui.index — landing pages generated from the artefacts on disk.
 
-    python -m ecarsi.index <root | unit>       (re)write the static pages
+    python -m ecarsi index <root | unit>       (re)write the static pages
 
 Nothing here is told what happened: the state of a run is read back from
 manifests, contract files, stats/decision files and progress.log, so the

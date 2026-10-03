@@ -1,7 +1,7 @@
-"""ecarsi.umapdata — compact UMAP + labels of an h5ad for the landing page's
+"""ecarsi.ui.umapdata — compact UMAP + labels of an h5ad for the landing page's
 interactive scatter (release/umap.json).
 
-    python -m ecarsi.umapdata <h5ad> <out.json> [--coarse zmip_ann_coarse] [--fine zmip_ann_fine]
+    python -m ecarsi umapdata <h5ad> <out.json> [--coarse zmip_ann_coarse] [--fine zmip_ann_fine]
 
 Read with h5py only (no anndata load): coordinates quantised to 16-bit ints
 over the bounding box, labels as category indices, one colour per category
@@ -124,7 +124,7 @@ def write_umap_json(h5ad: Path, out: Path, coarse_col="zmip_ann_coarse", fine_co
 
 
 def main(argv):
-    ap = argparse.ArgumentParser(prog="ecarsi.umapdata", description=__doc__)
+    ap = argparse.ArgumentParser(prog="ecarsi umapdata", description=__doc__)
     ap.add_argument("h5ad")
     ap.add_argument("out")
     ap.add_argument("--coarse", default="zmip_ann_coarse")

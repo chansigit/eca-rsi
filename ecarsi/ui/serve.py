@@ -18,7 +18,7 @@ background — nothing here manages processes. Every dataset (an organize
 root or a single unit, see ecarsi.layout) is served under its own name,
 `/<name>/...`; `/` is the navigator (sidebar grouped by collection) opening
 on an overview page that lists them all. Landing pages are
-rendered from the run directory on every request (ecarsi.index), so a run
+rendered from the run directory on every request (ecarsi.ui.index), so a run
 that is still going shows its current stage; the server never writes into
 a dataset directory.
 
@@ -469,7 +469,7 @@ NAV_JS = r"""
 
 
 def _dataset_state(root: Path) -> dict:
-    """Per-dataset summary read from disk (ecarsi.index), for the navigator / list."""
+    """Per-dataset summary read from disk (ecarsi.ui.index), for the navigator / list."""
     blank = {"units": 0, "released": 0, "n_input": None, "final_cells": None, "rounds": 0, "species": "",
              "finished": None, "updated": None, "events": {"organize": [], "release": []}}
     if not root.is_dir():

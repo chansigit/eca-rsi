@@ -2,7 +2,7 @@
 
 Every ecarsi step derives its paths from here, never by spelling directory
 names itself, so the whole run of one dataset is a single tree that can be
-served as-is (ecarsi.ui.serve) and rendered from disk alone (ecarsi.index).
+served as-is (ecarsi.ui.serve) and rendered from disk alone (ecarsi.ui.index).
 
 Two layouts. The control plane writes generation 2 (00-organize/, 01-per-sample/, rounds/roundNN/
 {02-cross-sample,03-zoom-in}/, publication.json files; the GEN2_* names below). Generation 1 is the
@@ -10,10 +10,10 @@ layout of the local path, removed in 0.4.0; its runs are still shown from their 
 the pages keep reading it:
 
     <root>/                                  organize's out_root = one dataset run
-      index.html                             root landing page (ecarsi.index)
+      index.html                             root landing page (ecarsi.ui.index)
       organize/manifest.json                 detection, profiles, plan, audit
       units/<unit>/
-        index.html                           unit landing page (ecarsi.index)
+        index.html                           unit landing page (ecarsi.ui.index)
         progress.log                         every event of every step
         input/{organized.h5ad, manifest.json}
         persample/{manifest.json, excluded_cells.csv, <sample>/…}   osp, once

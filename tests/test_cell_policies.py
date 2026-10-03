@@ -71,8 +71,8 @@ def test_blank_rule_drops_cells_before_the_partition(tmp_path):
     unit = facs(tmp_path)
     h5ad = L.input_h5ad(unit)
     with pytest.raises(ValueError, match="leaves 2 cells NA"):
-        build_mapping(h5ad, unit, spec(), None)
-    table, decision = build_mapping(h5ad, unit, spec(exclude_cells=[BLANK]), None)
+        build_mapping(h5ad, unit, spec())
+    table, decision = build_mapping(h5ad, unit, spec(exclude_cells=[BLANK]))
     assert table["excluded_reason"].tolist() == [""] * 6 + ["upstream_qc_blank"] * 2
     assert (table.loc[table.excluded_reason.ne(""), SAMPLE_KEY] == "").all()
     assert table.loc[table.excluded_reason.eq(""), SAMPLE_KEY].nunique() == 2
@@ -89,7 +89,7 @@ def test_where_rule_is_literal_and_rules_are_validated(tmp_path):
     h5ad = L.input_h5ad(unit)
     where = {"where": {"plate": ["missing"]}, "reason": "no_plate", "rationale": "x"}
     nothing = {"where": {"plate": ["P9"]}, "reason": "none", "rationale": "x"}
-    _, decision = build_mapping(h5ad, unit, spec(exclude_cells=[where, nothing]), None)
+    _, decision = build_mapping(h5ad, unit, spec(exclude_cells=[where, nothing]))
     assert [r["n_cells"] for r in decision["exclude_cells"]] == [2, 0]
     assert decision["exclude_cells"][1]["warning"] == "matched no cell"
     for bad, msg in [
@@ -125,19 +125,19 @@ def test_where_rule_is_literal_and_rules_are_validated(tmp_path):
         ),
     ]:
         with pytest.raises(ValueError, match=msg):
-            build_mapping(h5ad, unit, spec(exclude_cells=[bad]), None)
+            build_mapping(h5ad, unit, spec(exclude_cells=[bad]))
     with pytest.raises(ValueError, match="unique"):
-        build_mapping(h5ad, unit, spec(exclude_cells=[where, where]), None)
+        build_mapping(h5ad, unit, spec(exclude_cells=[where, where]))
     with pytest.raises(ValueError, match="unknown sample-map key"):
-        build_mapping(h5ad, unit, spec(exclude_cell=[]), None)
+        build_mapping(h5ad, unit, spec(exclude_cell=[]))
 
 
 def test_rules_are_part_of_the_mapping_identity(tmp_path):
     unit = facs(tmp_path)
     h5ad = L.input_h5ad(unit)
-    a, _ = build_mapping(h5ad, unit, spec(exclude_cells=[BLANK]), None)
+    a, _ = build_mapping(h5ad, unit, spec(exclude_cells=[BLANK]))
     b, _ = build_mapping(
-        h5ad, unit, spec(exclude_cells=[{**BLANK, "reason": "other_slug"}]), None
+        h5ad, unit, spec(exclude_cells=[{**BLANK, "reason": "other_slug"}])
     )
     assert mapping_identity(a) != mapping_identity(b)
 
@@ -148,7 +148,7 @@ def test_rules_are_part_of_the_mapping_identity(tmp_path):
 def test_batch_key_false_declares_the_unit_one_batch(tmp_path):
     """The owner says there is no batch effect: two experiments stay two, Harmony gets one batch value."""
     unit = facs(tmp_path)
-    table, decision = build_mapping(L.input_h5ad(unit), unit, spec(exclude_cells=[BLANK], batch_key=False), None)
+    table, decision = build_mapping(L.input_h5ad(unit), unit, spec(exclude_cells=[BLANK], batch_key=False))
     samples = set(table.loc[table[SAMPLE_KEY].ne(""), SAMPLE_KEY])
     assert len(samples) == 2
     assert decision["batch_key"] == {"column": SINGLE_BATCH_COLUMN, "single": True, "n_filled": 0,
@@ -180,7 +180,7 @@ def test_batch_key_constant_per_experiment_ignoring_na(tmp_path):
     unit = facs(tmp_path)
     h5ad = L.input_h5ad(unit)
     table, decision = build_mapping(
-        h5ad, unit, spec(exclude_cells=[BLANK], batch_key="mouse.id"), None
+        h5ad, unit, spec(exclude_cells=[BLANK], batch_key="mouse.id")
     )
     bk = decision["batch_key"]
     sid = table[table[SAMPLE_KEY].ne("")].groupby("source_value")[SAMPLE_KEY].first()
@@ -196,7 +196,7 @@ def test_batch_key_constant_per_experiment_ignoring_na(tmp_path):
         ("sample", "single value"),
     ]:
         with pytest.raises(ValueError, match=msg):
-            build_mapping(h5ad, unit, spec(exclude_cells=[BLANK], batch_key=key), None)
+            build_mapping(h5ad, unit, spec(exclude_cells=[BLANK], batch_key=key))
 
 
 # ---------------------------------------------------------------- ledger
