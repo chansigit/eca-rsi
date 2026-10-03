@@ -35,8 +35,10 @@ for name in control science; do
         for info in "$site"/"$dist"-*.dist-info; do
           [ -d "$info" ] || continue
           sites+=("$site")
-          # only the package's own top-level entries: never "..", "bin" (shared console scripts) or hidden names
-          for top in $(cut -d, -f1 "$info/RECORD" | cut -d/ -f1 | sort -u | grep -vxE '\.\.?|bin|__pycache__|\..*'); do
+          # the package's own top-level entries by its RECORD (a hand-installed one has only top_level.txt), and the
+          # dist-info itself; never "..", "bin" (shared console scripts) or hidden names
+          if [ -f "$info/RECORD" ]; then tops=$(cut -d, -f1 "$info/RECORD" | cut -d/ -f1); else tops=$(cat "$info/top_level.txt"); fi
+          for top in $(printf '%s\n' $tops "$(basename "$info")" | sort -u | grep -vxE '\.\.?|bin|__pycache__|\..*'); do
             [ -e "$site/$top" ] && mv "$site/$top" "replaced/$name-$(basename "$site")-$top-$RANDOM"
           done
         done
@@ -61,7 +63,13 @@ dup = {}
 for d in m.distributions():
     dup.setdefault(d.metadata['Name'].lower().replace('_','-'), []).append(d.version)
 dups = {k: x for k, x in dup.items() if len(set(x)) > 1}
-print('$name', json.load(open('/opt/eca-rsi/BUILD.json'))['eca_rsi_commit'], v, 'duplicates:', dups or 'none', 'ecarsi:', ecarsi.__file__)"
+print('$name', json.load(open('/opt/eca-rsi/BUILD.json'))['eca_rsi_commit'], v, 'duplicates:', dups or 'none', 'ecarsi:', ecarsi.__file__)
+if dups: raise SystemExit('two versions of one distribution: a wheel did not replace the old one')
+if '$name' == 'science':  # every kernel name eca-rsi uses resolves (decision 0014)
+    import importlib
+    for k in ('osp', 'msp', 'zmip'):
+        api = importlib.import_module(k + '.api'); [getattr(api, n) for n in api.__all__]
+    print('science: kernel api modules complete')"
 done
 sha256sum "$IMAGES/rsi-control-$STAMP.sif" "$IMAGES/rsi-science-$STAMP.sif"
 echo "$(date +%T) BUILD DONE"
