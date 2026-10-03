@@ -4,6 +4,10 @@ All notable changes to zmip. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 0.3.10 - 2026-10-02
+
+- Add `zmip.api`, the names eca-rsi uses, under public names and resolved lazily. eca-rsi imports zmip only from there, so everything outside it may change freely.
+
 ## 0.3.9 - 2026-09-12
 
 - Reuse verified integration for interrupted lineages and persist accepted annotations with cell-aligned subcluster assignments.
