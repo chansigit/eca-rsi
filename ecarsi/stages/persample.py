@@ -5,8 +5,8 @@ import json
 import shutil
 from pathlib import Path
 
-from ..warm_pool.state import immutable, reference, verified
-from ..warm_pool.state import read, save
+from ..files import immutable, reference, verified
+from ..files import read, save
 from ..run_state import digest, file_identity
 
 
@@ -29,7 +29,7 @@ def partition(spec, offset, destination):
     import anndata as ad
     import pandas as pd
     from ..sample_mapping import read_cell_table, mapping_identity, SAMPLE_KEY
-    from ..upstream import verify_snapshots
+    from .upstream import verify_snapshots
     unit = Path(spec["unit"])
     metadata = verified(spec["input_manifest"])
     if file_identity(unit / "input/organized.h5ad") != metadata["identity"]:
@@ -109,8 +109,8 @@ def exclusion_ledger(folder, request):
 
 
 def compute(bundle_ref, destination):
-    from ..osp_worker import compute_sample, classify_error
-    from ..osp_contract import validate_outputs, is_empty
+    from .osp_worker import compute_sample, classify_error
+    from .osp_contract import validate_outputs, is_empty
     bundle = check_bundle(bundle_ref)
     source = Path(bundle["files"]["request.json"]["path"]).parent
     request = read(source / "request.json")
@@ -146,9 +146,9 @@ def compute(bundle_ref, destination):
                           if empty else validate_outputs(folder, False)}
     if not empty:
         from osp.api import detect_primary_key, system_prompt, PROPOSAL_SCHEMA_DOC
-        from ..downstream import _data
+        from .h5ad import open_counts
         key = detect_primary_key(str(folder))
-        data = _data(folder / "clustered.h5ad")
+        data = open_counts(folder / "clustered.h5ad")
         try:
             clusters = sorted(set(data.obs[key].astype(str)))
         finally:
@@ -286,7 +286,7 @@ def tool(name, state_path, arguments_path, destination):
 
 
 def finalize(computed_ref, annotation_ref, destination):
-    from ..osp_contract import validate_outputs
+    from .osp_contract import validate_outputs
     bundle = check_bundle(computed_ref)
     folder = destination / "sample"
     folder.mkdir()

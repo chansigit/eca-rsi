@@ -6,7 +6,8 @@ import sys
 import pytest
 
 from ecarsi.warm_pool.budget import MEASURED_CEILING_MB, measured_ceiling
-from ecarsi.warm_pool.state import digest, read, save, status, submit, validate
+from ecarsi.files import digest, read, save
+from ecarsi.warm_pool.state import status, submit, validate
 
 
 def _spec(name, operation, memory_mb, code="pass"):

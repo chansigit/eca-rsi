@@ -4,7 +4,7 @@ import pytest
 
 from ecarsi.agent.session import reference
 from ecarsi.control.dataset import AnalysisUnitWorkflow, dataset_step
-from ecarsi.warm_pool.state import save
+from ecarsi.files import save
 
 
 def test_organize_resume_accepts_relocated_publication_but_rejects_changed_data(tmp_path, monkeypatch):
@@ -126,7 +126,7 @@ def test_resume_reuses_complete_stages_and_only_starts_unfinished_zoom(monkeypat
 
 
 def test_dataset_publication_preserves_incomplete_revision_and_seals_success(tmp_path):
-    from ecarsi.warm_pool.state import read, digest
+    from ecarsi.files import read, digest
     spec = dict(output_root=str(tmp_path), dataset_id='test')
     path = dataset_step('publish', [spec, [], [{'unit': 'U', 'error': 'failed'}]])
     previous = read(path)

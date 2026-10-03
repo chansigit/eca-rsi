@@ -7,15 +7,15 @@ from pathlib import Path
 
 from .. import layout as L
 from ..run_state import digest, file_identity, read_json, write_json, writer_lock
-from ..warm_pool.state import read, save
+from ..files import read, save
 
 
 def prepare(input_root: Path, destination: Path):
-    from ..organize import find_ecapp_units, profile_unit
-    from ..upstream import inspect_unit
+    from .upstream import discover, profile_unit
+    from .upstream import inspect_unit
 
     input_root = input_root.resolve(strict=True)
-    units, violations = find_ecapp_units(input_root)
+    units, violations = discover(input_root)
     if violations:
         raise ValueError(f"undeclared H5AD: {violations[0]}")
     records = [inspect_unit(unit) for unit in units]
@@ -33,7 +33,7 @@ def prepare(input_root: Path, destination: Path):
 
 def planning_spec(spec, prepared_path):
     """The immutable agent policy names worker programs, never a Bridge-side harness."""
-    from ..warm_pool.state import reference
+    from ..files import reference
     from ..plan import PLAN_SCHEMA
     prepared = read(prepared_path)
     if prepared is None or Path(prepared["input_root"]).resolve() != Path(spec["input_root"]).resolve():
@@ -56,7 +56,7 @@ def planning_spec(spec, prepared_path):
             cpus=spec["prepare_cpus"], memory_mb=spec["prepare_memory_mb"],
             timeout_seconds=spec["prepare_timeout_seconds"],
             inputs=[reference(prepared_path), *[reference(package / p) for p in (
-                "stages/organize.py", "plan.py", "execute.py", "upstream.py", "downstream.py", "design.py")]],
+                "stages/organize.py", "plan.py", "stages/organize_execute.py", "stages/upstream.py", "stages/h5ad.py")]],
             outputs=["result.json"], result_file="result.json"))
     prompt = (package / "prompts/plan.md").read_text() + "\n\n" + (package / "prompts/organize_v2.md").read_text()
     prompt += ("\n\n## Worker tools\nYou have no local filesystem or code execution. "
@@ -75,9 +75,9 @@ def planning_spec(spec, prepared_path):
 
 def plan_tool(name, prepared_path, arguments_path, destination):
     """Metadata reads and scientific plan validation run only inside a Pool grant."""
-    from ..upstream import inspect_unit, normalize
+    from .upstream import inspect_unit, normalize
     from ..plan import PLAN_SCHEMA, _validate, validate_sample_mapping
-    from ..execute import _conservation_audit, _experiment_audit
+    from .organize_execute import _conservation_audit, _experiment_audit
     from jsonschema import validate, ValidationError
     prepared, arguments = read(prepared_path), read(arguments_path)
     current = [inspect_unit(record) for record in prepared["records"]]
@@ -92,8 +92,8 @@ def plan_tool(name, prepared_path, arguments_path, destination):
             else:
                 if column not in profile["obs_columns"]:
                     raise ValueError("Column is not present in this source")
-                from ..design import _obs
-                values = normalize(_obs(profile["h5ad"])[column])
+                from .h5ad import read_obs
+                values = normalize(read_obs(profile["h5ad"])[column])
                 counts = values.value_counts()
                 offset = arguments["offset"]
                 result = {"source": profile["name"], "column": column, "offset": offset,
@@ -121,7 +121,7 @@ def plan_tool(name, prepared_path, arguments_path, destination):
 
 
 def accepted_plan(spec, session_result, prepared_path):
-    from ..warm_pool.state import verified
+    from ..files import verified
     from ..warm_pool.state import status
     result = read(session_result)
     if not result or "output" not in result:
@@ -139,9 +139,9 @@ def accepted_plan(spec, session_result, prepared_path):
 
 
 def execute(prepared_path: Path, reply_path: Path, output: Path, sample_map_path: Path | None = None):
-    from ..execute import execute_plan
+    from .organize_execute import execute_plan
     from ..plan import _validate, validate_sample_mapping
-    from ..upstream import inspect_unit
+    from .upstream import inspect_unit
 
     prepared = read(prepared_path)
     reply = read(reply_path)
@@ -159,7 +159,7 @@ def execute(prepared_path: Path, reply_path: Path, output: Path, sample_map_path
     execute_plan([record for record in current if record["state"] == "accepted"], prepared["profiles"], plan, run,
                  records=current, input_identity=prepared["source_identity"],
                  adapter_identity=digest([file_identity(Path(__file__)),
-                                          file_identity(Path(__file__).parents[1] / "execute.py")]),
+                                          file_identity(Path(__file__).with_name("organize_execute.py"))]),
                  sample_map=sample_map)
     manifest = read_json(L.organize_manifest(run))
     if manifest["state"] != "complete" or not manifest.get("experiment_audit"):
@@ -174,7 +174,7 @@ def execute(prepared_path: Path, reply_path: Path, output: Path, sample_map_path
 
 def publish(output: Path, destination: Path):
     """Coordinator-side acceptance after a successful Pool receipt."""
-    from ..upstream import verify_snapshots
+    from .upstream import verify_snapshots
 
     output, destination = output.resolve(), destination.resolve()
     completion = read(output / "completion.json")

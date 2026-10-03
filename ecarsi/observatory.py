@@ -12,7 +12,7 @@ import re
 import socket
 import time
 
-from .warm_pool.state import lock, read
+from .files import lock, read
 # Re-exported so existing callers and tests keep their import path.
 from .ui.control import (MAX_WINDOW, ControlPlane, resource_history,  # noqa: F401
                          snapshot, summarize_resources, task_timeline, worker_inventory)

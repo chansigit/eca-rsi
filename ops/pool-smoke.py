@@ -2,7 +2,8 @@
 scheduler deploy without any dataset. usage: pool-smoke.py [N] [sleep_seconds]"""
 import os, sys, time, json
 from pathlib import Path
-from ecarsi.warm_pool.state import submit, status, read
+from ecarsi.files import read
+from ecarsi.warm_pool.state import submit, status
 
 POOL = Path(os.environ['POOL'])  # ops/run.sh passes it
 n, nap = int(sys.argv[1]) if len(sys.argv) > 1 else 24, int(sys.argv[2]) if len(sys.argv) > 2 else 5

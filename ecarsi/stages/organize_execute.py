@@ -16,8 +16,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from . import layout as L
-from .run_state import file_identity, read_json, write_json
+from .. import layout as L
+from ..run_state import file_identity, read_json, write_json
 
 if TYPE_CHECKING:
     import anndata as ad
@@ -50,7 +50,7 @@ def _slim(a) -> None:
     if np.issubdtype(counts.dtype, np.integer) and counts.dtype.itemsize > 4 and counts.max() <= np.iinfo(np.int32).max:
         a.layers["counts"] = counts.astype(np.int32)
     a.X = sparse.csr_matrix(a.shape, dtype=np.float32)
-    a.uns["X_placeholder"] = "X is intentionally empty; expression lives in layers['counts'] (ecarsi.execute)"
+    a.uns["X_placeholder"] = "X is intentionally empty; expression lives in layers['counts'] (ecarsi.stages.organize_execute)"
 
 
 def _load_member(units_by_name: dict, member: dict):
@@ -90,9 +90,9 @@ def _conservation_audit(units_by_name: dict, plan: dict) -> dict:
     silently dropped by a filter gap, none double-counted by overlapping
     filters, no source file omitted from the plan. Metadata-only reads,
     runs BEFORE anything is written; any violation aborts the whole run."""
-    from .design import _obs
+    from .h5ad import read_obs
 
-    src_obs = {src: _obs(u["h5ad"]) for src, u in units_by_name.items()}
+    src_obs = {src: read_obs(u["h5ad"]) for src, u in units_by_name.items()}
 
     taken: dict[str, list[set]] = {src: [] for src in units_by_name}
     unit_expected: dict[str, int] = {}
@@ -128,7 +128,7 @@ def _conservation_audit(units_by_name: dict, plan: dict) -> dict:
 
 def _experiment_audit(units_by_name: dict, plan: dict) -> dict:
     """Before writing, prove each source experiment lands in one analysis unit."""
-    from .design import _obs
+    from .h5ad import read_obs
     from .upstream import normalize
 
     across = {}
@@ -139,7 +139,7 @@ def _experiment_audit(units_by_name: dict, plan: dict) -> dict:
             # against the full source obs
             across[source] = {"experiments": None, "complete": True}
             continue
-        obs = _obs(record["h5ad"])
+        obs = read_obs(record["h5ad"])
         col = decision.get("sample_column")
         values = normalize(obs[col]) if col is not None else None
         if values is not None and decision.get("missing_as") is not None:
@@ -171,11 +171,11 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
     every unit (a merge to the unit holding its sources)."""
     import anndata as ad
 
-    from .plan import _validate
+    from ..plan import _validate
     from .upstream import snapshot, validate_matrix, verify_snapshots
     _validate(plan, profiles)
     if "sample_mapping" in plan:
-        from .plan import validate_sample_mapping
+        from ..plan import validate_sample_mapping
         validate_sample_mapping(plan, profiles)
     units_by_name = {u["name"]: u for u in units}
     species_by_name = {p["name"]: p.get("species") for p in profiles}
@@ -251,8 +251,8 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
         udir.mkdir(parents=True, exist_ok=True)
         tmp = udir / "organized.tmp.h5ad"
         merged.write_h5ad(tmp)  # never in place: tmp + rename
-        from .downstream import _data
-        check = _data(tmp, min_vars=1)
+        from .h5ad import open_counts
+        check = open_counts(tmp, min_vars=1)
         try:
             if check.shape != merged.shape or not check.obs_names.equals(merged.obs_names):
                 raise ValueError(f"organized H5AD failed readback: {name}")
@@ -292,7 +292,7 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
         unit_manifest["identity"] = file_identity(L.input_h5ad(unit))
         write_json(L.input_manifest(unit), unit_manifest)
         if "sample_mapping" in plan:
-            from .sample_mapping import build_mapping, mapping_identity, SAMPLE_KEY
+            from ..sample_mapping import build_mapping, mapping_identity, SAMPLE_KEY
             explicit = sample_map or {}
             mapping_spec = {"sources": {src: explicit.get("sources", {}).get(src, plan["sample_mapping"][src])
                                         for src in src_totals}}
@@ -325,7 +325,4 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
 
     global_manifest["state"] = "complete"
     write_json(gm, global_manifest)
-    from .ui.index import write_all
-
-    write_all(out_root)
     print(f"[done] {len(plan['analysis_units'])} analysis unit(s); manifest at {gm}")

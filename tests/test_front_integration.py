@@ -12,11 +12,12 @@ from scipy import sparse
 
 from pathlib import Path
 
-from ecarsi import layout as L, organize as O
-from ecarsi.osp_contract import INPUT_CELLS, validate_outputs
+from ecarsi import layout as L
+from ecarsi.stages import upstream as O
+from ecarsi.stages.osp_contract import INPUT_CELLS, validate_outputs
 from ecarsi.run_state import read_json, write_json, writer_lock
 from ecarsi.sample_mapping import SAMPLE_KEY, build_mapping
-from ecarsi.upstream import column_values, inspect_unit
+from ecarsi.stages.upstream import column_values, inspect_unit
 
 
 def matrix(n=6):
@@ -52,18 +53,13 @@ def plan_file(path, names=("A",), split=False):
 def organize(root, out, plan):
     """Organize with a given plan, as the control plane does: its stage's prepare, then the shared
     execute_plan (the stage's execute adds the sample-mapping checks; these plans name no mapping)."""
-    from ecarsi.execute import execute_plan
+    from ecarsi.stages.organize_execute import execute_plan
     from ecarsi.stages.organize import prepare
     prepared = prepare(Path(root), Path(out).parent / (Path(out).name + "-prepared.json"))
     plan = plan if isinstance(plan, dict) else read_json(Path(plan))
     accepted = [record for record in prepared["records"] if record["state"] == "accepted"]
     execute_plan(accepted, prepared["profiles"], plan, Path(out), records=prepared["records"],
                  input_identity=prepared["source_identity"], adapter_identity="test")
-
-
-@pytest.fixture(autouse=True)
-def no_index(monkeypatch):
-    monkeypatch.setattr("ecarsi.ui.index.write_all", lambda *args: None)
 
 
 def organize_two(tmp_path):
@@ -84,17 +80,17 @@ def test_history_is_pruned_but_other_h5ad_rejected(tmp_path):
     history = step / ".history" / "standardize-old"
     history.mkdir(parents=True)
     (history / "standardized.h5ad").write_bytes(b"old")
-    units, violations = O.find_ecapp_units(tmp_path)
+    units, violations = O.discover(tmp_path)
     assert len(units) == 1 and violations == []
     extra = step / "extra.h5ad"
     extra.write_bytes(b"extra")
-    assert O.find_ecapp_units(tmp_path)[1] == [extra]
+    assert O.discover(tmp_path)[1] == [extra]
 
 
 @pytest.mark.parametrize("status,code", [("error", 1), ("needs_review", 3), ("ok", 1)])
 def test_failed_upstream_blocks_even_with_h5ad(tmp_path, status, code):
     source(tmp_path, status=status, code=code)
-    u = O.find_ecapp_units(tmp_path)[0][0]
+    u = O.discover(tmp_path)[0][0]
     with pytest.raises(ValueError, match="not ready"):
         inspect_unit(u)
 
@@ -129,7 +125,7 @@ def test_upstream_validation(tmp_path, problem):
     a.write_h5ad(step / "standardized.h5ad")
     write_json(step / "result.json", result)
     with pytest.raises(ValueError):
-        inspect_unit(O.find_ecapp_units(tmp_path)[0][0])
+        inspect_unit(O.discover(tmp_path)[0][0])
 
 
 def test_mixed_species_plan_is_rejected(tmp_path):
@@ -313,7 +309,7 @@ def test_profile_preserves_low_cardinality_text_evidence(tmp_path, monkeypatch, 
     data.obs["numeric_score"] = np.array([1, 1, 2, 2, 1, 2])
     monkeypatch.setattr(ad.settings, "allow_write_nullable_strings", True)
     data.write_h5ad(step / "standardized.h5ad", convert_strings_to_categoricals=False)
-    units, violations = O.find_ecapp_units(tmp_path)
+    units, violations = O.discover(tmp_path)
     assert not violations
     profile = O.profile_unit(units[0])
     assert profile["obs_columns"]["tissue"]["value_counts"] == {"bone": 3, "blood": 3}
@@ -326,20 +322,20 @@ def test_profile_nullable_string_missing_values_do_not_hide_tissue(tmp_path, mon
     data.obs["tissue"] = pd.array(["bone", "bone", "blood", None, "bone", "blood"], dtype="string")
     monkeypatch.setattr(ad.settings, "allow_write_nullable_strings", True)
     data.write_h5ad(step / "standardized.h5ad", convert_strings_to_categoricals=False)
-    units, _ = O.find_ecapp_units(tmp_path)
+    units, _ = O.discover(tmp_path)
     assert O.profile_unit(units[0])["obs_columns"]["tissue"]["value_counts"] == {"bone": 3, "blood": 2}
 
 
 def test_organize_prepare_reads_counts_in_chunks_without_eager_layers(tmp_path, monkeypatch):
     from ecarsi.stages.organize import prepare
-    from ecarsi.design import _obs
+    from ecarsi.stages.h5ad import read_obs
     step = source(tmp_path / "inputs", n=5000)
     def no_eager_read(*args, **kwargs):
         raise AssertionError("Organize preparation must not load AnnData layers")
     monkeypatch.setattr(ad, "read_h5ad", no_eager_read)
     prepared = prepare(tmp_path / "inputs", tmp_path / "prepared.json")
     assert prepared["profiles"][0]["n_obs"] == 5000
-    assert len(_obs(step / "standardized.h5ad")) == 5000
+    assert len(read_obs(step / "standardized.h5ad")) == 5000
     # A bad value beyond the first validation chunk must still be rejected.
     import h5py
     with h5py.File(step / "standardized.h5ad", "r+") as handle:

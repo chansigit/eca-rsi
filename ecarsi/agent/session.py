@@ -11,7 +11,8 @@ import re
 import tempfile
 from types import ModuleType, SimpleNamespace
 
-from ..warm_pool.state import digest, file_digest, identifier, immutable, lock, read, reference, save, validate, verified
+from ..files import digest, file_digest, immutable, lock, read, reference, save, verified
+from ..warm_pool.state import identifier, validate
 
 
 class ToolRejection(ValueError):
@@ -24,7 +25,7 @@ class ToolRejection(ValueError):
 def archive_adapter(bridge_root, source=None):
     """Keep the exact model-call adapter available for the lifetime of its sessions."""
     from . import root_path
-    from ..warm_pool.state import sync_directory
+    from ..files import sync_directory
     directory = root_path(bridge_root) / "adapters"
     directory.mkdir(mode=0o700, exist_ok=True)
     content = Path(source or __file__).read_bytes()
@@ -506,7 +507,7 @@ def repeated_rejections(reply_path, results):
     """How many consecutive turns, ending with this one, made the same single call and had it rejected.
     Eye 2026-09-17: 25 identical rejected proposals in two minutes, 167k input tokens each, for one
     stray quote; the session would have burnt its 80 turns without a chance of converging."""
-    from ..warm_pool.state import digest
+    from ..files import digest
     if len(results) != 1 or not verified(results[0]["output"]).get("is_error"):
         return 0
     key = digest([results[0]["name"], results[0]["arguments"]])

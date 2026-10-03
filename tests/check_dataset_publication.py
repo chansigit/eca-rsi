@@ -9,11 +9,11 @@ from ecarsi.agent.session import reference, verified
 from ecarsi.stages.crosssample import artifact
 from ecarsi.stages.persample import check_bundle
 from ecarsi.run_state import file_identity
-from ecarsi.design import _obs
+from ecarsi.stages.h5ad import read_obs
 
 
 def obs(path):
-    data = _obs(Path(path))
+    data = read_obs(Path(path))
     assert data.index.is_unique
     return data
 

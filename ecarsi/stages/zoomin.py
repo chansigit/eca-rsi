@@ -6,13 +6,13 @@ import os
 import re
 from pathlib import Path
 
-from ..warm_pool.state import immutable, reference, verified
+from ..files import immutable, reference, verified
 from . import PROMPTS
 from .contract import (LOOKUP_NOTE, NO_ARGUMENTS, checklist, deg_lookup_schema, evidence_page, evidence_paths, json_hint,
                        lookup_arguments, proposal as parse_proposal, schema)
 from .crosssample import artifact, publish_bundle, deg, deg_batch, assemble
 from .persample import check_bundle, sealed
-from ..warm_pool.state import digest, read, save
+from ..files import digest, read, save
 
 
 def data_from(bundle, name='integrated.h5ad', backed=None):

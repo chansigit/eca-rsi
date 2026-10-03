@@ -1,17 +1,14 @@
 """File-only ECA-PP schema 2 adapter (0.2.x through the 0.5.x contract)."""
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
-from .run_state import file_identity, read_json, write_json
+from ..sample_mapping import normalize
+from ..run_state import file_identity, read_json, write_json
 
 RESERVED = ("eca_source_cell_id", "eca_pp_batch", "eca_pp_cell_type", "eca_sample_id")
-
-
-def normalize(values):
-    s = values.astype("string").str.strip()
-    return s.mask(s.str.lower().isin(("", "na", "n/a", "nan", "none", "null", "<na>", "missing")))
 
 
 def is_run_root(p: Path) -> bool:
@@ -134,7 +131,7 @@ def load_evidence(unit: dict, obs):
 
 
 def inspect_unit(unit: dict) -> dict:
-    from .downstream import _data
+    from .h5ad import open_counts
 
     result = read_json(Path(unit["standardize_result"]))
     state = result_state(result, "standardize")
@@ -147,7 +144,7 @@ def inspect_unit(unit: dict) -> dict:
         return record
     if not isinstance(result.get("output"), str) or Path(result["output"]).name != h5.name:
         raise ValueError("result does not declare standardized.h5ad output")
-    a = _data(h5, min_vars=1)
+    a = open_counts(h5, min_vars=1)
     try:
         validate_matrix(a, result)
         if set(RESERVED) & set(a.obs.columns) or "source_unit" in a.obs:
@@ -164,13 +161,13 @@ def inspect_unit(unit: dict) -> dict:
 
 def snapshot(record: dict, target: Path) -> None:
     """Self-contained result JSON, derived TSV and complete source obs metadata."""
-    from .design import _obs
+    from .h5ad import read_obs
     import shutil
 
     target.mkdir(parents=True, exist_ok=True)
     write_json(target / "standardize.json", record["standardize"])
     write_json(target / "identify_columns.json", record.get("identify_columns", {}))
-    obs = _obs(record["h5ad"])
+    obs = read_obs(record["h5ad"])
     _, values, _ = load_evidence(record, obs)
     for col, s in values.items():
         obs[col] = s
@@ -184,3 +181,49 @@ def verify_snapshots(input_dir: Path, manifest: dict) -> None:
         for name, identity in entry.get("snapshot_files", {}).items():
             if file_identity(input_dir / entry["dir"] / name) != identity:
                 raise ValueError(f"upstream snapshot changed: {source}/{name}")
+
+
+def profile_unit(unit: dict, max_levels: int = 30) -> dict:
+    """Cheap obs/metadata profile the planning agent reasons over.
+
+    Reads upstream result.json verbatim (species, counts, cell numbers) and
+    the h5ad obs directly, with counts validated in bounded chunks. For every
+    low-cardinality categorical column, its value counts — organ/tissue/compartment structure lives
+    there, and obs metadata is the ONLY sanctioned evidence for splitting.
+    """
+    from .h5ad import open_counts
+    import pandas as pd
+
+    prof = {"name": unit["name"], "h5ad": unit["h5ad"]}
+    with open(unit["standardize_result"]) as f:
+        std = json.load(f)
+
+    prof["species"] = (std.get("species") or {}).get("resolved")
+    prof["n_cells"] = (std.get("metrics") or {}).get("n_cells")
+    prof["n_vars"] = (std.get("metrics") or {}).get("n_vars")
+
+    a = open_counts(unit["h5ad"], min_vars=1)
+    try:
+        validate_matrix(a, std)
+        evidence, _, _ = load_evidence(unit, a.obs)
+        prof["upstream_evidence"] = evidence
+        prof["upstream_review"] = std.get("reasons", [])
+        cols = {}
+        for c in a.obs.columns:
+            s = a.obs[c]
+            semantic = normalize(s) if pd.api.types.is_string_dtype(s.dtype) or isinstance(s.dtype, pd.CategoricalDtype) else s
+            nuniq = semantic.nunique(dropna=True)
+            entry: dict = {"dtype": str(s.dtype), "n_unique": int(nuniq), "n_na": int(semantic.isna().sum())}
+            if nuniq <= max_levels and (pd.api.types.is_string_dtype(s.dtype) or isinstance(s.dtype, pd.CategoricalDtype)):
+                # drop unused categorical levels — phantom zero counts would
+                # pollute the profile the agent reasons over
+                entry["value_counts"] = {str(k): int(v) for k, v in semantic.value_counts().items() if v}
+            cols[str(c)] = entry
+        prof["obs_columns"] = cols
+        prof["n_obs"] = int(a.n_obs)
+    finally:
+        a.file.close()
+    return prof
+
+
+# ---------------------------------------------------------------- cli

@@ -6,7 +6,8 @@ from temporalio.client import Client
 from ecarsi.control.temporal import endpoint
 from ecarsi.control.dataset import resume_dataset
 from ecarsi.control.coordinator import QUEUE
-from ecarsi.warm_pool.state import read, retry
+from ecarsi.files import read
+from ecarsi.warm_pool.state import retry
 CONTROL, POOL = os.environ["CONTROL"], os.environ["POOL"]  # ops/run.sh passes them
 reason, wids = sys.argv[1], sys.argv[2:]
 RECONCILE = re.compile(r"Reconcile (\S+) \((\S+)\) before resume")

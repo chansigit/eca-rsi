@@ -46,8 +46,9 @@ def materialize_reports(root, records):
 
 
 def validate_spec(spec, *, resume=False):
-    from ..warm_pool.state import reference
-    from ..warm_pool.state import identifier, pool_root, read
+    from ..files import reference
+    from ..files import read
+    from ..warm_pool.state import identifier, pool_root
     from ..agent import root_path
     required = {"run_id", "dataset_id", "unit", "output_root", "pool_root", "bridge_root",
                 "partition_budget", "compute_budget", "tool_budget", "finalize_budget", "config",
@@ -108,8 +109,9 @@ def validate_spec(spec, *, resume=False):
 
 @activity.defn
 def sample_step(action, args):
-    from ..warm_pool.state import immutable, reference, verified
-    from ..warm_pool.state import submit, digest, read, status, save, lock
+    from ..files import immutable, reference, verified
+    from ..files import digest, read, save, lock
+    from ..warm_pool.state import submit, status
     from ..stages.persample import annotation_spec
     if action == "read":
         return read(args[0])
@@ -252,7 +254,7 @@ def handoff(path):
     previous_round; every activity that wants the content reads the file itself, by path.
     So what enters history keeps each sample's name and size and drops the rest. Old
     histories hold the full document, which is a superset, so replay is unaffected."""
-    from ..warm_pool.state import reference, verified
+    from ..files import reference, verified
     doc = verified(reference(path))
     if isinstance(doc.get('samples'), list):
         doc['samples'] = [{k: s[k] for k in ('sample', 'n_cells') if k in s} if isinstance(s, dict) else s

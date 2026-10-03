@@ -13,8 +13,9 @@ import pytest
 import ecarsi.agent as bridge
 import ecarsi.agent.dispatch as dispatch
 import ecarsi.agent.session as session
-from ecarsi.warm_pool.state import immutable, reference, verified
-from ecarsi.warm_pool.state import save, read, status
+from ecarsi.files import immutable, reference, verified
+from ecarsi.files import save, read
+from ecarsi.warm_pool.state import status
 
 
 def test_portable_upgrade_pins_execution_without_rewriting_session(tmp_path, monkeypatch):
@@ -57,7 +58,7 @@ def test_recovery_ignores_only_terminal_model_attempts_with_an_accepted_replacem
     root = Path(spec['bridge_root'])
     config = read(root / 'config.json')
     save(root / 'config.json', dict(config, pool_root=spec['pool_root']))
-    from ecarsi.warm_pool.state import digest
+    from ecarsi.files import digest
     # recovery finds a sample's session by annotation_spec's id
     spec = dict(spec, session_id='osp-' + digest(['test', 'sample'])[:24], output_root=str(tmp_path / 'recovery'),
         trace=dict(workflow_id='persample/test', dataset_id=spec['dataset_id'],

@@ -9,7 +9,7 @@ import scipy.sparse as sp
 from ecarsi.agent.session import immutable, reference, verified
 from ecarsi.stages.persample import sealed
 from ecarsi.stages.zoomin import prepare, markers, subset, compute, deg, assemble, apply_lineage, merge, tool
-from ecarsi.warm_pool.state import save
+from ecarsi.files import save
 
 
 def test_zoom_handoffs_and_exact_global_conservation(tmp_path):

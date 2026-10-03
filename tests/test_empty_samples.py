@@ -7,7 +7,7 @@ import json
 import pandas as pd
 
 from ecarsi import layout as L
-from ecarsi.osp_contract import is_empty
+from ecarsi.stages.osp_contract import is_empty
 
 
 def _empty_sample(d, cells, identity="id-1", kind="qc_zero_survivors", reason="hard_threshold"):

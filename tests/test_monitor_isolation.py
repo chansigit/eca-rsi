@@ -83,7 +83,7 @@ def test_the_monitor_never_writes_into_the_run_it_watches(path):
     Its own caches and the static pages it renders are not the run's state, so `ecarsi.ui.index`
     writing index.html is fine -- what is forbidden is the durable state modules, which is how a
     page would come to hold a lock or overwrite a receipt."""
-    forbidden = {"ecarsi.warm_pool.state.save", "ecarsi.warm_pool.state.lock",
+    forbidden = {"ecarsi.files.save", "ecarsi.files.lock", "ecarsi.files.immutable",
                  "ecarsi.agent.save", "ecarsi.control.dataset.resume_dataset"}
     for module in imported(ast.parse(path.read_text())):
         assert module not in forbidden, f"{path.name} imports {module}: the monitor is read-only"

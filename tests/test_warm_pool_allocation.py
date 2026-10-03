@@ -6,7 +6,7 @@ import time
 import pytest
 
 from ecarsi.warm_pool import allocation
-from ecarsi.warm_pool.state import read, save
+from ecarsi.files import read, save
 
 
 def test_slurm_profile_cannot_cross_jobs_or_expand_the_grant(tmp_path, monkeypatch):

@@ -48,7 +48,7 @@ def submit_prepare(spec: dict) -> str:
 @activity.defn
 def submit_plan(spec: dict, prepared_path: str) -> str:
     from ..agent import submit
-    from ..warm_pool.state import read
+    from ..files import read
     prepared = read(prepared_path)
     if prepared is None or Path(prepared["input_root"]).resolve() != Path(spec["input_root"]).resolve():
         raise ValueError("prepared input identity does not match this dataset")
@@ -75,7 +75,8 @@ def validate_sample_map(sample_map):
 
 @activity.defn
 def submit_execute(spec: dict, prepared_path: str, reply_path: str, plan_parent: str | None = None) -> str:
-    from ..warm_pool.state import file_digest, immutable, submit
+    from ..files import file_digest, immutable
+    from ..warm_pool.state import submit
     request_id = spec["run_id"] + ".execute"
     trace = task_trace(spec, "organize.execute")
     if plan_parent:
@@ -121,7 +122,8 @@ def check_pool(root: str, request_id: str, output: str) -> dict:
 
 
 def check_pool_once(root, request_id, output):
-    from ..warm_pool.state import file_digest, read, retry, status
+    from ..files import file_digest, read
+    from ..warm_pool.state import retry, status
     state = status(root, request_id)
     if state["state"] == "succeeded":
         receipt = state["receipt"]
@@ -260,7 +262,7 @@ ACTIVITIES = [submit_prepare, submit_plan, submit_execute, check_pool, check_bri
 @activity.defn
 def agent_step(action: str, args: list):
     from ..agent import session
-    from ..warm_pool.state import immutable, read, reference, verified
+    from ..files import immutable, read, reference, verified
     if action == "cached_completion":
         session_ref = args[0]
         spec = verified(session_ref)["spec"]
@@ -291,7 +293,7 @@ def agent_step(action: str, args: list):
         return immutable(Path(spec["output_root"]) / "result.json",
                                  {"session": args[0], "reply": reference(args[1])})["path"]
     if action == "restart":
-        from ..warm_pool.state import reference
+        from ..files import reference
         spec, reason = args
         root = Path(spec["output_root"])
         root.mkdir(mode=0o700, parents=True, exist_ok=True)

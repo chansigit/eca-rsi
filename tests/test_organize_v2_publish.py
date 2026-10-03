@@ -4,7 +4,7 @@ import pytest
 import ecarsi.stages.organize as organize
 from ecarsi import layout as L
 from ecarsi.run_state import digest, file_identity, read_json, write_json
-from ecarsi.warm_pool.state import read, save
+from ecarsi.files import read, save
 
 
 def outputs(tmp_path):

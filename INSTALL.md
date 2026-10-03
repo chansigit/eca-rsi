@@ -27,7 +27,7 @@ The file `container/control-requirements.lock` defines the pinned Python environ
 
 | Package | Version |
 |---|---|
-| ecarsi | 0.4.2 |
+| ecarsi | 0.4.3 |
 | agent-harness-bridge | 0.2.15 |
 | osp-sc (`osp`) | 0.1.8 |
 | msp-sc (`msp`) | 0.5.3 |
@@ -78,6 +78,7 @@ Every setting you edit lives in `~/.config/ecarsi/`:
 | `temporal.yaml` | Temporal dynamic config: workflow task timeout, history limits | you |
 | `periscope-password` | `user:pass` for Periscope (mode 600) | you |
 | `models-admin-key` | The key for edits on Periscope's model page (mode 600). Not a model API key | you |
+| `gate-dataset.json` | The release gate's dataset: a spec without `run_id`, `output_root`, `dataset_id`, with test `storage` roots (`ops/gate.py`) | you |
 
 Model API keys (`ARK_API_KEY`, ...) stay in `~/.bashrc`; the runners read them from there. Two more files belong to their services and are written by tools: `pool/config.json` (`warm_pool init`, `configure-runtime`) and `bridge/config.json` (`ecarsi.agent init`). To move to another machine, edit `deployment.env` and `results.json`, then initialise the pool (A.5) and the bridge there. Nothing else names a machine path.
 
@@ -192,7 +193,7 @@ Switch only when the report shows `running executions: 0`. The script `ops/switc
 5. Start the plane and Periscope.
 6. Re-add the workers.
 
-Keep the previous pair until the next end-to-end run passes.
+Then run the release gate on the new pair, in the background: `bash ops/runpy.sh ops/gate.py start`, then `bash ops/runpy.sh ops/gate.py wait <run_id>`. It runs `gate-dataset.json` end to end and checks that every unit is released, that no step degraded, that every zoomed lineage has its report and that the display zone and work archive exist. Keep the previous pair until the gate passes; if it fails, switch back.
 
 ## B. Development
 

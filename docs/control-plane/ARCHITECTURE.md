@@ -51,13 +51,16 @@ Set `CODE=<checkout>` in the launcher to put a checkout first on `PYTHONPATH`. T
 | | `runner` | resident model-turn runners, one process per catalog model |
 | | `session` | session contract: create, reset, validate_turn, and continuation; stops after repeated rejections |
 | | `parallel` `tool_errors` | parallel read-only tools, argument rejection |
-| `ecarsi.warm_pool` | `state` `backend` `worker` `allocation` `provision` | file protocol (`reference` / `verified` / `immutable`), HQ adapter, worker, Slurm probe, `add-worker` |
+| `ecarsi.warm_pool` | `state` `backend` `worker` `allocation` `provision` | requests and receipts, HQ adapter, worker, Slurm probe, `add-worker` |
 | | `budget` `reservation` `measure` | budgets from measured runs, measured ceilings, half-hourly `measured.json` |
 | `ecarsi.stages` | `organize` `persample` `crosssample` `zoomin` | host programs: compute, validate, publish |
+| | `organize_execute` `upstream` `h5ad` `inclusion` `osp_worker` `osp_contract` | organize and per-sample helpers: ECA-PP products, the organized units, OSP calls |
+| | `ledger` `release_state` `archive` | the cell ledger, the atomic release, the work-tree archive |
 | | `release` | dataset release (ledger, review, UMAP data) |
 | | `contract` | shared model contract: tools without parameter lists, `deg_lookup` thresholds, lenient JSON, checklists |
 | | `evidence` `execution` | execution plans on the pool: evidence batch reads, single-tool plans, measured budgets |
-| `ecarsi` | `observatory` (+ `.html`) | control-plane page, timeline, `status` and `tokens` reports |
+| `ecarsi` | `files` | durable JSON records every part hands over: `save`, `lock`, `immutable`, `reference` / `verified` |
+| | `observatory` (+ `.html`) | control-plane page, timeline, `status` and `tokens` reports |
 | | `round_policy` | round stopping rules and `loop_control.json` |
 | | `contracts` | fields of the JSON files two subsystems share, checked by writer and reader ([0014](../decisions/0014-boundaries-are-tested.md)) |
 | | `degraded` | records of steps that failed without failing the run ([0013](../decisions/0013-degraded-results-are-recorded.md)) |

@@ -2,8 +2,8 @@
 import math
 from pathlib import Path
 
-from .state import immutable, reference, verified
-from .state import digest, read
+from ..files import immutable, reference, verified
+from ..files import digest, read
 
 
 # Measured 2026-09-16 over 40,286 succeeded receipts of the 28-tissue Tabula Sapiens batch:

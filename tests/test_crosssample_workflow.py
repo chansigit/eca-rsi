@@ -6,7 +6,8 @@ import pytest
 
 from ecarsi.control.crosssample import CrosssampleWorkflow, crosssample_step, validate_spec
 from ecarsi.agent.session import reference
-from ecarsi.warm_pool.state import save, read, validate_trace
+from ecarsi.files import save, read
+from ecarsi.warm_pool.state import validate_trace
 
 
 def test_gpu_selection_and_large_fanin(tmp_path):

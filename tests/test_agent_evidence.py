@@ -9,7 +9,7 @@ import pytest
 import ecarsi.stages.evidence as batch
 from ecarsi.agent.session import immutable, reference, verified
 from ecarsi.stages.persample import sealed
-from ecarsi.warm_pool.state import read, save
+from ecarsi.files import read, save
 
 PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aMZkAAAAASUVORK5CYII=')
 

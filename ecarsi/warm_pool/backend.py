@@ -11,7 +11,8 @@ import subprocess
 import sys
 import time
 
-from .state import digest, file_digest, lock, observation, pool_root, read, save
+from ..files import digest, file_digest, lock, read, save
+from .state import observation, pool_root
 
 
 # ponytail: bounded native alternatives cover up to 64 cards per worker, including

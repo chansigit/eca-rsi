@@ -56,7 +56,7 @@ def measure(pool_root, days=DAYS, now=None):
 
 
 def write(pool_root, days=DAYS):
-    from .state import save
+    from ..files import save
     result = measure(pool_root, days)
     save(Path(pool_root) / "measured.json", result)
     return result

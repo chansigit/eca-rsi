@@ -51,7 +51,7 @@ def test_compact_tables_keeps_markers_graph_and_unknown_blocks():
 
 
 def test_copy_light_replaces_a_same_size_stale_copy(tmp_path):
-    from ecarsi.warm_pool.state import file_digest
+    from ecarsi.files import file_digest
 
     source, folder = tmp_path / "pool" / "report.md", tmp_path / "round"
     source.parent.mkdir()

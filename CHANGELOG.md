@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.3 — 2026-10-02
+
+Every module now sits in one part of the system.
+
+- **Stage helpers moved into `ecarsi/stages/`**: `organize_execute` (was `execute`), `upstream` (with organize's
+  `profile_unit`), `h5ad` (`read_obs`, `open_counts`; was `design` and `downstream`), `inclusion` (was the top-level
+  `crosssample`), `osp_worker`, `osp_contract`, `ledger`, `release_state`, `archive`. Pinned program lists follow.
+- **`ecarsi/files.py`**: the durable-record helpers (`read`, `save`, `lock`, `immutable`, `reference`, `verified`,
+  `digest`) every part used from `warm_pool/state.py`; the pool keeps only requests and receipts.
+- **Shared modules import no part** (`tests/test_layers.py`; `display` and `observatory` are the listed exceptions);
+  `control/dataset.py` takes run-directory names from `layout`. Organize no longer writes static Periscope pages.
+- **Removed**: the `ecarsi.index`, `ecarsi.umapdata` and `ecarsi.harness` shims, `ecarsi.cost` and the sample map's
+  unfed agent fallback (`build_mapping` has no `identify` argument).
+- **Release gate** `ops/gate.py`: after a switch, runs `~/.config/ecarsi/gate-dataset.json` end to end and checks
+  release, degraded steps, lineage reports (#26), display zone and archive (#25).
+- Decision 0015 proposes running two image versions side by side; not built.
+
 ## 0.4.2 — 2026-10-02
 
 Make the system smaller to explain and harder to break silently.

@@ -9,7 +9,7 @@ from types import SimpleNamespace as NS
 import pytest
 
 import ecarsi.control.dataset as dataset_workflow
-from ecarsi.warm_pool.state import save
+from ecarsi.files import save
 
 
 class FakeClient:

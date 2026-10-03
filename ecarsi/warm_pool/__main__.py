@@ -7,7 +7,8 @@ import subprocess
 import sys
 
 from .backend import check_hq, check_runtime, hq_server, join, serve
-from .state import archive, cancel, digest, file_digest, lock, pool_root, read, retry, save, status, submit, sync_directory
+from ..files import digest, file_digest, lock, read, save, sync_directory
+from .state import archive, cancel, pool_root, retry, status, submit
 
 
 def configure_runtime(root, runtime):

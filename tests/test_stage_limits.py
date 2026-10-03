@@ -33,7 +33,7 @@ def test_completed_stage_check_tolerates_floored_keys(tmp_path, monkeypatch):
     # Resume re-validates every completed stage; with floors set, a spec saved before the floors
     # differs only in the floored key and must still be accepted (Eye, 2026-09-17 00:00 PDT).
     from ecarsi.control.dataset import dataset_step
-    from ecarsi.warm_pool.state import save
+    from ecarsi.files import save
     monkeypatch.setenv('ECA_RSI_STAGE_LIMIT_FLOORS', json.dumps({'max_in_flight_deg': 12}))
     root = tmp_path / 'stage'
     root.mkdir()
@@ -48,7 +48,7 @@ def test_completed_stage_check_tolerates_floored_keys(tmp_path, monkeypatch):
 
 def test_resumed_stage_keeps_the_saved_spec(tmp_path, monkeypatch):
     from ecarsi.control.dataset import stage_spec_on_disk
-    from ecarsi.warm_pool.state import save
+    from ecarsi.files import save
     monkeypatch.setenv('ECA_RSI_STAGE_LIMIT_FLOORS', json.dumps({'max_in_flight_deg': 12}))
     root = tmp_path / 'stage'
     fresh = dict(input='a', max_in_flight_deg=12)

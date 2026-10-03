@@ -10,7 +10,8 @@ import sys
 import time
 
 from ecarsi.warm_pool.slurm import inventory, process_identity
-from .state import lock, pool_root, read, save
+from ..files import lock, read, save
+from .state import pool_root
 
 
 def runtime_prefix(runtime, binds=None):

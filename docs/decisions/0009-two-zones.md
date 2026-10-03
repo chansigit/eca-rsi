@@ -14,5 +14,5 @@ sync never fails a run.
 
 **Consequences.** Results are durable and cheap (40–150 files per run); the work tree can be archived or
 discarded by policy. Periscope serves display zones, so a running dataset is visible from its first stage.
-Old runs were normalized the same way. Code: `ecarsi/display.py`, `ecarsi/archive.py`,
+Old runs were normalized the same way. Code: `ecarsi/display.py`, `ecarsi/stages/archive.py`,
 `ecarsi/stages/display.py`.

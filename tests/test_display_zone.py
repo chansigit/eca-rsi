@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from ecarsi import archive, display
+from ecarsi import display
+from ecarsi.stages import archive
 from ecarsi.ui import index
 from .test_gen2_pages import gen2_run
 

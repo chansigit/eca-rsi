@@ -13,7 +13,8 @@ import stat
 import sys
 import time
 
-from ..warm_pool.state import digest, file_digest, identifier, lock, read, save, sync_directory, validate_trace
+from ..files import digest, file_digest, lock, read, save, sync_directory
+from ..warm_pool.state import identifier, validate_trace
 
 PROMPTS = Path(__file__).parents[1] / "prompts"
 
@@ -163,7 +164,7 @@ def status(root, request_id):
 
 def retry_turn(root, request_id, *, reason):
     """Explicit bounded recovery of a tool-free model turn, retaining failed attempts."""
-    from ..warm_pool.state import immutable, verified, reference
+    from ..files import immutable, verified, reference
     from .dispatch import policy
     from ..warm_pool.state import status as pool_status
     if not isinstance(reason, str) or not reason.strip():
@@ -315,7 +316,7 @@ def confirm_stopped(root, request_id, *, reason):
         if read(folder / 'turn-response.json') is not None or read(folder / 'proposal.json') is not None:
             recover_result(folder, 'confirmed_stopped_with_saved_reply')
         else:
-            from ..warm_pool.state import immutable
+            from ..files import immutable
             audit = immutable(folder / 'resolution.json', dict(request_digest=read(folder / 'request.json')['digest'],
                 previous=previous, remote_stopped=True, reason=reason))
             save(folder / 'result.json', dict(state='failed', reason='remote_stopped_without_reply',

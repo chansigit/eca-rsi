@@ -5,7 +5,8 @@ import pytest
 
 from ecarsi.warm_pool.backend import check_runtime
 from ecarsi.warm_pool.worker import registered_worker_id
-from ecarsi.warm_pool.state import cancel, file_digest, read, save, status, submit, validate_trace
+from ecarsi.files import file_digest, read, save
+from ecarsi.warm_pool.state import cancel, status, submit, validate_trace
 
 
 def test_recovery_cache_skips_terminal_history_but_rechecks_retry_and_live_owner(tmp_path, monkeypatch):
@@ -504,7 +505,7 @@ def test_memory_ceilings_come_from_the_table_and_the_pool_config(tmp_path):
 
 
 def _immutable_writer(path, value, out):
-    from ecarsi.warm_pool.state import immutable
+    from ecarsi.files import immutable
     try:
         immutable(path, value)
         out.put(("ok", value))
@@ -514,7 +515,7 @@ def _immutable_writer(path, value, out):
 
 def test_immutable_leaves_no_lock_and_one_writer_wins(tmp_path):
     import multiprocessing
-    from ecarsi.warm_pool.state import immutable
+    from ecarsi.files import immutable
     record = tmp_path / "r.json"
     immutable(record, {"v": 1})
     immutable(record, {"v": 1})

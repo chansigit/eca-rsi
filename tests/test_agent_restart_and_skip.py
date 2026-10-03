@@ -6,7 +6,7 @@ import pytest
 from temporalio.exceptions import ApplicationError
 
 from ecarsi.agent.session import reference
-from ecarsi.warm_pool.state import read, save
+from ecarsi.files import read, save
 
 
 def test_restart_names_a_fresh_session_and_records_the_superseded_one(tmp_path):
@@ -256,7 +256,7 @@ def test_release_lists_rejected_sources_and_policy_exclusions_for_review(tmp_pat
 
 def test_a_restart_pins_the_program_files_as_they_are_now(tmp_path):
     from ecarsi.control.coordinator import agent_step
-    from ecarsi.warm_pool.state import reference
+    from ecarsi.files import reference
     program = tmp_path / 'zoomin.py'
     program.write_text('old')
     evidence = tmp_path / 'evidence.json'

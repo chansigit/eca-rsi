@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 from scipy import sparse
 
-from ecarsi.execute import _experiment_audit
+from ecarsi.stages.organize_execute import _experiment_audit
 from ecarsi.plan import validate_sample_mapping
 
 
@@ -50,8 +50,8 @@ def test_worker_plan_returns_correctable_error_then_accepts_complete_experiments
     import json
     from ecarsi.stages.organize import plan_tool
     from ecarsi.run_state import digest
-    from ecarsi.warm_pool.state import save
-    from ecarsi import upstream
+    from ecarsi.files import save
+    from ecarsi.stages import upstream
     obs = pd.DataFrame({"sample_id": ["s1", "s1", "s2", "s2"],
                         "tissue": ["left", "right", "left", "right"]}, index=["01", "02", "03", "04"])
     path = tmp_path / "source.h5ad"

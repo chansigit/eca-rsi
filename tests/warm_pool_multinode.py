@@ -14,7 +14,8 @@ import subprocess
 import time
 
 from ecarsi.warm_pool.backend import HyperQueue
-from ecarsi.warm_pool.state import cancel, file_digest, read, save, status, submit
+from ecarsi.files import file_digest, read, save
+from ecarsi.warm_pool.state import cancel, status, submit
 
 
 def eventually(fn, timeout=60):

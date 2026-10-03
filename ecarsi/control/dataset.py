@@ -8,6 +8,7 @@ from pathlib import Path
 from temporalio import activity, workflow
 from temporalio.exceptions import ApplicationError
 
+from .. import layout as L
 from ..contracts import check
 from .persample import await_pool, call, stage_with_waits
 
@@ -65,7 +66,7 @@ def superseded_sessions(root):
     judgement again as a fresh session (every generation of the one that died: the generation live at
     the restart kept six resumes blocked on its failed turn, 2026-09-24), a context reset continued it
     in a fresh conversation."""
-    from ..warm_pool.state import read
+    from ..files import read
     restarted = {read(path)['superseded'] for path in Path(root).rglob('restart.json')}
     ids = set(restarted)
     for path in Path(root).rglob('context-reset-*.json'):
@@ -118,7 +119,8 @@ def request_states(pool_root, bridge_root, identities, superseded, sessions):
     `<stage run_id>.<kind>-…` (organize: `<run_id>-organize.<step>`) or `<session_id>.tool-…`,
     Bridge requests `<session_id>[-rN|-gN].turn-N`. Reading every request.json instead took the
     2026-09-23 resume past 17 minutes on a 437k-folder pool, on the control-plane node."""
-    from ..warm_pool.state import read, status
+    from ..files import read
+    from ..warm_pool.state import status
     from ..agent import status as bridge_status
     runs = {i.split('/')[1] for i in identities if '/' in i}
     heads = runs | {r + '-organize' for r in runs} | set(sessions)
@@ -169,8 +171,8 @@ async def resume_dataset(client, identity, task_queue, reason):
     task_queue None means the queue the previous run was started on: a run started on a queue
     no coordinator polls sits at its first workflow task forever (2026-09-16, Eye)."""
     from temporalio.common import WorkflowIDReusePolicy
-    from ..warm_pool.state import immutable, reference
-    from ..warm_pool.state import read, digest
+    from ..files import immutable, reference
+    from ..files import read, digest
     if not reason.strip():
         raise ValueError('A recovery reason is required')
     previous = client.get_workflow_handle(identity)
@@ -204,9 +206,9 @@ async def resume_dataset(client, identity, task_queue, reason):
     # Earlier recovery runs may have skipped completed children. Their stable stage IDs
     # still own Pool/Bridge requests, so include their sealed specifications as well.
     identities.add('organize/' + spec['run_id'] + '-organize')
-    for pattern, prefix in (('units/*/01-per-sample/spec.json', 'persample/'),
-                            ('units/*/rounds/*/02-cross-sample/spec.json', 'cross-sample/'),
-                            ('units/*/rounds/*/03-zoom-in/spec.json', 'zoom-in/')):
+    for pattern, prefix in ((f'{L.UNITS}/*/{L.GEN2_PERSAMPLE}/{L.GEN2_SPEC}', 'persample/'),
+                            (f'{L.UNITS}/*/{L.ROUNDS}/*/{L.GEN2_CROSS}/{L.GEN2_SPEC}', 'cross-sample/'),
+                            (f'{L.UNITS}/*/{L.ROUNDS}/*/{L.GEN2_ZOOM}/{L.GEN2_SPEC}', 'zoom-in/')):
         for path in root.glob(pattern):
             stage = read(path)
             if any(stage[key] != spec[key] for key in ('dataset_id', 'pool_root', 'bridge_root')):
@@ -264,7 +266,7 @@ def stage_spec_on_disk(root, result, resume):
     """On resume a stage keeps the spec it was saved with: operator floors widen new stages only,
     a running stage is widened through set_deg_limit, and the stage workflow re-writes spec.json
     immutably (Eye, 2026-09-17: 'Conflicting durable content' with a floored resume spec)."""
-    from ..warm_pool.state import read
+    from ..files import read
     if not resume or not root.exists():
         return result
     saved = read(root / 'spec.json')
@@ -275,18 +277,18 @@ def stage_spec_on_disk(root, result, resume):
 
 @activity.defn
 def dataset_step(action, args):
-    from ..warm_pool.state import immutable, reference, verified
-    from ..warm_pool.state import digest, read, save, lock
+    from ..files import immutable, reference, verified
+    from ..files import digest, read, save, lock
     if action == 'release':
         from ..warm_pool.state import submit
         spec, path = args
         source = reference(path)
         unit = verified(source)
-        root = Path(spec['output_root']) / 'units' / unit['unit']['name']
+        root = L.unit_dir(Path(spec['output_root']), unit['unit']['name'])
         if Path(path).resolve() != (root / 'publication.json').resolve() or unit['state'] != 'complete':
             raise ValueError('Release requires this dataset\'s completed unit')
         from .. import stages
-        programs = [stages.program('release'), *(stages.PACKAGE / name for name in ('release_state.py', 'ledger.py', 'review.py', 'ui/umapdata.py'))]
+        programs = [stages.program(name) for name in ('release', 'release_state', 'ledger')] + [stages.PACKAGE / name for name in ('review.py', 'ui/umapdata.py')]
         packet = immutable(root / 'release-input.json', dict(input=source))
         request_id = spec['run_id'] + '.release-' + digest(source)[:16]
         parent = Path(verified(unit['final'])['result']['path']).relative_to(Path(spec['pool_root']) / 'requests').parts[0]
@@ -369,7 +371,7 @@ def dataset_step(action, args):
         from ..run_state import file_identity
         units = []
         for entry in value['units']:
-            directory = Path(path) / 'units' / entry['name']
+            directory = L.unit_dir(Path(path), entry['name'])
             manifest = directory / 'input/manifest.json'
             if file_identity(manifest) != entry['manifest']:
                 raise ValueError('Organize unit manifest changed before scheduling')
@@ -382,14 +384,14 @@ def dataset_step(action, args):
             result = validate(with_limit_floors(settings), resume=resume)
             return stage_spec_on_disk(Path(result['output_root']), result, resume)
         verified(unit['organize'])
-        directory = Path(spec['output_root']) / 'units' / unit['name']
+        directory = L.unit_dir(Path(spec['output_root']), unit['name'])
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         template = spec[stage]
         common = {k: spec[k] for k in ('dataset_id', 'pool_root', 'bridge_root')}
         common['run_id'] = spec['run_id'][:20] + '-' + digest([spec['run_id'], unit['name'], stage, round_number])[:20]
         if stage == 'per_sample':
             from .persample import validate_spec as validate
-            return validated({**template, **common, 'unit': unit['path'], 'output_root': str(directory / '01-per-sample'),
+            return validated({**template, **common, 'unit': unit['path'], 'output_root': str(directory / L.GEN2_PERSAMPLE),
                              'depends_on': [spec['run_id'] + '-organize.execute']}, validate)
         metadata = verified(unit['manifest'])
         from ..sample_mapping import SAMPLE_KEY
@@ -405,16 +407,16 @@ def dataset_step(action, args):
         request_root = Path(spec['pool_root']) / 'requests'
         from ..warm_pool.state import identifier
         settings['depends_on'] = sorted({identifier(Path(ref['path']).relative_to(request_root).parts[0]) for ref in parents})
-        directory = directory / 'rounds' / f'round{round_number:02d}'
+        directory = L.round_dir(directory, round_number)
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         if stage == 'cross_sample':
             from .crosssample import validate_spec as validate
-            settings['output_root'] = str(directory / '02-cross-sample')
+            settings['output_root'] = str(directory / L.GEN2_CROSS)
             if round_number > 1:
                 settings['previous_round'] = round_number - 1
         elif stage == 'zoom_in':
             from .zoomin import validate_spec as validate
-            settings['output_root'] = str(directory / '03-zoom-in')
+            settings['output_root'] = str(directory / L.GEN2_ZOOM)
         else:
             raise ValueError('Unknown dataset stage')
         return validated(settings, validate)
@@ -425,7 +427,7 @@ def dataset_step(action, args):
         # safe point -- the check just has to be an activity, because reading the file is I/O.
         from ..round_policy import read_control
         spec, unit, stage = args
-        control = read_control(Path(spec['output_root']) / 'units' / unit['name'])
+        control = read_control(L.unit_dir(Path(spec['output_root']), unit['name']))
         if control.get('pause_after_stage') != stage:
             return None
         return (f'PAUSED: loop_control stopped the unit after {stage}; clear pause_after_stage '
@@ -447,8 +449,8 @@ def dataset_step(action, args):
         # is the manual gearbox, re-read here because a round boundary is the only moment a
         # decision is made. Generation 1 has worked this way since the start; the durable control
         # plane froze the policy into workflow input, which left no way to move a limit mid-run.
-        unit_root = Path(spec['output_root']) / 'units' / unit['name']
-        directory = unit_root / 'rounds' / f'round{n:02d}'
+        unit_root = L.unit_dir(Path(spec['output_root']), unit['name'])
+        directory = L.round_dir(unit_root, n)
         path, notes = directory / 'publication.json', []
         stored = read(path)
         if stored and stored['stats']['decision'] == 'pause':
@@ -492,10 +494,10 @@ def dataset_step(action, args):
         from .. import stages
         spec, label, final = args
         key = digest([label, bool(final)])[:16]
-        (Path(spec['output_root']) / 'display-sync').mkdir(exist_ok=True)
-        packet = immutable(Path(spec['output_root']) / 'display-sync' / (key + '.json'),
+        (Path(spec['output_root']) / L.GEN2_DISPLAY_SYNC).mkdir(exist_ok=True)
+        packet = immutable(Path(spec['output_root']) / L.GEN2_DISPLAY_SYNC / (key + '.json'),
                            dict(zone(spec), root=spec['output_root'], final=bool(final), label=label))
-        programs = [stages.program('display'), stages.PACKAGE / 'display.py', stages.PACKAGE / 'archive.py']
+        programs = [stages.program('display'), stages.PACKAGE / 'display.py', stages.program('archive')]
         budget = DISPLAY_FINAL_BUDGET if final else DISPLAY_BUDGET
         request_id = spec['run_id'] + '.display-' + key
         submit(spec['pool_root'], dict(request_id=request_id, operation_id='dataset.display',
@@ -506,9 +508,9 @@ def dataset_step(action, args):
     if action == 'round-ledger':
         from ..warm_pool.state import submit
         spec, unit, progress = args
-        directory = Path(spec['output_root']) / 'units' / unit['name'] / 'rounds' / f"round{len(progress['stats']):02d}"
+        directory = L.round_dir(L.unit_dir(Path(spec['output_root']), unit['name']), len(progress['stats']))
         from .. import stages
-        programs = [stages.program('release'), *(stages.PACKAGE / name for name in ('ledger.py', 'sample_mapping.py'))]
+        programs = [stages.program('release'), stages.program('ledger'), stages.PACKAGE / 'sample_mapping.py']
         packet = immutable(directory / 'ledger-input.json', dict(
             input=reference(progress['input']), unit=unit,
             per_sample=reference(progress['per_sample']), rounds=progress['rounds']))
@@ -526,7 +528,7 @@ def dataset_step(action, args):
         spec, unit, progress, result = args
         from .artifacts import copy_light
         bundle = verified(reference(result))
-        directory = Path(spec['output_root']) / 'units' / unit['name'] / 'rounds' / f"round{len(progress['stats']):02d}"
+        directory = L.round_dir(L.unit_dir(Path(spec['output_root']), unit['name']), len(progress['stats']))
         from ..degraded import save
         save(directory, copy_light(bundle.get('files'), directory / 'ledger'), stage=directory.name + '/ledger')
         return str(directory / 'ledger')
@@ -538,7 +540,7 @@ def dataset_step(action, args):
         from ..display import zone
         record = note(label, RuntimeError(error))
         root = Path(spec['output_root'])
-        save(root / 'units' / unit_name if unit_name else root, [record], stage=label)
+        save(L.unit_dir(root, unit_name) if unit_name else root, [record], stage=label)
         display = Path(zone(spec)['dest']) if spec.get('storage') else None
         if display and display.is_dir():
             try:

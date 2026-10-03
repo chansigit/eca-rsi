@@ -6,8 +6,8 @@ import pytest
 
 from ecarsi.agent.parallel import choose, eligible, merge_states
 import ecarsi.agent.session as session
-from ecarsi.warm_pool.state import immutable, reference, verified
-from ecarsi.warm_pool.state import read, save
+from ecarsi.files import immutable, reference, verified
+from ecarsi.files import read, save
 
 
 def test_merge_retains_all_observations_and_rejects_scientific_mutations():

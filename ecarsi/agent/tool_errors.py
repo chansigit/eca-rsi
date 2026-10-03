@@ -3,7 +3,8 @@ import json
 from pathlib import Path
 
 from . import session
-from ..warm_pool.state import digest, immutable, read, reference, save, status, submit, verified
+from ..files import digest, immutable, read, reference, save, verified
+from ..warm_pool.state import status, submit
 
 
 def reject_arguments(session_ref, reply_path, index, previous, message):

@@ -3,14 +3,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import layout as L
-from .run_state import read_json
+from .. import layout as L
+from ..run_state import read_json
 
 INPUT_CELLS = "input_cells.csv.gz"
 
 
 def validate_outputs(outdir: Path, annotate: bool) -> dict:
-    from .downstream import _data
+    from .h5ad import open_counts
     import numpy as np
     import pandas as pd
 
@@ -35,7 +35,7 @@ def validate_outputs(outdir: Path, annotate: bool) -> dict:
     # AnnData's backed reader still loads layers into RAM. Reuse the downstream
     # metadata/sparse reader: this contract needs cell labels, not count values.
     try:
-        a = _data(outdir / "clustered.h5ad")
+        a = open_counts(outdir / "clustered.h5ad")
     except KeyError as exc:
         raise ValueError("clustered H5AD lacks required metadata or counts") from exc
     try:

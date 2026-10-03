@@ -8,7 +8,7 @@ exclude_cells   rules dropping cells BEFORE any OSP subset is cut; every
                 string equality, AND across columns — a literal "missing"
                 matches "missing") or {"blank": [col, ...], "reason",
                 "rationale"} (NA-family in ALL listed columns, see
-                upstream.normalize). Unknown column = error; a rule matching no
+                sample_mapping.normalize). Unknown column = error; a rule matching no
                 cell = recorded warning (a shared map may not apply to every
                 organ); a source left with no cell = error.
 batch_key       obs column Harmony corrects by instead of eca_sample_id. Must
@@ -25,7 +25,8 @@ import re
 
 import pandas as pd
 
-from .upstream import normalize
+from .sample_mapping import normalize
+
 
 REASON_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}")
 AGENT_EXCLUDE_MAX_FRAC = (

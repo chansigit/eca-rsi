@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from ecarsi.osp_contract import INPUT_CELLS
+from ecarsi.stages.osp_contract import INPUT_CELLS
 from ecarsi.run_state import file_identity, write_json
 from tests.test_front_integration import matrix
 

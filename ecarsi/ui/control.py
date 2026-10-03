@@ -20,7 +20,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from . import records
-from ..warm_pool.state import read
+from ..files import read
 
 PAGE = Path(__file__).with_name("observatory.html")
 # The monitor answers "are the workers healthy right now", not "how was last week scheduled": every

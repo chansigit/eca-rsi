@@ -10,7 +10,7 @@ from ecarsi.agent.session import immutable,reference,validate_spec,verified
 from ecarsi.stages.crosssample import BASE,agent_spec,finalize
 from ecarsi.stages.contract import NO_ARGUMENTS
 from ecarsi.stages.persample import sealed
-from ecarsi.warm_pool.state import save,read
+from ecarsi.files import save, read
 
 
 def test_later_round_keeps_source_ids_and_archives_labels(tmp_path, monkeypatch):

@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 
-from ecarsi import organize
+from ecarsi.stages import upstream
 
 
 def _source(tmp_path: Path) -> Path:
@@ -22,7 +22,7 @@ def test_nested_run_root_is_pruned(tmp_path):
     (rsi / "units" / "intestine" / "input" / "organized.h5ad").write_bytes(b"h5")
     (rsi / "units" / "intestine" / "release").mkdir()
     (rsi / "units" / "intestine" / "release" / "final.h5ad").write_bytes(b"h5")
-    units, violations = organize.find_ecapp_units(tmp_path)
+    units, violations = upstream.discover(tmp_path)
     assert [u["name"] for u in units] == ["Intestine"]
     assert violations == []
 
@@ -31,5 +31,5 @@ def test_plain_stray_h5ad_is_still_undeclared(tmp_path):
     src = _source(tmp_path)
     (src / "rsi").mkdir()
     (src / "rsi" / "final.h5ad").write_bytes(b"h5")  # no organize/manifest.json: not a run root
-    _, violations = organize.find_ecapp_units(tmp_path)
+    _, violations = upstream.discover(tmp_path)
     assert violations == [src / "rsi" / "final.h5ad"]

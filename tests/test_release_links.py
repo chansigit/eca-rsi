@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 from ecarsi.stages.release import local_link
-from ecarsi.warm_pool.state import file_digest
+from ecarsi.files import file_digest
 
 
 def entry(tmp_path, original, stage, number=0, scope=''):

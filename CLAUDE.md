@@ -16,19 +16,21 @@ ECA-RSI is the `ecarsi/` package. Deterministic kernels (osp / msp / zmip) do th
 ## Package map
 
 ```
-ecarsi/control/     Temporal workflows: coordinator, temporal, dataset, persample, crosssample, zoomin (the package itself does not import temporalio)
+ecarsi/control/     orchestration (Temporal workflows): coordinator, temporal, dataset, persample, crosssample, zoomin
 ecarsi/agent/       model-turn service: dispatch, session, parallel, tool_errors, runners
-ecarsi/warm_pool/   bounded compute requests, HQ adapter, scheduler, provisioning (add-worker, slurm-worker), measure
-ecarsi/stages/      programs that run in the pool: organize, persample, crosssample, zoomin, release, contract, evidence, execution
-ecarsi/ui/          Periscope (serve, index, umapdata)
-ecarsi/layout.py    the run directory layout (control/dataset.py still spells the generation-2 stage directories itself)
-ecarsi/observatory.py   status / releases / tokens reports; the data behind Periscope's /_control/ page
-ecarsi/contracts.py     the fields of every JSON file two subsystems share; writers and readers check them
-ecarsi/degraded.py      records of steps that failed without failing the run (0013)
-ops/                    the deployment scripts ($BASE/ops links here; ops/README.md)
+ecarsi/warm_pool/   execution pool: requests and receipts (state), HQ adapter, scheduler, workers, provisioning, measure
+ecarsi/stages/      programs the pool runs: organize, persample, crosssample, zoomin, release, display, contract, evidence,
+                    execution; and their helpers: organize_execute, upstream (ECA-PP products), h5ad, inclusion,
+                    osp_worker, osp_contract, ledger, release_state, archive
+ecarsi/ui/          Periscope (serve, index, umapdata, control, records): read-only, tests/test_monitor_isolation.py
+ecarsi/*.py         the vocabulary every part shares; imports no part: layout, files (durable JSON records),
+                    contracts, degraded, run_state, review, round_policy, plan, sample_mapping, policies,
+                    model_web, resources; display (zone sync) and observatory (operator reports) are the two
+                    listed exceptions
+ops/                the deployment scripts ($BASE/ops links here; ops/README.md)
 ```
 
-Boundaries (0014, `tests/test_layers.py`): only `ecarsi/stages/` and `osp_worker.py` use the kernels, and only through `osp.api`, `msp.api`, `zmip.api`; a name the stages need goes into that kernel's `api` module first. The pool, agents, stages and Periscope never import orchestration; see the test for the full table.
+Boundaries (0014, `tests/test_layers.py`): only `ecarsi/stages/` uses the kernels, and only through `osp.api`, `msp.api`, `zmip.api`; a name the stages need goes into that kernel's `api` module first. The pool, agents, stages and Periscope never import orchestration; the shared modules import no part; see the test for the full table.
 
 The kernels are osp, msp, and zmip. The osp kernel performs per-sample QC, clustering, and annotation. The msp kernel performs cross-sample integration, inspection, and annotation. The zmip kernel performs lineage zoom-in. The zmip kernel reuses the DEG, evidence, and report code from the msp kernel. The bridge (agent-harness-bridge) is the agent runtime.
 
@@ -87,7 +89,7 @@ Agent models come from the catalog `~/.config/ecarsi/models.json` (`ECA_MODEL_CA
 
 ## Versions
 
-The current combination includes ecarsi 0.4.2, agent-harness-bridge 0.2.15, OSP 0.1.8, MSP 0.5.3, ZMIP 0.3.10, and standissect-lite 0.2.0. The combination also includes openai-agents 0.22.3 and claude-agent-sdk 0.2.163. HQ is the owner's patched fork on branch `local`. The authoritative lists are [INSTALL.md](INSTALL.md) and `container/control-requirements.lock`.
+The current combination includes ecarsi 0.4.3, agent-harness-bridge 0.2.15, OSP 0.1.8, MSP 0.5.3, ZMIP 0.3.10, and standissect-lite 0.2.0. The combination also includes openai-agents 0.22.3 and claude-agent-sdk 0.2.163. HQ is the owner's patched fork on branch `local`. The authoritative lists are [INSTALL.md](INSTALL.md) and `container/control-requirements.lock`.
 
 ## Targeted checks
 

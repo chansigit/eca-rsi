@@ -21,7 +21,7 @@ import time
 import uuid
 
 from ..warm_pool.backend import parent_death_signal
-from ..warm_pool.state import file_digest, lock, read, save
+from ..files import file_digest, lock, read, save
 
 
 def endpoint(root):

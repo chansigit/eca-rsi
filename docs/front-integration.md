@@ -84,21 +84,21 @@ Without a map file, the sample-column agent may attach an `exclude_cells` propos
 
 ## OSP configuration and status
 
-Every experiment is one pool task that calls the OSP public Python API (`ecarsi.osp_worker.compute_sample`) with Scrublet, DecontX, resolution, species and tissue passed explicitly (the spec's `per_sample.config`). The default resolution is 1.0. ECA-RSI does not copy OSP's QC, clustering or annotation code. ECA-RSI does not change the shared bridge's budgets or retries.
+Every experiment is one pool task that calls the OSP public Python API (`ecarsi.stages.osp_worker.compute_sample`) with Scrublet, DecontX, resolution, species and tissue passed explicitly (the spec's `per_sample.config`). The default resolution is 1.0. ECA-RSI does not copy OSP's QC, clustering or annotation code. ECA-RSI does not change the shared bridge's budgets or retries.
 
-A sample is complete when its OSP run succeeds and passes these checks (`ecarsi.osp_contract.validate_outputs`):
+A sample is complete when its OSP run succeeds and passes these checks (`ecarsi.stages.osp_contract.validate_outputs`):
 
 - The sample has a readable `clustered.h5ad`. It has a valid HTML report. It has a QC summary and `qc_removed.csv`. A proposal exists when annotation is on.
 - Input cells = survivors ∪ removed cells. Survivors and removed cells are disjoint. Neither set contains duplicates or foreign ids. The summary counts match.
 - The proposal's `cluster_key` exists. The proposal's cluster coverage, coarse and fine labels and QC actions agree with the H5AD.
 
-A failed sample records its failure class (`ecarsi.osp_worker.classify_error`): explicit transient connection or timeout errors are retryable; deterministic and unclassified errors stay failed; text is never used to guess. A sample whose every cell QC removed, or whose survivors are fewer than clustering needs, is empty only when every input cell is booked in `qc_removed.csv` with a reason (`osp_contract.is_empty`); no placeholder H5AD is written.
+A failed sample records its failure class (`ecarsi.stages.osp_worker.classify_error`): explicit transient connection or timeout errors are retryable; deterministic and unclassified errors stay failed; text is never used to guess. A sample whose every cell QC removed, or whose survivors are fewer than clustering needs, is empty only when every input cell is booked in `qc_removed.csv` with a reason (`osp_contract.is_empty`); no placeholder H5AD is written.
 
 Upstream review items and OSP degradation messages appear on the unit page and in the release review.
 ## Checks
 
 ```bash
-bash $CONTROL/ops/runsci-dev.sh -m pytest -q tests/test_front_integration.py tests/test_osp_worker.py tests/test_empty_samples.py \
+bash ops/runsci-dev.sh -m pytest -q tests/test_front_integration.py tests/test_osp_worker.py tests/test_empty_samples.py \
   tests/test_cell_policies.py tests/test_organize_v2_contract.py tests/test_persample_v2.py
 ```
 

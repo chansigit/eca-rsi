@@ -9,7 +9,7 @@ import errno
 from pathlib import Path
 
 from .osp_contract import validate_outputs
-from .run_state import file_identity
+from ..run_state import file_identity
 
 
 def classify_error(exc: Exception, stage: str) -> tuple[str, bool]:

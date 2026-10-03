@@ -58,7 +58,7 @@ Measured per task, already emitted by the bridge's run summary:
 
 - model requests, input/output tokens, reasoning tokens
 - wall time, tool calls
-- `cost_usd` where the backend reports it (claude does; Ark/Doubao does not — see `ecarsi.cost`)
+- `cost_usd` where the backend reports it (claude does; Ark/Doubao does not)
 - infrastructure failures encountered: output-length truncation, `PreviousResponseNotFound`,
   usage limits
 

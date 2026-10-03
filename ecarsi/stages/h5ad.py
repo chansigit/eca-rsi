@@ -1,8 +1,8 @@
-"""Read an h5ad's obs, var and raw counts without loading the matrix (`_data`)."""
+"""Read an h5ad's obs, var and raw counts without loading the matrix: `open_counts`, `read_obs`."""
 from __future__ import annotations
 
 
-class _Matrix:
+class Counts:
     """Read metadata and slice counts directly; AnnData backed mode loads layers."""
     def __init__(self, path, min_vars=2):
         import h5py
@@ -35,5 +35,14 @@ class _Matrix:
         return block[np.argsort(order), :]
 
 
-def _data(path, *, min_vars=2):
-    return _Matrix(path, min_vars=min_vars)
+def open_counts(path, *, min_vars=2):
+    return Counts(path, min_vars=min_vars)
+
+
+def read_obs(h5ad):
+    """The obs table alone."""
+    import h5py
+    from anndata.io import read_elem
+
+    with h5py.File(h5ad, "r") as f:
+        return read_elem(f["obs"])

@@ -102,6 +102,7 @@ def unit_dir(root: Path, name: str) -> Path:
 # numbered directory; the computed artefacts stay in the Pool's request folders.
 GEN2_SPEC, GEN2_ORGANIZE, GEN2_PUBLICATION = "spec.json", "00-organize", "publication.json"
 GEN2_PERSAMPLE, GEN2_CROSS, GEN2_ZOOM = "01-per-sample", "02-cross-sample", "03-zoom-in"
+GEN2_DISPLAY_SYNC = "display-sync"  # the display-zone sync packets of a run (ecarsi.display)
 
 
 def is_gen2_root(root: Path) -> bool:

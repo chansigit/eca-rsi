@@ -19,7 +19,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from ..warm_pool.state import read
+from ..files import read
 
 
 def journal_paths(pool: Path, since: float, until: float):

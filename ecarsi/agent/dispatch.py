@@ -9,7 +9,8 @@ import socket
 import subprocess
 import time
 
-from ..warm_pool.state import digest, file_digest, lock, read, save, submit, status
+from ..files import digest, file_digest, lock, read, save
+from ..warm_pool.state import submit, status
 
 
 DEFAULT_POLICY = dict(response_timeout_seconds=900, cooldown_seconds=300,
@@ -33,7 +34,7 @@ def model_key(model):
 
 def routes(config, request):
     from ..model_web import normalized_models
-    from ..warm_pool.state import verified
+    from ..files import verified
     models = normalized_models(read(config["catalog"]))
     if request["spec"]["operation_id"] == "agent.turn":
         session = verified(request["spec"]["session"])
@@ -94,7 +95,7 @@ def dispatch(root, folder, config, model):
             if (result.get('state') != 'failed' or
                     read(folder / 'state.json', {}).get('retry_of') != digest(result)):
                 return None
-            from ..warm_pool.state import immutable
+            from ..files import immutable
             immutable(folder / ('failed-result-' + digest(result) + '.json'), result)
             (folder / 'result.json').unlink()
         return _dispatch(root, folder, config, model)
@@ -102,7 +103,7 @@ def dispatch(root, folder, config, model):
 
 def _dispatch(root, folder, config, model):
     """Persist intent before enqueueing so dispatcher replacement cannot duplicate a turn."""
-    from ..warm_pool.state import immutable, verified
+    from ..files import immutable, verified
     from .session import archive_adapter
     request = read(folder / "request.json")
     settings = policy(config)
@@ -194,7 +195,7 @@ def reconcile_pool(root, folder, config, events):
 
 def _reconcile_pool(root, folder, config, events):
     """Accept one attempt's fenced output; late alternatives never publish Bridge replies."""
-    from ..warm_pool.state import verified
+    from ..files import verified
     state = read(folder / "state.json")
     attempt = state["attempts"][-1]
     if attempt.get("execution") == "service":
@@ -259,7 +260,7 @@ def _reconcile_service(root, folder, config, events, state, attempt):
 
 
 def _settle(root, folder, config, events, state, attempt, outcome, response, elapsed, finished_at):
-    from ..warm_pool.state import verified
+    from ..files import verified
     model_failure = outcome in {"timeout", "provider_error", "incomplete_submission"}
     event = record_event(root, folder, attempt, outcome, elapsed=elapsed, model_failure=model_failure,
                          finished_at=finished_at)
@@ -286,7 +287,7 @@ def settings_timeout(attempt):
 
 def completed_replacement(pool_root, request_id, bridge_root):
     """A fenced model-only attempt cannot block recovery after its reply succeeded."""
-    from ..warm_pool.state import verified
+    from ..files import verified
     from . import status as bridge_status
     request = read(Path(pool_root) / 'requests' / request_id / 'request.json', {})
     spec = request.get('spec', {})
@@ -547,7 +548,7 @@ async def perform(plan, folder, *, setup=None):
     result's accounting); a runner did it once at start and passes nothing."""
     from . import run_organize, sdk_restore_compat
     from .session import run_turn, validate_turn, pinned_adapter
-    from ..warm_pool.state import verified
+    from ..files import verified
     started = time.time()
     worker = dict(host=socket.gethostname().split(".")[0], pid=os.getpid())
     save(folder / "started.json", dict(started_at=started, worker=worker, model=plan["model"]))

@@ -9,7 +9,7 @@ import pytest
 from ecarsi.agent.session import reference, verified
 from ecarsi.stages.release import collect, publish
 from ecarsi.run_state import file_identity
-from ecarsi.warm_pool.state import save
+from ecarsi.files import save
 
 
 def test_release_conservation_retry_and_corruption(tmp_path):

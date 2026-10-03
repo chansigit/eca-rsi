@@ -76,7 +76,7 @@ def test_release_knobs_follow_config_edits(tmp_path):
 
 def test_scheduler_uses_a_separate_hq_server_only_while_one_holds_the_lock(tmp_path):
     from ecarsi.warm_pool.backend import external_hq_server
-    from ecarsi.warm_pool.state import lock
+    from ecarsi.files import lock
     assert not external_hq_server(tmp_path)
     with lock(tmp_path / "hq-server.lock"):
         import subprocess, sys
@@ -151,7 +151,8 @@ def test_an_unpinned_task_is_not_pinned_again():
 def test_a_pinned_task_is_resubmitted_with_the_cpu_variant_once_no_card_is_live(tmp_path, monkeypatch):
     import time
     from ecarsi.warm_pool.backend import HyperQueue, observe
-    from ecarsi.warm_pool.state import observation, read, save
+    from ecarsi.files import read, save
+    from ecarsi.warm_pool.state import observation
     (tmp_path / "requests").mkdir()
     save(tmp_path / "config.json", dict(hq="/bin/false", executor="/usr/bin/python3", runtime={}))
     spec = dict(request_id="r", operation_id="zoom-in.compute", cpus=2, memory_mb=12288, time_request_seconds=600,
@@ -204,7 +205,8 @@ def test_hq_version_accepts_the_release_and_source_builds():
 
 def test_a_request_no_worker_can_hold_is_marked_infeasible_not_queued(tmp_path):
     from ecarsi.warm_pool.backend import infeasible
-    from ecarsi.warm_pool.state import observation, read, save
+    from ecarsi.files import read, save
+    from ecarsi.warm_pool.state import observation
     small, big = (6, 24576.0, 0, math.inf), (64, 118000.0, 1, math.inf)
     assert infeasible(dict(cpus=4, memory_mb=8192), [small]) is None
     assert infeasible(dict(cpus=12, memory_mb=8192), [small]).startswith("no worker holds 12 cpus / 8192 MB (largest 6 cpus")

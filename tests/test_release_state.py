@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from ecarsi import release_state as R
+from ecarsi.stages import release_state as R
 
 
 def old_release(unit, previous):
@@ -55,7 +55,7 @@ def test_process_death_around_each_directory_rename(tmp_path, previous, after, b
     script = '''
 import os, sys
 from pathlib import Path
-from ecarsi import release_state as R
+from ecarsi.stages import release_state as R
 unit, boundary, after = Path(sys.argv[1]), sys.argv[2], sys.argv[3] == 'True'
 replace = R.os.replace
 def crash(source, target):

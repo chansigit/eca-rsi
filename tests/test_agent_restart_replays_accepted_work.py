@@ -17,7 +17,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from ecarsi.warm_pool.state import digest, read
+from ecarsi.files import digest, read
 
 import ecarsi.agent as bridge
 import ecarsi.agent.session as session

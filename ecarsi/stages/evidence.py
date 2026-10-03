@@ -7,8 +7,8 @@ import importlib
 import json
 from pathlib import Path
 
-from ..warm_pool.state import immutable, reference, verified
-from ..warm_pool.state import digest, read, save
+from ..files import immutable, reference, verified
+from ..files import digest, read, save
 
 MODULES = {'ecarsi.stages.persample', 'ecarsi.stages.crosssample', 'ecarsi.stages.zoomin'}
 PAGES = {'read_evidence', 'sample_inventory', 'type_context', 'list_evidence'}

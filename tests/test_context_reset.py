@@ -1,7 +1,7 @@
 """A session whose transcript the provider rejects restarts as a fresh conversation with the
 host state carried over (Eye round 5, 2026-09-16: 37 turns, 4.5 M input tokens, HTTP 400 x3)."""
 from ecarsi.agent.session import RESET_NOTE, reference, reset_spec
-from ecarsi.warm_pool.state import save
+from ecarsi.files import save
 
 
 def test_reset_spec_renames_nests_explains_and_carries_the_reached_state(tmp_path):

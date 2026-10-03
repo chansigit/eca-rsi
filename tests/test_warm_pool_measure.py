@@ -3,7 +3,7 @@ import json
 import time
 
 from ecarsi.warm_pool.measure import measure, quantile, write
-from ecarsi.warm_pool.state import read
+from ecarsi.files import read
 
 
 def journal(pool, worker, day, rows):
@@ -70,7 +70,7 @@ def test_measurements_replace_the_knobs_unless_a_knob_is_configured():
 
 def test_measured_file_is_reloaded_when_it_changes(tmp_path):
     from ecarsi.warm_pool.backend import HyperQueue
-    from ecarsi.warm_pool.state import save
+    from ecarsi.files import save
     (tmp_path / "requests").mkdir()
     save(tmp_path / "config.json", dict(hq="/bin/false", executor="/usr/bin/python3", runtime={}))
     hq = HyperQueue(tmp_path)

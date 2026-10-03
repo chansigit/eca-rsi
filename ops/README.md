@@ -16,6 +16,7 @@ Logs of builds and switches go to `$BASE/control-logs/`.
 | `build-images-update.sh` | new image pair from the current one with a fresh eca-rsi snapshot (and optional wheels) |
 | `build-images.sh` | full rebuild from base images (Temporal, PostgreSQL, HQ added) |
 | `switch-images.sh <stamp> <science sha256> <host:job>…` | stop, repoint `deployment.env`, start, re-add workers |
+| `gate.py start\|wait <run_id>\|check <run root>` | the release gate after a switch: `~/.config/ecarsi/gate-dataset.json` end to end, then the checks (released, nothing degraded, lineage reports, display zone, archive) |
 | `node-check.sh` | one look: Slurm jobs, HQ, scheduler, productivity, recent failures, coordinator memory |
 | `fail-recent.py` | pool failures of the last ~70 min, grouped by reason |
 | `pool-smoke.py [N] [sleep]` | trivial requests through the scheduler, without a dataset |

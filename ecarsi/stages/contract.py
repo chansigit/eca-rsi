@@ -19,7 +19,7 @@ import shutil
 from pathlib import Path
 
 from . import PROMPTS
-from ..warm_pool.state import file_digest
+from ..files import file_digest
 
 # Matrices, and the machine-side inputs and caches a stage feeds its agent: a lineage's
 # deg_input/*.npy alone is 759 MiB, against ~50 MiB of tables and figures worth reading.

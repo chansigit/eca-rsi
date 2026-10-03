@@ -11,11 +11,11 @@ from ecarsi.agent.session import reference, verified
 from ecarsi.stages.persample import partition, sealed, tool
 from ecarsi.run_state import file_identity
 from ecarsi.sample_mapping import mapping_identity
-from ecarsi.warm_pool.state import read, save
+from ecarsi.files import read, save
 
 
 def test_partition_preserves_confirmed_string_ids_and_batch_bound(tmp_path, monkeypatch):
-    from ecarsi import upstream
+    from ecarsi.stages import upstream
     monkeypatch.setattr(upstream, "verify_snapshots", lambda *a: None)
     folder = tmp_path / "unit/input"
     folder.mkdir(parents=True)

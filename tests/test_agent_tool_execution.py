@@ -3,7 +3,7 @@ import pytest
 from ecarsi.agent.session import immutable, reference, verified
 from ecarsi.stages.execution import execute, plan
 from ecarsi.stages.persample import sealed, evidence_files
-from ecarsi.warm_pool.state import read, save
+from ecarsi.files import read, save
 
 
 def test_pagination_preserves_all_text_and_seen_state_with_bounded_budget(tmp_path, monkeypatch):

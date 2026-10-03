@@ -18,7 +18,7 @@ import sys
 import time
 from pathlib import Path
 
-from ..warm_pool.state import digest, read, save
+from ..files import digest, read, save
 from .dispatch import configure, model_key, perform, policy
 
 MAX_CALLS = 2000  # a runner drains and exits after this many turns; the supervisor starts a fresh one

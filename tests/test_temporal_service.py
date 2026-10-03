@@ -4,7 +4,7 @@ import time
 import pytest
 
 from ecarsi.control.temporal import endpoint
-from ecarsi.warm_pool.state import save
+from ecarsi.files import save
 
 
 @pytest.mark.parametrize('command', ['status-dataset', 'worker'])

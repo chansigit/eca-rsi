@@ -6,7 +6,7 @@ import time
 import pytest
 
 from ecarsi.warm_pool import provision
-from ecarsi.warm_pool.state import read, save
+from ecarsi.files import read, save
 
 
 def profile(**changes):

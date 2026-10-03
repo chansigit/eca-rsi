@@ -6,12 +6,12 @@ import os
 from pathlib import Path
 import shutil
 
-from ..warm_pool.state import immutable, reference, verified
+from ..files import immutable, reference, verified
 from . import PROMPTS
 from .contract import (LOOKUP_NOTE, NO_ARGUMENTS, checklist, deg_lookup_schema, evidence_page, evidence_paths, json_hint,
                        lookup_arguments, proposal as parse_proposal, schema)
 from .persample import check_bundle, sealed
-from ..warm_pool.state import digest, read, save
+from ..files import digest, read, save
 
 BASE = 'msp_leiden_r2.0'
 INVENTORY_PAGE_BYTES = 64 * 1024  # sample_inventory pages by bytes, like evidence pages: a cohort of 62
@@ -134,7 +134,7 @@ def inspect_input(spec, destination):
 def compute(inspected_ref, inclusion_ref, destination):
     import pandas as pd
     from msp.api import load_and_merge
-    from ..crosssample import validate_inclusion
+    from .inclusion import validate_inclusion
     inspected, inclusion = verified(inspected_ref), verified(inclusion_ref)
     if inclusion.get('accepted') is not True or inclusion['evidence'] != inspected_ref:
         raise ValueError('Inclusion is not accepted for this input')
@@ -364,7 +364,7 @@ def refine(evidence_ref, types_ref, decision_ref, destination):
 
 def _proposal_schema(phase):
     if phase=='inclusion':
-        from ..crosssample import INCLUSION_SCHEMA
+        from .inclusion import INCLUSION_SCHEMA
         return json.dumps(INCLUSION_SCHEMA)
     if phase=='type':
         from msp.api import CLUSTER_SCHEMA_DOC
@@ -520,7 +520,7 @@ def tool(name,state_path,args_path,destination):
         elif name=='submit_decision':
             proposal=parse_proposal(args)
             if phase=='inclusion':
-                from ..crosssample import validate_inclusion
+                from .inclusion import validate_inclusion
                 validate_inclusion(proposal,[s['sample'] for s in bundle['samples']])
                 if set(state.get('inventories',[]))!={s['sample'] for s in bundle['samples']}:raise ValueError('Read every sample inventory before inclusion')
                 missing=[s['sample'] for s in bundle['samples'] if not any(p.startswith(s['sample']+'/figures/') and 'umap_clusters' in p for p in state['read'])]
@@ -660,7 +660,7 @@ def main():
     elif a.operation=='include-single':
         bundle=verified(ref(0))
         if len(bundle['samples'])!=1:raise ValueError('Automatic inclusion requires exactly one sample')
-        from ..crosssample import SINGLE_SAMPLE_NOTE
+        from .inclusion import SINGLE_SAMPLE_NOTE
         immutable(dest/'decision.json',dict(accepted=True,evidence=ref(0),proposal={'samples':[dict(sample=bundle['samples'][0]['sample'],include=True,reason=SINGLE_SAMPLE_NOTE)],'notes':SINGLE_SAMPLE_NOTE}))
     elif a.operation=='compute':compute(ref(0),ref(1),dest)
     elif a.operation=='compute-round':compute_round(ref(0),dest)

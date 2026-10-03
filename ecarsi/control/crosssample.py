@@ -10,7 +10,7 @@ from .persample import DEG_BATCH_SIZE, HISTORY_LIMIT, await_pool, call, handoff,
 
 
 def validate_spec(spec, *, resume=False):
-    from ..warm_pool.state import verified
+    from ..files import verified
     from ..warm_pool.state import identifier, pool_root
     from ..agent import root_path
     required = {'run_id', 'dataset_id', 'input', 'output_root', 'pool_root', 'bridge_root',
@@ -77,7 +77,7 @@ def save_inclusion(root, bundle):
     evidence -> inclusion. The unit page has shown that column since generation 1 and
     must not walk the pool to render, so the round keeps its own copy.
     """
-    from ..warm_pool.state import read, save
+    from ..files import read, save
 
     try:
         evidence = read(bundle['evidence']['path'])
@@ -90,8 +90,9 @@ def save_inclusion(root, bundle):
 
 @activity.defn
 def crosssample_step(action, args):
-    from ..warm_pool.state import immutable, reference, verified
-    from ..warm_pool.state import digest, submit
+    from ..files import immutable, reference, verified
+    from ..files import digest
+    from ..warm_pool.state import submit
     if action == 'read':
         return handoff(args[0])
     if action == 'session':

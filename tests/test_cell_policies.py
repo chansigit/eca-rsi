@@ -158,7 +158,7 @@ def test_batch_key_false_declares_the_unit_one_batch(tmp_path):
 def test_the_spec_sample_map_overrides_the_plan_and_applies_its_policies(tmp_path):
     """spec organize.sample_map reaches organize: its sources win over the planning agent's column, its
     exclusion rules and batch key apply, and a source it names must be an accepted input."""
-    from ecarsi.execute import execute_plan
+    from ecarsi.stages.organize_execute import execute_plan
     from ecarsi.stages.organize import prepare
     root = facs_input(tmp_path)
     prepared = prepare(root, tmp_path / "prepared.json")

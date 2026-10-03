@@ -2,7 +2,7 @@ import pytest
 
 from ecarsi.control.persample import validate_spec
 from ecarsi.run_state import file_identity
-from ecarsi.warm_pool.state import save
+from ecarsi.files import save
 
 
 def test_only_published_organize_units_can_start(tmp_path):
@@ -36,7 +36,7 @@ def test_only_published_organize_units_can_start(tmp_path):
 def test_sample_size_selects_gpu_alternative_before_submission(tmp_path):
     from ecarsi.agent.session import reference
     from ecarsi.control.persample import sample_step
-    from ecarsi.warm_pool.state import read
+    from ecarsi.files import read
     pool = tmp_path / "pool"
     pool.mkdir(mode=0o700)
     (pool / "requests").mkdir()
@@ -54,7 +54,8 @@ def test_sample_size_selects_gpu_alternative_before_submission(tmp_path):
 
 def test_recovery_requires_resolved_receipts(tmp_path):
     from ecarsi.control.persample import sample_step
-    from ecarsi.warm_pool.state import digest, submit
+    from ecarsi.files import digest
+    from ecarsi.warm_pool.state import submit
     for name in ("pool", "bridge"):
         root = tmp_path / name
         root.mkdir(mode=0o700)
@@ -84,7 +85,7 @@ def test_recovery_requires_resolved_receipts(tmp_path):
 def test_resume_retains_incomplete_publication_and_cannot_replace_complete(tmp_path):
     from ecarsi.agent.session import reference
     from ecarsi.control.persample import sample_step
-    from ecarsi.warm_pool.state import read
+    from ecarsi.files import read
     save(tmp_path / "input.json", {})
     spec = {"output_root": str(tmp_path), "input_manifest": reference(tmp_path / "input.json")}
     totals = {"total_samples": 1, "n_input": 2, "n_excluded": 0, "exclusions": reference(tmp_path / "input.json")}

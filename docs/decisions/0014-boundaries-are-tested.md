@@ -12,7 +12,7 @@ dropped surfaced stages later as a `KeyError`.
 
 - **Kernels.** osp, msp and zmip each have an `api` module listing every name eca-rsi uses, under a public
   name (private ones are aliased there). eca-rsi imports a kernel only through it, and only from the
-  stage programs (`ecarsi/stages/`, `ecarsi/osp_worker.py`); the control image has no kernels.
+  stage programs (`ecarsi/stages/`); the control image has no kernels.
   `tests/test_layers.py` refuses any other kernel import; each kernel's `tests/test_api.py` checks that
   every name resolves. Changing a name in an `api` module is a breaking change for eca-rsi.
 - **Directions.** `tests/test_layers.py` also lists which subsystem may not import which: the pool knows
@@ -25,5 +25,6 @@ dropped surfaced stages later as a `KeyError`.
 
 **Consequences.** A kernel can change anything outside its `api` module freely. A new cross-boundary
 import or a dropped field fails a test with the place named. The contracts list only what readers rely
-on, so old runs keep passing. Not yet done: sorting the remaining top-level modules of `ecarsi/` into
-the six parts, and moving the generic file helpers out of `warm_pool/state.py`, which every part uses.
+on, so old runs keep passing. Since 0.4.3 the stage-only helpers live in `ecarsi/stages/`, the generic
+file helpers every part uses moved from `warm_pool/state.py` to `ecarsi/files.py`, and the modules left directly
+in `ecarsi/` are the shared vocabulary, which may import no part (two listed exceptions: `display`, `observatory`).

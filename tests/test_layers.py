@@ -1,5 +1,8 @@
 """Which subsystem may import which (docs/OVERVIEW.md, "The six parts"). A new import across a boundary
-fails here; change these tables only together with the design."""
+fails here; change these tables only together with the design.
+
+The subsystems are the packages under ecarsi/. The modules directly in ecarsi/ are the vocabulary they
+share (layout, files, contracts, run_state, review, ...): they import no subsystem at all."""
 import ast
 from pathlib import Path
 
@@ -12,14 +15,19 @@ FORBIDDEN = {
     "ecarsi.stages": {"ecarsi.control", "ecarsi.agent", "ecarsi.ui"},                     # programs the pool runs
     "ecarsi.ui": {"ecarsi.control", "ecarsi.agent", "ecarsi.stages"},                     # read-only presentation
 }
+PARTS = {"ecarsi.control", "ecarsi.agent", "ecarsi.warm_pool", "ecarsi.stages", "ecarsi.ui"}
 # Known crossings, each with its reason. Remove an entry when its import goes away.
 ALLOWED = {
     ("ecarsi/stages/release.py", "ecarsi.ui.umapdata"): "release writes umap.json with Periscope's own writer",
+    ("ecarsi/display.py", "ecarsi.ui"): "the display zone is what Periscope's renderer reads: display renders the pages to find out",
+    ("ecarsi/observatory.py", "ecarsi.control"): "operator reports, run by a person, may ask Temporal directly (not a web page)",
+    ("ecarsi/observatory.py", "ecarsi.warm_pool"): "operator reports read the pool's journals",
+    ("ecarsi/observatory.py", "ecarsi.ui"): "operator reports and Periscope's /_control/ page show the same records",
 }
 KERNELS = {"msp", "osp", "zmip"}
 # Only the programs of the compute image use the kernels; everything else also runs in the control image,
 # which has none. They reach a kernel only through its api module, the kernel's contract with eca-rsi.
-KERNEL_USERS = {"ecarsi.stages", "ecarsi.osp_worker"}
+KERNEL_USERS = {"ecarsi.stages"}
 
 
 def subsystem(module):
@@ -52,7 +60,9 @@ def allowed(path, name):
 def test_subsystems_import_only_downwards():
     crossings = set()
     for path, module, name in imports():
-        if subsystem(name) in FORBIDDEN.get(subsystem(module), ()) and not allowed(path, name):
+        source = subsystem(module)
+        forbidden = FORBIDDEN.get(source, PARTS if source.startswith("ecarsi.") and source not in PARTS else ())
+        if subsystem(name) in forbidden and not allowed(path, name):
             crossings.add(f"{path} imports {name}")
     assert not crossings, sorted(crossings)
 

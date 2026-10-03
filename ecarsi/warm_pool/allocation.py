@@ -7,7 +7,7 @@ import socket
 import subprocess
 import time
 
-from .state import read, save
+from ..files import read, save
 
 
 def current_job():

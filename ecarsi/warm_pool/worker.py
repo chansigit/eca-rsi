@@ -15,7 +15,8 @@ from .backend import check_runtime, parent_death_signal
 
 GPU_BLIND_LIMIT = 120  # seconds nvidia-smi may keep failing before the attempt is given up
 USAGE_SECONDS = 5  # usage.json cadence: status() calls an attempt stale after 15 s; the RSS watchdog still samples every 0.25 s
-from .state import digest, file_digest, identifier, lock, pool_root, read, save, sync_directory
+from ..files import digest, file_digest, lock, read, save, sync_directory
+from .state import identifier, pool_root
 
 
 

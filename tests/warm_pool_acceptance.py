@@ -17,7 +17,8 @@ import time
 
 from ecarsi.warm_pool.__main__ import initialize
 from ecarsi.warm_pool.backend import HyperQueue
-from ecarsi.warm_pool.state import cancel, file_digest, read, status, submit
+from ecarsi.files import file_digest, read
+from ecarsi.warm_pool.state import cancel, status, submit
 from ecarsi.warm_pool.worker import identity, reconcile_local
 
 

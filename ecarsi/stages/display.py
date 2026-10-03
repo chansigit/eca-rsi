@@ -4,7 +4,7 @@ Writes synced.json in the working directory."""
 import argparse
 from pathlib import Path
 
-from ..warm_pool.state import read, save
+from ..files import read, save
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
@@ -13,6 +13,6 @@ if __name__ == "__main__":
     from ..display import sync
     result = dict(display=sync(packet["root"], packet["dest"], packet["record"]))
     if packet.get("final"):
-        from ..archive import pack
+        from .archive import pack
         result["archive"] = pack(packet["root"], packet["record"]["work"])
     save(Path.cwd() / "synced.json", result)

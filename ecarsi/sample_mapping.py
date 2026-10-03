@@ -6,12 +6,17 @@ from pathlib import Path
 
 from . import layout as L
 from .run_state import digest, file_identity, read_json
-from .upstream import normalize
 
 SAMPLE_KEY = "eca_sample_id"
 # `batch_key: false` declares the unit one batch: every cell gets this column with one value, so MSP and
 # ZMIP skip Harmony and the per-batch HVG vote (they correct only across two or more batch values)
 SINGLE_BATCH_COLUMN, SINGLE_BATCH = "eca_batch", "single_batch"
+
+
+def normalize(values):
+    """Strings stripped; empty and NA spellings become missing."""
+    s = values.astype("string").str.strip()
+    return s.mask(s.str.lower().isin(("", "na", "n/a", "nan", "none", "null", "<na>", "missing")))
 
 
 def _validate_sample_column(decision: dict, profile: dict, *, allow_unknown: bool = False,

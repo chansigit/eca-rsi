@@ -2,7 +2,7 @@ import pytest
 
 from ecarsi.agent.session import reference
 from ecarsi.warm_pool.budget import from_compute, from_deg_buffers
-from ecarsi.warm_pool.state import save
+from ecarsi.files import save
 
 
 def test_upstream_budget_is_conservative_pinned_and_keeps_existing_requests(tmp_path):

@@ -2,7 +2,7 @@
 import time
 
 from ecarsi.warm_pool.backend import allocation_ended, worker_lost_receipt
-from ecarsi.warm_pool.state import save
+from ecarsi.files import save
 
 
 def _identity(root, name, host, expires_at):

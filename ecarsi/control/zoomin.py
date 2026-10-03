@@ -10,7 +10,7 @@ from .persample import HISTORY_LIMIT, await_pool, call, handoff, stage_with_wait
 
 
 def validate_spec(spec, *, resume=False):
-    from ..warm_pool.state import verified
+    from ..files import verified
     from ..warm_pool.state import identifier, pool_root
     from ..agent import root_path
     budgets = {'prepare_budget','subset_budget','compute_budget','deg_budget','tool_budget','merge_budget'}
@@ -60,8 +60,9 @@ def validate_spec(spec, *, resume=False):
 
 @activity.defn
 def zoomin_step(action,args):
-    from ..warm_pool.state import immutable, reference, verified
-    from ..warm_pool.state import digest, submit
+    from ..files import immutable, reference, verified
+    from ..files import digest
+    from ..warm_pool.state import submit
     if action=='read':return handoff(args[0])
     if action=='session':return verified(reference(args[0]))
     if action=='accepted':
