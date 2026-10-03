@@ -28,9 +28,10 @@ HEAVY = (".h5ad", ".zarr", ".parquet", ".npy", ".npz", ".sqlite")
 
 def copy_light(files, folder):
     """Copy the readable half of a publication -- report, figures, tables -- out of the pool
-    request that produced it. `files` is a {name: {path, sha256}} map. Copying never raises:
-    a missing report is worth a warning, not a failed stage."""
-    folder = Path(folder)
+    request that produced it. `files` is a {name: {path, sha256}} map. Copying never fails a stage:
+    a missing report is a degradation (ecarsi.degraded), returned for the caller to keep."""
+    from ..degraded import note
+    folder, notes = Path(folder), []
     for name, ref in sorted((files or {}).items()):
         if name.endswith(HEAVY):
             continue
@@ -44,7 +45,8 @@ def copy_light(files, folder):
             shutil.copyfile(source, partial)
             partial.replace(target)
         except OSError as exc:
-            print(f"[publish] warning: {folder.name}/{name} not copied: {exc}", flush=True)
+            notes.append(note(f"{folder.name}/{name} not copied", exc))
+    return notes
 
 NO_ARGUMENTS = {'type': 'object', 'required': [], 'additionalProperties': False,
                 'properties': {'offset': {'type': 'integer', 'description': 'Ignored: the whole listing comes back in one call.'}}}

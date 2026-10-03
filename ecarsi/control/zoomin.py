@@ -73,7 +73,9 @@ def zoomin_step(action,args):
         path=Path(spec['output_root'])/'publication.json'
         immutable(path,{**bundle,'result':reference(args[1])})
         from .artifacts import copy_light
-        copy_light(bundle.get('files'), path.parent)
+        from ..degraded import save
+        save(path.parent, bundle.get('degraded', []) + copy_light(bundle.get('files'), path.parent),
+             stage=path.parent.parent.name + '/zoom-in')
         return str(path)
     spec,payload,parents=args
     if action == 'prepare':

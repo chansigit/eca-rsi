@@ -166,7 +166,10 @@ def test_unit_waits_for_accepted_pool_release_before_completing(monkeypatch):
     monkeypatch.setattr(module.workflow, 'execute_child_workflow', child)
     monkeypatch.setattr(module.workflow, 'patched', lambda name: True)
     progress = dict(per_sample='per.json', input='zoom.json', stats=[{}], rounds=[{}])
-    assert asyncio.run(AnalysisUnitWorkflow().run({}, {}, progress)) == 'unit.json'
+    # the round ledger needs its budget: without one it used to fail on a KeyError nobody saw (decision 0013)
+    spec = dict(zoom_in=dict(merge_budget=dict(timeout_seconds=60)))
+    assert asyncio.run(AnalysisUnitWorkflow().run(spec, {}, progress)) == 'unit.json'
+    assert 'round-ledger-published' in actions and 'degraded' not in actions
     assert actions[-3:] == ['release', 'await release', 'released']
 
 
@@ -192,6 +195,7 @@ def test_a_ledger_that_never_runs_does_not_hold_the_unit(monkeypatch):
     progress = dict(per_sample='per.json', input='zoom.json', stats=[{}], rounds=[{}])
     assert asyncio.run(AnalysisUnitWorkflow().run(spec, {}, progress)) == 'unit.json'
     assert 'round-ledger-published' not in actions and actions[-2:] == ['release', 'released']
+    assert 'degraded' in actions  # the expired ledger is recorded with the run (decision 0013)
 
 
 def test_completed_stage_requires_same_input_spec_and_accepted_result(tmp_path, monkeypatch):

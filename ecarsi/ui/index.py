@@ -25,6 +25,7 @@ from pathlib import Path
 
 from .. import layout as L
 from .. import review
+from ..degraded import read as read_degraded
 
 CSS = """
 /* warm paper by day, dark by night (prefers-color-scheme); everything below reads these variables */
@@ -1073,12 +1074,14 @@ def dataset_state(root: Path, states: list[dict] | None = None) -> dict:
     events = {k: [s["events"][k] for s in states if s.get("events") and s["events"][k]] for k in ("organize", "release")}
     updated = state_mtime(root)
     cls, stage = _stalled(cls, stage, updated)
+    degraded = read_degraded(root)  # steps that failed without failing the run (decision 0013)
     return {"units": len(states), "released": released, "n_input": sum(n_in) if n_in else None, "events": events,
             "final_cells": sum(final) if final else None, "rounds": max((len(s["rounds"]) for s in states), default=0),
             "species": ", ".join(sorted({str(s["species"]) for s in states if s["species"]})),
             "finished": max(fin) if fin and released == len(states) else None,
             "updated": updated, "stage": stage, "cls": cls, "trend": round_trend(states),
-            "unit_rows": [unit_row(s, unit_order(root)) for s in states], "run_id": run_id(root),
+            "unit_rows": [dict(unit_row(s, unit_order(root)), degraded=sum(r.get("unit") in (None, s["name"]) for r in degraded))
+                          for s in states], "run_id": run_id(root), "degraded": degraded,
             "awaiting_start": False}
 
 
@@ -1430,6 +1433,11 @@ def render_root(root: Path, name: str | None = None) -> str:
                    '<th class="r">rounds</th><th class="r">final cells</th><th>stage</th><th>last event</th></tr></thead>'
                    f'<tbody>{"".join(rows)}</tbody></table></div>' if rows else '<p class="empty">No units yet.</p>') + "</section>")
     extra = []
+    if ds["degraded"]:
+        extra.append('<div class="callout tone-warn"><b>degraded steps</b>: failed without failing the run; '
+                     'each is a bug to fix (decision 0013)<ul class="warn">'
+                     + "".join(f'<li>{e(r.get("unit") or "dataset")} · {e(r.get("stage", ""))} · {e(r.get("scope", ""))}: '
+                               f'{e(r["what"])}: {e(r["error"])}</li>' for r in ds["degraded"]) + "</ul></div>")
     if om and om.get("warnings"):
         extra.append('<div class="callout tone-warn"><b>organize warnings</b><ul class="warn">'
                      + "".join(f"<li>{e(w)}</li>" for w in om["warnings"]) + "</ul></div>")

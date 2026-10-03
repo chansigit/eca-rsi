@@ -2,6 +2,10 @@ import os
 
 import pytest
 
+# Strict mode (ecarsi.degraded): a step that would only degrade a real run fails its test. Set at import,
+# so subprocesses and pool tasks the tests start inherit it; a test of the lenient path deletes it.
+os.environ["ECARSI_STRICT"] = "1"
+
 
 @pytest.fixture(autouse=True)
 def _restore_environment():

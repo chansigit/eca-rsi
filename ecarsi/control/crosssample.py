@@ -106,7 +106,9 @@ def crosssample_step(action, args):
         publication = Path(spec['output_root']) / 'publication.json'
         immutable(publication, {**bundle, 'result': reference(path)})
         from .artifacts import copy_light
-        copy_light(bundle.get('files'), Path(spec['output_root']))
+        from ..degraded import save
+        root = Path(spec['output_root'])
+        save(root, copy_light(bundle.get('files'), root), stage=root.parent.name + '/cross-sample')
         save_inclusion(Path(spec['output_root']), bundle)
         return str(publication)
     spec, payload, parents = args

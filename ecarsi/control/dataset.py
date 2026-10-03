@@ -526,8 +526,25 @@ def dataset_step(action, args):
         from .artifacts import copy_light
         bundle = verified(reference(result))
         directory = Path(spec['output_root']) / 'units' / unit['name'] / 'rounds' / f"round{len(progress['stats']):02d}"
-        copy_light(bundle.get('files'), directory / 'ledger')
+        from ..degraded import save
+        save(directory, copy_light(bundle.get('files'), directory / 'ledger'), stage=directory.name + '/ledger')
         return str(directory / 'ledger')
+    if action == 'degraded':
+        # A control-plane step that failed without failing the run (ecarsi.degraded). Kept in the work
+        # tree, and in the display zone directly: a failed final sync would never carry it there.
+        spec, unit_name, label, error = args
+        from ..degraded import note, save
+        from ..display import zone
+        record = note(label, RuntimeError(error))
+        root = Path(spec['output_root'])
+        save(root / 'units' / unit_name if unit_name else root, [record], stage=label)
+        display = Path(zone(spec)['dest']) if spec.get('storage') else None
+        if display and display.is_dir():
+            try:
+                save(display, [record], stage=label, **({'unit': unit_name} if unit_name else {}))
+            except OSError as exc:
+                print(f'[degraded] {label}: not written to the display zone: {exc!r}', flush=True)
+        return None
     if action == 'publish':
         spec, results, failures = args
         publications = [reference(p) for p in sorted(results)]
@@ -576,7 +593,15 @@ async def show(spec, stage, unit=None, final=False):
         if final:
             await asyncio.wait_for(await_pool(spec, request), DISPLAY_FINAL_BUDGET['timeout_seconds'] * 2)
     except Exception as exc:
-        print(f'[display] {label}: not synced: {exc!r}', flush=True)
+        await degraded(spec, unit, f'display sync after {label}', exc)
+
+
+async def degraded(spec, unit, label, exc):
+    """Keep a step that failed without failing the run (ecarsi.degraded). In strict mode the activity raises."""
+    if workflow.patched('degraded-v1'):
+        await call(dataset_step, 'degraded', [spec, unit['name'] if unit else None, label, f'{type(exc).__name__}: {exc}'])
+    else:
+        print(f'[degraded] {label}: {exc!r}', flush=True)
 
 
 @workflow.defn
@@ -624,7 +649,7 @@ class AnalysisUnitWorkflow:
                 result = await asyncio.wait_for(await_pool(spec, request), limit)
                 await call(dataset_step, 'round-ledger-published', [spec, unit, progress, result])
             except Exception as exc:  # a report is not worth failing a finished round over
-                print(f'[round] ledger not published: {exc!r}', flush=True)
+                await degraded(spec, unit, f'round{number:02d} ledger', exc)
         await show(spec, f'round{number:02d}/decided', unit)
         if progress.get('paused'):
             # The round is complete and published, with its ledger; only the next one is withheld.

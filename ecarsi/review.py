@@ -37,6 +37,9 @@ from . import layout as L
 OVER_BUDGET_FRAC = 0.10  # per-round removal budget the loop treats as "too much"
 
 KINDS: list[tuple[str, str, str]] = [
+    ("degraded", "Steps that failed without failing the run",
+     "A report, a copy or a display sync that failed while the run went on (ecarsi.degraded, decision 0013). "
+     "The result is complete; what is listed here is missing beside it. Each is a bug to fix, not a biological doubt."),
     ("agent_config_changed", "Backend/model changed mid-run",
      "A round resumed with a different {harness, model} than the one its earlier stages used "
      "(deliberately allowed since 2026-09-10 -- switching mid-run to a stronger model is a legitimate "
@@ -350,7 +353,7 @@ def to_markdown(items: list[Item], unit_name: str, n_rounds: int) -> str:
 
 
 # colour of a category's card: bad = irreversible, warn = changed the input set or labels, info = advisory
-KIND_TONE = {"convergence": "bad", "removed": "bad", "sample_excluded": "warn", "reassigned": "warn",
+KIND_TONE = {"degraded": "warn", "convergence": "bad", "removed": "bad", "sample_excluded": "warn", "reassigned": "warn",
              "policy_excluded": "warn", "upstream_review": "info", "inspect_flag": "info", "plan_warning": "info"}
 
 

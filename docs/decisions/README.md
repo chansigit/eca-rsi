@@ -18,3 +18,4 @@ decision that is replaced keeps its page and says so at the top.
 | [0010](0010-production-code-is-the-image.md) | Production code is the image snapshot |
 | [0011](0011-settings-in-one-directory.md) | Every setting in `~/.config/ecarsi`, machine paths only in `deployment.env` |
 | [0012](0012-one-execution-path.md) | One execution path: the local path was removed |
+| [0013](0013-degraded-results-are-recorded.md) | A step that fails without failing the run leaves a record |

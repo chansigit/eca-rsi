@@ -1223,7 +1223,7 @@ def _home_html(items: dict[str, Path], state=_dataset_state, verdicts: "ControlV
         # can carry an honest convergence curve and status. A dataset that has not organized yet has
         # no unit, and a state cached before this column existed has no unit_rows; both fall back to
         # the dataset aggregate so the fleet page never goes blank while the cache warms.
-        units = s.get("unit_rows") or [dict(name="", stage=s["stage"], cls=s["cls"], n_input=s["n_input"],
+        units = s.get("unit_rows") or [dict(name="", stage=s["stage"], cls=s["cls"], n_input=s["n_input"], degraded=len(s.get("degraded") or []),
                                             final_cells=s["final_cells"], rounds=s["rounds"],
                                             trend=s.get("trend") or [], species=s["species"], updated=s["updated"])]
         # The control plane numbers its unit workflows in plan order, which the organize publication
@@ -1248,7 +1248,9 @@ def _home_html(items: dict[str, Path], state=_dataset_state, verdicts: "ControlV
                 f'<td class="num" data-v="{kept if kept is not None else -1}">{f"{kept:.0f}%" if kept is not None else ""}</td>'
                 f'<td class="num" data-v="{u["rounds"]}">{u["rounds"] or ""}</td>'
                 f'<td>{index.sparkline(u["trend"])}</td>'
-                f'<td data-v="{rank.get(u["cls"], 9)}"><span class="pill {e(u["cls"])}">{e(u["stage"])}</span></td>'
+                f'<td data-v="{rank.get(u["cls"], 9)}"><span class="pill {e(u["cls"])}">{e(u["stage"])}</span>'
+                + (f' <span class="pill tone-warn" title="steps that failed without failing the run; see the dataset page">'
+                   f'{u["degraded"]} degraded</span>' if u.get("degraded") else "") + '</td>'
                 f'<td class="num nw" data-v="{u["updated"] or 0}">{index._when(u["updated"])}</td></tr>')
     def th(t, num=False):
         attrs = ' class="r" data-num' if num else ""

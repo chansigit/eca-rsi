@@ -183,7 +183,7 @@ def apply_lineage(evidence, decision, destination):
     ledger['input_version'] = evidence['sha256'];ledger['decision'] = json.dumps(decision)
     ledger.to_csv(destination/'cell_exclusions.csv.gz', index=False)
     save(destination/'annotation_proposal.json', accepted)
-    lineage_report(bundle, data, kept, destination)
+    degraded = lineage_report(bundle, data, kept, destination)
     kept.write_h5ad(destination/'annotated.h5ad')
     import anndata as an
     disk = an.read_h5ad(destination/'annotated.h5ad', backed='r')
@@ -193,7 +193,8 @@ def apply_lineage(evidence, decision, destination):
     finally:
         disk.file.close()
     sealed(destination, destination/'final.json', state='complete', evidence=evidence,
-        decision=decision, lineage=bundle['lineage'], n_input=len(data), n_survived=len(kept), n_removed=len(removed))
+        decision=decision, lineage=bundle['lineage'], n_input=len(data), n_survived=len(kept), n_removed=len(removed),
+        **({'degraded': degraded} if degraded else {}))
 
 
 def lineage_report(bundle, data, kept, destination):
@@ -202,14 +203,15 @@ def lineage_report(bundle, data, kept, destination):
     lineage in one directory; here they are two requests, so the evidence a reader wants
     (QC tables, DEG tables, embeddings) is staged next to the decision first. Rendering is
     the last thing a lineage does and the least important: a report that will not draw must
-    not throw away an accepted annotation."""
+    not throw away an accepted annotation. Returns the degradations (ecarsi.degraded)."""
     import anndata as an
     from msp.evidence import plot_annotation
     from msp.report import compose_title, generate_report
     from .contract import copy_light
-    name = bundle['lineage']['name']
+    from ..degraded import note
+    name, notes = bundle['lineage']['name'], []
     try:
-        copy_light(bundle['files'], destination)
+        notes = copy_light(bundle['files'], destination)
         # msp draws categorical labels (and recolours what it draws); zmip's apply_decisions
         # returns plain strings, so every lineage report failed here (2026-10-02, #26).
         # Draw from a light copy: annotated.h5ad is written from kept, untouched.
@@ -217,7 +219,8 @@ def lineage_report(bundle, data, kept, destination):
         plot_annotation(data, an.AnnData(obs=labels, obsm={'X_umap': kept.obsm['X_umap']}), str(destination/'figures'))
         generate_report(str(destination), title=compose_title('zoom-in lineage (zmip)', str(destination), subject=name))
     except Exception as exc:                      # noqa: BLE001 - any drawing failure, never fatal
-        print(f'[zoom-in] warning: no report for lineage {name}: {type(exc).__name__}: {exc}', flush=True)
+        notes.append(note(f'report of lineage {name}', exc))
+    return notes
 
 
 def lineage_labels(bundle):
@@ -249,7 +252,7 @@ def merge(prepared, decision, results, destination, skipped=()):
     plan = plan_without(accepted_plan(prepared, decision), skipped)
     source = verified(prepared)
     data = data_from(verified(source['input']), 'annotated.h5ad')
-    accepted, ledgers = {}, []
+    accepted, ledgers, degraded = {}, [], []
     for ref in results:
         result = check_bundle(ref)
         evidence = verified(result['evidence'])
@@ -265,7 +268,8 @@ def merge(prepared, decision, results, destination, skipped=()):
         # The report looks a lineage up at <destination>/<slug>/ and links there: generation 1
         # computed each lineage in that subdirectory, generation 2 in a pool request of its own.
         # Without this copy every zoomed lineage renders "(not run yet)" and its link is dead.
-        copy_light(result['files'], destination/slug(name))
+        degraded += [{**d, 'scope': name} for d in result.get('degraded', [])]
+        degraded += [{**d, 'scope': name} for d in copy_light(result['files'], destination/slug(name))]
     save(destination/'zmip_plan.json', plan)
     # with_report: zmip's own global page for the round, as generation 1 always published.
     kept, removed, _ = merge_back(data, plan, accepted, str(destination), with_report=True)
@@ -275,7 +279,8 @@ def merge(prepared, decision, results, destination, skipped=()):
         raise ValueError('Global zoom-in cell conservation failed')
     ledger.to_csv(destination/'cell_exclusions.csv.gz', index=False)
     sealed(destination, destination/'final.json', state='complete', input=source['input'], planning=prepared, decision=decision,
-        lineages=results, skipped_lineages=list(skipped), n_input=len(data), n_survived=len(kept), n_removed=len(ledger))
+        lineages=results, skipped_lineages=list(skipped), n_input=len(data), n_survived=len(kept), n_removed=len(ledger),
+        **({'degraded': degraded} if degraded else {}))
 
 
 def intersections(bundle):

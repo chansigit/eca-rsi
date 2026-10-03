@@ -37,9 +37,10 @@ def sample_summary(records, skipped, failed):
 def materialize_reports(root, records):
     """Each finished sample's report and figures next to the publication; see artifacts."""
     from .artifacts import copy_light
+    from ..degraded import save
 
     for record in records:
-        copy_light(record.get("files"), root / record["sample"])
+        save(root, copy_light(record.get("files"), root / record["sample"]), stage="per-sample", scope=record["sample"])
 
 
 def validate_spec(spec, *, resume=False):

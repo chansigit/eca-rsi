@@ -185,9 +185,17 @@ def review_items(unit, exclusions, decisions, root=None):
     """Reuse review records; count actual removed cells, not proposed cluster sizes. `root` is the unit
     directory, where decisions link to their local copies."""
     from .. import layout as L
+    import re
+    from ..degraded import read as read_degraded
     from ..review import Item, _loop_items, _annotation_items, _mark_recurring
     from ..run_state import read_json
     items = []
+    # steps that failed without failing the run, kept under <run>/degraded/ (ecarsi.degraded)
+    for record in (read_degraded(Path(root).parent.parent) if root is not None else []):
+        if record.get('unit') in (None, Path(root).name):
+            number = re.search(r'round(\d+)', record.get('stage', ''))
+            items.append(Item('degraded', int(number.group(1)) if number else 0, record.get('stage', ''),
+                record.get('scope', ''), note=f"{record['what']}: {record['error']}"))
     for ref in unit['rounds']:
         record = verified(ref)
         items += _loop_items(record['round'], record['stats'], unit['forced_release'], record['round'] == len(unit['rounds']))
