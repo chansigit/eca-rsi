@@ -74,7 +74,7 @@ small { color: #555; } li { margin: 6px 0; }
 <p>Coordinator 重试“提交请求”，Bridge 重试“供应方尝试”，科学提案纠错由 Coordinator 决定，三者不能各自重跑整个 agent 循环。结果不明及不可恢复错误必须可诊断；通常恢复靠自动核对和有界策略，不靠人工逐任务点继续。</p>
 
 <h2>6. 配置、凭据与热更新</h2>
-<p>扩展现有 <code>ECA_MODEL_CATALOG</code> 指定的模型目录（默认 <code>~/.config/ecarsi/model-pool.json</code>），不另设一份相互覆盖的模型清单。以下是拟增加的配置内容，不是当前文件已经支持的 schema。</p>
+<p>扩展现有 <code>ECA_MODEL_CATALOG</code> 指定的模型目录（默认 <code>~/.config/ecarsi/models.json</code>），不另设一份相互覆盖的模型清单。以下是拟增加的配置内容，不是当前文件已经支持的 schema。</p>
 <table><thead><tr><th>内容</th><th>约定</th></tr></thead><tbody>
 <tr><td>候选与调用顺序</td><td>稳定 candidate_id、harness、model、endpoint URL、enabled、允许 purpose；列表顺序仍显示 Primary、Fallback 1、Fallback 2。模型名字和地址来自配置。</td></tr>
 <tr><td>共享组与策略</td><td>账户组/模型组、并发、速率、请求超时、重试/冷却、会话与费用预算。组关系显式设置，避免不同 URL 被误当不同账户。</td></tr>

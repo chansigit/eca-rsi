@@ -523,8 +523,8 @@ async def main():
     p.add_argument("spec", type=Path)
     p = commands.add_parser("start-dataset")
     p.add_argument("spec", type=Path)
-    p.add_argument("--storage", type=Path, default=Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "ecarsi" / "storage.json",
-                   help="JSON {display_root, archive_root} filled into a spec that has no 'storage' (#25); ignored if absent")
+    p.add_argument("--results", type=Path, default=Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "ecarsi" / "results.json",
+                   help="JSON with display_root and archive_root, filled into a spec that has no 'storage' (#25); ignored if absent")
     p = commands.add_parser("resume-dataset")
     p.add_argument("run_id")
     p.add_argument("--reason", required=True)
@@ -560,8 +560,9 @@ async def main():
         if args.command == "start-dataset":
             from .dataset import DatasetWorkflow, validate_spec as validate_dataset
             spec = json.loads(args.spec.read_text())
-            if 'storage' not in spec and args.storage.is_file():
-                spec['storage'] = json.loads(args.storage.read_text())  # where its display zone and archive go
+            if 'storage' not in spec and args.results.is_file():
+                results = json.loads(args.results.read_text())  # where its display zone and archive go
+                spec['storage'] = {key: results[key] for key in ('display_root', 'archive_root')}
             spec = validate_dataset(spec)
             run, identity = DatasetWorkflow.run, 'dataset/' + spec['run_id']
         elif args.command == "start-agent":

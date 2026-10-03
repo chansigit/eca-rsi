@@ -17,7 +17,7 @@ PROVIDERS = {
 
 def catalog_path(environ=None):
     env = os.environ if environ is None else environ
-    return Path(env.get('ECA_MODEL_CATALOG', str(Path.home() / '.config/ecarsi/model-pool.json')))
+    return Path(env.get('ECA_MODEL_CATALOG', str(Path.home() / '.config/ecarsi/models.json')))
 
 
 def read_catalog(environ=None):
@@ -87,7 +87,7 @@ def save_models(models, revision, environ=None):
 def admin_matches(token, environ=None):
     import hmac
     try:
-        expected = catalog_path(environ).with_name('model-admin-token').read_text().strip()
+        expected = catalog_path(environ).with_name('models-admin-key').read_text().strip()
         return len(expected) >= 32 and hmac.compare_digest(token, expected)
     except OSError:
         return False
@@ -245,7 +245,7 @@ def render(data):
 def controls():
     return ('<div id="model-admin" class="callout" hidden><label>Management key <input type="password" id="model-admin-key" autocomplete="off"></label>'
             '<button class="btn plain" data-model-action="unlock">Unlock settings</button>'
-            '<p class="model-note">Public edits require the management key stored on the server in <code>~/.config/ecarsi/model-admin-token</code>. This is not a model API key.</p></div>'
+            '<p class="model-note">Public edits require the management key stored on the server in <code>~/.config/ecarsi/models-admin-key</code>. This is not a model API key.</p></div>'
             '<p id="model-message" class="model-note" role="status"></p><div id="model-key-results"></div>')
 
 

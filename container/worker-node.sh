@@ -7,7 +7,7 @@
 set -u
 : "${POOL:?pool directory}" "${SCIENCE_IMG:?science image (.sif)}"
 HOSTPY=${HOSTPY:-python3}          # the launcher probes Slurm (scontrol) and GPUs (nvidia-smi) on the host
-BINDS=${BINDS:-/scratch,/oak,/home,/lscratch}
+: "${BINDS:?host directories the containers see, comma-separated, e.g. /scratch,/home}"
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 INSIDE=${CODE:-/opt/eca-rsi}
 cpus=$("$HOSTPY" -c "import os; print(','.join(map(str, sorted(os.sched_getaffinity(0)))))")

@@ -64,32 +64,41 @@ chmod 700 $E $E/control $E/pool $E/bridge $E/bridge/requests $E/runs
 ln -s ../pool $E/control/pool; ln -s ../bridge $E/control/bridge
 ```
 
-### A.4 The launcher
+### A.4 Configuration and the launcher
 
-The launcher lives inside the control image. The deployment copy only exports paths and runs it:
+Every setting you edit lives in `~/.config/ecarsi/`:
+
+| File | What it holds | Written by |
+|---|---|---|
+| `deployment.env` | This machine: the two images, the state directory, the host directories the containers see (`BINDS`), the host Python, ports, Periscope's port and domain | you; `ops/switch-images.sh` rewrites the two image lines |
+| `results.json` | `display_root` and `archive_root` for new runs; `more_display_roots` that Periscope shows as well | you |
+| `models.json` | The model catalog: harness, model and URL, in calling order. No keys | you, or Periscope's model page |
+| `periscope-datasets.json` | Runs Periscope shows besides the display zones, `{name: run dir}` | Periscope (Bind / Unbind), or you |
+| `temporal.yaml` | Temporal dynamic config: workflow task timeout, history limits | you |
+| `periscope-password` | `user:pass` for Periscope (mode 600) | you |
+| `models-admin-key` | The key for edits on Periscope's model page (mode 600). Not a model API key | you |
+
+Model API keys (`ARK_API_KEY`, ...) stay in `~/.bashrc`; the runners read them from there. Two more files belong to their services and are written by tools: `pool/config.json` (`warm_pool init`, `configure-runtime`) and `bridge/config.json` (`ecarsi.agent init`). To move to another machine, edit `deployment.env` and `results.json`, then initialise the pool (A.5) and the bridge there. Nothing else names a machine path.
+
+`examples/deployment.env` is the template. The launcher lives inside the control image; the deployment copy reads `deployment.env` and runs it:
 
 ```bash
 # $E/control/control-plane.sh
-export BASE=$E/control
-export IMG=$GROUP_HOME/$USER/eca/images/rsi-control-<stamp>.sif
-export SCIENCE_IMG=$GROUP_HOME/$USER/eca/images/rsi-science-<stamp>.sif
-export CONTROL=$BASE/durable-control POOL=$E/pool BRIDGE=$E/bridge
-export HOSTPY=/path/to/host/python3                       # host Python 3.11+ for the worker launcher
-export TEMPORAL_PORT=7633 DATABASE_PORT=55433 UI_PORT=8633 OBSERVATORY_PORT=8766   # only when another plane shares the host
+set -a; . ~/.config/ecarsi/deployment.env; set +a
 apptainer exec "$IMG" cat /opt/eca-rsi/container/control-plane.sh > "$BASE/.control-plane.from-image.sh"
 exec bash "$BASE/.control-plane.from-image.sh" "$@"
 ```
 
-You can set optional variables: `COORDINATORS` (default 4), `STAGE_LIMIT_FLOORS` (JSON, for example `{"max_in_flight_deg": 12, "max_in_flight_lineages": 6}`), `TEMPORAL_DYNAMIC_CONFIG` (a Temporal dynamic-config YAML), and `BINDS` (default `/scratch,/oak,/home,/lscratch`). Do not set `CODE` in a deployment. See B.2.
+`BINDS` is required. `COORDINATORS` (default 4) and `STAGE_LIMIT_FLOORS` are optional. Do not set `CODE` in a deployment. See B.2.
 
 ### A.5 Initialise the pool
 
 Run both commands inside the compute image with the image Python. `init` records the HyperQueue binary and the interpreter. `configure-runtime` validates the imports and pins the compute image for new requests.
 
 ```bash
-SCI=$GROUP_HOME/$USER/eca/images/rsi-science-<stamp>.sif
-run_sci() { apptainer exec --cleanenv --bind /scratch,/oak,/home,/lscratch --env PYTHONSAFEPATH=1 \
-  --env PYTHONPATH=/opt/eca-rsi:/opt/rsi-control:/opt/rsi-python "$SCI" /usr/local/bin/python3.12 "$@"; }
+set -a; . ~/.config/ecarsi/deployment.env; set +a
+run_sci() { apptainer exec --cleanenv --bind "$BINDS" --env PYTHONSAFEPATH=1 \
+  --env PYTHONPATH=/opt/eca-rsi:/opt/rsi-control:/opt/rsi-python "$SCIENCE_IMG" /usr/local/bin/python3.12 "$@"; }
 
 run_sci -m ecarsi.warm_pool --root $E/pool init --hq /opt/rsi-bin/hq --runtime /usr/local/bin/python3.12
 run_sci -m ecarsi.warm_pool --root $E/pool configure-runtime $E/control/pool-runtime-current.json
@@ -121,19 +130,21 @@ The first start on a new state directory initialises PostgreSQL and the Temporal
 Start Periscope from the compute image. Pass the four roots so its `/_control/` page sees the plane:
 
 ```bash
-cd /tmp && APPTAINERENV_APPEND_PATH=$HOME/local/bin setsid nohup apptainer exec --cleanenv --bind /scratch,/oak,/home,/lscratch \
+set -a; . ~/.config/ecarsi/deployment.env; set +a
+cd /tmp && APPTAINERENV_APPEND_PATH=$HOME/local/bin setsid nohup apptainer exec --cleanenv --bind "$BINDS" \
   --env PYTHONSAFEPATH=1 --env PYTHONPATH=/opt/eca-rsi:/opt/rsi-control:/opt/rsi-python \
-  "$SCI" /usr/local/bin/python3.12 -m ecarsi serve --port 8899 \
-  --control-plane $E/control --control-pool-root $E/pool --control-bridge-root $E/bridge --control-temporal-root $E/control/durable-control \
-  > $SCRATCH/serve-8899.log 2>&1 < /dev/null &
+  "$SCIENCE_IMG" /usr/local/bin/python3.12 -m ecarsi serve --port $PERISCOPE_PORT --auth-file ~/.config/ecarsi/periscope-password \
+  --control-plane $BASE --control-pool-root $POOL --control-bridge-root $BRIDGE --control-temporal-root $CONTROL \
+  > $STATE/control/control-logs/periscope.log 2>&1 < /dev/null &
 ```
 
-Add `--ngrok --domain <reserved domain>` for a public tunnel. `APPTAINERENV_APPEND_PATH` makes your `ngrok` binary visible inside the image. Add `--auth user:pass` before you expose it.
+Add `--ngrok --domain $PERISCOPE_DOMAIN` for a public tunnel. `APPTAINERENV_APPEND_PATH` makes your `ngrok` binary visible inside the image. `--auth-file` keeps the password out of the process list.
 
-Periscope serves the display zones it finds under the `display_roots` of `~/.config/ecarsi/periscope.json` (`--config` for another file), and the entries of `~/.config/ecarsi/registry.json`:
+Periscope serves the display zones under `display_root` and `more_display_roots` of `~/.config/ecarsi/results.json` (`--results` for another file), and the entries of `~/.config/ecarsi/periscope-datasets.json`:
 
 ```json
-{"display_roots": ["/oak/stanford/projects/eca/eca-rsi/display"]}
+{"display_root": "/oak/stanford/projects/eca/eca-rsi/display", "archive_root": "/oak/stanford/projects/eca/eca-rsi/work",
+ "more_display_roots": ["/oak/stanford/projects/eca/eca-rsi-test/display"]}
 ```
 
 ### A.7 Add workers
@@ -143,8 +154,8 @@ Workers are Slurm jobs. You can join a worker in two ways.
 **A job that is the worker.** `control-plane.sh start` unpacks the image's eca-rsi into `$BASE/image-code`. Submit its worker script:
 
 ```bash
-POOL=$E/pool SCIENCE_IMG=$SCI HOSTPY=/path/to/host/python3 \
-  sbatch --time=8:00:00 --cpus-per-task=16 --mem=32G $E/control/image-code/container/worker-node.sh
+set -a; . ~/.config/ecarsi/deployment.env; set +a     # sbatch passes POOL, SCIENCE_IMG, HOSTPY and BINDS on
+sbatch --time=8:00:00 --cpus-per-task=16 --mem=32G $E/control/image-code/container/worker-node.sh
 ```
 
 The job takes every granted core and 90 % of the memory. It joins the HQ server and leaves when the job ends.
@@ -295,16 +306,12 @@ The control-plane path admits datasets through the coordinators. A dataset spec 
 
 ```bash
 cd /tmp
-apptainer exec --cleanenv --bind /scratch,/oak,/home,/lscratch --env PYTHONSAFEPATH=1 --env PYTHONPATH=/opt/eca-rsi:/opt/rsi-control \
+apptainer exec --cleanenv --bind "$BINDS" --env PYTHONSAFEPATH=1 --env PYTHONPATH=/opt/eca-rsi:/opt/rsi-control \
   "$IMG" /usr/local/bin/python3 -m ecarsi.control --service-root $E/control/durable-control --task-queue ecarsi-durable-v2 start-dataset dataset.json
 # later: status-dataset RUN_ID, resume-dataset RUN_ID --reason "..."
 ```
 
-`start-dataset` adds a `storage` key from `~/.config/ecarsi/storage.json` (`--storage` for another file) when the spec has none. With it, the run keeps its display zone up to date after every stage and archives its work tree when the dataset completes:
-
-```json
-{"display_root": "/oak/stanford/projects/eca/eca-rsi/display", "archive_root": "/oak/stanford/projects/eca/eca-rsi/work"}
-```
+`start-dataset` adds a `storage` key from `display_root` and `archive_root` of `~/.config/ecarsi/results.json` (`--results` for another file) when the spec has none. With it, the run keeps its display zone up to date after every stage and archives its work tree when the dataset completes.
 
 Follow progress on Periscope. A unit that stops on `loop_control.json` (`pause`, `stop_after_round`, `pause_after_stage`) ends as `PAUSED`. Clear the control. Then run `resume-dataset` on the unit.
 

@@ -4,7 +4,7 @@ Periscope is the name of the web UI (page titles, the sidebar brand, the
 startup line); the CLI verb stays `serve`.
 
     ecarsi serve [dir...] [--registry FILE] [--port 8899] [--bind 127.0.0.1]
-                 [--ngrok [--domain csj.example.app]] [--auth user:pass]
+                 [--ngrok [--domain csj.example.app]] [--auth user:pass | --auth-file FILE]
                  [--control-plane RUN_DIR [--control-pool-root P] [--control-bridge-root B] [--control-temporal-root T]]
     ecarsi serve scan-add <dir-or-glob>... [--name N] [--dry-run] [--registry FILE]
     ecarsi serve remove   <name>... [--registry FILE]
@@ -22,20 +22,20 @@ rendered from the run directory on every request (ecarsi.index), so a run
 that is still going shows its current stage; the server never writes into
 a dataset directory.
 
-The single source of truth for what is served is the REGISTRY FILE
-(default $XDG_CONFIG_HOME/ecarsi/registry.json, i.e. ~/.config/ecarsi/
-registry.json), a JSON object {name: path}. The server re-reads it whenever
+The single source of truth for what is served by hand is the DATASET LIST
+(default $XDG_CONFIG_HOME/ecarsi/periscope-datasets.json, i.e. ~/.config/ecarsi/
+periscope-datasets.json), a JSON object {name: path}. The server re-reads it whenever
 its mtime changes, so `scan-add` / `remove` — and the navigator's Bind /
 Unbind buttons, which edit the same file — take effect within a request,
 without talking to the running process. Kill and restart the server on any
 host and the same list comes back. Directories given on the `serve`
 command line are served in addition, for this process only.
 
-A fourth source, under the file and the command line, is the DISPLAY ZONES: the config file
-(default $XDG_CONFIG_HOME/ecarsi/periscope.json, `--config`) may list `display_roots`; every
-`<root>/<collection>/<dataset>/<run>/display.json` there (ops/display-zone.py) is served under the
-name it records. The server rescans them every 10 minutes in the background and re-reads the
-config file each time, so a new display zone or root appears without a restart.
+A fourth source, under the file and the command line, is the DISPLAY ZONES: the results file
+(default $XDG_CONFIG_HOME/ecarsi/results.json, `--results`) names a `display_root` and may list
+`more_display_roots`; every `<root>/<collection>/<dataset>/<run>/display.json` there is served under
+the name it records. The server rescans them every 10 minutes in the background and re-reads the
+results file each time, so a new display zone or root appears without a restart.
 
 `dump` copies the registry file elsewhere (or prints it); `reload` merges
 another such file into it (`--replace` to swap the whole list) — handy for
@@ -45,7 +45,8 @@ Default: local only (http://127.0.0.1:PORT). --ngrok additionally opens ONE
 ngrok tunnel covering everything (ngrok binary + authtoken are the user's
 responsibility; so are account limits such as one agent session per free
 account). --domain uses a reserved domain instead of a random URL;
---auth USER:PASS puts a password on the whole site (HTTP basic auth,
+--auth USER:PASS (or --auth-file, a file holding USER:PASS, which keeps it out of
+the process list) puts a password on the whole site (HTTP basic auth,
 checked by this server on every request — local, LAN or tunnel; ngrok is
 not involved). Default: no password, so day-to-day debugging is prompt-free.
 The navigator's Bind / Unbind buttons (POST /_bind, /_unbind) are refused
@@ -85,20 +86,21 @@ SUBCOMMANDS = ("scan-add", "remove", "list", "dump", "reload")
 
 def default_registry() -> Path:
     base = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
-    return base / "ecarsi" / "registry.json"
+    return base / "ecarsi" / "periscope-datasets.json"
 
 
-def default_config() -> Path:
-    return default_registry().with_name("periscope.json")
+def default_results() -> Path:
+    return default_registry().with_name("results.json")
 
 
 def display_zones(config: Path | None) -> dict[str, Path]:
     """name -> display-zone copy, for every <root>/<collection>/<dataset>/<run>/display.json under the
-    config file's display_roots. A name that several copies claim (a dataset run again) goes to the newest
-    one; the others are served as <name>-<run>."""
+    results file's display_root and more_display_roots. A name that several copies claim (a dataset run
+    again) goes to the newest one; the others are served as <name>-<run>."""
     try:
-        roots = json.loads(Path(config).read_text()).get("display_roots", []) if config else []
-    except (OSError, ValueError, AttributeError):
+        results = json.loads(Path(config).read_text()) if config else {}
+        roots = [r for r in [results.get("display_root"), *results.get("more_display_roots", [])] if r]
+    except (OSError, ValueError, AttributeError, TypeError):
         return {}
     records = []
     for root in roots:
@@ -1616,6 +1618,8 @@ def start_ngrok(port: int, domain: str | None) -> tuple[subprocess.Popen, str]:
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
+    if args.auth_file:
+        args.auth = Path(args.auth_file).expanduser().read_text().strip()
     reg_path = Path(args.registry).expanduser().resolve()
     extra: dict[str, Path] = {}
     for d in args.dir:
@@ -1643,7 +1647,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         verdicts = ControlVerdicts(base / 'fleet-status.json')
     # The plane's own list of runs is the third source of rows, under the file and the command line:
     # a submitted dataset is on the page at once, and nobody registers anything by hand.
-    registry = Registry(reg_path, extra, published=verdicts.runs, config=Path(args.config).expanduser())
+    registry = Registry(reg_path, extra, published=verdicts.runs, config=Path(args.results).expanduser())
     registry.scan_display()
     items = registry.snapshot()
     registry.start()
@@ -1925,7 +1929,7 @@ def main(argv: list[str]) -> int:
             "--registry",
             default=str(default_registry()),
             metavar="FILE",
-            help="registry file, JSON {name: path} (default $XDG_CONFIG_HOME/ecarsi/registry.json)",
+            help="dataset list, JSON {name: path} (default $XDG_CONFIG_HOME/ecarsi/periscope-datasets.json)",
         )
 
     if argv and argv[0] in SUBCOMMANDS:
@@ -2023,10 +2027,11 @@ def main(argv: list[str]) -> int:
         "--domain", default=None, help="reserved ngrok domain (implies --ngrok)"
     )
     ap.add_argument(
-        "--config",
-        default=str(default_config()),
+        "--results",
+        default=str(default_results()),
         metavar="FILE",
-        help="Periscope config, JSON {\"display_roots\": [DIR, ...]} (default $XDG_CONFIG_HOME/ecarsi/periscope.json)",
+        help="results file, JSON {\"display_root\": DIR, \"more_display_roots\": [DIR, ...], ...}: the display zones to serve "
+        "(default $XDG_CONFIG_HOME/ecarsi/results.json)",
     )
     ap.add_argument(
         "--auth",
@@ -2034,6 +2039,7 @@ def main(argv: list[str]) -> int:
         metavar="USER:PASS",
         help="web-level password (HTTP basic auth, enforced by the server on every request, local or tunnel); default none",
     )
+    ap.add_argument("--auth-file", default=None, metavar="FILE", help="read USER:PASS for --auth from FILE")
     registry_arg(ap)
     args = ap.parse_args(argv)
     return cmd_serve(args)

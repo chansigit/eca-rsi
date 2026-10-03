@@ -88,7 +88,7 @@ def test_settings_http_admin_gate_and_no_secret_echo(tmp_path, monkeypatch):
     catalog = tmp_path / 'models.json'
     catalog.write_text(json.dumps({'models': []}))
     token = 't' * 40
-    (tmp_path / 'model-admin-token').write_text(token)
+    (tmp_path / 'models-admin-key').write_text(token)
     monkeypatch.setenv('ECA_MODEL_CATALOG', str(catalog))
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), partial(serve.Handler, registry=serve.Registry(tmp_path / 'registry.json')))
     thread = threading.Thread(target=server.serve_forever, daemon=True);thread.start()

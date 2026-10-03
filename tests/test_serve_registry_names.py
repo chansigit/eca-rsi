@@ -63,7 +63,7 @@ def test_a_settled_registry_proposes_no_renames():
 
 def test_display_roots_in_the_config_serve_every_display_zone_under_its_recorded_name(tmp_path):
     """ops/display-zone.py copies a run's pages to <root>/<collection>/<dataset>/<run>/ with a display.json;
-    listing the root in periscope.json serves them all, under the file and the command line."""
+    naming the root in results.json serves them all, under the file and the command line."""
     import json
     from ecarsi.ui.serve import Registry
     root = tmp_path / "display"
@@ -73,8 +73,8 @@ def test_display_roots_in_the_config_serve_every_display_zone_under_its_recorded
         (root / coll / ds / run / "display.json").write_text(json.dumps({"name": name, "collection": coll}))
     (root / "hcl" / "Broken" / "gen1").mkdir(parents=True)
     (root / "hcl" / "Broken" / "gen1" / "display.json").write_text("{")
-    config = tmp_path / "periscope.json"
-    config.write_text(json.dumps({"display_roots": [str(root), str(tmp_path / "gone")]}))
+    config = tmp_path / "results.json"
+    config.write_text(json.dumps({"display_root": str(root), "archive_root": "/a", "more_display_roots": [str(tmp_path / "gone")]}))
     registry_file = tmp_path / "registry.json"
     registry_file.write_text(json.dumps({"3ca-Durante": str(tmp_path / "elsewhere"), "kept": str(root / "hcl" / "Adipose" / "gen1")}))
     reg = Registry(registry_file, config=config)

@@ -21,7 +21,7 @@ New sessions and dispatches archive the exact adapter source in `<bridge>/adapte
 
 ## Model health and fallback
 
-The model catalog (`ECA_MODEL_CATALOG`, normally `~/.config/ecarsi/model-pool.json`) defines the calling order. The system prefers a free, healthy primary model. A busy or cooling primary model lets the next configured model take the turn. Each attempt has an immutable dispatch record and an independent task.
+The model catalog (`ECA_MODEL_CATALOG`, normally `~/.config/ecarsi/models.json`) defines the calling order. The system prefers a free, healthy primary model. A busy or cooling primary model lets the next configured model take the turn. Each attempt has an immutable dispatch record and an independent task.
 
 The bridge `config.json` file defines defaults under `routing`:
 
@@ -85,7 +85,7 @@ Worker credential-shell timeouts are transient setup failures, not model failure
 ## Commands
 
 ```bash
-python -m ecarsi.agent init <bridge> --catalog ~/.config/ecarsi/model-pool.json --concurrency 4 --pool-root <pool>
+python -m ecarsi.agent init <bridge> --catalog ~/.config/ecarsi/models.json --concurrency 4 --pool-root <pool>
 python -m ecarsi.agent serve <bridge>
 python -m ecarsi.agent runners <bridge>
 python -m ecarsi.agent submit <bridge> request.json
