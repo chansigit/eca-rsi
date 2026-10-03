@@ -60,7 +60,7 @@ Workers advertise the runtime digest. After you switch images, stop the worker s
 
 ## Build
 
-For a full build, run [ops/build-images.sh](../ops/build-images.sh). It starts from base images whose control environment comes from [control-requirements.lock](control-requirements.lock) (CPython 3.12 x86_64 hashed wheels). It adds Temporal, PostgreSQL, and HQ. It then copies the eca-rsi checkout to `/opt/eca-rsi`.
+For a full build, run [ops/build-images.sh](../ops/build-images.sh). It starts from base images whose control environment comes from [control-requirements.lock](control-requirements.lock) (CPython 3.12 x86_64 hashed wheels). It takes Temporal, PostgreSQL, and HQ out of an existing control image. It then copies the eca-rsi checkout to `/opt/eca-rsi`.
 
 For an incremental build, run `ops/build-images-update.sh`. Extract the current images into a sandbox directory on local node storage. Replace `/opt/eca-rsi` and any updated wheels. Pack the sandbox directory and wrap it as a SIF file.
 

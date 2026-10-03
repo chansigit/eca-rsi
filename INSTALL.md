@@ -254,7 +254,7 @@ It extracts both images into sandboxes on node-local disk. It replaces `/opt/eca
 
 Pack by hand. `apptainer build` from a sandbox segfaults in its mksquashfs step on the compute sandbox. The script runs `mksquashfs ... -processors 4`. Then it runs `apptainer sif new` and `apptainer sif add --datatype 4 --parttype 2 --partfs 1 --partarch 2 --groupid 1`.
 
-A full rebuild (`ops/build-images.sh`) starts from the two base images, whose Python environments come from `container/control-requirements.lock` with `--require-hashes`. It adds Temporal, PostgreSQL and HQ from a tools directory and the eca-rsi snapshot. Record the sha256 of every new image. Then switch (A.9). Run an end-to-end regression on a small dataset.
+A full rebuild (`ops/build-images.sh`) starts from the two base images, whose Python environments come from `container/control-requirements.lock` with `--require-hashes`. It adds the eca-rsi snapshot, and Temporal, PostgreSQL and HQ taken from an existing control image (every control image carries them; nothing on scratch does). The Python environments' own root is `$GROUP_HOME/chensj16/eca/images/base/python312-slim.sif` ([docs/history/CONTAINER_LEGACY.md](docs/history/CONTAINER_LEGACY.md)). Record the sha256 of every new image. Then switch (A.9). Run an end-to-end regression on a small dataset.
 
 ### B.6 Source repositories
 
