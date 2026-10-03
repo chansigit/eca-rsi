@@ -5,7 +5,7 @@
 Nothing here is told what happened: the state of a run is read back from
 manifests, contract files, stats/decision files and progress.log, so the
 same function renders a finished release and a run that is halfway through
-round 2 (ecarsi.serve re-renders on every request, which is what makes
+round 2 (ecarsi.ui.serve re-renders on every request, which is what makes
 mid-run monitoring possible). Every step also writes the static pages when
 it finishes, so a directory that is only copied around still has them.
 

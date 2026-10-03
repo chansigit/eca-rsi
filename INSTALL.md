@@ -45,7 +45,7 @@ Store runtime state on a shared, writable filesystem. Purged scratch is acceptab
 
 ```text
 $GROUP_SCRATCH/<user>/eca/
-  control/            # control-plane.sh (deployment copy), durable-control/ (Temporal + PostgreSQL), control-logs/, image-code/, ops/
+  control/            # ops/ and control-plane.sh (links into the eca-rsi checkout), durable-control/ (Temporal + PostgreSQL), control-logs/, image-code/
   pool/               # warm pool: config.json, requests/, hq/, worker-state/
   bridge/             # model-turn service: requests/
   runs/               # dataset run directories
@@ -55,6 +55,7 @@ Rules:
 
 - You must own every directory with mode `0700`. The pool and bridge refuse to start otherwise.
 - Set `control/pool` and `control/bridge` as symlinks to `../pool` and `../bridge`.
+- Link the deployment scripts from the checkout: `ln -s <eca-rsi checkout>/ops control/ops` and `ln -s ops/control-plane.sh control/control-plane.sh`. [ops/README.md](ops/README.md) lists them.
 - Create `bridge/requests` before you start the bridge.
 
 ```bash
@@ -80,10 +81,10 @@ Every setting you edit lives in `~/.config/ecarsi/`:
 
 Model API keys (`ARK_API_KEY`, ...) stay in `~/.bashrc`; the runners read them from there. Two more files belong to their services and are written by tools: `pool/config.json` (`warm_pool init`, `configure-runtime`) and `bridge/config.json` (`ecarsi.agent init`). To move to another machine, edit `deployment.env` and `results.json`, then initialise the pool (A.5) and the bridge there. Nothing else names a machine path.
 
-`examples/deployment.env` is the template. The launcher lives inside the control image; the deployment copy reads `deployment.env` and runs it:
+`examples/deployment.env` is the template. The launcher lives inside the control image; `ops/control-plane.sh` reads `deployment.env` and runs it:
 
 ```bash
-# $E/control/control-plane.sh
+# ops/control-plane.sh
 set -a; . ~/.config/ecarsi/deployment.env; set +a
 apptainer exec "$IMG" cat /opt/eca-rsi/container/control-plane.sh > "$BASE/.control-plane.from-image.sh"
 exec bash "$BASE/.control-plane.from-image.sh" "$@"
@@ -210,7 +211,7 @@ Develop in the `dev` worktree. Fast-forward `main` after the tests pass. Do not 
 
 ### B.2 Run a checkout instead of the image snapshot
 
-Set `CODE=<checkout>` in the deployment copy of the launcher. The checkout comes first on `PYTHONPATH`. It shadows `/opt/eca-rsi` in both images. `control-plane.sh identity` prints which one runs. Use this setting on a test plane only. Production runs from the snapshot.
+Set `CODE=<checkout>` before `ops/control-plane.sh`. The checkout comes first on `PYTHONPATH`. It shadows `/opt/eca-rsi` in both images. `control-plane.sh identity` prints which one runs. Use this setting on a test plane only. Production runs from the snapshot.
 
 The pool pins program files by content into every request. A changed stage file (`ecarsi/stages/*`, `ecarsi/agent/session.py`) breaks queued requests and in-flight sessions. Deploy such changes only when 0 executions are running.
 
@@ -253,7 +254,7 @@ It extracts both images into sandboxes on node-local disk. It replaces `/opt/eca
 
 Pack by hand. `apptainer build` from a sandbox segfaults in its mksquashfs step on the compute sandbox. The script runs `mksquashfs ... -processors 4`. Then it runs `apptainer sif new` and `apptainer sif add --datatype 4 --parttype 2 --partfs 1 --partarch 2 --groupid 1`.
 
-A full rebuild (`ops/build-images-20261001.sh`) downloads Temporal and PostgreSQL. It installs `container/control-requirements.lock` with `--require-hashes`. Record the sha256 of every new image. Then switch (A.9). Run an end-to-end regression on a small dataset.
+A full rebuild (`ops/build-images.sh`) starts from the two base images, whose Python environments come from `container/control-requirements.lock` with `--require-hashes`. It adds Temporal, PostgreSQL and HQ from a tools directory and the eca-rsi snapshot. Record the sha256 of every new image. Then switch (A.9). Run an end-to-end regression on a small dataset.
 
 ### B.6 Source repositories
 

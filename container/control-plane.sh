@@ -2,8 +2,8 @@
 # Start/stop the v2 control plane on THIS host. The deployed copy lives in the run directory and
 # exports the paths below (from ~/.config/ecarsi/deployment.env, see examples/deployment.env); everything is idempotent, logs under $BASE/control-logs, and state lives
 # on shared storage, so run it again on a fresh node after an allocation expires.
-#   control-plane.sh start|stop|restart|status [temporal|hq|scheduler|bridge|runners|coordinators|fleet-status|pruner|observatory ...]
-#   observatory (a second, private Periscope) starts only when named; ops/start-periscope.sh starts the real one.
+#   control-plane.sh start|stop|restart|status [temporal|hq|scheduler|bridge|runners|coordinators|fleet-status|pruner ...]
+#   Periscope is not a component: ops/start-periscope.sh starts it from the science image.
 #   hq is the HyperQueue server on its own: restarting the scheduler then leaves every worker connected.
 #   Without it running the scheduler starts (and on exit kills) a server of its own, as before.
 #   control-plane.sh report [--sessions HOURS] [--json]     # text status of pool, bridge, workers, datasets
@@ -23,11 +23,10 @@ CONTROL=${CONTROL:-$BASE/durable-control}; POOL=${POOL:-$BASE/pool}; BRIDGE=${BR
 LOGS=$BASE/control-logs; mkdir -p "$LOGS"
 COORDINATORS=${COORDINATORS:-4}; TASK_QUEUE=${TASK_QUEUE:-ecarsi-durable-v2}
 STAGE_LIMIT_FLOORS=${STAGE_LIMIT_FLOORS:-}                # e.g. '{"max_in_flight_deg": 12, "max_in_flight_lineages": 6}'
-# TEMPORAL_PORT / DATABASE_PORT / UI_PORT / OBSERVATORY_PORT: set them when another control plane shares the host.
+# TEMPORAL_PORT / DATABASE_PORT / UI_PORT: set them when another control plane shares the host.
 # TEMPORAL_DYNAMIC_CONFIG: a Temporal dynamic-config YAML (hot-reloaded), e.g. a longer default workflow task timeout.
 : "${BINDS:?host directories the containers see, comma-separated, e.g. /scratch,/home}"
 HOST_IP=$(hostname -I | awk '{print $1}')
-HOSTPY=${HOSTPY:-python3}                                 # Periscope (with the control-plane monitor at /_control/) runs on a host interpreter
 PY=(apptainer exec --cleanenv --bind "$BINDS" --env LC_ALL=C --env LANG=C
     --env "PYTHONPATH=$CODE_IN:/opt/rsi-control" --env PYTHONNOUSERSITE=1 --env PYTHONSAFEPATH=1
     --env PYTHONDONTWRITEBYTECODE=1 --env OPENBLAS_NUM_THREADS=1 --env OMP_NUM_THREADS=1
@@ -37,7 +36,6 @@ PY=(apptainer exec --cleanenv --bind "$BINDS" --env LC_ALL=C --env LANG=C
 pattern() { case $1 in temporal) echo "ecarsi.control.temporal --root $CONTROL";; scheduler) echo "ecarsi.warm_pool --root $POOL scheduler";;
     hq) echo "ecarsi.warm_pool --root $POOL hq-server";;
     bridge) echo "ecarsi.agent serve $BRIDGE";; runners) echo "ecarsi.agent runners $BRIDGE";; coordinators) echo "ecarsi.control --service-root $CONTROL .*worker";;
-    observatory) echo "ecarsi.serve --registry $BASE/periscope-registry.json";;   # the registry path, not --control-plane: another Periscope may serve the same run directory
     fleet-status) echo "fleet-status.py --service-root $CONTROL";;
     pruner) echo "request-pruner.py --service-root $CONTROL";; esac; }
 # Skip container wrappers, interactive `bash -c` shells and this script's own subshells: a shell whose
@@ -78,9 +76,6 @@ start() {
     coordinators) local n; n=$(pids coordinators | wc -l)
         for ((i=n; i<COORDINATORS; i++)); do launch "coordinator-$i" env "APPTAINERENV_ECA_RSI_STAGE_LIMIT_FLOORS=$STAGE_LIMIT_FLOORS" \
             "${PY[@]}" -m ecarsi.control --service-root "$CONTROL" --task-queue "$TASK_QUEUE" worker --workflow-slots 2; done ;;
-    observatory) launch observatory apptainer exec --cleanenv --bind "$BINDS" --env "PYTHONPATH=$CODE_IN:/opt/rsi-control:/opt/rsi-python" \
-        "${SCIENCE_IMG:?science image for Periscope}" /usr/local/bin/python3.12 -m ecarsi.serve --registry "$BASE/periscope-registry.json" --control-plane "$BASE" \
-        --control-pool-root "$POOL" --control-bridge-root "$BRIDGE" --control-temporal-root "$CONTROL" --bind "$HOST_IP" --port "${OBSERVATORY_PORT:-8765}" ;;
     fleet-status) launch fleet-status "${PY[@]}" "$CODE_IN/container/fleet-status.py" --service-root "$CONTROL" --out "$BASE/fleet-status.json" ;;
     runners) launch runners "${PY[@]}" -m ecarsi.agent runners "$BRIDGE" ;;
     pruner) launch request-pruner "${PY[@]}" "$CODE_IN/container/request-pruner.py" --service-root "$CONTROL" --pool-root "$POOL" \
@@ -91,7 +86,7 @@ stop() {
   pids "$1" | while read -r p; do kill -TERM "$p" 2>/dev/null; done
   for _ in $(seq 20); do pids "$1" | grep -q . || return 0; sleep 1; done; echo "warning: $1 still running"
 }
-status() { for c in temporal hq scheduler bridge runners coordinators observatory fleet-status pruner; do printf '%-13s %s\n' "$c" "$(n=$(pids "$c" | wc -l); [ "$n" -gt 0 ] && echo "running ($n proc)" || echo stopped)"; done; }
+status() { for c in temporal hq scheduler bridge runners coordinators fleet-status pruner; do printf '%-13s %s\n' "$c" "$(n=$(pids "$c" | wc -l); [ "$n" -gt 0 ] && echo "running ($n proc)" || echo stopped)"; done; }
 
 cmd=${1:-status}; shift || true
 comps=("$@"); [ ${#comps[@]} -eq 0 ] && comps=(temporal hq scheduler bridge runners coordinators fleet-status pruner)

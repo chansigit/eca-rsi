@@ -2,7 +2,7 @@
 
 Every ecarsi step derives its paths from here, never by spelling directory
 names itself, so the whole run of one dataset is a single tree that can be
-served as-is (ecarsi.serve) and rendered from disk alone (ecarsi.index).
+served as-is (ecarsi.ui.serve) and rendered from disk alone (ecarsi.index).
 
 Two layouts. The control plane writes generation 2 (00-organize/, 01-per-sample/, rounds/roundNN/
 {02-cross-sample,03-zoom-in}/, publication.json files; the GEN2_* names below). Generation 1 is the

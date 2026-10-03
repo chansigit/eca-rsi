@@ -32,7 +32,7 @@ control-plane.sh host-code                            # unpack the snapshot to $
 
 - The `start` command logs the active eca-rsi version in `control-logs/identity.log`. Set `CODE=<checkout>` for development. The checkout appears first on `PYTHONPATH` and shadows `/opt/eca-rsi`. Deploy production code changes to the control plane only through a rebuilt image.
 - Set directory permissions under `BASE` to mode `0700`. Create `bridge/requests` before the first start.
-- Set `TEMPORAL_PORT`, `DATABASE_PORT`, `UI_PORT`, `OBSERVATORY_PORT`, and `TASK_QUEUE` if another control plane shares the host. The `TEMPORAL_DYNAMIC_CONFIG` variable names a hot-reloaded Temporal dynamic configuration YAML file. The `STAGE_LIMIT_FLOORS` variable raises `max_in_flight_deg` and `max_in_flight_lineages` for every dataset.
+- Set `TEMPORAL_PORT`, `DATABASE_PORT`, `UI_PORT`, and `TASK_QUEUE` if another control plane shares the host. The `TEMPORAL_DYNAMIC_CONFIG` variable names a hot-reloaded Temporal dynamic configuration YAML file. The `STAGE_LIMIT_FLOORS` variable raises `max_in_flight_deg` and `max_in_flight_lineages` for every dataset.
 - The `COORDINATORS` variable sets the number of coordinator processes (default: 4). Allocate 96 GB of memory to the control plane. Each coordinator process uses 6–7 GB.
 
 Start Periscope from the compute image using `ops/start-periscope.sh` from the deployment directory. Export `APPTAINERENV_APPEND_PATH=$HOME/local/bin` so the container image detects `ngrok`.
@@ -60,7 +60,7 @@ Workers advertise the runtime digest. After you switch images, stop the worker s
 
 ## Build
 
-For a full build, run `ops/build-images-<date>.sh` in the deployment directory. The script installs the control environment from [control-requirements.lock](control-requirements.lock) with CPython 3.12 x86_64 hashed wheels. It adds Temporal, PostgreSQL, and HQ. It then copies the eca-rsi checkout to `/opt/eca-rsi`.
+For a full build, run [ops/build-images.sh](../ops/build-images.sh). It starts from base images whose control environment comes from [control-requirements.lock](control-requirements.lock) (CPython 3.12 x86_64 hashed wheels). It adds Temporal, PostgreSQL, and HQ. It then copies the eca-rsi checkout to `/opt/eca-rsi`.
 
 For an incremental build, run `ops/build-images-update.sh`. Extract the current images into a sandbox directory on local node storage. Replace `/opt/eca-rsi` and any updated wheels. Pack the sandbox directory and wrap it as a SIF file.
 

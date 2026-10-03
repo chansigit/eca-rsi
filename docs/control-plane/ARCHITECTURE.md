@@ -22,7 +22,7 @@ Stage programs    ecarsi.stages      organize / persample / crosssample / zoomin
 ──────────────────────────────────────────────────────────────────────────────────────
 Kernels           osp · msp · zmip · standissect-lite        Model runtime: agent-harness-bridge (`harness_bridge`)
 ──────────────────────────────────────────────────────────────────────────────────────
-Observation       Periscope (`ecarsi.serve`), with the control-plane page at `/_control/`;
+Observation       Periscope (`ecarsi.ui.serve`), with the control-plane page at `/_control/`;
                   `ecarsi.observatory` provides that page and the `status` / `tokens` reports
 ```
 
