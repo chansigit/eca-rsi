@@ -28,7 +28,7 @@ MEASURED_CEILING_MB = {
     'sample_inventory': 1536, 'submit_quality': 5632, 'submit_decision': 9984,
     'submit_annotation': 4096, 'submit_types': 5632, 'submit_plan': 5632,
     'subcluster': 6144, 'zoom-in.assemble': 1024,
-    'cross-sample.assemble': 2560, 'zoom-in.apply': 7168, 'persample.partition': 7424,
+    'cross-sample.assemble': 2560, 'zoom-in.apply': 7168,
     'zoom-in.lineage.prepare': 1536, 'zoom-in.plan.prepare': 1536,
     'cross-sample.type.prepare': 1536, 'cross-sample.quality.prepare': 1536,
     'cross-sample.inclusion.prepare': 1536, 'inspect_source': 5120, 'organize.prepare': 8192,
@@ -39,6 +39,23 @@ MEASURED_CEILING_MB = {
 # exactly one core on its 2-CPU grant; zoom-in compute/markers peak at 1.0-1.4 cores of 4. The
 # thread caps (OMP/OPENBLAS/NUMBA) follow spec["cpus"], so a smaller grant changes nothing they did.
 MEASURED_CPUS = {'zoom-in.deg': 1, 'cross-sample.deg': 1, 'zoom-in.compute': 2, 'zoom-in.markers': 2}
+
+
+# Steps that hold their whole input matrix, dense HVG copies included: (fixed MiB, MiB per cell).
+# osp.compute: a PanSci heart_Prkdc sample peaked at 24.7 GiB (2026-09-22), the 11_Shietal samples at
+# 0.8-2.1 GiB (2026-10-02 journals). cross-sample and zoom-in compute: MSP scales 3000 HVGs densely next
+# to the counts it loads; no journaled run held more than ~10k cells, so these are estimates to
+# re-measure from the first large run (decision 0016). per_cell x 20,000-cell chunks stays near 8 GiB.
+CELL_MB = {'osp.compute': (1024, 0.4), 'cross-sample.compute': (2048, 0.15),
+           'cross-sample.compute-round': (2048, 0.15), 'zoom-in.compute': (2048, 0.15)}
+
+
+def from_cells(request, n_cells):
+    """Raise a whole-matrix step's memory to what its cell count needs; never lower it. Before this a
+    fixed 8 GiB reached a large sample only through two killed attempts (8 -> 16 -> 32 GiB) and stopped there."""
+    fixed, per_cell = CELL_MB[request['operation_id']]
+    memory = math.ceil((fixed + per_cell * n_cells) / 256) * 256
+    return request if memory <= request['memory_mb'] else dict(request, memory_mb=memory)
 
 
 def measured_ceiling(spec, ceilings=None):

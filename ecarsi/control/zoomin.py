@@ -115,6 +115,9 @@ def zoomin_step(action,args):
             # time_request against the worker's remaining time; 4 h test nodes on 2026-09-27).
             request['timeout_seconds']*=2
         request=from_deg_buffers(request,refs[0],root/(request_id+'.resources.json'),spec['pool_root'])
+    elif action=='compute':
+        from ..warm_pool.budget import from_cells
+        request=from_cells(request,cells)
     elif action in {'prepare','markers','subset','merge'}:
         # These load the whole cross-sample matrix; size them from it, not a constant.
         from ..warm_pool.budget import from_artifact

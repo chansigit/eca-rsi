@@ -649,6 +649,24 @@ def _gen2_rounds(unit: Path) -> list[dict]:
     return out
 
 
+def batch_source(manifest: dict) -> str:
+    """Where a unit's samples and batch came from (decision 0016), one line for its Samples header."""
+    decision = (manifest.get("sample_mapping") or {}).get("decision") or {}
+    sources = decision.get("sources") or {}
+    if not sources:
+        return ""
+    by = sorted({d.get("source", "agent") for d in sources.values()})
+    columns = sorted({d.get("sample_column") or "whole source" for d in sources.values()})
+    platforms = sorted({d["platform"] for d in sources.values() if d.get("platform")})
+    batch = decision.get("batch_key") or {}
+    batch_text = ("one batch, no Harmony" if batch.get("single") else
+                  f"batch {batch['column']}" if batch.get("column") not in (None, "eca_batch") else "batch = sample")
+    n_chunks = sum(len(c) for c in (decision.get("chunks") or {}).values())
+    return "; ".join(x for x in (
+        f"samples from {'/'.join(by)}: {', '.join(columns)}", batch_text,
+        f"{n_chunks} chunks" if n_chunks else "", f"platform {', '.join(platforms)}" if platforms else "") if x)
+
+
 def _gen2_unit_state(unit: Path) -> dict:
     published = _json(unit / L.GEN2_PUBLICATION, {})
     per = _json(unit / L.GEN2_PERSAMPLE / L.GEN2_PUBLICATION, {})
@@ -707,7 +725,8 @@ def _gen2_unit_state(unit: Path) -> dict:
             "persample": {"manifest": bool(per), "n": len(per.get("samples", [])) + len(failed_samples),
                           "n_done": len(per.get("samples", [])), "done": per.get("state") == "complete",
                           "samples": [], "species": manifest.get("species"), "sample_column": None,
-                          "n_excluded": per.get("n_removed"), "skipped": skipped, "failed": failed_samples},
+                          "n_excluded": per.get("n_removed"), "skipped": skipped, "failed": failed_samples,
+                          "batch_source": batch_source(manifest)},
             "rounds": rounds, "released": released, "stage": stage, "stage_class": cls,
             "last_event": published.get("reason", "") or (rounds[-1]["reason"] if rounds else ""),
             "final_cells": final_cells,
@@ -823,6 +842,8 @@ def _gen2_unit_body(unit: Path, s: dict, base: str = "") -> str:
     meta = [f'{per["n_done"]}/{per["n"]} done'] if per["n"] else []
     if per.get("n_excluded"):
         meta.append(f'{per["n_excluded"]:,} cells excluded before OSP')
+    if per.get("batch_source"):
+        meta.append(e(per["batch_source"]))
     parts.append(f'<section class="block" id="samples"><h2>Samples <span class="count">{" · ".join(meta)}</span></h2>'
                  f'<p class="lede">{EXPLAIN["samples"]}</p>'
                  + ('<div class="wrap"><table><thead><tr><th>sample</th><th class="r">input cells</th><th>osp</th>'

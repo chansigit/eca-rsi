@@ -127,8 +127,12 @@ def inspect_input(spec, destination):
     if sum(s['n_cells'] for s in samples) != publication['n_survived']:
         raise ValueError('Per-sample publication cell total changed')
     # All later operations retain this accepted source chain instead of copying historical ledgers.
+    from ..sample_mapping import CHUNK
+    # Chunks of one sample are random slices: no inclusion agent judges them (decision 0016).
+    # The key is written only when true, so an unchunked unit's record is the same as before.
+    chunked = {'chunked': True} if any(CHUNK.search(s['sample']) for s in samples) else {}
     immutable(destination/'inspected.json', dict(samples=samples, empty=empty, files=files,
-              input=spec['input'], n_input=publication['n_survived'], spec=spec))
+              input=spec['input'], n_input=publication['n_survived'], spec=spec, **chunked))
 
 
 def compute(inspected_ref, inclusion_ref, destination):
@@ -659,9 +663,10 @@ def main():
         immutable(dest/'agent.json',agent_spec(spec,evidence,phase,parent,types))
     elif a.operation=='include-single':
         bundle=verified(ref(0))
-        if len(bundle['samples'])!=1:raise ValueError('Automatic inclusion requires exactly one sample')
-        from .inclusion import SINGLE_SAMPLE_NOTE
-        immutable(dest/'decision.json',dict(accepted=True,evidence=ref(0),proposal={'samples':[dict(sample=bundle['samples'][0]['sample'],include=True,reason=SINGLE_SAMPLE_NOTE)],'notes':SINGLE_SAMPLE_NOTE}))
+        if len(bundle['samples'])!=1 and not bundle.get('chunked'):raise ValueError('Automatic inclusion requires exactly one sample or chunked samples')
+        from .inclusion import CHUNKED_NOTE, SINGLE_SAMPLE_NOTE
+        note=CHUNKED_NOTE if bundle.get('chunked') else SINGLE_SAMPLE_NOTE
+        immutable(dest/'decision.json',dict(accepted=True,evidence=ref(0),proposal={'samples':[dict(sample=s['sample'],include=True,reason=note) for s in bundle['samples']],'notes':note}))
     elif a.operation=='compute':compute(ref(0),ref(1),dest)
     elif a.operation=='compute-round':compute_round(ref(0),dest)
     elif a.operation=='refine':refine(ref(0),ref(1),ref(2),dest)

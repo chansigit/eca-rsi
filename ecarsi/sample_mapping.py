@@ -11,6 +11,11 @@ SAMPLE_KEY = "eca_sample_id"
 # `batch_key: false` declares the unit one batch: every cell gets this column with one value, so MSP and
 # ZMIP skip Harmony and the per-batch HVG vote (they correct only across two or more batch values)
 SINGLE_BATCH_COLUMN, SINGLE_BATCH = "eca_batch", "single_batch"
+# A sample above this many cells runs per-sample QC as chunks (decision 0016): one OSP compute and one
+# agent session per chunk, each inside the default 8 GiB (an 89k-nucleus PanSci sample peaked at 24.7 GiB).
+# The chunks keep their sample as the batch. Sample map `chunk_cells` overrides it.
+CHUNK_CELLS = 20000
+CHUNK = re.compile(r"\.chunk\d+$")  # generated sample IDs end in a digest; merge IDs must not end like this
 
 
 def normalize(values):
@@ -175,7 +180,7 @@ def build_mapping(h5ad: Path, unit: Path | None, spec: dict | None,
     for merge in (spec or {}).get("merges", []):
         sid = merge.get("sample_id")
         if (not isinstance(sid, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,119}", sid)
-                or not str(merge.get("evidence", "")).strip()):
+                or CHUNK.search(sid) or not str(merge.get("evidence", "")).strip()):
             raise ValueError("cross-source merge needs sample_id and positive experiment evidence")
         if sid in merge_ids or sid in groups.values():
             raise ValueError(f"duplicate/colliding merged sample_id: {sid}")
@@ -192,7 +197,10 @@ def build_mapping(h5ad: Path, unit: Path | None, spec: dict | None,
     if table[kept].duplicated([SAMPLE_KEY, "source_cell_id"]).any():
         raise ValueError("a merged experiment contains repeated original cell IDs; resolve overlapping source cells first")
     table["excluded_reason"] = excluded.reindex(table.index).fillna("")
+    chunks = chunk(table, kept, (spec or {}).get("chunk_cells", CHUNK_CELLS))
     decision = {"sources": decisions, "merges": (spec or {}).get("merges", []), "exclude_cells": rules}
+    if chunks:
+        decision["chunks"] = chunks
     if spec is not None and spec.get("batch_key") is False:
         if SINGLE_BATCH_COLUMN in obs.columns:
             raise ValueError(f"batch_key false needs the obs column {SINGLE_BATCH_COLUMN!r}, which the input already has")
@@ -200,7 +208,37 @@ def build_mapping(h5ad: Path, unit: Path | None, spec: dict | None,
                                  "of_sample": {str(s): SINGLE_BATCH for s in table.loc[kept, SAMPLE_KEY].unique()}}
     elif spec is not None and spec.get("batch_key") is not None:
         decision["batch_key"] = P.resolve_batch_key(obs[kept.to_numpy()], table.loc[kept, SAMPLE_KEY], spec["batch_key"])
+    elif chunks:
+        # batch = sample, as without a batch_key; the chunks of a sample are one batch
+        if SINGLE_BATCH_COLUMN in obs.columns:
+            raise ValueError(f"chunked samples need the obs column {SINGLE_BATCH_COLUMN!r}, which the input already has")
+        parent = {c: sid for sid, names in chunks.items() for c in names}
+        decision["batch_key"] = {"column": SINGLE_BATCH_COLUMN, "n_filled": 0,
+                                 "of_sample": {str(s): parent.get(s, s) for s in table.loc[kept, SAMPLE_KEY].unique()}}
     return table, decision
+
+
+def chunk(table, kept, size: int) -> dict:
+    """Split every sample above `size` cells into ceil(n / size) chunks, in place, by a stable hash of
+    the original cell ID; {sample: [chunk IDs]}.
+    ponytail: random chunks; chunk by round-1 well if doublet rates ever ask for it."""
+    import numpy as np
+    import pandas as pd
+
+    if not isinstance(size, int) or isinstance(size, bool) or size < 1000:
+        raise ValueError("chunk_cells must be an integer of at least 1000")
+    out = {}
+    for sid, n in table.loc[kept, SAMPLE_KEY].value_counts().items():
+        k = -(-int(n) // size)
+        if k < 2:
+            continue
+        rows = table.index[table[SAMPLE_KEY] == sid]
+        ids = (table.loc[rows, "source_unit"].astype(str) + "\t" + table.loc[rows, "source_cell_id"].astype(str))
+        part = pd.util.hash_array(ids.to_numpy(dtype=object)) % np.uint64(k)
+        names = np.array([f"{sid}.chunk{j + 1:02d}" for j in range(k)])
+        table.loc[rows, SAMPLE_KEY] = names[part.astype(np.int64)]
+        out[str(sid)] = sorted(set(names[part.astype(np.int64)]))
+    return out
 
 
 def mapping_identity(table) -> str:

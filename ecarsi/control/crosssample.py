@@ -169,6 +169,9 @@ def crosssample_step(action, args):
     if action in {'deg', 'deg-batch'}:
         from ..warm_pool.budget import from_deg_buffers
         request = from_deg_buffers(request, refs[0], root / (request_id + '.resources.json'), spec['pool_root'])
+    elif action in {'compute', 'compute-round'}:
+        from ..warm_pool.budget import from_cells
+        request = from_cells(request, cells)
     submit(spec['pool_root'], request)
     return {'id': request_id, 'output': output}
 
@@ -220,7 +223,7 @@ class CrosssampleWorkflow:
         if bundle.get('previous_round'):
             self._stage = 'reintegrating survivors'
             prepared, parent = await run_operation('compute-round', [inspected], [parent])
-        elif len(bundle['samples']) == 1:
+        elif len(bundle['samples']) == 1 or bundle.get('chunked'):  # 'chunked': decision 0016
             inclusion, inclusion_parent = await run_operation('include-single', [inspected], [parent])
         else:
             inclusion, inclusion_parent = await judge('inclusion', inspected, parent)

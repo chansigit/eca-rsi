@@ -71,11 +71,14 @@ def validate_sample_map(sample_map):
     batch = sample_map.get("batch_key")
     if not (batch is None or batch is False or (isinstance(batch, str) and batch.strip())):
         raise ValueError("sample_map.batch_key is an obs column name, or false for one batch without correction")
+    chunk = sample_map.get("chunk_cells")
+    if chunk is not None and (not isinstance(chunk, int) or isinstance(chunk, bool) or chunk < 1000):
+        raise ValueError("sample_map.chunk_cells is an integer of at least 1000 (cells per per-sample chunk)")
 
 
 @activity.defn
 def submit_execute(spec: dict, prepared_path: str, reply_path: str, plan_parent: str | None = None) -> str:
-    from ..files import file_digest, immutable
+    from ..files import file_digest, immutable, read
     from ..warm_pool.state import submit
     request_id = spec["run_id"] + ".execute"
     trace = task_trace(spec, "organize.execute")
@@ -87,10 +90,16 @@ def submit_execute(spec: dict, prepared_path: str, reply_path: str, plan_parent:
         output = Path(spec["output_root"])
         path = immutable(output.with_name(output.name + ".sample-map.json"), spec["sample_map"])["path"]
         args, files = args + ["--sample-map", path], files + [path]
+    # Execute reads each source whole, concatenates and writes organized.h5ad: size it from the sources,
+    # never below the spec (parse-5M heart_male alone is 8.9 GB on disk; decision 0016).
+    import math
+    gib = sum(Path(r["h5ad"]).stat().st_size for r in read(prepared_path)["records"]
+              if r.get("state") == "accepted") / 2**30
+    memory = max(spec["execute_memory_mb"], math.ceil((3 * 1024 * gib + 1024) / 256) * 256)
+    timeout = max(spec["execute_timeout_seconds"], math.ceil(600 + 300 * gib))
     submit(spec["pool_root"], dict(request_id=request_id, operation_id="organize.execute",
         trace=trace, args=args,
-        cpus=spec["execute_cpus"], memory_mb=spec["execute_memory_mb"],
-        timeout_seconds=spec["execute_timeout_seconds"],
+        cpus=spec["execute_cpus"], memory_mb=memory, timeout_seconds=timeout,
         inputs=[{"path": path, "sha256": file_digest(path)} for path in files],
         outputs=["completion.json", "run/organize/manifest.json"]))
     return request_id

@@ -21,3 +21,4 @@ decision that is replaced keeps its page and says so at the top.
 | [0013](0013-degraded-results-are-recorded.md) | A step that fails without failing the run leaves a record |
 | [0014](0014-boundaries-are-tested.md) | Subsystem boundaries are written down and tested |
 | [0015](0015-image-versions-side-by-side.md) | Two image versions side by side (proposed, not built) |
+| [0016](0016-samples-and-batches-from-eca-pp.md) | Samples and batches come from ECA-PP; big samples run as chunks |

@@ -225,3 +225,29 @@ def test_the_batch_column_decides_harmony_and_the_experiment_stays_the_sample(tm
     finally:
         module.integrate = original
     assert set(pd.read_csv(output/'input_cells.csv.gz', dtype=str).sample_id) == {'a', 'b'}
+
+
+def test_chunks_of_one_sample_skip_the_inclusion_agent(tmp_path, monkeypatch):
+    """Decision 0016: chunks are random slices of a sample; nobody judges which to exclude."""
+    import sys
+    from ecarsi.stages import crosssample as module
+    rng=np.random.default_rng(0);samples=[]
+    names=['A__all__0123456789.chunk01','A__all__0123456789.chunk02']
+    for name in names:
+        folder=tmp_path/name;folder.mkdir()
+        counts=rng.poisson(1.,(20,10)).astype('float32')
+        data=an.AnnData(counts,obs=pd.DataFrame({'sample_id':[name]*20},index=[name+str(i) for i in range(20)]))
+        data.layers['counts']=counts.copy();data.write_h5ad(folder/'clustered.h5ad')
+        pd.DataFrame({'cell_id':data.obs_names,'source_id':['A']*20,'source_cell_id':data.obs_names}).to_csv(folder/'input_cells.csv.gz',index=False)
+        save(folder/'annotation_proposal.json',{'qc_actions':[]})
+        samples.append(sealed(folder,folder/'final.json',sample=name,empty=False,validation={'n_survived':20,'qc_summary':{}}))
+    publication=immutable(tmp_path/'publication.json',dict(state='complete',failed_samples=[],samples=samples,n_survived=40))
+    inspected=tmp_path/'inspected';inspected.mkdir()
+    module.inspect_input(dict(input=publication,config={},run_id='test',max_refinements=2),inspected)
+    assert read(inspected/'inspected.json')['chunked'] is True
+    out=tmp_path/'include';out.mkdir();monkeypatch.chdir(out)
+    monkeypatch.setattr(sys,'argv',['crosssample','include-single',str(inspected/'inspected.json')])
+    module.main()
+    decision=read(out/'decision.json')
+    assert sorted(s['sample'] for s in decision['proposal']['samples'])==names
+    assert all(s['include'] for s in decision['proposal']['samples']) and 'chunked' in decision['proposal']['notes']

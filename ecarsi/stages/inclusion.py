@@ -38,6 +38,8 @@ INCLUSION_SCHEMA = {
 
 
 SINGLE_SAMPLE_NOTE = "single sample — inclusion agent not consulted; harmony is skipped downstream"
+CHUNKED_NOTE = ("chunked samples (random slices of one sample, decision 0016) — inclusion agent not "
+                "consulted; every sample included")
 
 
 def validate_inclusion(decision, expected):

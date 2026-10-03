@@ -234,6 +234,14 @@ def sample_step(action, args):
     if action == 'finalize':
         from ..warm_pool.budget import from_compute
         request = from_compute(request, reference(computed), root / (request_id + '.resources.json'), spec['pool_root'])
+    elif action == 'compute':
+        from ..warm_pool.budget import from_cells
+        request = from_cells(request, entry["n_cells"])
+    elif action == 'partition':
+        # reads the whole organized.h5ad: size it from the file (decision 0016)
+        from ..warm_pool.budget import from_artifact
+        organized = Path(spec["input_manifest"]["path"]).parent / "organized.h5ad"
+        request = from_artifact(request, {"path": str(organized)}, root / (request_id + '.resources.json'), spec['pool_root'])
     submit(spec["pool_root"], request)
     return {"id": request_id, "output": output}
 

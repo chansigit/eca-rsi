@@ -77,7 +77,7 @@ def plan_tool(name, prepared_path, arguments_path, destination):
     """Metadata reads and scientific plan validation run only inside a Pool grant."""
     from .upstream import inspect_unit, normalize
     from ..plan import PLAN_SCHEMA, _validate, validate_sample_mapping
-    from .organize_execute import _conservation_audit, _experiment_audit
+    from .organize_execute import _conservation_audit, _experiment_audit, effective_mapping
     from jsonschema import validate, ValidationError
     prepared, arguments = read(prepared_path), read(arguments_path)
     current = [inspect_unit(record) for record in prepared["records"]]
@@ -89,6 +89,8 @@ def plan_tool(name, prepared_path, arguments_path, destination):
             column = arguments["column"]
             if column is None:
                 result = {k: profile[k] for k in ("name", "species", "n_obs", "n_vars", "obs_columns")}
+                if profile.get("eca_pp_decision"):
+                    result["eca_pp_decision"] = {k: v for k, v in profile["eca_pp_decision"].items() if k != "ladder"}
             else:
                 if column not in profile["obs_columns"]:
                     raise ValueError("Column is not present in this source")
@@ -106,7 +108,8 @@ def plan_tool(name, prepared_path, arguments_path, destination):
             validate_sample_mapping(plan, prepared["profiles"])
             units = {r["name"]: r for r in current}
             conservation = _conservation_audit(units, plan)
-            experiments = _experiment_audit(units, plan)
+            mapping = effective_mapping(plan, prepared["profiles"], stop=False)
+            experiments = _experiment_audit(units, {**plan, "sample_mapping": mapping})
             result = {"accepted": True, "response": {"plan": plan},
                       "source_identity": prepared["source_identity"],
                       "conservation": conservation, "experiments": experiments}

@@ -33,7 +33,7 @@ AGENT_EXCLUDE_MAX_FRAC = (
     0.5  # ponytail: one ceiling for agent proposals; an explicit sample map has none
 )
 RULE_KEYS = {"where", "blank", "reason", "rationale"}
-SPEC_KEYS = {"sources", "merges", "exclude_cells", "batch_key"}
+SPEC_KEYS = {"sources", "merges", "exclude_cells", "batch_key", "chunk_cells"}
 
 
 # ---------------------------------------------------------------- exclude_cells

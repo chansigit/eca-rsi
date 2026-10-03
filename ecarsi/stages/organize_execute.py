@@ -126,10 +126,37 @@ def _conservation_audit(units_by_name: dict, plan: dict) -> dict:
     return {"sources": audit, "unit_expected": unit_expected}
 
 
+def effective_mapping(plan: dict, profiles: list[dict], sample_map: dict | None = None, *,
+                      stop: bool = True) -> dict:
+    """Each source's experiment decision (decision 0016): the owner's sample map, else ECA-PP's, else the
+    organize agent's. An ECA-PP decision that found no usable sample on a platform that needs one stops
+    here (`stop`), unless the sample map decides that source; the planning agent cannot fix it, so its
+    plan checks pass `stop=False`."""
+    explicit = (sample_map or {}).get("sources", {})
+    eca_pp = {p["name"]: p["eca_pp_decision"] for p in profiles if p.get("eca_pp_decision")}
+    stopped = [f"{name}: {d['error']}" for name, d in eca_pp.items() if "error" in d and name not in explicit]
+    if stopped and stop:
+        raise ValueError("no usable sample or batch: " + "; ".join(stopped))
+    agent = {name: {**d, "source": "agent"} for name, d in plan.get("sample_mapping", {}).items()}
+    return {**agent, **eca_pp, **{name: {**d, "source": "sample_map"} for name, d in explicit.items()}}
+
+
+def unit_batch_key(sources: list[str], mapping: dict, explicit: dict):
+    """The unit's batch_key when the owner's sample map names none: ECA-PP's batch when it recommends the
+    correction, false (one batch) when it found none, for a unit whose one source ECA-PP decided.
+    ponytail: several sources keep batch = sample; their ECA-PP batch values could collide."""
+    if "batch_key" in explicit or len(sources) != 1:
+        return explicit.get("batch_key")
+    decision = mapping[sources[0]]
+    if decision.get("source") != "eca_pp":
+        return None
+    return decision["batch"] or False
+
+
 def _experiment_audit(units_by_name: dict, plan: dict) -> dict:
     """Before writing, prove each source experiment lands in one analysis unit."""
     from .h5ad import read_obs
-    from .upstream import normalize
+    from .upstream import load_evidence, normalize
 
     across = {}
     for source, record in units_by_name.items():
@@ -141,6 +168,8 @@ def _experiment_audit(units_by_name: dict, plan: dict) -> dict:
             continue
         obs = read_obs(record["h5ad"])
         col = decision.get("sample_column")
+        if col is not None and col.startswith("eca_pp_"):
+            obs[col] = load_evidence(record, obs)[1][col]
         values = normalize(obs[col]) if col is not None else None
         if values is not None and decision.get("missing_as") is not None:
             values = values.fillna(decision["missing_as"])
@@ -184,7 +213,8 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
     unknown = set(explicit) - {p["name"] for p in profiles}
     if unknown:
         raise ValueError(f"sample_map names sources that are not accepted inputs: {sorted(unknown)}")
-    effective = {**plan, "sample_mapping": {**plan["sample_mapping"], **explicit}} if "sample_mapping" in plan else plan
+    effective = ({**plan, "sample_mapping": effective_mapping(plan, profiles, sample_map)}
+                 if "sample_mapping" in plan else plan)
     experiment_audit = _experiment_audit(units_by_name, effective) if "sample_mapping" in plan else None
     print(
         "[audit] cell conservation OK: "
@@ -292,17 +322,21 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
         unit_manifest["identity"] = file_identity(L.input_h5ad(unit))
         write_json(L.input_manifest(unit), unit_manifest)
         if "sample_mapping" in plan:
-            from ..sample_mapping import build_mapping, mapping_identity, SAMPLE_KEY
+            from ..sample_mapping import build_mapping, mapping_identity, normalize, SAMPLE_KEY
             explicit = sample_map or {}
-            mapping_spec = {"sources": {src: explicit.get("sources", {}).get(src, plan["sample_mapping"][src])
-                                        for src in src_totals}}
+            mapping_spec = {"sources": {src: effective["sample_mapping"][src] for src in src_totals}}
             merges = [m for m in explicit.get("merges", [])
                       if {member.get("source") for member in m.get("members", [])} & set(src_totals)]
             if merges:
                 mapping_spec["merges"] = merges
-            for key in ("exclude_cells", "batch_key"):
+            for key in ("exclude_cells", "chunk_cells"):
                 if key in explicit:
                     mapping_spec[key] = explicit[key]
+            batch_key = unit_batch_key(list(src_totals), effective["sample_mapping"], explicit)
+            if batch_key == "eca_pp_batch" and normalize(merged.obs[batch_key]).nunique() < 2:
+                batch_key = False  # an organ slice of the source holds one ECA-PP batch: nothing to correct
+            if batch_key is not None:
+                mapping_spec["batch_key"] = batch_key
             table, decision = build_mapping(L.input_h5ad(unit), unit, mapping_spec)
             unmapped = table[SAMPLE_KEY].eq("") & table["excluded_reason"].eq("")
             if len(table) != merged.n_obs or unmapped.any():

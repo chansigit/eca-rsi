@@ -6,6 +6,16 @@ organs, Hua Heart / integrated, 3CA Li2019_skin and four other 3CA datasets, plu
 non-droplet platforms) or the way the pipeline drives its agents (long contexts). The answer is mostly the
 data, through one mechanism: **the sample unit**. Wrong sample units then overload the agents.
 
+**Follow-up (same day, owner).** Correcting across age and sex is what an atlas wants: the system builds training
+sets and atlases, where one cell type must be recognised across conditions. Sections 1 and 2 are corrected below.
+Two facts found later:
+- ECA-PP's identify-columns had already measured each dataset's batch with Harmony probes, but eca-rsi never used
+  its answer.
+- Hua Heart's cell names carry 23 10x libraries.
+
+The fixes are [decision 0016](../decisions/0016-samples-and-batches-from-eca-pp.md) (eca-rsi 0.4.4, eca-pp 0.5.3),
+which replaces section 5.
+
 Sources: the obs tables of the ECA-PP inputs (h5py, no matrices), the released display zones under
 `$OAK/eca-rsi/display/`, the current `bridge/requests` (303 turns, all Shi runs since 10-01), the September token
 summary (`$OAK/eca-rsi/work/_batches/gen2-acceptance-20260917-tokens-final.json`), `OPEN-ITEMS.md`, the code at
@@ -17,7 +27,7 @@ the deployed commits, vendor and paper documentation (links at the end). Scripts
 |---|---|---|---|
 | PanSci lung_WT_p2of5, duodenum_Prkdc (first runs) | EasySci combinatorial indexing (nuclei) | `batch` (a PCR/ligation well, ~90-900 cells, every well holds every age and sex) taken as the sample: 189-380 "samples", 4,103 OSP agent turns (rank 1 of 209 datasets), inclusion tool output over the 256 KiB handoff | data → agent |
 | PanSci heart_Rag, lung_Rag, liver_Rag, Prkdc | same | `sample_id` = Age_group × Gender: 4 "samples" of 18k-89k nuclei each. Per-sample OSP died at 8 GiB (heart_Prkdc needed 32 GiB). First attempts also hit a 120 s coordinator timeout (see Hua) | data (size) + infrastructure |
-| all PanSci released since 9-22 | same | the cross-sample `batch_col` is `eca_sample_id`, i.e. Age_group × Gender: **Harmony corrected across ages and sexes** | data (science) |
+| all PanSci released since 9-22 | same | the cross-sample `batch_col` is `eca_sample_id`, i.e. Age_group × Gender: Harmony corrected across ages and sexes. *Follow-up: intended for atlas building, no rerun needed* | — |
 | Hua Heart / integrated | 10x, two donors | 2 donors of 75k and 85k cells; donor ≡ chemistry (Donor1 all 10X-V3, Donor2 all 10X-V2). Attempt 2 died at 8 GiB per sample. Attempts 1 and 3 timed out at the per-sample start | data (size) + infrastructure |
 | Li2019_skin | MARS-seq | true samples: `sample` (23) / `patient` (22); the run's 196 "samples" match `amp_batch` (198 amplification batches, 36 % of which hold more than one patient). Inclusion then needed ~510k tokens (196 required UMAP reads) against a 256k window | data → agent |
 | Griffiths (62 samples), Chen2021_validation (55), Young2018 (49), Raghavan ×2 (48) | 10x / inDrop | correct units, but inclusion requires one UMAP read per sample and re-sends every image each turn; overflowed until paging (Griffiths passed at 234k of 256k) | agent |
@@ -35,8 +45,9 @@ these platforms are barcode collisions or clumps that travel together, so they o
 replicates by it. The last two segments of the cell name are sample-pure: every value belongs to exactly one
 Age_group × Gender group (heart_Rag: 64 values, median 2,751 cells; lung_Rag: 49). They are the RT wells, the
 finest unit that is certainly one sample. `sample_id` = Age_group × Gender pools all RT wells, and probably several
-mice, of a group, and is also the batch Harmony corrects. Every PanSci release built on it has had its age and sex
-differences treated as batch effects.
+mice, of a group, and is also the batch Harmony corrects, so every PanSci release corrected across age and sex
+(follow-up: the intended behaviour for atlases). ECA-PP measured PanSci's wells, RT wells and sex as candidate
+batches: most organs showed no batch effect (iLISI gain 0.001-0.016 against the 0.05 bar).
 
 **parse-5M.** [Parse's 5 Million Mouse Single Cell Atlas](https://www.parsebiosciences.com/datasets/5-million-mouse-single-cell-atlas-from-7-tissues/):
 7 tissues from one male and one female mouse, nuclei, WT Penta, 32 sublibraries, ~10k reads per cell. Each of our
@@ -44,8 +55,10 @@ differences treated as batch effects.
 (2-10 asymmetrically loaded wells of 12k-59k nuclei) and `sublibrary` (32 of 0.7k-17k). The conversion also
 applied a 10x-level filter (≥500 genes, ≥800 transcripts) before ECA-PP, which is strict for shallow nuclei data.
 
-**Hua Heart.** `sample.source` (Donor1/Donor2) is the sample. It cannot be separated from chemistry: any batch
-correction across donors also corrects V2 against V3 and vice versa.
+**Hua Heart.** `sample.source` (Donor1/Donor2) was taken as the sample. It cannot be separated from chemistry: any
+batch correction across donors also corrects V2 against V3 and vice versa. *Follow-up:* the cell names
+(`Donor1.M1-1.<barcode>`) carry the libraries: 23 of 5,035-9,569 cells, each one anatomical region, within the
+range of one 10x channel. ECA-PP 0.5.3 finds them as its `library`.
 
 **Per-sample size and memory.** Per-sample OSP memory grows with cells per sample. The PanSci specs gave 8 or
 16 GiB; heart_Prkdc needed 32 GiB (peak 24.7 GiB), Hua's 75k-85k died at 8 GiB. Since 9-18 an RSS kill is retried
@@ -105,6 +118,11 @@ well-as-sample PanSci run). A wrong sample unit multiplies both.
   inspection proposal carrying `types` (lung_WT_p5of5), Temporal's history limit (zoom-in continue-as-new).
 
 ## 5. Fix candidates (not implemented), by impact and risk
+
+*Superseded by [decision 0016](../decisions/0016-samples-and-batches-from-eca-pp.md).*
+- Candidates 1-4 are done differently. Batches come from ECA-PP's ladder rather than a refusal of covariate-mixing
+  columns, and PanSci needs no rerun.
+- Candidates 5-7 (agent context, QC presets) remain open.
 
 1. **Sample units right before anything runs.** Host-side check in organize: a sample column whose values mix
    ages, sexes, donors or genotypes (the "well test") is refused; very many tiny levels warn. Explicit sample maps

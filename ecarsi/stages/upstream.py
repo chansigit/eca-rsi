@@ -8,7 +8,11 @@ from pathlib import Path
 from ..sample_mapping import normalize
 from ..run_state import file_identity, read_json, write_json
 
-RESERVED = ("eca_source_cell_id", "eca_pp_batch", "eca_pp_cell_type", "eca_sample_id")
+RESERVED = ("eca_source_cell_id", "eca_pp_batch", "eca_pp_cell_type", "eca_pp_library", "eca_sample_id")
+# The most cells one library holds on a droplet-like platform (a 10x channel recovers at most ~20k), as in
+# ECA-PP identify-columns 0.5.3, whose `library` groups stay below it. A source with no batch and no library
+# may be one sample only if it fits one library, or on a split-pool or plate platform (decision 0016).
+LIBRARY_MAX_CELLS = 30000
 
 
 def is_run_root(p: Path) -> bool:
@@ -39,7 +43,9 @@ def discover(root: Path) -> tuple[list[dict], list[Path]]:
         name = (root.parent.name if root.name in ("input", "data") else root.name) if d == root else d.name
         u = {"name": name, "dir": str(d), "h5ad": str(h5), "standardize_result": str(rj)}
         ic = d / "identify_columns" / "result.json"
-        if ic in files:
+        # also beside an input root that is the standardize folder itself, as the dataset specs name it
+        # (until 0.4.4 such runs never saw ECA-PP's batch; decision 0016)
+        if ic in files or ic.is_file():
             u["identify_columns_result"] = str(ic)
         units.append(u)
         claimed.add(h5)
@@ -121,13 +127,54 @@ def load_evidence(unit: dict, obs):
         evidence = read_json(path)
         if result_state(evidence, "identify_columns") != "accepted":
             raise ValueError("identify-columns result was rejected; resolve or remove that optional result")
-        for role in ("batch", "cell_type"):
+        for role in ("batch", "cell_type", "library"):
             s, tsv = column_values(obs, (evidence.get("columns") or {}).get(role), path.parent)
             if s is not None:
                 values[f"eca_pp_{role}"] = s
             if tsv is not None:
                 files[role] = {"path": str(tsv), "identity": file_identity(tsv)}
     return evidence, values, files
+
+
+def eca_pp_decision(evidence: dict, values: dict, n_obs: int) -> dict | None:
+    """A source's experiment decision taken from ECA-PP identify-columns (decision 0016), or None when the
+    source has no such result or its column leaves cells unassigned: the organize agent decides those.
+
+    Sample (the per-sample QC unit): ECA-PP's library when it found one, else its batch (adopted, or
+    "correction unnecessary"), else the whole source. Batch: ECA-PP's batch only when it recommends the
+    correction. A source with neither is one sample only on a split-pool or plate platform or when it
+    fits one library; otherwise the decision carries an `error` that organize raises unless the owner's
+    sample map decides the source (owner, 2026-10-03)."""
+    if not evidence:
+        return None
+    columns = evidence.get("columns") or {}
+    platform = (evidence.get("platform") or {}).get("value", "unknown")
+    batch = columns.get("batch") or {}
+    role = "library" if columns.get("library") else "batch" if batch else None
+    if role and values[f"eca_pp_{role}"].isna().any():
+        return None
+    label = lambda block: block.get("label") or block.get("value")
+    decision = {"sample_column": f"eca_pp_{role}" if role else None, "source": "eca_pp", "platform": platform,
+                "batch": "eca_pp_batch" if batch.get("correction") == "recommended" else None,
+                "ladder": evidence.get("ladder")}
+    if role == "library":
+        decision["rationale"] = (f"ECA-PP library {label(columns['library'])!r}: "
+                                 + columns["library"].get("evidence", ""))
+    elif role == "batch":
+        decision["rationale"] = (f"ECA-PP batch {label(batch)!r} (correction {batch.get('correction')}): "
+                                 + str(batch.get("evidence", ""))[:400])
+    else:
+        decision.update(confirmed_single=True, rationale=(
+            f"ECA-PP found no batch on a {platform} platform: "
+            + str(columns.get("batch_evidence") or "no batch candidate")[:400]))
+        if platform not in ("split-pool", "plate") and n_obs > LIBRARY_MAX_CELLS:
+            decision["error"] = (
+                f"{n_obs} cells and no batch on a {platform} platform: more than one library holds "
+                f"(> {LIBRARY_MAX_CELLS}), so the library identity was lost. ECA-PP ladder: "
+                f"{evidence.get('ladder') or columns.get('batch_evidence') or 'not recorded (ECA-PP < 0.5.2)'}. "
+                "Name the sample column in the spec's organize.sample_map, or re-run identify-columns with "
+                "--platform when the assay is split-pool (Parse, SPLiT-seq, EasySci, sci-RNA-seq3).")
+    return decision
 
 
 def inspect_unit(unit: dict) -> dict:
@@ -205,8 +252,9 @@ def profile_unit(unit: dict, max_levels: int = 30) -> dict:
     a = open_counts(unit["h5ad"], min_vars=1)
     try:
         validate_matrix(a, std)
-        evidence, _, _ = load_evidence(unit, a.obs)
+        evidence, values, _ = load_evidence(unit, a.obs)
         prof["upstream_evidence"] = evidence
+        prof["eca_pp_decision"] = eca_pp_decision(evidence, values, int(a.n_obs))
         prof["upstream_review"] = std.get("reasons", [])
         cols = {}
         for c in a.obs.columns:

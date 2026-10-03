@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.4 — 2026-10-03
+
+Samples and batches follow ECA-PP; large samples no longer need hand-made splits
+([decision 0016](docs/decisions/0016-samples-and-batches-from-eca-pp.md)).
+
+- **Organize takes each source's samples from ECA-PP identify-columns** (eca-pp 0.5.3: batch ladder, platform, library):
+  the library, else the batch, else the whole source; Harmony only when ECA-PP recommends it. Precedence: the
+  spec's `sample_map`, then ECA-PP, then the planning agent (sources without an identify-columns result). A large
+  source without batch or library stops at organize unless the platform is split-pool or plate.
+- **Chunks**: a sample above 20,000 cells (`sample_map.chunk_cells`) runs per-sample QC as `<sample>.chunkNN`
+  chunks that keep the sample as their batch; a chunked unit skips the inclusion agent.
+- **Budgets from size**: per-sample, cross-sample and zoom-in compute ask for memory by cell count
+  (`budget.from_cells`, raise only); partition and organize execute by file size.
+- Periscope's Samples header says where the samples and the batch came from.
+- `docs/history/HARD_DATASETS_20261003.md` corrected: correcting PanSci across age and sex is what the atlas wants.
+
 ## 0.4.3 — 2026-10-02
 
 Every module now sits in one part of the system.

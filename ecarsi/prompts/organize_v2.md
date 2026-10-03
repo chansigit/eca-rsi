@@ -1,8 +1,14 @@
 # Experiment mapping required by Organize
 
 In addition to the analysis-unit plan, return `sample_mapping`: an object keyed
-by **every source profile name**. Each value is an experiment decision with
+by source profile name. Each value is an experiment decision with
 `sample_column`, `rationale`, and `confirmed_single` when appropriate.
+
+A source whose profile carries `eca_pp_decision` is already decided: ECA-PP
+measured its batch and library, and the program takes its samples from there.
+Leave such sources out of `sample_mapping` (anything you write for them is not
+used), but keep every one of their experiments in a single analysis unit. Decide
+only the sources without `eca_pp_decision`, as follows.
 
 Choose a metadata column that identifies the original complete experimental
 sample or library for that source. A shared donor alone does not make multiple

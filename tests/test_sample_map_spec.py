@@ -21,7 +21,7 @@ def test_execute_pins_the_sample_map_and_passes_it_on(tmp_path, monkeypatch):
     sent = []
     monkeypatch.setattr("ecarsi.warm_pool.state.submit", lambda root, request: sent.append(request))
     prepared, reply = tmp_path / "prepared.json", tmp_path / "reply.json"
-    prepared.write_text("{}")
+    prepared.write_text('{"records": []}')
     reply.write_text("{}")
     (tmp_path / "run").mkdir()
     spec = dict(run_id="r1-organize", output_root=str(tmp_path / "run" / "00-organize"), pool_root=str(tmp_path / "pool"),

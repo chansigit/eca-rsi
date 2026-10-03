@@ -15,7 +15,12 @@ python -m ecarsi.control --service-root <control> --task-queue <queue> status-da
 
 ### Explicit sample map (optional)
 
-`organize.sample_map` states what the planning agent must not guess. It has the shape of the sample maps in [front-integration.md](../front-integration.md), and every key is optional:
+Without a sample map, each source's samples and batch come from ECA-PP's identify-columns result (decision
+[0016](../decisions/0016-samples-and-batches-from-eca-pp.md)): its library, else its batch, else the whole source;
+Harmony only when ECA-PP recommends the correction. A source without one falls back to the planning agent.
+Samples above 20,000 cells run as chunks that keep their sample as the batch.
+
+`organize.sample_map` states what neither ECA-PP nor the planning agent may decide. It has the shape of the sample maps in [front-integration.md](../front-integration.md), and every key is optional:
 
 ```json
 "organize": {
@@ -29,9 +34,10 @@ python -m ecarsi.control --service-root <control> --task-queue <queue> status-da
 }
 ```
 
-- `sources` overrides the plan's experiment column for the sources it names (any other source keeps the agent's decision). A name that is not an accepted input is an error.
+- `sources` overrides the experiment column for the sources it names (any other source keeps ECA-PP's or the agent's decision). A name that is not an accepted input is an error.
 - `merges` pools one experiment split across sources; `exclude_cells` drops cells before OSP, each with its reason in the ledger and in `needs_review` (`policy_excluded`).
-- `batch_key` names the column Harmony corrects by instead of the experiment. It must be constant within every experiment and take at least two values in the unit. **`"batch_key": false`** declares the unit one batch with no batch effect: every cell gets `eca_batch = single_batch`, and MSP and ZMIP skip Harmony and the per-batch HVG vote. The agents then see one batch, as for a single-sample unit.
+- `batch_key` names the column Harmony corrects by instead of the experiment. It must be constant within every experiment and take at least two values in the unit. **`"batch_key": false`** declares the unit one batch with no batch effect: every cell gets `eca_batch = single_batch`, and MSP and ZMIP skip Harmony and the per-batch HVG vote. The agents then see one batch, as for a single-sample unit. A sample map may hold only `batch_key`: the sources keep their automatic decision.
+- `chunk_cells` (default 20000, at least 1000) is the largest sample per-sample QC takes whole; bigger samples run as chunks (`<sample>.chunkNN`, by a stable hash of the cell ID) that keep their sample as the batch, and the unit skips the inclusion agent.
 
 `start-dataset` checks the map's shape; organize checks it against the data. The map is pinned by content with the organize request (`00-organize.sample-map.json` beside the run).
 

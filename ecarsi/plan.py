@@ -111,9 +111,15 @@ def validate_sample_mapping(plan: dict, profiles: list[dict]) -> None:
 
     mapping = plan.get("sample_mapping")
     known = {p["name"]: p for p in profiles}
-    if not isinstance(mapping, dict) or set(mapping) != set(known):
-        raise ValueError("sample_mapping must name every source exactly once")
+    # ECA-PP decides the sources it has an identify-columns result for (decision 0016): the agent
+    # may leave them out, and whatever it says about them is not used
+    decided = {name for name, p in known.items() if p.get("eca_pp_decision")}
+    if (not isinstance(mapping, dict) or not set(mapping) <= set(known)
+            or set(mapping) | decided != set(known)):
+        raise ValueError("sample_mapping must name every source that ECA-PP did not decide, exactly once")
     for source, decision in mapping.items():
+        if source in decided:
+            continue
         if not isinstance(decision, dict) or set(decision) - {"sample_column", "confirmed_single", "rationale"}:
             raise ValueError(f"{source}: invalid experiment decision")
         error = _validate_sample_column(decision, known[source])
