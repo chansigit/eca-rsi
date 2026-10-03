@@ -4,7 +4,7 @@
 
 ECA-RSI coordinates sample-level QC, cross-sample integration, and lineage-level refinement. The workflow starts from [ECA-PP](https://github.com/chansigit/eca-pp) outputs. It runs dedicated analysis packages. It repeats integration and refinement on the surviving cells until the process meets a numerical stopping rule. Each analysis unit receives an annotated H5AD, reports, a cell ledger, and unresolved questions for review.
 
-The `ecarsi` Python package (0.4.0) provides the implementation. It ships inside two Apptainer images. It installs nothing on the host. New to the code: read [docs/OVERVIEW.md](docs/OVERVIEW.md). To deploy: [INSTALL.md](INSTALL.md).
+The `ecarsi` Python package (0.4.1) provides the implementation. It ships inside two Apptainer images. It installs nothing on the host. New to the code: read [docs/OVERVIEW.md](docs/OVERVIEW.md). To deploy: [INSTALL.md](INSTALL.md).
 
 ## How it runs
 
@@ -61,7 +61,7 @@ The organize stage checks upstream status and exit codes. It opens each accepted
 
 ECA-PP's `identify_columns/result.json` and derived TSV evidence are optional. RSI aligns that evidence to the original cell IDs. It identifies experiments within each source. Two sources that both use `sample=S1` remain separate OSP inputs. A technical batch column is not automatically an experimental sample column. The system supports explicit sample mappings. See [docs/front-integration.md](docs/front-integration.md) for mapping formats.
 
-A sample map can also declare two cell policies (`ecarsi/policies.py`). The host applies these policies deterministically and never infers them:
+An explicit sample map goes in the dataset spec as `organize.sample_map` ([DATASET_V2.md](docs/control-plane/DATASET_V2.md#explicit-sample-map-optional)). Besides overriding a source's experiment column, it can declare two cell policies (`ecarsi/policies.py`). The host applies these policies deterministically and never infers them:
 
 ```json
 {
@@ -75,7 +75,7 @@ A sample map can also declare two cell policies (`ecarsi/policies.py`). The host
 }
 ```
 
-`exclude_cells` rules drop cells before the host cuts any OSP subset. A `where` rule matches exact strings and applies an AND condition across columns. A `blank` rule checks for a missing-family value in every listed column. An unknown column is an error. A rule that matches no cell produces a recorded warning. Every excluded cell is recorded with its reason in the unit's `cell_exclusions.csv.gz`. The `batch_key` names the obs column that Harmony corrects by instead of the experiment. For plate = mouse x FACS gate designs, this column is the mouse. The host requires this key to be constant within every experiment (blank cells ignored) and to take at least two values. Without a map, the sample-column agent may propose exclusion rules. The system validates these rules exactly like user rules and records them as `proposed_by: agent`.
+`exclude_cells` rules drop cells before the host cuts any OSP subset. A `where` rule matches exact strings and applies an AND condition across columns. A `blank` rule checks for a missing-family value in every listed column. An unknown column is an error. A rule that matches no cell produces a recorded warning. Every excluded cell is recorded with its reason in the unit's `cell_exclusions.csv.gz`. The `batch_key` names the obs column that Harmony corrects by instead of the experiment. For plate = mouse x FACS gate designs, this column is the mouse. The host requires this key to be constant within every experiment (blank cells ignored) and to take at least two values. `"batch_key": false` declares the unit one batch with no batch effect: Harmony and the per-batch HVG vote are skipped. Without a map, the sample-column agent may propose exclusion rules. The system validates these rules exactly like user rules and records them as `proposed_by: agent`.
 
 ## Run the workflow
 
@@ -193,7 +193,7 @@ Intermediate matrices live in the pool requests that computed them. The pruner d
 
 ## Validation
 
-The test suite contains 447 tests. It runs inside the compute image. See [INSTALL.md](INSTALL.md#b3-run-the-tests).
+The test suite contains 454 tests. It runs inside the compute image. See [INSTALL.md](INSTALL.md#b3-run-the-tests).
 
 The latest end-to-end regression ran on 2026-10-02. The run used dataset 11_Shietal on the `20261002-1` image pair: two fixed rounds, 9,163 to 4,941 cells, with the display zone synced after every stage and the work tree archived at completion.
 

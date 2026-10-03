@@ -56,7 +56,8 @@ def organize(root, out, plan):
     from ecarsi.stages.organize import prepare
     prepared = prepare(Path(root), Path(out).parent / (Path(out).name + "-prepared.json"))
     plan = plan if isinstance(plan, dict) else read_json(Path(plan))
-    execute_plan(prepared["records"], prepared["profiles"], plan, Path(out), records=prepared["records"],
+    accepted = [record for record in prepared["records"] if record["state"] == "accepted"]
+    execute_plan(accepted, prepared["profiles"], plan, Path(out), records=prepared["records"],
                  input_identity=prepared["source_identity"], adapter_identity="test")
 
 
@@ -98,17 +99,14 @@ def test_failed_upstream_blocks_even_with_h5ad(tmp_path, status, code):
         inspect_unit(u)
 
 
-def test_review_survives_and_a_rejected_source_is_refused(tmp_path):
+def test_review_survives_and_a_rejected_source_is_skipped(tmp_path):
     root, out = tmp_path / "in", tmp_path / "out"
     source(root, status="needs_review")
     source(root, "rejected", status="rejected", code=2, write_h5=False)
     plan = plan_file(tmp_path / "p.json")
-    # the control plane refuses an input set with a rejected source; the local path used to skip it
-    with pytest.raises(ValueError, match="every source must have accepted"):
-        organize(root, out, plan)
-    import shutil
-    shutil.rmtree(root / "rejected")
-    organize(root, out, plan)
+    organize(root, out, plan)  # ECA-PP rejected one source: organize skips it and keeps it in the inventory
+    gm = read_json(L.organize_manifest(out))
+    assert [r["state"] for r in gm["source_inventory"]] == ["accepted", "rejected"]
     um = read_json(L.input_manifest(L.unit_dir(out, "test-unit")))
     assert um["upstream"]["A"]["standardize"]["reasons"] == ["review me"]
 

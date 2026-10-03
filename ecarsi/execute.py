@@ -133,12 +133,19 @@ def _experiment_audit(units_by_name: dict, plan: dict) -> dict:
 
     across = {}
     for source, record in units_by_name.items():
-        obs = _obs(record["h5ad"])
         decision = plan["sample_mapping"][source]
-        col = decision["sample_column"]
+        if decision.get("derive_from_cell_id") is not None:
+            # an explicit map naming experiments by cell ID: build_mapping checks the split itself,
+            # against the full source obs
+            across[source] = {"experiments": None, "complete": True}
+            continue
+        obs = _obs(record["h5ad"])
+        col = decision.get("sample_column")
         values = normalize(obs[col]) if col is not None else None
-        if values is not None and values.isna().any():
-            raise ValueError(f"{source}: experiment column leaves cells unassigned")
+        if values is not None and decision.get("missing_as") is not None:
+            values = values.fillna(decision["missing_as"])
+        # cells without a value are an error unless the sample map excludes them: build_mapping checks
+        # that after the exclusions; here only the experiments that have a value can be split
         owners = {}
         for au in plan["analysis_units"]:
             for member in au["members"]:
@@ -146,7 +153,7 @@ def _experiment_audit(units_by_name: dict, plan: dict) -> dict:
                     continue
                 mask = _keep_mask(obs, member.get("obs_filter"))
                 selected = obs.index if mask is None else obs.index[mask]
-                selected_values = {"all"} if col is None else set(values.loc[selected].astype(str))
+                selected_values = {"all"} if col is None else set(values.loc[selected].dropna().astype(str))
                 for value in selected_values:
                     if value in owners and owners[value] != au["name"]:
                         raise ValueError(f"{source}/{value}: organize split a complete experiment "
@@ -158,7 +165,10 @@ def _experiment_audit(units_by_name: dict, plan: dict) -> dict:
 
 def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: Path,
                  *, records: list[dict] | None = None, input_identity: str | None = None,
-                 adapter_identity: str | None = None) -> None:
+                 adapter_identity: str | None = None, sample_map: dict | None = None) -> None:
+    """`sample_map` is the owner's explicit map (the dataset spec's `organize.sample_map`): its `sources`
+    override the plan's experiment column per source; `merges`, `exclude_cells` and `batch_key` apply to
+    every unit (a merge to the unit holding its sources)."""
     import anndata as ad
 
     from .plan import _validate
@@ -170,7 +180,12 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
     units_by_name = {u["name"]: u for u in units}
     species_by_name = {p["name"]: p.get("species") for p in profiles}
     audit = _conservation_audit(units_by_name, plan)
-    experiment_audit = _experiment_audit(units_by_name, plan) if "sample_mapping" in plan else None
+    explicit = (sample_map or {}).get("sources", {})
+    unknown = set(explicit) - {p["name"] for p in profiles}
+    if unknown:
+        raise ValueError(f"sample_map names sources that are not accepted inputs: {sorted(unknown)}")
+    effective = {**plan, "sample_mapping": {**plan["sample_mapping"], **explicit}} if "sample_mapping" in plan else plan
+    experiment_audit = _experiment_audit(units_by_name, effective) if "sample_mapping" in plan else None
     print(
         "[audit] cell conservation OK: "
         + ", ".join(f"{k} {v['total']}" for k, v in audit["sources"].items())
@@ -278,9 +293,19 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
         write_json(L.input_manifest(unit), unit_manifest)
         if "sample_mapping" in plan:
             from .sample_mapping import build_mapping, mapping_identity, SAMPLE_KEY
-            mapping_spec = {"sources": {src: plan["sample_mapping"][src] for src in src_totals}}
+            explicit = sample_map or {}
+            mapping_spec = {"sources": {src: explicit.get("sources", {}).get(src, plan["sample_mapping"][src])
+                                        for src in src_totals}}
+            merges = [m for m in explicit.get("merges", [])
+                      if {member.get("source") for member in m.get("members", [])} & set(src_totals)]
+            if merges:
+                mapping_spec["merges"] = merges
+            for key in ("exclude_cells", "batch_key"):
+                if key in explicit:
+                    mapping_spec[key] = explicit[key]
             table, decision = build_mapping(L.input_h5ad(unit), unit, mapping_spec, None)
-            if len(table) != merged.n_obs or table[SAMPLE_KEY].eq("").any():
+            unmapped = table[SAMPLE_KEY].eq("") & table["excluded_reason"].eq("")
+            if len(table) != merged.n_obs or unmapped.any():
                 raise ValueError(f"{name}: confirmed experiment mapping does not cover every cell")
             mapping_path = udir / L.SAMPLE_MAPPING
             table.to_csv(mapping_path, index_label="cell_id")

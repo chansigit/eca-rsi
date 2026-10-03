@@ -59,19 +59,38 @@ def submit_plan(spec: dict, prepared_path: str) -> str:
     return request_id
 
 
+def validate_sample_map(sample_map):
+    """The owner's explicit sample map (spec `organize.sample_map`); build_mapping checks it against the data."""
+    from ..policies import check_spec_keys
+    if not isinstance(sample_map, dict):
+        raise ValueError("sample_map must be a JSON object")
+    check_spec_keys(sample_map)
+    if (not isinstance(sample_map.get("sources", {}), dict) or not isinstance(sample_map.get("merges", []), list)
+            or not isinstance(sample_map.get("exclude_cells", []), list)):
+        raise ValueError("sample_map: sources is an object of per-source decisions; merges and exclude_cells are lists")
+    batch = sample_map.get("batch_key")
+    if not (batch is None or batch is False or (isinstance(batch, str) and batch.strip())):
+        raise ValueError("sample_map.batch_key is an obs column name, or false for one batch without correction")
+
+
 @activity.defn
 def submit_execute(spec: dict, prepared_path: str, reply_path: str, plan_parent: str | None = None) -> str:
-    from ..warm_pool.state import file_digest, submit
+    from ..warm_pool.state import file_digest, immutable, submit
     request_id = spec["run_id"] + ".execute"
     trace = task_trace(spec, "organize.execute")
     if plan_parent:
         trace["depends_on"] = [plan_parent]
+    args, files = ["-m", "ecarsi.stages.organize", "execute", prepared_path, reply_path, "."], [prepared_path, reply_path]
+    if "sample_map" in spec:
+        # next to the organize output: the request pins it by content like its other inputs
+        output = Path(spec["output_root"])
+        path = immutable(output.with_name(output.name + ".sample-map.json"), spec["sample_map"])["path"]
+        args, files = args + ["--sample-map", path], files + [path]
     submit(spec["pool_root"], dict(request_id=request_id, operation_id="organize.execute",
-        trace=trace,
-        args=["-m", "ecarsi.stages.organize", "execute", prepared_path, reply_path, "."],
+        trace=trace, args=args,
         cpus=spec["execute_cpus"], memory_mb=spec["execute_memory_mb"],
         timeout_seconds=spec["execute_timeout_seconds"],
-        inputs=[{"path": path, "sha256": file_digest(path)} for path in (prepared_path, reply_path)],
+        inputs=[{"path": path, "sha256": file_digest(path)} for path in files],
         outputs=["completion.json", "run/organize/manifest.json"]))
     return request_id
 
@@ -416,8 +435,10 @@ def validate_spec(spec):
         "run_id", "input_root", "output_root", "pool_root", "bridge_root",
         "prepare_cpus", "prepare_memory_mb", "prepare_timeout_seconds",
         "execute_cpus", "execute_memory_mb", "execute_timeout_seconds"}
-    if not isinstance(spec, dict) or not required <= spec.keys() or spec.keys() - required - {"dataset_id"}:
+    if not isinstance(spec, dict) or not required <= spec.keys() or spec.keys() - required - {"dataset_id", "sample_map"}:
         raise ValueError("Organize Workflow requires explicit input, output, services and resource budgets")
+    if "sample_map" in spec:
+        validate_sample_map(spec["sample_map"])
     identifier(spec["run_id"])
     if "dataset_id" in spec:
         from ..warm_pool.state import validate_trace

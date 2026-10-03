@@ -27,7 +27,7 @@ The file `container/control-requirements.lock` defines the pinned Python environ
 
 | Package | Version |
 |---|---|
-| ecarsi | 0.4.0 |
+| ecarsi | 0.4.1 |
 | agent-harness-bridge | 0.2.15 |
 | osp-sc (`osp`) | 0.1.7 |
 | msp-sc (`msp`) | 0.5.2 |

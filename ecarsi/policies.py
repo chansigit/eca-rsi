@@ -1,23 +1,22 @@
-"""Declarative cell policies of the sample map — host-applied, never inferred.
+"""Declarative cell policies of the sample map (the dataset spec's `organize.sample_map`) — host-applied,
+never inferred.
 
 exclude_cells   rules dropping cells BEFORE any OSP subset is cut; every
-                excluded cell is a ledger row (osp_status
-                "removed:persample-policy:<reason>", persample/excluded_cells.csv).
+                excluded cell is a ledger row with its reason (the unit's
+                cell_exclusions.csv.gz, operation persample.partition).
                 Rule: {"where": {col: [values]}, "reason", "rationale"} (raw
                 string equality, AND across columns — a literal "missing"
                 matches "missing") or {"blank": [col, ...], "reason",
                 "rationale"} (NA-family in ALL listed columns, see
                 upstream.normalize). Unknown column = error; a rule matching no
                 cell = recorded warning (a shared map may not apply to every
-                organ); a source left with no cell = error. The sample-column
-                agent may propose rules of the same shape; those are strict:
-                no-match or more than AGENT_EXCLUDE_MAX_FRAC of the source is
-                rejected in-session.
+                organ); a source left with no cell = error.
 batch_key       obs column Harmony corrects by instead of eca_sample_id. Must
                 be constant within every OSP experiment (NA ignored, two non-NA
                 values = error), present in every experiment, >= 2 values in
                 the unit. The per-sample constant is written into each OSP
-                subset so NA cells follow their experiment.
+                subset so NA cells follow their experiment. `false` declares the
+                unit one batch: no batch correction (sample_mapping.SINGLE_BATCH_COLUMN).
 """
 
 from __future__ import annotations
@@ -183,6 +182,3 @@ def resolve_batch_key(obs: pd.DataFrame, sample: pd.Series, key) -> dict:
         "of_sample": {str(s): str(v) for s, v in first.items()},
         "n_filled": int(values.isna().sum()),
     }
-
-
-# ---------------------------------------------------------------- agent: batch_key recommendation

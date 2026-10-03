@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-import json
-from types import SimpleNamespace
 
 import anndata as ad
 import pandas as pd
 import pytest
 
 from ecarsi import layout as L, policies as P, review
-from ecarsi.run_state import write_json
-from ecarsi.sample_mapping import SAMPLE_KEY, build_mapping, mapping_identity
+from ecarsi.run_state import read_json, write_json
+from ecarsi.sample_mapping import SAMPLE_KEY, SINGLE_BATCH, SINGLE_BATCH_COLUMN, build_mapping, mapping_identity
 from tests.test_front_integration import organize, plan_file, source
 
 BLANK = {
@@ -21,9 +19,9 @@ BLANK = {
 }
 
 
-def facs(tmp_path):
+def facs_input(tmp_path):
     """One source, 8 cells: plate P1 (mouse m1) = cells 0-2, P2 (m2) = 3-5; cells 6-7 blank everywhere."""
-    root, out = tmp_path / "in", tmp_path / "out"
+    root = tmp_path / "in"
     step = source(root, "A", n=8)
     a = ad.read_h5ad(step / "standardized.h5ad")
     a.obs["plate"] = ["P1"] * 3 + ["P2"] * 3 + ["missing"] * 2
@@ -50,7 +48,12 @@ def facs(tmp_path):
     ]  # cell2 blank here only: kept
     a.obs["half"] = ["d1"] * 3 + ["missing"] * 3 + [""] * 2  # blank throughout P2
     a.write_h5ad(step / "standardized.h5ad")
-    organize(root, out, plan_file(tmp_path / "plan.json"))
+    return root
+
+
+def facs(tmp_path):
+    out = tmp_path / "out"
+    organize(facs_input(tmp_path), out, plan_file(tmp_path / "plan.json"))
     return L.unit_dir(out, "test-unit")
 
 
@@ -59,21 +62,6 @@ def spec(**extra):
         "sources": {"A": {"sample_column": "plate", "rationale": "plate = library"}},
         **extra,
     }
-
-
-def agent_submitting(monkeypatch, decisions, seen):
-    """Fake harness: submits each decision in turn until the host accepts one."""
-
-    async def agent(**kwargs):
-        tool = kwargs["tools"][0]
-        for d in decisions:
-            r = await tool.handler({"decision_json": json.dumps(d)})
-            seen.append(r["content"][0]["text"])
-            if not r["is_error"]:
-                return SimpleNamespace(submitted=r["_submitted"], cost_usd=None, tokens_in=None, tokens_out=None)
-        raise AssertionError(seen)
-
-    monkeypatch.setattr("ecarsi.harness.run_agent", agent)
 
 
 # ---------------------------------------------------------------- rules
@@ -155,6 +143,37 @@ def test_rules_are_part_of_the_mapping_identity(tmp_path):
 
 
 # ---------------------------------------------------------------- batch_key
+
+
+def test_batch_key_false_declares_the_unit_one_batch(tmp_path):
+    """The owner says there is no batch effect: two experiments stay two, Harmony gets one batch value."""
+    unit = facs(tmp_path)
+    table, decision = build_mapping(L.input_h5ad(unit), unit, spec(exclude_cells=[BLANK], batch_key=False), None)
+    samples = set(table.loc[table[SAMPLE_KEY].ne(""), SAMPLE_KEY])
+    assert len(samples) == 2
+    assert decision["batch_key"] == {"column": SINGLE_BATCH_COLUMN, "single": True, "n_filled": 0,
+                                     "of_sample": {s: SINGLE_BATCH for s in samples}}
+
+
+def test_the_spec_sample_map_overrides_the_plan_and_applies_its_policies(tmp_path):
+    """spec organize.sample_map reaches organize: its sources win over the planning agent's column, its
+    exclusion rules and batch key apply, and a source it names must be an accepted input."""
+    from ecarsi.execute import execute_plan
+    from ecarsi.stages.organize import prepare
+    root = facs_input(tmp_path)
+    prepared = prepare(root, tmp_path / "prepared.json")
+    plan = {**read_json(plan_file(tmp_path / "plan.json")),
+            "sample_mapping": {"A": {"sample_column": None, "confirmed_single": True, "rationale": "agent: one experiment"}}}
+    def run(out, sample_map):
+        execute_plan(prepared["records"], prepared["profiles"], plan, out, records=prepared["records"],
+                     input_identity=prepared["source_identity"], adapter_identity="test", sample_map=sample_map)
+    run(tmp_path / "out", spec(exclude_cells=[BLANK], batch_key="mouse.id"))
+    decision = read_json(L.input_manifest(L.unit_dir(tmp_path / "out", "test-unit")))["sample_mapping"]["decision"]
+    assert decision["sources"]["A"]["sample_column"] == "plate"
+    assert decision["batch_key"]["column"] == "mouse.id"
+    assert [rule["reason"] for rule in decision["exclude_cells"]] == ["upstream_qc_blank"]
+    with pytest.raises(ValueError, match="not accepted inputs"):
+        run(tmp_path / "other", {"sources": {"Z": {"sample_column": "plate", "rationale": "x"}}})
 
 
 def test_batch_key_constant_per_experiment_ignoring_na(tmp_path):

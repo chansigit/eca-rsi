@@ -9,6 +9,9 @@ from .run_state import digest, file_identity, read_json
 from .upstream import normalize
 
 SAMPLE_KEY = "eca_sample_id"
+# `batch_key: false` declares the unit one batch: every cell gets this column with one value, so MSP and
+# ZMIP skip Harmony and the per-batch HVG vote (they correct only across two or more batch values)
+SINGLE_BATCH_COLUMN, SINGLE_BATCH = "eca_batch", "single_batch"
 
 
 def _validate_sample_column(decision: dict, profile: dict, *, allow_unknown: bool = False,
@@ -195,7 +198,12 @@ def build_mapping(h5ad: Path, unit: Path | None, spec: dict | None, identify,
         raise ValueError("a merged experiment contains repeated original cell IDs; resolve overlapping source cells first")
     table["excluded_reason"] = excluded.reindex(table.index).fillna("")
     decision = {"sources": decisions, "merges": (spec or {}).get("merges", []), "exclude_cells": rules}
-    if spec is not None and spec.get("batch_key") is not None:
+    if spec is not None and spec.get("batch_key") is False:
+        if SINGLE_BATCH_COLUMN in obs.columns:
+            raise ValueError(f"batch_key false needs the obs column {SINGLE_BATCH_COLUMN!r}, which the input already has")
+        decision["batch_key"] = {"column": SINGLE_BATCH_COLUMN, "single": True, "n_filled": 0,
+                                 "of_sample": {str(s): SINGLE_BATCH for s in table.loc[kept, SAMPLE_KEY].unique()}}
+    elif spec is not None and spec.get("batch_key") is not None:
         decision["batch_key"] = P.resolve_batch_key(obs[kept.to_numpy()], table.loc[kept, SAMPLE_KEY], spec["batch_key"])
     return table, decision
 

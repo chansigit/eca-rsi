@@ -4,7 +4,7 @@ This document describes input rules, sample-map policies, and resume semantics f
 
 On the control plane, organize and per-sample run as pool tasks ([control-plane/ORGANIZE_V2.md](control-plane/ORGANIZE_V2.md), [control-plane/PERSAMPLE_V2.md](control-plane/PERSAMPLE_V2.md)); their options are keys of the dataset spec. The `eca-rsi organize` and `eca-rsi persample` commands of the local path were removed in 0.4.0.
 
-**Explicit sample maps have no control-plane input yet.** The organize plan decides each source's experiment column (`sample_column`, `confirmed_single`, `rationale`; `plan.validate_sample_mapping`). A map file with `merges`, `exclude_cells` or `batch_key` (the sections below) was an input of the local path's `persample --sample-map`; `ecarsi/sample_mapping.py` and `ecarsi/policies.py` still apply it, but no spec key passes one in.
+**Explicit sample maps go in the dataset spec** as `organize.sample_map` ([control-plane/DATASET_V2.md](control-plane/DATASET_V2.md#explicit-sample-map-optional)). The organize plan decides each source's experiment column (`sample_column`, `confirmed_single`, `rationale`); the map's `sources` override it, and its `merges`, `exclude_cells` and `batch_key` (the sections below) apply as written. `"batch_key": false` declares the unit one batch: no batch correction.
 ## Input and organize
 
 The organize plan follows `ecarsi.plan.PLAN_SCHEMA`. Each unit must have exactly one resolved species. Assign every cell of an accepted source exactly once. The main flow validates the model's submission before it writes results.
@@ -13,7 +13,7 @@ Input rules:
 
 - Input processing reads Schema 2, including 0.2.x and 0.5.x results on disk. It rejects unknown schemas.
 - Input processing accepts `ok/0` and `needs_review/0`. It keeps review reasons for each source. Starting with ECA-PP `0576683`, input processing trusts the expanded `.raw` directly. It no longer generates the HVG counts cross-check or its review reason. Existing `counts_check` records stay unchanged.
-- Input processing lists `rejected/2` sources without output in `organize/source_inventory.json`. It excludes these sources.
+- Input processing skips `rejected/2` sources (which must have no output). The organize manifest's `source_inventory` keeps them, and every unit's `needs_review` lists them.
 - `error`, `blocked`, contradictory states, missing files, a missing counts layer or an invalid matrix stop the whole input set.
 - Input processing skips only `.history` inside an ECA-PP step directory. Any other undeclared H5AD causes an error.
 - `input/upstream/<source>/` keeps the full result JSON, the derived TSV and the full source obs. Input processing aligns the TSV by original cell ID before any renaming. It rejects duplicate, missing or extra IDs.
@@ -76,7 +76,9 @@ Tabula Muris FACS example:
 
 `batch_key` names the Harmony correction column. The default is `eca_sample_id`. The host checks that this column exists in the obs of `organized.h5ad`. The host checks that the column is constant within every OSP experiment. It ignores missing values during this check. It fills missing values per experiment. Two non-NA values in one experiment cause an error. An all-NA experiment causes an error. The host also checks that the column has at least two values in the unit.
 
-The host writes the per-sample constant into the OSP subset. It also records this constant in `sample_mapping.batch_key` (`column`, `of_sample`, `n_filled`). Cross-sample passes the correction column to MSP as `--batch-col`. The round manifest records `integration_policy.selection = "sample_map"`.
+The host writes the per-sample constant into the OSP subset. It also records this constant in `sample_mapping.batch_key` (`column`, `of_sample`, `n_filled`). Cross-sample and zoom-in pass the column to MSP and ZMIP as their batch column (the stages' `config.batch_col`).
+
+`"batch_key": false` declares the unit one batch with no batch effect. The host writes `eca_batch = single_batch` into every OSP subset and records `sample_mapping.batch_key` with `"single": true`; MSP and ZMIP then skip Harmony and the per-batch HVG vote, since they correct only across two or more batch values. The experiments stay separate for QC and in the ledger.
 
 Without a map file, the sample-column agent may attach an `exclude_cells` proposal with the same structure. The host checks the proposal against the source obs. The column must exist. At least one cell must match. The proposal must exclude at most half of the source: `policies.AGENT_EXCLUDE_MAX_FRAC`. If a check fails, the host requests a resubmission. The host applies valid proposals with `proposed_by: "agent"`.
 

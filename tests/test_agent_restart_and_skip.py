@@ -235,6 +235,25 @@ def test_release_lists_skipped_samples_for_review(tmp_path):
     assert 'session died twice' in items[0].note
 
 
+def test_release_lists_rejected_sources_and_policy_exclusions_for_review(tmp_path):
+    import pandas as pd
+    from ecarsi import layout as L
+    from ecarsi.run_state import write_json
+    from ecarsi.stages.release import review_items
+    organized = tmp_path / '00-organize'
+    write_json(L.organize_manifest(organized), {'source_inventory': [
+        {'name': 'good', 'state': 'accepted'}, {'name': 'bad', 'state': 'rejected'}]})
+    save(tmp_path / 'per-sample.json', {})
+    unit = dict(unit={'path': str(organized / 'units' / 'u')}, per_sample=reference(tmp_path / 'per-sample.json'),
+                rounds=[], forced_release=False)
+    exclusions = pd.DataFrame({'round': [0, 0, 0], 'release_stage': ['per-sample'] * 3, 'cell_uid': ['a', 'b', 'c'],
+                               'reason': ['upstream_qc_blank', 'upstream_qc_blank', 'low_counts'],
+                               'operation': ['persample.partition', 'persample.partition', 'osp.compute']})
+    items = review_items(unit, exclusions, [])
+    assert [(i.kind, i.scope, i.n_cells) for i in items] == [
+        ('upstream_review', 'bad', None), ('policy_excluded', 'upstream_qc_blank', 2)]
+
+
 def test_a_restart_pins_the_program_files_as_they_are_now(tmp_path):
     from ecarsi.control.coordinator import agent_step
     from ecarsi.warm_pool.state import reference

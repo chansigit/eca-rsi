@@ -63,7 +63,7 @@ Layers, module map and mechanisms: [docs/control-plane/ARCHITECTURE.md](docs/con
 - **Single sample.** A single sample skips the inclusion agent. If inclusion leaves one sample, MSP skips Harmony. In that case, inspect and annotate ignore sample composition.
 - **Biological doubts do not block release.** Send low confidence, inspect flags, sample exclusions, and reassignments to `release/needs_review.*`. Group these items by category: convergence, removed, sample_excluded, reassigned (with recurring items marked), inspect_flag, lineage_skipped, low_confidence, agent_skipped, and policy_excluded. Execution failures still fail the unit.
 - **Boundary reviews.** MSP requires `boundary_reviews` for adjacent coarse-label pairs. ZMIP requires `shared_island_reviews` for same-island splits. A missing DEG or a fixed mixing percentage never forces a merge.
-- **Sample-map policies** (`ecarsi/policies.py`): Policies include `exclude_cells` and `batch_key`. See [docs/front-integration.md](docs/front-integration.md). No spec key passes an explicit sample map in yet (the removed local path's `persample --sample-map` did): the organize plan sets only each source's experiment column.
+- **Sample map** (spec `organize.sample_map`; `ecarsi/policies.py`, `sample_mapping.py`): `sources` override the planning agent's experiment column; `merges`, `exclude_cells` and `batch_key` apply as written. `batch_key: false` = one batch, no Harmony. See [docs/control-plane/DATASET_V2.md](docs/control-plane/DATASET_V2.md). ECA-PP sources with status `rejected` are skipped and listed in `needs_review`.
 - **H5AD slimming.** The file `organized.h5ad` keeps expression in `layers["counts"]` only. `X` is an empty placeholder. Convert wide integer counts to int32. Do not include `.raw`. Store embeddings as float32.
 - **Release.** `release_state.py` builds the release in a staging directory and switches atomically. Intermediate matrices stay in the pool requests that computed them; the pruner deletes those after the run finishes.
 
@@ -81,7 +81,7 @@ Agent models come from the catalog `~/.config/ecarsi/models.json` (`ECA_MODEL_CA
 
 ## Versions
 
-The current combination includes ecarsi 0.4.0, agent-harness-bridge 0.2.15, OSP 0.1.7, MSP 0.5.2, ZMIP 0.3.9, and standissect-lite 0.2.0. The combination also includes openai-agents 0.22.3 and claude-agent-sdk 0.2.163. HQ is the owner's patched fork on branch `local`. The authoritative lists are [INSTALL.md](INSTALL.md) and `container/control-requirements.lock`.
+The current combination includes ecarsi 0.4.1, agent-harness-bridge 0.2.15, OSP 0.1.7, MSP 0.5.2, ZMIP 0.3.9, and standissect-lite 0.2.0. The combination also includes openai-agents 0.22.3 and claude-agent-sdk 0.2.163. HQ is the owner's patched fork on branch `local`. The authoritative lists are [INSTALL.md](INSTALL.md) and `container/control-requirements.lock`.
 
 ## Targeted checks
 

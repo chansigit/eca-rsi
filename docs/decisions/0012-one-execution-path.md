@@ -11,6 +11,7 @@ local one as if it were current.
 from the code the control plane runs. Pages still read its run layout, because its old runs are served from
 their display zones.
 
-**Consequences.** One way to run, one layout to document. Three behaviours that only the local path had are
-not on the control plane: explicit sample maps (`merges`, `exclude_cells`, `batch_key`), study-design context
-for the agents, and skipping rejected ECA-PP sources. Each needs its own decision. See CHANGELOG 0.4.0.
+**Consequences.** One way to run, one layout to document. The removal showed three behaviours only the
+local path had. Two came back on the control plane in 0.4.1: explicit sample maps (spec `organize.sample_map`,
+with `batch_key: false` for one batch) and skipping rejected ECA-PP sources. The study-design context for the
+agents stays off until its effect is measured. See CHANGELOG 0.4.0 and 0.4.1.

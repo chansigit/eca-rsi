@@ -184,11 +184,23 @@ def local_link(root, entry):
 def review_items(unit, exclusions, decisions, root=None):
     """Reuse review records; count actual removed cells, not proposed cluster sizes. `root` is the unit
     directory, where decisions link to their local copies."""
+    from .. import layout as L
     from ..review import Item, _loop_items, _annotation_items, _mark_recurring
+    from ..run_state import read_json
     items = []
     for ref in unit['rounds']:
         record = verified(ref)
         items += _loop_items(record['round'], record['stats'], unit['forced_release'], record['round'] == len(unit['rounds']))
+    # sources ECA-PP rejected: organize skipped them; the whole dataset's inventory is in its organize manifest
+    organized = L.organize_manifest(Path(unit['unit']['path']).parents[1]) if 'unit' in unit else None
+    for source in (read_json(organized).get('source_inventory', []) if organized and organized.is_file() else []):
+        if source.get('state') == 'rejected':
+            items.append(Item('upstream_review', 0, 'organize', source.get('name', ''), action='skip',
+                note='ECA-PP rejected this source (status rejected, exit code 2); organize skipped it'))
+    if 'operation' in exclusions:
+        for reason, rows in exclusions[exclusions.operation.eq('persample.partition')].groupby('reason', sort=True):
+            items.append(Item('policy_excluded', 0, 'per-sample', str(reason), n_cells=len(rows), action='remove',
+                note='excluded before OSP by the sample map (spec organize.sample_map)', link='cell_exclusions.csv.gz'))
     for entry in verified(unit['per_sample']).get('skipped_samples', []):
         items.append(Item('agent_skipped', 0, 'per-sample', entry['sample'], n_cells=entry['n_cells'],
             note='annotation agent failed twice; survivors kept unannotated: ' + str(entry.get('error', ''))[:300],

@@ -19,9 +19,11 @@ def prepare(input_root: Path, destination: Path):
     if violations:
         raise ValueError(f"undeclared H5AD: {violations[0]}")
     records = [inspect_unit(unit) for unit in units]
+    # ECA-PP rejected a source (rejected/2): skip it, keep it in the source inventory; the release's
+    # needs_review lists it. Any other non-accepted state was already an error in inspect_unit.
     accepted = [record for record in records if record["state"] == "accepted"]
-    if len(accepted) != len(records) or not accepted:
-        raise ValueError("every source must have accepted ECA-PP results")
+    if not accepted:
+        raise ValueError("no accepted ECA-PP source in the input")
     profiles = [profile_unit(record) for record in accepted]
     prepared = {"schema_version": 1, "input_root": str(input_root), "records": records,
                 "profiles": profiles, "source_identity": digest(records)}
@@ -136,7 +138,7 @@ def accepted_plan(spec, session_result, prepared_path):
     return {"path": result["output"]["path"], "request_id": result["pool_request_id"]}
 
 
-def execute(prepared_path: Path, reply_path: Path, output: Path):
+def execute(prepared_path: Path, reply_path: Path, output: Path, sample_map_path: Path | None = None):
     from ..execute import execute_plan
     from ..plan import _validate, validate_sample_mapping
     from ..upstream import inspect_unit
@@ -153,10 +155,12 @@ def execute(prepared_path: Path, reply_path: Path, output: Path):
     if digest(current) != prepared["source_identity"]:
         raise ValueError("ECA-PP inputs changed after Organize preparation")
     run = output / "run"
-    execute_plan(current, prepared["profiles"], plan, run,
+    sample_map = read_json(sample_map_path) if sample_map_path else None
+    execute_plan([record for record in current if record["state"] == "accepted"], prepared["profiles"], plan, run,
                  records=current, input_identity=prepared["source_identity"],
                  adapter_identity=digest([file_identity(Path(__file__)),
-                                          file_identity(Path(__file__).parents[1] / "execute.py")]))
+                                          file_identity(Path(__file__).parents[1] / "execute.py")]),
+                 sample_map=sample_map)
     manifest = read_json(L.organize_manifest(run))
     if manifest["state"] != "complete" or not manifest.get("experiment_audit"):
         raise ValueError("Organize did not confirm experiment mapping")
@@ -250,6 +254,7 @@ def main():
     p.add_argument("prepared", type=Path)
     p.add_argument("reply", type=Path)
     p.add_argument("output", type=Path)
+    p.add_argument("--sample-map", type=Path, default=None, help="the dataset spec's organize.sample_map, as a file")
     p = commands.add_parser("plan-tool")
     p.add_argument("name", choices=["inspect_source", "submit_plan"])
     p.add_argument("prepared", type=Path)
@@ -261,7 +266,7 @@ def main():
     elif args.operation == "plan-tool":
         plan_tool(args.name, args.prepared, args.arguments, args.output)
     else:
-        execute(args.prepared, args.reply, args.output)
+        execute(args.prepared, args.reply, args.output, args.sample_map)
 
 
 if __name__ == "__main__":

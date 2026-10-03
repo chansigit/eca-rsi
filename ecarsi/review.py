@@ -44,11 +44,10 @@ KINDS: list[tuple[str, str, str]] = [
      "reader should see, not something the loop blocks. Written by the local path only (removed 2026-10); "
      "kept so its releases still render."),
     ("upstream_review", "Input and per-sample review",
-     "Upstream quality flags, OSP execution or QC warnings and advisory batch-key recommendations "
-     "(never applied); see persample/needs_review.json."),
+     "Upstream quality flags, sources ECA-PP rejected (organize skips them), and OSP execution or QC warnings."),
     ("policy_excluded", "Cells excluded before OSP by policy",
-     "Declarative exclude_cells rules of the sample map (or an agent proposal the host validated the same way), "
-     "applied before any QC. Every cell is in persample/excluded_cells.csv and the ledger (step persample-policy)."),
+     "Declarative exclude_cells rules of the sample map (the dataset spec's organize.sample_map), applied before "
+     "any QC. Every excluded cell is in the unit's cell_exclusions.csv.gz with its reason."),
     ("convergence", "Loop convergence",
      "The loop did not stop on its own, or a round after the first removed more than the per-round budget."),
     ("removed", "Cells removed below high confidence",

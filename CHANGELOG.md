@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.1 — 2026-10-02
+
+- **Explicit sample maps on the control plane**: the dataset spec's `organize.sample_map` (`sources`, `merges`,
+  `exclude_cells`, `batch_key`) reaches organize, pinned by content with its request. `sources` override the
+  planning agent's experiment column; excluded cells are ledger rows with their reason and `policy_excluded`
+  review items. `"batch_key": false` declares a unit one batch: `eca_batch = single_batch` on every cell, so MSP
+  and ZMIP skip Harmony and the per-batch HVG vote. A named `batch_key` is checked as before (constant per
+  experiment, two or more values).
+- **Rejected ECA-PP sources are skipped**, as the local path did, instead of failing organize: the source
+  inventory keeps them and every unit's `needs_review` lists them (`upstream_review`).
+- Rounds after the first record each cell's experiment (`eca_sample_id`), not its batch value, as the sample
+  of its input and exclusion rows.
+- Tests run the real MSP integration for a named batch column (Harmony runs) and for one batch (skipped).
+
 ## 0.4.0 — 2026-10-02
 
 The control plane is the only way ECA-RSI runs; the local path is gone.

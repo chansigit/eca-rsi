@@ -176,3 +176,52 @@ def test_compute_comparisons_and_sql_handoff(tmp_path):
     assert all(c.startswith(clusters[0]+',') for c in refined_bundle['type_scope'])
     assert set(refined_bundle['type_entries'])==set(clusters)-{clusters[0]}
     assert reference(computed/'integrated.h5ad')==verified(evidence)['files']['integrated.h5ad']
+
+
+@pytest.mark.parametrize('batch_col,batches,harmony_runs', [
+    ('mouse', ('m1', 'm2'), True),                       # the owner names the batch column (sample map batch_key)
+    ('eca_batch', ('single_batch',) * 2, False),         # batch_key false: one batch, no correction
+])
+def test_the_batch_column_decides_harmony_and_the_experiment_stays_the_sample(tmp_path, batch_col, batches, harmony_runs):
+    """Two experiments with a separate batch column, as the per-sample stage writes them: MSP corrects by that
+    column (or skips Harmony for one batch value), and the next round still records the experiment."""
+    from ecarsi.sample_mapping import SAMPLE_KEY
+    from ecarsi.stages.crosssample import inspect_input, compute, compute_round
+    rng = np.random.default_rng(7); samples = []
+    for name, batch in zip(('a', 'b'), batches):
+        folder = tmp_path/name; folder.mkdir()
+        counts = rng.poisson(1., (60, 50)).astype('float32')
+        for group in range(2): counts[group*30:(group+1)*30, group*10:(group+1)*10] += 8
+        data = an.AnnData(counts, obs=pd.DataFrame({SAMPLE_KEY: [name]*60, batch_col: [batch]*60,
+            'source_unit': ['src']*60, 'eca_source_cell_id': [name+str(i) for i in range(60)],
+            'pct_counts_mt': [2.]*60, 'n_genes_by_counts': (counts > 0).sum(axis=1).astype(float),
+            'total_counts': counts.sum(axis=1), 'doublet_score': [.05]*60}, index=[name+str(i) for i in range(60)]))
+        data.layers['counts'] = counts.copy(); data.write_h5ad(folder/'clustered.h5ad')
+        pd.DataFrame({'cell_id': data.obs_names, 'source_id': ['src']*60, 'source_cell_id': data.obs_names}).to_csv(folder/'input_cells.csv.gz', index=False)
+        save(folder/'annotation_proposal.json', {'qc_actions': []})
+        samples.append(sealed(folder, folder/'final.json', sample=name, empty=False, validation={'n_survived': 60, 'qc_summary': {}}))
+    publication = immutable(tmp_path/'publication.json', dict(state='complete', failed_samples=[], samples=samples, n_survived=120))
+    cfg = dict(batch_col=batch_col, species='human', compute_backend='cpu', n_top_genes=30, n_pcs=10, n_neighbors=10)
+    inspected = tmp_path/'inspected'; inspected.mkdir()
+    inspect_input(dict(input=publication, config=cfg, run_id='test', max_refinements=2), inspected)
+    inspected_ref = reference(inspected/'inspected.json')
+    inclusion = immutable(tmp_path/'inclusion.json', dict(accepted=True, evidence=inspected_ref,
+        proposal={'samples': [dict(sample=n, include=True, reason='fixture') for n in ('a', 'b')], 'notes': 'fixture'}))
+    computed = tmp_path/'computed'; computed.mkdir(); compute(inspected_ref, inclusion, computed)
+    msp = an.read_h5ad(computed/'integrated.h5ad').uns['msp']
+    assert msp['batch_col'] == batch_col
+    assert (msp['harmony'] != 'skipped: single batch') == harmony_runs
+    # a later round: the survivors' experiment, not their batch, is the sample of record
+    survivors = an.read_h5ad(computed/'integrated.h5ad'); survivors.write_h5ad(tmp_path/'annotated_zmip.h5ad')
+    source = sealed(tmp_path, tmp_path/'survivors.json', state='complete', n_survived=120)
+    later = tmp_path/'later'; later.mkdir()
+    inspect_input(dict(input=source, previous_round=1, config=cfg), later)
+    output = tmp_path/'round2'; output.mkdir()
+    import ecarsi.stages.crosssample as module
+    original = module.integrate
+    module.integrate = lambda *args: None
+    try:
+        compute_round(reference(later/'inspected.json'), output)
+    finally:
+        module.integrate = original
+    assert set(pd.read_csv(output/'input_cells.csv.gz', dtype=str).sample_id) == {'a', 'b'}

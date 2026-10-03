@@ -185,6 +185,7 @@ def compute_round(inspected_ref, destination):
     import anndata as an
     import pandas as pd
     from ..round_policy import PREV_COLS
+    from ..sample_mapping import SAMPLE_KEY
     inspected = verified(inspected_ref)
     previous = verified(inspected['input'])
     path = artifact(previous, 'annotated_zmip.h5ad')
@@ -205,7 +206,8 @@ def compute_round(inspected_ref, destination):
     origin = pd.DataFrame(dict(cell_id=data.obs_names.astype(str),
         source_id=data.obs.source_unit.astype(str).to_numpy(),
         source_cell_id=data.obs.eca_source_cell_id.astype(str).to_numpy(),
-        sample_id=data.obs[batch].astype(str).to_numpy()))
+        # the experiment, not the batch: they differ once a sample map names a batch_key (or false)
+        sample_id=data.obs[SAMPLE_KEY if SAMPLE_KEY in data.obs else batch].astype(str).to_numpy()))
     origin.to_csv(destination/'input_cells.csv.gz', index=False)
     pd.DataFrame(columns=[*origin.columns, 'reason', 'reason_code']).to_csv(destination/'sample_exclusions.csv.gz', index=False)
     pd.DataFrame(columns=['cell', 'reasons']).to_csv(destination/'osp_removal_proposals.csv.gz', index=False)

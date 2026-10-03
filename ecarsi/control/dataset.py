@@ -38,8 +38,8 @@ def validate_spec(spec):
     from .coordinator import validate_spec as validate_organize
     expected = {f'{phase}_{resource}' for phase in ('prepare', 'execute')
                 for resource in ('cpus', 'memory_mb', 'timeout_seconds')}
-    if not isinstance(spec['organize'], dict) or set(spec['organize']) != expected:
-        raise ValueError('Organize settings must contain only its six resource budgets')
+    if not isinstance(spec['organize'], dict) or set(spec['organize']) - {'sample_map'} != expected:
+        raise ValueError('Organize settings must contain its six resource budgets and at most a sample_map')
     validate_organize({k: spec[k] for k in ('run_id', 'dataset_id', 'input_root', 'output_root', 'pool_root', 'bridge_root')}
                      | spec['organize'])
     for stage in ('per_sample', 'cross_sample', 'zoom_in'):

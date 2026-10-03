@@ -13,6 +13,30 @@ python -m ecarsi.control --service-root <control> --task-queue <queue> start-dat
 python -m ecarsi.control --service-root <control> --task-queue <queue> status-dataset RUN_ID
 ```
 
+### Explicit sample map (optional)
+
+`organize.sample_map` states what the planning agent must not guess. It has the shape of the sample maps in [front-integration.md](../front-integration.md), and every key is optional:
+
+```json
+"organize": {
+  "prepare_cpus": 2, "...": "...",
+  "sample_map": {
+    "sources": {"Lung": {"sample_column": "plate.barcode", "rationale": "Smart-seq2 plate = library"}},
+    "merges": [],
+    "exclude_cells": [{"blank": ["mouse.id", "subtissue"], "reason": "upstream_qc_blank", "rationale": "wells the authors dropped"}],
+    "batch_key": "mouse.id"
+  }
+}
+```
+
+- `sources` overrides the plan's experiment column for the sources it names (any other source keeps the agent's decision). A name that is not an accepted input is an error.
+- `merges` pools one experiment split across sources; `exclude_cells` drops cells before OSP, each with its reason in the ledger and in `needs_review` (`policy_excluded`).
+- `batch_key` names the column Harmony corrects by instead of the experiment. It must be constant within every experiment and take at least two values in the unit. **`"batch_key": false`** declares the unit one batch with no batch effect: every cell gets `eca_batch = single_batch`, and MSP and ZMIP skip Harmony and the per-batch HVG vote. The agents then see one batch, as for a single-sample unit.
+
+`start-dataset` checks the map's shape; organize checks it against the data. The map is pinned by content with the organize request (`00-organize.sample-map.json` beside the run).
+
+ECA-PP sources with status `rejected` are skipped: organize keeps them in its source inventory, and every unit's `needs_review` lists them (`upstream_review`).
+
 The output root must be fresh, and its parent must exist. Budgets apply per operation. The GPU setting `auto` follows pool preference and size threshold. The setting `rapids` requires a GPU. The setting `cpu` selects Scanpy. Neither submission nor execution requests a Slurm allocation.
 
 Outputs:
