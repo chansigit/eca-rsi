@@ -14,6 +14,7 @@ import re
 import shutil
 import sys
 import time
+import uuid
 from pathlib import Path
 
 from . import layout as L
@@ -100,12 +101,13 @@ def sync(root: Path, dest: Path, record: dict) -> dict:
                 continue
         except FileNotFoundError:
             target.parent.mkdir(parents=True, exist_ok=True)
-        partial = target.with_name(target.name + ".partial")
+        # a name of its own: syncs of one zone can overlap (four began together at the end of test1002-shi)
+        partial = target.with_name(f"{target.name}.{uuid.uuid4().hex}.partial")
         shutil.copy2(source, partial)
         os.replace(partial, target)
         copied += 1
     dest.mkdir(parents=True, exist_ok=True)
-    partial = dest / (L.DISPLAY + ".partial")
+    partial = dest / f"{L.DISPLAY}.{uuid.uuid4().hex}.partial"
     partial.write_text(json.dumps(dict(record, synced_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"), files=len(need)), indent=1) + "\n")
     os.replace(partial, dest / L.DISPLAY)
     return dict(dest=str(dest), files=len(need), copied=copied, seconds=round(time.time() - start, 1))

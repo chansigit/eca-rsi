@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import tarfile
 from pathlib import Path
 
@@ -43,6 +44,20 @@ def test_sync_copies_only_what_the_pages_need_and_only_what_changed(tmp_path):
     receipt.write_text(json.dumps({"state": "complete", "changed": True}))
     os.utime(receipt, (receipt.stat().st_atime, receipt.stat().st_mtime + 10))
     assert display.sync(root, dest, record)["copied"] == 1
+
+
+def test_overlapping_syncs_of_one_zone_do_not_trip_over_each_other(tmp_path, monkeypatch):
+    """2026-10-02: four syncs of test1002-shi began together and the final one failed."""
+    root, dest = gen2_run(tmp_path / "run"), tmp_path / "display" / "c" / "d" / "r"
+    record = dict(name="run", collection="c", dataset="d", run="r", source=str(root), work="/w.tar.gz")
+    real = shutil.copy2
+    def copy_then_overlap(source, target):
+        real(source, target)
+        monkeypatch.setattr(shutil, "copy2", real)
+        display.sync(root, dest, record)  # another sync runs between this copy and its rename
+    monkeypatch.setattr(shutil, "copy2", copy_then_overlap)
+    display.sync(root, dest, record)
+    assert (dest / "display.json").is_file() and not list(dest.rglob("*.partial"))
 
 
 def test_archive_round_trips_and_keeps_an_existing_one(tmp_path):
