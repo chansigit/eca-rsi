@@ -59,6 +59,8 @@ Set `CODE=<checkout>` in the launcher to put a checkout first on `PYTHONPATH`. T
 | | `evidence` `execution` | execution plans on the pool: evidence batch reads, single-tool plans, measured budgets |
 | `ecarsi` | `observatory` (+ `.html`) | control-plane page, timeline, `status` and `tokens` reports |
 | | `round_policy` | round stopping rules and `loop_control.json` |
+| | `contracts` | fields of the JSON files two subsystems share, checked by writer and reader ([0014](../decisions/0014-boundaries-are-tested.md)) |
+| | `degraded` | records of steps that failed without failing the run ([0013](../decisions/0013-degraded-results-are-recorded.md)) |
 | | `prompts/` | prompts and checklists of the agent sessions |
 
 ## Entry points
