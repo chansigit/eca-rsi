@@ -3,6 +3,7 @@
 # re-register the pool runtime from inside the new science image, repoint deployment.env, start, re-add workers.
 # Settings: ~/.config/ecarsi/deployment.env; this script rewrites its IMG and SCIENCE_IMG lines.
 # usage: switch-images.sh <stamp> <science sha256> <host:job> ...
+# A worker with a CPU slice (the plane node) is re-added by hand: warm_pool add-worker <host> --job-id <id> --cpus ... --memory-mb ...
 set -e -o pipefail
 OPS=$(cd "$(dirname "$0")" && pwd)
 STAMP=$1; SHA=$2; shift 2
@@ -40,5 +41,5 @@ HC=$BASE/image-code
 for hj in "$@"; do h=${hj%%:*}; j=${hj##*:}
   ( PYTHONPATH=$HC timeout 420 "$HOSTPY" -m ecarsi.warm_pool --root $POOL add-worker $h --job-id $j --wait-seconds 300 2>&1 | grep -E '"cpus"' | tr -d '\n' | sed "s/^/$h /"; echo ) &
 done; wait   # timeout: the ssh in add-worker can hang on a worker that keeps the channel open (#20)
-apptainer exec "$CTL" /opt/rsi-bin/hq --server-dir $POOL/hq worker list 2>/dev/null | grep RUNNING | cut -c1-110
+apptainer exec "$CTL" /opt/rsi-bin/hq --server-dir $POOL/hq worker list 2>/dev/null | grep RUNNING | cut -c1-110 || echo "no worker running yet"
 echo "SWITCH DONE $STAMP"
