@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Per-sample `read_evidence` reads figures in fixed pages (offset 0, then each returned `next_offset`). Any other
+  offset is an error. In the 2026-10-04 scale test one session read offsets 1–9 after a complete first page, put
+  55 images (7.5 MB) in its context, and its next model call timed out three times.
+
 ## 0.4.4 — 2026-10-03
 
 Samples and batches follow ECA-PP; large samples no longer need hand-made splits

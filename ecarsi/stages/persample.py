@@ -217,17 +217,22 @@ def tool(name, state_path, arguments_path, destination):
         if name == "read_evidence":
             offset = arguments["offset"]
             if arguments["kind"] == "figures":
-                if not 0 <= offset <= len(figures):
-                    raise ValueError("Use the returned figure offset")
-                names, image_bytes = [], 0
-                for figure in figures[offset:offset + 16]:
+                # Fixed pages (16 figures, 9 MiB): a read at any other offset re-sent the tail of a page,
+                # and one session's 1..9 offsets put 55 images in its context (scale test 2026-10-04).
+                pages, start, page, image_bytes = {}, 0, [], 0
+                for figure in figures:
                     size = Path(bundle["files"][figure]["path"]).stat().st_size
-                    if image_bytes + size > 9 * 2**20:
-                        if not names:
-                            raise ValueError("One figure exceeds the 9 MiB image budget")
-                        break
-                    names.append(figure)
+                    if size > 9 * 2**20:
+                        raise ValueError("One figure exceeds the 9 MiB image budget")
+                    if len(page) == 16 or image_bytes + size > 9 * 2**20:
+                        pages[start], start, page, image_bytes = page, start + len(page), [], 0
+                    page.append(figure)
                     image_bytes += size
+                pages[start] = page
+                if offset not in pages:
+                    raise ValueError("Figures come in fixed pages: read offset 0, then each returned next_offset; "
+                                     "null means every figure was returned. Pages start at " + str(sorted(pages)))
+                names = pages[offset]
                 next_offset = offset + len(names)
                 response.update(text="Figures: " + ", ".join(names), images=["data:image/png;base64," +
                     base64.b64encode(Path(bundle["files"][n]["path"]).read_bytes()).decode() for n in names],

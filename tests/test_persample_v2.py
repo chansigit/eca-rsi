@@ -83,6 +83,7 @@ def test_annotation_evidence_and_refinement_are_immutable_versions(tmp_path, mon
     figures = invoke("read_evidence", {"kind": "figures", "offset": 0})
     assert len(figures["images"]) == 8 and figures["next_offset"] is None
     assert figures["images"][0].startswith("data:image/png;base64,")
+    assert "fixed pages" in invoke("read_evidence", {"kind": "figures", "offset": 1})["error"]
     invoke("read_evidence", {"kind": "tables", "offset": 0})
     invoke("check_genes", {"genes": ["CD3D"]})
     invoke("check_qc_scores", {})
