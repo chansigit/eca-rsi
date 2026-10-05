@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Release review links resolve (#26).** The needs_review rows `removed` and `policy_excluded` linked
+  `cell_exclusions.csv.gz` beside the unit instead of `release/cell_exclusions.csv.gz`, and `agent_skipped` linked an
+  absolute path; both are unit-relative now. Found by rendering a finished gate's display zone and following every link.
 - **Remote `add-worker` carries the library path.** It ran the host Python over `ssh <node> '<python> …'`, whose shell
   loads no modules since `~/.bashrc` loads `~/pp` in interactive shells only (2026-10-05); the module-built Python then
   could not find `libpython3.12.so` and the image switch left the pool with no worker. The remote command now gets this

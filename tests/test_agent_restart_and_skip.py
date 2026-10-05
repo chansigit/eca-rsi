@@ -198,6 +198,7 @@ def test_release_lists_skipped_samples_for_review(tmp_path):
     items = review_items(unit, exclusions, [])
     assert [(i.kind, i.scope, i.n_cells) for i in items] == [('agent_skipped', 'b', 5)]
     assert 'session died twice' in items[0].note
+    assert items[0].link == '01-per-sample/b/report.html'  # unit-relative: the page prefixes the unit (#26)
 
 
 def test_release_lists_rejected_sources_and_policy_exclusions_for_review(tmp_path):
@@ -217,6 +218,7 @@ def test_release_lists_rejected_sources_and_policy_exclusions_for_review(tmp_pat
     items = review_items(unit, exclusions, [])
     assert [(i.kind, i.scope, i.n_cells) for i in items] == [
         ('upstream_review', 'bad', None), ('policy_excluded', 'upstream_qc_blank', 2)]
+    assert items[1].link == 'release/cell_exclusions.csv.gz'
 
 
 def test_a_restart_pins_the_program_files_as_they_are_now(tmp_path):

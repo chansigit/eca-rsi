@@ -190,6 +190,7 @@ def review_items(unit, exclusions, decisions, root=None):
     from ..review import Item, _loop_items, _annotation_items, _mark_recurring
     from ..run_state import read_json
     items = []
+    exclusions_link = f'{L.RELEASE}/cell_exclusions.csv.gz'  # links are unit-relative (review.Item.link)
     # steps that failed without failing the run, kept under <run>/degraded/ (ecarsi.degraded)
     for record in (read_degraded(Path(root).parent.parent) if root is not None else []):
         if record.get('unit') in (None, Path(root).name):
@@ -208,11 +209,11 @@ def review_items(unit, exclusions, decisions, root=None):
     if 'operation' in exclusions:
         for reason, rows in exclusions[exclusions.operation.eq('persample.partition')].groupby('reason', sort=True):
             items.append(Item('policy_excluded', 0, 'per-sample', str(reason), n_cells=len(rows), action='remove',
-                note='excluded before OSP by the sample map (spec organize.sample_map)', link='cell_exclusions.csv.gz'))
+                note='excluded before OSP by the sample map (spec organize.sample_map)', link=exclusions_link))
     for entry in verified(unit['per_sample']).get('skipped_samples', []):
         items.append(Item('agent_skipped', 0, 'per-sample', entry['sample'], n_cells=entry['n_cells'],
             note='annotation agent failed twice; survivors kept unannotated: ' + str(entry.get('error', ''))[:300],
-            link=unit['per_sample']['path']))
+            link=f"{L.GEN2_PERSAMPLE}/{entry['sample']}/report.html"))
     for (number, stage), rows in exclusions.groupby(['round', 'release_stage'], sort=False):
         uncertain = []
         for row in rows.itertuples():
@@ -230,7 +231,7 @@ def review_items(unit, exclusions, decisions, root=None):
         if uncertain:
             items.append(Item('removed', int(number), stage, n_cells=len(uncertain), action='remove',
                 note='Removal evidence includes medium or low confidence; see cell_exclusions.csv.gz.',
-                link='cell_exclusions.csv.gz'))
+                link=exclusions_link))
     for entry in decisions:
         if root is not None:
             entry = {**entry, 'source': {**entry['source'], 'link': local_link(root, entry)}}
