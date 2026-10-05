@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **The per-sample unit rule lives in ECA-PP only** (eca-pp 0.5.4 `sample_unit`; decision 0016 amended):
+  organize maps ECA-PP's verdict (library, batch, whole, stop) to columns; `LIBRARY_MAX_CELLS` and the platform list
+  left eca-rsi. The identify-columns result is contract `eca-pp-identify-columns/1`. A pre-0.5.4 result without a
+  batch or library stops organize until identify-columns is re-run.
 - **MSP 0.5.4**: DEG leaves out the genes no cell of a comparison expresses (a gene expressed in one group only
   is kept); pvals_adj is still corrected over all genes, so the DEG tables do not change. In the scale test no cell
   expressed 20 % of the genes and a single cluster none of 49 % (median).

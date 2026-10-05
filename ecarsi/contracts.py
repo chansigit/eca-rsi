@@ -29,6 +29,9 @@ KINDS = {
     "receipt/1": {"state": ("succeeded", "failed", "cancelled"), "outputs": list},
     # <run>/degraded/*.json: ecarsi.degraded, read by release and Periscope
     "degraded/1": {"what": str, "error": str, "at": int, "id": str},
+    # <ECA-PP output>/identify_columns/result.json: eca-pp identify-columns (another repository), read by
+    # stages.upstream; `sample_unit` (0.5.4) is checked against stages.upstream.SAMPLE_UNITS there
+    "eca-pp-identify-columns/1": {"step": ("identify_columns",), "columns": dict},
 }
 
 

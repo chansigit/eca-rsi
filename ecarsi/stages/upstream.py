@@ -5,14 +5,13 @@ import json
 import os
 from pathlib import Path
 
+from ..contracts import check
 from ..sample_mapping import normalize
 from ..run_state import file_identity, read_json, write_json
 
 RESERVED = ("eca_source_cell_id", "eca_pp_batch", "eca_pp_cell_type", "eca_pp_library", "eca_sample_id")
-# The most cells one library holds on a droplet-like platform (a 10x channel recovers at most ~20k), as in
-# ECA-PP identify-columns 0.5.3, whose `library` groups stay below it. A source with no batch and no library
-# may be one sample only if it fits one library, or on a split-pool or plate platform (decision 0016).
-LIBRARY_MAX_CELLS = 30000
+# ECA-PP identify-columns names each source's per-sample QC unit (0.5.4, decision 0016).
+SAMPLE_UNITS = ("library", "batch", "whole", "stop")
 
 
 def is_run_root(p: Path) -> bool:
@@ -136,25 +135,30 @@ def load_evidence(unit: dict, obs):
     return evidence, values, files
 
 
-def eca_pp_decision(evidence: dict, values: dict, n_obs: int) -> dict | None:
+def eca_pp_decision(evidence: dict, values: dict) -> dict | None:
     """A source's experiment decision taken from ECA-PP identify-columns (decision 0016), or None when the
     source has no such result or its column leaves cells unassigned: the organize agent decides those.
 
-    Sample (the per-sample QC unit): ECA-PP's library when it found one, else its batch (adopted, or
-    "correction unnecessary"), else the whole source. Batch: ECA-PP's batch only when it recommends the
-    correction. A source with neither is one sample only on a split-pool or plate platform or when it
-    fits one library; otherwise the decision carries an `error` that organize raises unless the owner's
-    sample map decides the source (owner, 2026-10-03)."""
+    ECA-PP names the per-sample QC unit (identify-columns 0.5.4 `sample_unit`: library, batch, whole or
+    stop) and keeps the rule; eca-rsi keeps no copy. Batch: ECA-PP's batch only when it recommends the
+    correction. A result from before 0.5.4 names no unit: its library or batch is still the unit, and a
+    source with neither stops until identify-columns is re-run. A stop carries an `error` that organize
+    raises unless the owner's sample map decides the source (owner, 2026-10-03)."""
     if not evidence:
         return None
-    columns = evidence.get("columns") or {}
-    platform = (evidence.get("platform") or {}).get("value", "unknown")
+    check("eca-pp-identify-columns", evidence)
+    columns = evidence["columns"]
     batch = columns.get("batch") or {}
-    role = "library" if columns.get("library") else "batch" if batch else None
+    named = evidence.get("sample_unit") or {}
+    unit = named.get("value") or ("library" if columns.get("library") else "batch" if batch else "stop")
+    if unit not in SAMPLE_UNITS:
+        raise ValueError(f"ECA-PP sample_unit {unit!r} is not one of {SAMPLE_UNITS}")
+    role = unit if unit in ("library", "batch") else None
     if role and values[f"eca_pp_{role}"].isna().any():
         return None
     label = lambda block: block.get("label") or block.get("value")
-    decision = {"sample_column": f"eca_pp_{role}" if role else None, "source": "eca_pp", "platform": platform,
+    decision = {"sample_column": f"eca_pp_{role}" if role else None, "source": "eca_pp",
+                "platform": (evidence.get("platform") or {}).get("value", "unknown"),
                 "batch": "eca_pp_batch" if batch.get("correction") == "recommended" else None,
                 "ladder": evidence.get("ladder")}
     if role == "library":
@@ -164,16 +168,13 @@ def eca_pp_decision(evidence: dict, values: dict, n_obs: int) -> dict | None:
         decision["rationale"] = (f"ECA-PP batch {label(batch)!r} (correction {batch.get('correction')}): "
                                  + str(batch.get("evidence", ""))[:400])
     else:
-        decision.update(confirmed_single=True, rationale=(
-            f"ECA-PP found no batch on a {platform} platform: "
-            + str(columns.get("batch_evidence") or "no batch candidate")[:400]))
-        if platform not in ("split-pool", "plate") and n_obs > LIBRARY_MAX_CELLS:
-            decision["error"] = (
-                f"{n_obs} cells and no batch on a {platform} platform: more than one library holds "
-                f"(> {LIBRARY_MAX_CELLS}), so the library identity was lost. ECA-PP ladder: "
-                f"{evidence.get('ladder') or columns.get('batch_evidence') or 'not recorded (ECA-PP < 0.5.2)'}. "
-                "Name the sample column in the spec's organize.sample_map, or re-run identify-columns with "
-                "--platform when the assay is split-pool (Parse, SPLiT-seq, EasySci, sci-RNA-seq3).")
+        reason = named.get("reason") or (
+            f"identify-columns {evidence.get('step_version')} found no batch and names no sample unit "
+            "(eca-pp < 0.5.4); re-run identify-columns")
+        decision.update(confirmed_single=True, rationale=f"ECA-PP: {reason}"[:400])
+        if unit == "stop":
+            decision["error"] = (f"{reason}. ECA-PP ladder: "
+                                 f"{evidence.get('ladder') or columns.get('batch_evidence') or 'not recorded'}.")
     return decision
 
 
@@ -254,7 +255,7 @@ def profile_unit(unit: dict, max_levels: int = 30) -> dict:
         validate_matrix(a, std)
         evidence, values, _ = load_evidence(unit, a.obs)
         prof["upstream_evidence"] = evidence
-        prof["eca_pp_decision"] = eca_pp_decision(evidence, values, int(a.n_obs))
+        prof["eca_pp_decision"] = eca_pp_decision(evidence, values)
         prof["upstream_review"] = std.get("reasons", [])
         cols = {}
         for c in a.obs.columns:

@@ -70,3 +70,9 @@ gen-2 runs in the display zone, using the ECA-PP results on disk (0.5.1 and olde
   `--platform split-pool`), 3 chondroatlas sources whose results are 0.2.0, and the 3CA Gonzalez2022, Jansky2021
   and Nam2019 (31k-94k cells, no batch found, no platform recorded).
 - **Agent decides.** HCL's 19 sources have no identify-columns result; the planning agent keeps deciding them.
+
+**Amended 2026-10-05.** ECA-PP identify-columns 0.5.4 writes the verdict itself: `sample_unit` (library, batch,
+whole or stop, with its reason) and `n_obs`. `stages/upstream.eca_pp_decision` only maps it to columns and keeps no
+copy of the 30,000-cell and split-pool/plate rule; the result file is checked as contract
+`eca-pp-identify-columns/1`. A result from before 0.5.4 still gives its library or batch; a source with neither
+stops until identify-columns is re-run.

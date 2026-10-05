@@ -17,11 +17,14 @@ from ecarsi.warm_pool.budget import from_cells
 from tests.test_front_integration import organize, source
 
 
-def evidence(platform="droplet", batch=None, library=None):
+def evidence(platform="droplet", batch=None, library=None, unit=None):
     return {
+        "step": "identify_columns",
+        "step_version": "0.5.4" if unit else "0.5.3",
         "platform": {"value": platform},
         "columns": {"batch": batch, "library": library},
         "ladder": [{"rung": 1, "label": "donor", "verdict": "rejected"}],
+        **({"sample_unit": {"value": unit, "reason": f"ECA-PP says {unit}"}} if unit else {}),
     }
 
 
@@ -29,40 +32,30 @@ def values(**cols):
     return {f"eca_pp_{role}": pd.Series(v, dtype="string") for role, v in cols.items()}
 
 
-def test_decision_takes_the_library_then_the_batch_then_the_whole_source():
+def test_decision_follows_the_sample_unit_eca_pp_names():
     adopted = {"value": "donor", "kind": "existing", "correction": "recommended"}
-    d = eca_pp_decision(
-        evidence(
-            batch=adopted,
-            library={
-                "value": "library.tsv",
-                "kind": "derived",
-                "label": "barcode:head:.",
-            },
-        ),
-        values(batch=["D1", "D2"], library=["L1", "L2"]),
-        160_000,
-    )
-    assert (d["sample_column"], d["batch"], d["source"]) == (
-        "eca_pp_library",
-        "eca_pp_batch",
-        "eca_pp",
-    )
+    library = {"value": "library.tsv", "kind": "derived", "label": "barcode:head:."}
+    d = eca_pp_decision(evidence(batch=adopted, library=library, unit="library"),
+                        values(batch=["D1", "D2"], library=["L1", "L2"]))
+    assert (d["sample_column"], d["batch"], d["source"]) == ("eca_pp_library", "eca_pp_batch", "eca_pp")
     unnecessary = {**adopted, "correction": "unnecessary"}
-    d = eca_pp_decision(evidence(batch=unnecessary), values(batch=["S1", "S2"]), 5_000)
+    d = eca_pp_decision(evidence(batch=unnecessary, unit="batch"), values(batch=["S1", "S2"]))
     assert (d["sample_column"], d["batch"]) == ("eca_pp_batch", None)
-    d = eca_pp_decision(evidence("split-pool"), {}, 465_000)
+    d = eca_pp_decision(evidence("split-pool", unit="whole"), {})
     assert d["sample_column"] is None and d["confirmed_single"] and "error" not in d
-    assert "error" not in eca_pp_decision(evidence("droplet"), {}, 8_000)
-    assert "sample_map" in eca_pp_decision(evidence("droplet"), {}, 200_000)["error"]
-    assert "sample_map" in eca_pp_decision(evidence("unknown"), {}, 200_000)["error"]
-    assert "error" not in eca_pp_decision(evidence("plate"), {}, 200_000)
+    stop = eca_pp_decision(evidence("droplet", unit="stop"), {})
+    assert stop["error"].startswith("ECA-PP says stop")
+    with pytest.raises(ValueError, match="sample_unit"):
+        eca_pp_decision(evidence(unit="lane"), {})
+    with pytest.raises(ValueError, match="columns missing"):
+        eca_pp_decision({"step": "identify_columns", "platform": {}}, {})
+    # before 0.5.4 no unit is named: a library or batch is still the unit, neither means re-run
+    d = eca_pp_decision(evidence(batch=adopted), values(batch=["S1", "S2"]))
+    assert d["sample_column"] == "eca_pp_batch"
+    assert "re-run identify-columns" in eca_pp_decision(evidence("split-pool"), {})["error"]
     # cells the column leaves unassigned, or no ECA-PP result: the organize agent decides
-    assert (
-        eca_pp_decision(evidence(batch=adopted), values(batch=["S1", None]), 5_000)
-        is None
-    )
-    assert eca_pp_decision({}, {}, 5_000) is None
+    assert eca_pp_decision(evidence(batch=adopted, unit="batch"), values(batch=["S1", None])) is None
+    assert eca_pp_decision({}, {}) is None
 
 
 def test_plan_may_leave_out_what_eca_pp_decided():
