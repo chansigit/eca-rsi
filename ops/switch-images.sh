@@ -39,7 +39,7 @@ bash $OPS/restart-periscope.sh
 echo "== workers"
 HC=$BASE/image-code
 for hj in "$@"; do h=${hj%%:*}; j=${hj##*:}
-  ( PYTHONPATH=$HC timeout 420 "$HOSTPY" -m ecarsi.warm_pool --root $POOL add-worker $h --job-id $j --wait-seconds 300 2>&1 | grep -E '"cpus"' | tr -d '\n' | sed "s/^/$h /"; echo ) &
+  ( PYTHONPATH=$HC timeout 420 "$HOSTPY" -m ecarsi.warm_pool --root $POOL add-worker $h --job-id $j --wait-seconds 300 2>&1 | grep -E '"cpus"|[Ee]rror' | tr -d '\n' | sed "s/^/$h /"; echo ) &
 done; wait   # timeout: the ssh in add-worker can hang on a worker that keeps the channel open (#20)
 apptainer exec "$CTL" /opt/rsi-bin/hq --server-dir $POOL/hq worker list 2>/dev/null | grep RUNNING | cut -c1-110 || echo "no worker running yet"
 echo "SWITCH DONE $STAMP"

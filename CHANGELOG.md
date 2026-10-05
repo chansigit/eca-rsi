@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Remote `add-worker` carries the library path.** It ran the host Python over `ssh <node> '<python> …'`, whose shell
+  loads no modules since `~/.bashrc` loads `~/pp` in interactive shells only (2026-10-05); the module-built Python then
+  could not find `libpython3.12.so` and the image switch left the pool with no worker. The remote command now gets this
+  side's `LD_LIBRARY_PATH`, and `switch-images.sh` prints a failed add-worker's error instead of a blank line.
 - **No workflow patch branches left.** All 21 `workflow.patched` branches of the stage workflows lost their old path;
   each patch id keeps one `workflow.deprecate_patch` line so the histories since 2026-10-04 still replay (139 of 141;
   the scale test's cross-sample and zoom-in predate DEG batching by cells). The dead organize `submit_plan` activity is

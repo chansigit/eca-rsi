@@ -74,7 +74,10 @@ def add_worker(root, host=None, *, host_python=None, job_id=None, cpu_ids=None, 
     if host:
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]*", host):
             raise ValueError("invalid worker hostname")
+        # The remote side runs this interpreter with this library path: an ssh-command shell loads no
+        # modules, and a module-built Python then cannot find libpython (~/.bashrc of 2026-10-05).
         command = ["env", "LC_ALL=C", "LANG=C", "PYTHONPATH=" + str(Path(__file__).resolve().parents[2]),
+                   "LD_LIBRARY_PATH=" + os.environ.get("LD_LIBRARY_PATH", ""),
                    host_python or sys.executable, "-m", "ecarsi.warm_pool", "--root", str(root),
                    "add-worker", "--wait-seconds", str(wait_seconds)]
         for flag, value in (("--job-id", job_id), ("--cpus", ",".join(map(str, cpu_ids)) if cpu_ids is not None else None),
