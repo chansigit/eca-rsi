@@ -9,10 +9,9 @@ from ..files import immutable, reference, verified
 from . import PROMPTS
 from .contract import (LOOKUP_NOTE, NO_ARGUMENTS, checklist, deg_lookup_schema, evidence_page, evidence_paths, json_hint,
                        lookup_arguments, proposal as parse_proposal, schema)
-from .persample import check_bundle, png_url, sealed
+from .common import BASE, artifact, assemble, check_bundle, deg, deg_batch, png_url, publish_bundle, sealed
 from ..files import digest, read, save
 
-BASE = 'msp_leiden_r2.0'
 INVENTORY_PAGE_BYTES = 64 * 1024  # sample_inventory pages by bytes, like evidence pages: a cohort of 62
                                   # patients paged one full proposal per call filled the model's context
                                   # by page 8 in every generation (2026-09-24, six 3CA datasets)
@@ -79,20 +78,6 @@ def proposal_artifact(bundle, key):
     if sample is None:
         raise KeyError(key)
     return artifact(check_bundle(sample['bundle']), name)
-
-
-def artifact(bundle, name):
-    ref = bundle['files'][name]
-    if reference(ref['path']) != ref:
-        raise ValueError('Evidence artifact changed: ' + name)
-    return Path(ref['path'])
-
-
-def publish_bundle(destination, name, parent=None, **metadata):
-    files = {k:v for k,v in verified(parent)['files'].items() if not any(p.startswith('.') for p in Path(k).parts)} if parent else {}
-    files.update({str(p.relative_to(destination)): reference(p) for p in sorted(destination.rglob('*'))
-                  if p.is_file() and p.name != name and not any(part.startswith('.') for part in p.relative_to(destination).parts)})
-    return immutable(destination / name, {**metadata, 'files': files})
 
 
 def inspect_input(spec, destination):
@@ -237,85 +222,6 @@ def integrate(data, inspected_ref, inclusion_ref, destination, inputs):
            type_entries={},quality_entries={},type_scope=sorted(data.obs[BASE].astype(str).unique()))
 
 
-def _deg_buffers(prepared_ref):
-    """The verified bundle, its DEG plan and the mapped shared buffers: verified once per process
-    (each process maps them without loading counts or graphs)."""
-    from msp.api import load_deg_input
-    bundle=verified(prepared_ref)
-    for name in bundle['files']:
-        if name.startswith('deg_input/'):
-            artifact(bundle,name)
-    directory=artifact(bundle,'deg_input/metadata.h5ad').parent
-    return bundle,read(artifact(bundle,'deg_plan.json'))['plan'],load_deg_input(directory)
-
-
-def _deg_one(prepared_ref,bundle,plan,loaded,index,destination):
-    from msp.api import compute_deg_task
-    task=bundle['tasks'][index]
-    frame=compute_deg_task(loaded,plan[task['plan_index']],task['cluster'])
-    if frame is None:raise ValueError('A planned DEG comparison has no eligible reference')
-    # Stress uses only top 10; annotation keeps the documented top 50 per view.
-    frame.groupby('group',observed=True).head(50).to_csv(destination/'deg.csv',index=False)
-    return immutable(destination/'result.json',dict(prepared=prepared_ref,index=index,task=task,table=reference(destination/'deg.csv')))
-
-
-def deg(prepared_ref, index, destination):
-    bundle,plan,loaded=_deg_buffers(prepared_ref)
-    _deg_one(prepared_ref,bundle,plan,loaded,index,destination)
-
-
-def deg_batch(prepared_ref, indices, destination):
-    """Several comparisons in one pool request: the buffers are verified and mapped once, each
-    comparison writes the deg-<i>/result.json a single request would, and results.json lists them so
-    assemble takes the batch in place of its members. One request per comparison cost each a process
-    start, a numba warm-up and a SHA pass over the buffers, and a lineage made N of them (2026-09-27)."""
-    indices=[int(i) for i in indices]
-    if len(set(indices))!=len(indices):raise ValueError('A DEG batch lists each comparison once')
-    bundle,plan,loaded=_deg_buffers(prepared_ref);results=[]
-    for index in indices:
-        folder=destination/('deg-'+str(index));folder.mkdir()
-        results.append(_deg_one(prepared_ref,bundle,plan,loaded,index,folder))
-    immutable(destination/'results.json',dict(prepared=prepared_ref,indices=indices,results=results))
-
-
-def deg_results(prepared_ref,results):
-    """The per-comparison result documents behind `results`: single result.json refs or deg_batch
-    results.json manifests, in any mix."""
-    rows=[]
-    for r in results:
-        doc=verified(r)
-        if 'indices' in doc:
-            if doc['prepared']!=prepared_ref:raise ValueError('DEG batch belongs to different evidence')
-            rows.extend(verified(x) for x in doc['results'])
-        else:
-            rows.append(doc)
-    return rows
-
-
-def assemble(prepared_ref, results, destination):
-    import pandas as pd
-    from msp.api import write_deg_results
-    from msp.api import DegTables
-    bundle=verified(prepared_ref);plan=read(artifact(bundle,'deg_plan.json'));out={**plan,'results':[]}
-    rows=deg_results(prepared_ref,results)
-    if sorted(r['index'] for r in rows)!=list(range(len(bundle['tasks']))):
-        raise ValueError('Missing or duplicate DEG results')
-    by_index={r['index']:r for r in rows}
-    for i,task in enumerate(bundle['tasks']):
-        r=by_index[i]
-        if r['prepared']!=prepared_ref or r['task']!=task or reference(r['table']['path'])!=r['table']:
-            raise ValueError('DEG result belongs to different evidence')
-        item=plan['plan'][task['plan_index']]
-        out['results'].append((item['key'],'global' if task['cluster'] is None else 'local',task['cluster'],pd.read_csv(r['table']['path'],dtype={'group':str},keep_default_na=False)))
-    for name in bundle['files']:
-        if '/' not in name and name.endswith('.csv') and not name.startswith(('deg_','stress_clusters')):
-            shutil.copyfile(artifact(bundle,name),destination/name)
-    write_deg_results(out,plan['keys'],str(destination),top_n_de=50)
-    with DegTables(destination,BASE) as tables:
-        tables.write_database(destination/'deg.sqlite',provenance={'prepared':prepared_ref,'mask':bundle['files']['preannotation_removal.csv'],'coverage':'top 50 per cluster and view'})
-    publish_bundle(destination,'evidence.json',prepared_ref,**{k:v for k,v in bundle.items() if k!='files'},prepared=prepared_ref,comparisons=results)
-
-
 def _data(bundle):
     import anndata as an
     return an.read_h5ad(artifact(bundle,'integrated.h5ad'))
@@ -420,7 +326,7 @@ def agent_spec(spec, evidence_ref, phase, parent, types_ref=None):
         tools.append(dict(name=name,description=description,
           read_only=name in {'read_evidence','list_evidence','sample_inventory','deg_lookup','deg_sql','check_genes','check_qc_scores','type_context'},parameters=parameters,
           args=['-m','ecarsi.stages.crosssample','tool',name,'{state}','{arguments}'],**spec['tool_budget'],
-          inputs=[reference(Path(__file__)),reference(Path(__file__).with_name('contract.py'))],outputs=['result.json'],result_file='result.json',multimodal=multimodal))
+          inputs=[reference(Path(__file__).with_name(n)) for n in ('crosssample.py','common.py','contract.py')],outputs=['result.json'],result_file='result.json',multimodal=multimodal))
     return dict(session_id='cross-'+digest([spec['run_id'],phase,evidence_ref,types_ref])[:24],dataset_id=spec['dataset_id'],prompt=prompt,tools=tools,
       max_turns=80,pool_root=spec['pool_root'],bridge_root=spec['bridge_root'],output_root=str(Path(spec['output_root'])/(phase+'-'+evidence_ref['sha256'][:12])),
       completion_tool='submit_decision',tool_state=state,planner='ecarsi.stages.evidence',

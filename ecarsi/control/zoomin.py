@@ -6,7 +6,7 @@ from temporalio import activity, workflow
 from temporalio.exceptions import ApplicationError
 
 from ..contracts import check
-from .persample import HISTORY_LIMIT, await_pool, call, deg_batches, handoff, run_degs, stage_with_waits
+from .common import HISTORY_LIMIT, SKIPPED_CELL_LIMIT, await_pool, call, deg_batches, handoff, run_degs, stage_with_waits
 
 
 def validate_spec(spec, *, resume=False):
@@ -100,7 +100,7 @@ def zoomin_step(action,args):
     packet=immutable(root/(request_id+'.json'),dict(spec=spec,refs=refs,request_id=request_id,**{k:v for k,v in payload.items() if k!='paths'}))
     unit='zoom-in.'+(payload['kind']+'.prepare' if action=='agent' else 'deg' if action=='deg-batch' else action)
     from .. import stages
-    programs=(stages.program('zoomin'),stages.program('crosssample'),stages.program('persample'),stages.program('contract'))
+    programs=(stages.program('zoomin'),stages.program('common'),stages.program('contract'))
     module='ecarsi.stages.zoomin'
     request=dict(request_id=request_id,operation_id=unit,
         args=['-m',module,action,packet['path']],**spec[budget],**gpu,
@@ -151,7 +151,6 @@ class ZoominWorkflow:
     @workflow.run
     async def run(self,spec,progress=None):
         from .coordinator import run_agent
-        from .persample import SKIPPED_CELL_LIMIT
         progress=progress or {}  # from continue_as_new: finished lineages and the DEG window
         self._deg_limit=progress.get('deg_limit') or getattr(self,'_deg_limit',spec['max_in_flight_deg'])
         async def run(action,paths,parents,**details):

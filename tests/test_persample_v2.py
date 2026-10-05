@@ -9,7 +9,8 @@ import pandas as pd
 from scipy import sparse
 
 from ecarsi.agent.session import reference, verified
-from ecarsi.stages.persample import partition, sealed, tool
+from ecarsi.stages.common import sealed
+from ecarsi.stages.persample import partition, tool
 from ecarsi.run_state import file_identity
 from ecarsi.sample_mapping import mapping_identity
 from ecarsi.files import read, save
@@ -116,7 +117,7 @@ def test_annotation_evidence_and_refinement_are_immutable_versions(tmp_path, mon
 
 def test_large_figures_reach_the_model_as_a_palette_png(tmp_path):
     from PIL import Image
-    from ecarsi.stages.persample import png_url
+    from ecarsi.stages.common import png_url
     rng = np.random.default_rng(0)
     Image.fromarray(rng.integers(0, 255, (600, 600, 4), dtype=np.uint8), "RGBA").save(tmp_path / "big.png")
     Image.new("RGB", (8, 8)).save(tmp_path / "small.png")

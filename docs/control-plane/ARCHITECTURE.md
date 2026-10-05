@@ -46,6 +46,7 @@ Set `CODE=<checkout>` in the launcher to put a checkout first on `PYTHONPATH`. T
 | `ecarsi.control` | `coordinator` | activities, `AgentWorkflow`, CLI (`worker`, `start-*`, `resume-*`, `status-*`), poll retry |
 | | `temporal` | hosts Temporal Server and PostgreSQL from the control image; publishes `service.json` |
 | | `dataset` `persample` `crosssample` `zoomin` | stage workflows |
+| | `common` | what the stage workflows share: activity calls, `await_pool`, the stage query, `HISTORY_LIMIT`, the DEG fan-out |
 | `ecarsi.agent` | `__init__` | handles submit, status, serve, and reconcile of turn requests; `adapter_path` names the pinned host code |
 | | `dispatch` | sends a turn to the pool or to a resident runner; finished-cache keyed by inode |
 | | `runner` | resident model-turn runners, one process per catalog model |
@@ -53,7 +54,8 @@ Set `CODE=<checkout>` in the launcher to put a checkout first on `PYTHONPATH`. T
 | | `parallel` `tool_errors` | parallel read-only tools, argument rejection |
 | `ecarsi.warm_pool` | `state` `backend` `worker` `allocation` `provision` | requests and receipts, HQ adapter, worker, Slurm probe, `add-worker` |
 | | `budget` `reservation` `measure` | budgets from measured runs, measured ceilings, half-hourly `measured.json` |
-| `ecarsi.stages` | `organize` `persample` `crosssample` `zoomin` | host programs: compute, validate, publish |
+| `ecarsi.stages` | `organize` `persample` `crosssample` `zoomin` | host programs: compute, validate, publish; they never import each other (`tests/test_layers.py`) |
+| | `common` | what the programs share: sealed bundles and artifacts, figures for the model (`png_url`), the DEG comparisons; pinned with every program that imports it |
 | | `organize_execute` `upstream` `h5ad` `inclusion` `osp_worker` `osp_contract` | organize and per-sample helpers: ECA-PP products, the organized units, OSP calls |
 | | `ledger` `release_state` `archive` | the cell ledger, the atomic release, the work-tree archive |
 | | `release` | dataset release (ledger, review, UMAP data) |
@@ -101,9 +103,9 @@ The owner requests the nodes. The system has no autoscaler and no keeper.
 |---|---|---|
 | HQ priority | Every request receives a native HQ priority. This priority equals the class base (agent 1000, tool 800, work 0) plus 10 × cpus. HQ orders the queue. The system has no hold, drain, or backlog layer. | `warm_pool/backend.py`: `PRIORITY_BASE`, `hq_priority` |
 | Feasibility gate | The gate does not submit a request that no live worker can hold. The gate checks cpus, memory, a required GPU, and the worker's remaining time against `time_request_seconds`. The system marks the request as `infeasible: <reason>`. The system retries the request every tick. | `warm_pool/backend.py`: `worker_capacity`, `infeasible` |
-| DEG batching | One pool request runs up to 8 DEG comparisons (`deg-batch`), fewer above 50,000 cells (one from 400,000) with `max_in_flight_deg` raised by the same factor. The request timeout is twice the per-comparison budget. Both cross-sample and zoom-in stages batch comparisons. | `control/persample.py`: `deg_batches`, `run_degs`; `stages/crosssample.py`: `deg_batch` |
-| Session restart and skip | A failed agent session restarts once as a new session (`-r2`, same evidence). A second failure skips the sample or lineage. A stage fails when skipped cells exceed 10 % of its input. | `control/coordinator.py`: `run_agent`; `control/persample.py`: `SKIPPED_CELL_LIMIT` |
-| Continue-as-new | Cross-sample and zoom-in workflows continue as new past 5,000 history events. These workflows carry finished results. | `control/persample.py`: `HISTORY_LIMIT`; `control/zoomin.py`, `control/crosssample.py` |
+| DEG batching | One pool request runs up to 8 DEG comparisons (`deg-batch`), fewer above 50,000 cells (one from 400,000) with `max_in_flight_deg` raised by the same factor. The request timeout is twice the per-comparison budget. Both cross-sample and zoom-in stages batch comparisons. | `control/common.py`: `deg_batches`, `run_degs`; `stages/common.py`: `deg_batch` |
+| Session restart and skip | A failed agent session restarts once as a new session (`-r2`, same evidence). A second failure skips the sample or lineage. A stage fails when skipped cells exceed 10 % of its input. | `control/coordinator.py`: `run_agent`; `control/common.py`: `SKIPPED_CELL_LIMIT` |
+| Continue-as-new | Cross-sample and zoom-in workflows continue as new past 5,000 history events. These workflows carry finished results. | `control/common.py`: `HISTORY_LIMIT`; `control/zoomin.py`, `control/crosssample.py` |
 | Resident runners | One process per catalog model keeps many turns in flight in one event loop. The bridge configuration `service.models` lists the models. An empty list disables runners. | `agent/runner.py`, `agent/dispatch.py`: `runner_ready` |
 | Pruner | The pruner deletes the pool requests of finished dataset runs. A worker executes this deletion as a pool task. | `container/request-pruner.py`; `warm_pool/state.py`: `prune_list` |
 | Pinned-file rule | Deploying a changed stage file fails queued requests and in-flight sessions that pinned the old content. Deploy changes only when zero executions run. | `stages/__init__.py`: `program` |

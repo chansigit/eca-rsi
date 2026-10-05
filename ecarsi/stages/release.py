@@ -5,8 +5,7 @@ from pathlib import Path
 import shutil
 
 from ..files import reference, verified
-from .crosssample import artifact
-from .persample import sealed
+from .common import artifact, sealed
 from ..files import lock, read, save
 from ..contracts import check
 

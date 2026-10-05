@@ -9,8 +9,7 @@ from ..files import immutable, reference, verified
 from . import PROMPTS
 from .contract import (LOOKUP_NOTE, NO_ARGUMENTS, checklist, deg_lookup_schema, evidence_page, evidence_paths, json_hint,
                        lookup_arguments, proposal as parse_proposal, schema)
-from .crosssample import artifact, publish_bundle, deg, deg_batch, assemble
-from .persample import check_bundle, png_url, sealed
+from .common import artifact, assemble, check_bundle, deg, deg_batch, png_url, publish_bundle, sealed
 from ..files import digest, read, save
 
 
@@ -351,7 +350,7 @@ def agent_spec(spec, evidence, kind, parent):
             read_only=name in {'read_evidence','list_evidence','annotation_status','deg_lookup','deg_sql','check_genes','check_qc_scores'},
             parameters=parameters,
             args=['-m','ecarsi.stages.zoomin','tool',name,'{state}','{arguments}'], **spec['compute_budget' if name=='subcluster' else 'tool_budget'],
-            inputs=[reference(Path(__file__).with_name(n)) for n in ('zoomin.py','crosssample.py','persample.py','contract.py')], outputs=['result.json'], result_file='result.json', multimodal=multimodal))
+            inputs=[reference(Path(__file__).with_name(n)) for n in ('zoomin.py','common.py','contract.py')], outputs=['result.json'], result_file='result.json', multimodal=multimodal))
     return dict(session_id=session, dataset_id=spec['dataset_id'], prompt=prompt, tools=tools,
         max_turns=100, pool_root=spec['pool_root'], bridge_root=spec['bridge_root'], output_root=str(root),
         completion_tool=completion, tool_state=state, planner='ecarsi.stages.evidence',

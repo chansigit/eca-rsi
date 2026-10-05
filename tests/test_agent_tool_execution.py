@@ -2,7 +2,8 @@ import pytest
 
 from ecarsi.agent.session import immutable, reference, verified
 from ecarsi.stages.execution import execute, plan
-from ecarsi.stages.persample import sealed, evidence_files
+from ecarsi.stages.common import sealed
+from ecarsi.stages.persample import evidence_files
 from ecarsi.files import read, save
 
 

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Stage programs and stage workflows share code through `common` modules only.** `stages/common.py` holds sealed
+  bundles, artifacts, `png_url` and the DEG comparisons (from `stages/persample.py` and `stages/crosssample.py`);
+  `control/common.py` holds `call`, `await_pool`, `handoff`, `stage_with_waits`, `HISTORY_LIMIT`,
+  `SKIPPED_CELL_LIMIT` and the DEG fan-out (from `control/persample.py`). Each program pins its own file, `common.py`
+  and `contract.py`, so a change to `persample.py` no longer invalidates queued zoom-in requests.
+  `tests/test_layers.py` fails when one stage program imports another.
 - **The per-sample unit rule lives in ECA-PP only** (eca-pp 0.5.4 `sample_unit`; decision 0016 amended):
   organize maps ECA-PP's verdict (library, batch, whole, stop) to columns; `LIBRARY_MAX_CELLS` and the platform list
   left eca-rsi. The identify-columns result is contract `eca-pp-identify-columns/1`. A pre-0.5.4 result without a
@@ -9,7 +15,7 @@
 - **MSP 0.5.4**: DEG leaves out the genes no cell of a comparison expresses (a gene expressed in one group only
   is kept); pvals_adj is still corrected over all genes, so the DEG tables do not change. In the scale test no cell
   expressed 20 % of the genes and a single cluster none of 49 % (median).
-- **DEG batches follow the cell count** (`control/persample.py` `deg_batches`, workflow patch `deg-batch-cells-v1`):
+- **DEG batches follow the cell count** (`control/common.py` `deg_batches`, workflow patch `deg-batch-cells-v1`):
   eight comparisons per request up to 50,000 cells, fewer above, one from 400,000, and `max_in_flight_deg` grows by
   the same factor. In the scale test (418k cells) one request of eight ran 75 min and timed out once while most of a
   64-core node sat idle. Each comparison is computed alone either way, so results do not change. Cross-sample and

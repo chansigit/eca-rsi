@@ -83,3 +83,16 @@ def test_kernels_only_through_their_api():
 def test_the_allowed_crossings_still_exist():
     gone = [entry for entry in ALLOWED if not any(allowed(path, name) and path == entry[0] for path, _, name in imports())]
     assert not gone, gone
+
+
+# Stage programs: what control pins and the pool runs (stages.program). They share code only through helper
+# modules (common, contract, ...), never through each other: zoom-in importing cross-sample made a change to
+# persample.py invalidate queued zoom-in requests (2026-10-05).
+PROGRAMS = {f"ecarsi.stages.{name}" for name in ("organize", "persample", "crosssample", "zoomin", "release", "display")}
+
+
+def test_stage_programs_never_import_each_other():
+    wrong = {f"{path} imports {name}" for path, module, name in imports()
+             if module in PROGRAMS and name in PROGRAMS and name != module}
+    assert not wrong, sorted(wrong)
+

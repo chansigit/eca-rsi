@@ -9,7 +9,7 @@ import pytest
 from ecarsi.agent.session import immutable,reference,validate_spec,verified
 from ecarsi.stages.crosssample import BASE,agent_spec,finalize
 from ecarsi.stages.contract import NO_ARGUMENTS
-from ecarsi.stages.persample import sealed
+from ecarsi.stages.common import sealed
 from ecarsi.files import save, read
 
 
@@ -121,7 +121,8 @@ def test_overlapping_removals_count_once_and_mismatched_decisions_fail(tmp_path,
 
 
 def test_compute_comparisons_and_sql_handoff(tmp_path):
-    from ecarsi.stages.crosssample import inspect_input,compute,deg,deg_batch,assemble,tool,refine
+    from ecarsi.stages.crosssample import inspect_input,compute,tool,refine
+    from ecarsi.stages.common import deg,deg_batch,assemble
     rng=np.random.default_rng(2024);samples=[]
     for name in ('a','b'):
         folder=tmp_path/name;folder.mkdir()

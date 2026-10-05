@@ -1,41 +1,13 @@
 """Worker operations for confirmed samples; no model calls or dataset driver."""
 import argparse
-import base64
-import io
 import json
 import shutil
 from pathlib import Path
 
 from ..files import immutable, reference, verified
+from .common import check_bundle, png_url, sealed
 from ..files import read, save
 from ..run_state import digest, file_identity
-
-
-def sealed(directory, destination, **metadata):
-    files = {str(p.relative_to(directory)): reference(p) for p in sorted(directory.rglob("*"))
-             if p.is_file() and not p.name.startswith(".")}
-    return immutable(destination, {**metadata, "files": files})
-
-
-def png_url(path):
-    """A figure as a data URL for the model. A PNG above 512 KiB goes to a 256-colour palette at full size:
-    the 418k-cell umap__ann_coarse.png fell from 1.66 MB to 533 KiB. Turns carrying the original timed out
-    or failed to parse at the provider for 10 minutes at a time (scale test 2026-10-05)."""
-    data = Path(path).read_bytes()
-    if len(data) > 512 * 1024:
-        from PIL import Image
-        buffer = io.BytesIO()
-        Image.open(io.BytesIO(data)).convert("RGB").quantize(256).save(buffer, "PNG", optimize=True)
-        data = min(data, buffer.getvalue(), key=len)
-    return "data:image/png;base64," + base64.b64encode(data).decode()
-
-
-def check_bundle(ref):
-    bundle = verified(ref)
-    for item in bundle["files"].values():
-        if reference(item["path"]) != item:
-            raise ValueError("Sample artifact changed")
-    return bundle
 
 
 def partition(spec, offset, destination):
@@ -195,7 +167,7 @@ def annotation_spec(spec, computed_ref, compute_request):
         tools.append({"name": name, "description": description,
             "parameters": {"type": "object", "properties": props, "required": list(props), "additionalProperties": False},
             "args": ["-m", "ecarsi.stages.persample", "tool", name, "{state}", "{arguments}"],
-            **spec["tool_budget"], "inputs": [reference(Path(__file__))],
+            **spec["tool_budget"], "inputs": [reference(Path(__file__)), reference(Path(__file__).with_name("common.py"))],
             "outputs": ["result.json"], "result_file": "result.json", "multimodal": multimodal, "read_only": read_only})
     prompt = bundle["prompt"] + ("\n\nYou have no local Read or execution tools. Use read_evidence for figures and tables, "
         "following next_offset until null. All tools execute on a worker. The initial clustering version is 0. "

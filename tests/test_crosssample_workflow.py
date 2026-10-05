@@ -64,7 +64,7 @@ def test_workflow_fanout_and_annotation_order(monkeypatch, change_limit):
         monkeypatch.setattr(module.workflow,'info',lambda:SimpleNamespace(workflow_id='cross-sample/test',get_current_history_length=lambda:0))
         monkeypatch.setattr(module.workflow,'wait',asyncio.wait)
         monkeypatch.setattr(module.workflow,'patched',lambda name:True)
-        monkeypatch.setattr('ecarsi.control.persample.DEG_BATCH_SIZE',1)   # one comparison per request, as before batching
+        monkeypatch.setattr('ecarsi.control.common.DEG_BATCH_SIZE',1)   # one comparison per request, as before batching
         workflow=CrosssampleWorkflow()
         assert await workflow.run({'max_in_flight_deg':3,'max_refinements':0})=='publication'
         assert peak==(5 if change_limit else 3) and events.index('assemble')>events.index('deg-7')
@@ -92,7 +92,7 @@ def test_confirmed_worker_interruption_recovers_with_a_finite_attempt_budget(tmp
 def test_a_blocked_pool_request_shows_why_it_waits(tmp_path, monkeypatch):
     # #18: the scheduler's infeasible reason reaches the waiting workflow's stage query.
     from ecarsi.control.coordinator import check_pool
-    import ecarsi.control.persample as module
+    import ecarsi.control.common as module
     from ecarsi.warm_pool.backend import observe
     from ecarsi.warm_pool.state import submit
     tmp_path.chmod(0o700); (tmp_path/'requests').mkdir(); save(tmp_path/'config.json', {'runtime': {}})
@@ -236,7 +236,7 @@ def test_a_long_history_continues_as_new_once_the_comparisons_are_in(monkeypatch
         monkeypatch.setattr(module.workflow,'wait',asyncio.wait)
         monkeypatch.setattr(module.workflow,'patched',lambda name:True)
         monkeypatch.setattr(module.workflow,'continue_as_new',continue_as_new)
-        monkeypatch.setattr('ecarsi.control.persample.DEG_BATCH_SIZE',1)
+        monkeypatch.setattr('ecarsi.control.common.DEG_BATCH_SIZE',1)
         spec={'max_in_flight_deg':3,'max_refinements':0}
         with pytest.raises(Continued) as stop:
             await CrosssampleWorkflow().run(spec)
@@ -288,7 +288,7 @@ def test_comparisons_are_batched_eight_per_request(monkeypatch, cells):
 
 
 def test_large_units_send_smaller_deg_batches_and_more_of_them_at_once():
-    from ecarsi.control.persample import deg_batches
+    from ecarsi.control.common import deg_batches
     assert deg_batches(20, 0) == ([list(range(0, 8)), list(range(8, 16)), [16, 17, 18, 19]], 1)
     assert deg_batches(20, 50_000)[1] == 1
     batches, factor = deg_batches(20, 100_000)

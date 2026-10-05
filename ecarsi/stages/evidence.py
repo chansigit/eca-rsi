@@ -165,7 +165,7 @@ def execute(packet_path):
                 and result.get('next_offset') is not None and not result.get('is_error')):
             # The legacy reader peeks one character before tell(), skipping it
             # on the next page. Compute the text-stream cookie before that peek.
-            from .crosssample import artifact
+            from .common import artifact
             bundle = verified(verified(reference(state_path))['evidence'])
             with artifact(bundle, arguments['path']).open() as stream:
                 stream.seek(arguments['offset'])

@@ -7,7 +7,7 @@ import pandas as pd
 import scipy.sparse as sp
 
 from ecarsi.agent.session import immutable, reference, verified
-from ecarsi.stages.persample import sealed
+from ecarsi.stages.common import sealed
 from ecarsi.stages.zoomin import prepare, markers, subset, compute, deg, assemble, apply_lineage, merge, tool
 from ecarsi.files import save
 

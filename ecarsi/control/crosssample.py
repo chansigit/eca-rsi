@@ -5,7 +5,7 @@ from temporalio import activity, workflow
 from temporalio.exceptions import ApplicationError
 
 from ..contracts import check
-from .persample import HISTORY_LIMIT, await_pool, call, deg_batches, handoff, run_degs, stage_with_waits
+from .common import HISTORY_LIMIT, await_pool, call, deg_batches, handoff, run_degs, stage_with_waits
 
 
 def validate_spec(spec, *, resume=False):
@@ -159,7 +159,7 @@ def crosssample_step(action, args):
         raise ValueError('Unknown cross-sample operation')
     unit = 'cross-sample.' + (payload['phase'] + '.prepare' if action == 'agent' else 'deg' if action == 'deg-batch' else action)
     from .. import stages
-    module, programs = 'ecarsi.stages.crosssample', (stages.program('crosssample'), stages.program('contract'), stages.PACKAGE / 'round_policy.py')
+    module, programs = 'ecarsi.stages.crosssample', (stages.program('crosssample'), stages.program('common'), stages.program('contract'), stages.PACKAGE / 'round_policy.py')
     request = dict(request_id=request_id, operation_id=unit,
            args=['-m', module, *command], **budget, **accelerator,
            inputs=refs + [reference(path) for path in programs], outputs=[output],
