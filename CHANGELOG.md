@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Cross-sample and zoom-in compute ask 0.12 MiB per cell (was an estimate of 0.15): the scale test peaked at
+  0.069 (418k cells, 30.3 GiB) and 0.084 (a 181k-cell lineage).
 - Figures above 512 KiB reach the model as a 256-colour palette PNG at full size (`stages.persample.png_url`, used by
   per-sample, cross-sample and zoom-in reads). The 418k-cell `umap__ann_coarse.png` fell from 1.66 MB to 533 KiB; in
   the scale test, turns carrying it failed at the provider after 10 minutes and one cross-sample session died.

@@ -245,6 +245,10 @@ def test_whole_matrix_steps_are_sized_from_cells_and_never_lowered():
         > 8192
     )
     assert np.isclose(from_cells(request, 20_000)["memory_mb"], 9216, atol=256)
+    # scale test peaks (2026-10-05) with at least 30 % headroom
+    cross = {**request, "operation_id": "cross-sample.compute"}
+    assert from_cells(cross, 418_322)["memory_mb"] >= 1.3 * 30.34 * 1024
+    assert from_cells({**request, "operation_id": "zoom-in.compute"}, 181_000)["memory_mb"] >= 1.3 * 16.84 * 1024
 
 
 def test_identify_columns_is_found_beside_a_standardize_input_root(tmp_path):
