@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Figures above 512 KiB reach the model as a 256-colour palette PNG at full size (`stages.persample.png_url`, used by
+  per-sample, cross-sample and zoom-in reads). The 418k-cell `umap__ann_coarse.png` fell from 1.66 MB to 533 KiB; in
+  the scale test, turns carrying it failed at the provider after 10 minutes and one cross-sample session died.
 - Per-sample `read_evidence` reads figures in fixed pages (offset 0, then each returned `next_offset`). Any other
   offset is an error. In the 2026-10-04 scale test one session read offsets 1–9 after a complete first page, put
   55 images (7.5 MB) in its context, and its next model call timed out three times.

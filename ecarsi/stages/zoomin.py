@@ -1,6 +1,5 @@
 """Versioned zoom-in worker operations, using ZMIP/MSP numerical kernels."""
 import argparse
-import base64
 import json
 import os
 import re
@@ -11,7 +10,7 @@ from . import PROMPTS
 from .contract import (LOOKUP_NOTE, NO_ARGUMENTS, checklist, deg_lookup_schema, evidence_page, evidence_paths, json_hint,
                        lookup_arguments, proposal as parse_proposal, schema)
 from .crosssample import artifact, publish_bundle, deg, deg_batch, assemble
-from .persample import check_bundle, sealed
+from .persample import check_bundle, png_url, sealed
 from ..files import digest, read, save
 
 
@@ -478,7 +477,7 @@ def tool(name, state_path, args_path, destination):
             if path.suffix == '.png':
                 if path.stat().st_size > 8*2**20:
                     raise ValueError('Figure exceeds image budget')
-                response.update(content=args['path'], images=['data:image/png;base64,'+base64.b64encode(path.read_bytes()).decode()])
+                response.update(content=args['path'], images=[png_url(path)])
             elif path.suffix in {'.csv','.json','.md','.txt'}:
                 with path.open() as stream:
                     stream.seek(args['offset']);response['content']=stream.read(16000)

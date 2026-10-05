@@ -1,6 +1,5 @@
 """Versioned cross-sample worker operations; scientific kernels live in MSP."""
 import argparse
-import base64
 import json
 import os
 from pathlib import Path
@@ -10,7 +9,7 @@ from ..files import immutable, reference, verified
 from . import PROMPTS
 from .contract import (LOOKUP_NOTE, NO_ARGUMENTS, checklist, deg_lookup_schema, evidence_page, evidence_paths, json_hint,
                        lookup_arguments, proposal as parse_proposal, schema)
-from .persample import check_bundle, sealed
+from .persample import check_bundle, png_url, sealed
 from ..files import digest, read, save
 
 BASE = 'msp_leiden_r2.0'
@@ -483,7 +482,7 @@ def tool(name,state_path,args_path,destination):
             path=artifact(bundle,args['path']) if args['path'] in bundle['files'] else proposal_artifact(bundle,args['path'])
             if path.suffix=='.png':
                 if path.stat().st_size>8*2**20:raise ValueError('Figure exceeds the image budget')
-                response.update(content=args['path'],images=['data:image/png;base64,'+base64.b64encode(path.read_bytes()).decode()])
+                response.update(content=args['path'],images=[png_url(path)])
             elif path.suffix in {'.csv','.json','.md','.txt'}:
                 with path.open() as stream:
                     stream.seek(args['offset']);text=stream.read(16000);nxt=stream.tell() if stream.read(1) else None

@@ -1,4 +1,5 @@
 import base64
+import io
 import json
 from pathlib import Path
 
@@ -111,3 +112,14 @@ def test_annotation_evidence_and_refinement_are_immutable_versions(tmp_path, mon
                               "evidence_genes": ["CD3D"], "doubts": "test"} for c in ("0,0", "0,1")], "qc_actions": []}
     result = invoke("submit_annotation", {"proposal_json": json.dumps(proposal), "version": 1})
     assert result["accepted"] and result["proposal"]["cluster_key"] == "ann_sub1"
+
+
+def test_large_figures_reach_the_model_as_a_palette_png(tmp_path):
+    from PIL import Image
+    from ecarsi.stages.persample import png_url
+    rng = np.random.default_rng(0)
+    Image.fromarray(rng.integers(0, 255, (600, 600, 4), dtype=np.uint8), "RGBA").save(tmp_path / "big.png")
+    Image.new("RGB", (8, 8)).save(tmp_path / "small.png")
+    big = base64.b64decode(png_url(tmp_path / "big.png").split(",", 1)[1])
+    assert len(big) < (tmp_path / "big.png").stat().st_size and Image.open(io.BytesIO(big)).size == (600, 600)
+    assert base64.b64decode(png_url(tmp_path / "small.png").split(",", 1)[1]) == (tmp_path / "small.png").read_bytes()

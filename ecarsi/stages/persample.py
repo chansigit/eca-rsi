@@ -1,6 +1,7 @@
 """Worker operations for confirmed samples; no model calls or dataset driver."""
 import argparse
 import base64
+import io
 import json
 import shutil
 from pathlib import Path
@@ -14,6 +15,19 @@ def sealed(directory, destination, **metadata):
     files = {str(p.relative_to(directory)): reference(p) for p in sorted(directory.rglob("*"))
              if p.is_file() and not p.name.startswith(".")}
     return immutable(destination, {**metadata, "files": files})
+
+
+def png_url(path):
+    """A figure as a data URL for the model. A PNG above 512 KiB goes to a 256-colour palette at full size:
+    the 418k-cell umap__ann_coarse.png fell from 1.66 MB to 533 KiB. Turns carrying the original timed out
+    or failed to parse at the provider for 10 minutes at a time (scale test 2026-10-05)."""
+    data = Path(path).read_bytes()
+    if len(data) > 512 * 1024:
+        from PIL import Image
+        buffer = io.BytesIO()
+        Image.open(io.BytesIO(data)).convert("RGB").quantize(256).save(buffer, "PNG", optimize=True)
+        data = min(data, buffer.getvalue(), key=len)
+    return "data:image/png;base64," + base64.b64encode(data).decode()
 
 
 def check_bundle(ref):
@@ -234,8 +248,7 @@ def tool(name, state_path, arguments_path, destination):
                                      "null means every figure was returned. Pages start at " + str(sorted(pages)))
                 names = pages[offset]
                 next_offset = offset + len(names)
-                response.update(text="Figures: " + ", ".join(names), images=["data:image/png;base64," +
-                    base64.b64encode(Path(bundle["files"][n]["path"]).read_bytes()).decode() for n in names],
+                response.update(text="Figures: " + ", ".join(names), images=[png_url(bundle["files"][n]["path"]) for n in names],
                     next_offset=next_offset if next_offset < len(figures) else None)
                 state["seen"]["figures"] = sorted(set(state["seen"]["figures"]) | set(names))
             else:
