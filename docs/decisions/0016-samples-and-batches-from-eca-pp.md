@@ -41,7 +41,7 @@ system must cope with very large data that has no batch at all (Parse, PanSci) w
   - A unit with chunks skips the inclusion agent and includes every sample: chunks are random slices, and nobody
     can judge which slice to drop.
   - `sample_map.chunk_cells` overrides the size.
-- **Whole-matrix steps are sized from their input**, never below the spec (`warm_pool/budget.py` `from_cells`;
+- **Whole-matrix steps are sized from their input**, never below the spec (`stages/resources.py` `from_cells`, was `warm_pool/budget.py`;
   `from_artifact` for partition; organize execute from its source files). Before this, a large sample reached
   enough memory only through two killed attempts (8 → 16 → 32 GiB) and then stopped.
 

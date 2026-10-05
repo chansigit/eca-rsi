@@ -35,13 +35,14 @@ def task_trace(spec, unit_id):
 
 @activity.defn
 def submit_prepare(spec: dict) -> str:
+    from ..stages.resources import size
     from ..warm_pool.state import submit
     request_id = spec["run_id"] + ".prepare"
-    submit(spec["pool_root"], dict(request_id=request_id, operation_id="organize.prepare",
+    submit(spec["pool_root"], size(dict(request_id=request_id, operation_id="organize.prepare",
         trace=task_trace(spec, "organize.prepare"),
         args=["-m", "ecarsi.stages.organize", "prepare", spec["input_root"], "prepared.json"],
         cpus=spec["prepare_cpus"], memory_mb=spec["prepare_memory_mb"],
-        timeout_seconds=spec["prepare_timeout_seconds"], inputs=[], outputs=["prepared.json"]))
+        timeout_seconds=spec["prepare_timeout_seconds"], inputs=[], outputs=["prepared.json"])))
     return request_id
 
 

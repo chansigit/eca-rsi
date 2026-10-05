@@ -1,4 +1,7 @@
-"""Persist conservative downstream budgets from accepted upstream measurements."""
+"""What each stage operation and tool asks of a worker: measured ceilings, CPU caps, memory by cell count,
+artifact size, upstream peak or DEG buffers. The stage code that builds a request sizes it here before it
+submits; the pool executes what it is asked and names no operation (it only applies the operator's online
+ceilings from pool/config.json and retries an RSS kill at twice the budget)."""
 import math
 from pathlib import Path
 
@@ -59,12 +62,10 @@ def from_cells(request, n_cells):
     return request if memory <= request['memory_mb'] else dict(request, memory_mb=memory)
 
 
-def measured_ceiling(spec, ceilings=None):
-    """Cap a fixed stage budget at the measured ceilings; never raise, never touch unknown operations.
-    `ceilings` (pool/config.json "ceilings": {operation: MiB}) overrides the table online, read at
-    every submit, so a pool can be retuned from its own journals without a release or a restart."""
-    table = {**MEASURED_CEILING_MB, **(ceilings or {})}
-    memory = min(spec['memory_mb'], table.get(spec.get('operation_id'), spec['memory_mb']))
+def size(spec):
+    """Cap a request at the measured ceiling and CPU count of its operation; never raise, never touch
+    unknown operations. Every stage request and tool call passes here before it is submitted."""
+    memory = min(spec['memory_mb'], MEASURED_CEILING_MB.get(spec.get('operation_id'), spec['memory_mb']))
     cpus = min(spec['cpus'], MEASURED_CPUS.get(spec.get('operation_id'), spec['cpus']))
     if (memory, cpus) == (spec['memory_mb'], spec['cpus']):
         return spec

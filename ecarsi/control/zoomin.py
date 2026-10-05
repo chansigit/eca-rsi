@@ -107,7 +107,7 @@ def zoomin_step(action,args):
         inputs=[packet,*[reference(path) for path in programs],spec['input'],*refs],outputs=[output],
         trace=dict(workflow_id='zoom-in/'+spec['run_id'],dataset_id=spec['dataset_id'],unit_id=unit,depends_on=parents))
     if action in {'deg','deg-batch'}:
-        from ..warm_pool.budget import from_deg_buffers
+        from ..stages.resources import from_deg_buffers
         if action=='deg-batch':
             # The comparisons run one after another in one process, but a comparison takes seconds to a
             # minute against a budget of many minutes: twice the budget covers a batch, and a request
@@ -116,14 +116,15 @@ def zoomin_step(action,args):
             request['timeout_seconds']*=2
         request=from_deg_buffers(request,refs[0],root/(request_id+'.resources.json'),spec['pool_root'])
     elif action=='compute':
-        from ..warm_pool.budget import from_cells
+        from ..stages.resources import from_cells
         request=from_cells(request,cells)
     elif action in {'prepare','markers','subset','merge'}:
         # These load the whole cross-sample matrix; size them from it, not a constant.
-        from ..warm_pool.budget import from_artifact
+        from ..stages.resources import from_artifact
         request=from_artifact(request,verified(spec['input'])['files']['annotated.h5ad'],
                               root/(request_id+'.resources.json'),spec['pool_root'])
-    submit(spec['pool_root'],request)
+    from ..stages.resources import size
+    submit(spec['pool_root'],size(request))
     return {'id':request_id,'output':output}
 
 

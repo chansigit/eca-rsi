@@ -1,11 +1,11 @@
-"""Measured memory ceilings at submission, RSS kills retryable at 2x, legacy identity kept."""
+"""Measured memory ceilings where stage requests are built, RSS kills retryable at 2x, legacy identity kept."""
 import os
 import subprocess
 import sys
 
 import pytest
 
-from ecarsi.warm_pool.budget import MEASURED_CEILING_MB, measured_ceiling
+from ecarsi.stages.resources import MEASURED_CEILING_MB, size
 from ecarsi.files import digest, read, save
 from ecarsi.warm_pool.state import status, submit, validate
 
@@ -24,28 +24,30 @@ def _pool(tmp_path):
 
 
 def test_cpu_counts_are_capped_from_measurements_too():
-    from ecarsi.warm_pool.budget import MEASURED_CPUS
-    capped = measured_ceiling(dict(_spec("d", "zoom-in.deg", 2560), cpus=2))
+    from ecarsi.stages.resources import MEASURED_CPUS
+    capped = size(dict(_spec("d", "zoom-in.deg", 2560), cpus=2))
     assert capped["cpus"] == MEASURED_CPUS["zoom-in.deg"] == 1 and capped["memory_mb"] == 2560
-    assert measured_ceiling(dict(_spec("d", "zoom-in.deg", 2560), cpus=1))["cpus"] == 1
-    assert measured_ceiling(dict(_spec("c", "cross-sample.compute", 12288), cpus=8))["cpus"] == 8
+    assert size(dict(_spec("d", "zoom-in.deg", 2560), cpus=1))["cpus"] == 1
+    assert size(dict(_spec("c", "cross-sample.compute", 12288), cpus=8))["cpus"] == 8
 
 
 def test_ceiling_caps_listed_operations_only_and_never_raises():
-    assert measured_ceiling(_spec("a", "submit_quality", 24576))["memory_mb"] == MEASURED_CEILING_MB["submit_quality"]
-    assert measured_ceiling(_spec("a", "submit_quality", 1024))["memory_mb"] == 1024
-    assert measured_ceiling(_spec("a", "cross-sample.compute", 24576))["memory_mb"] == 24576
+    assert size(_spec("a", "submit_quality", 24576))["memory_mb"] == MEASURED_CEILING_MB["submit_quality"]
+    assert size(_spec("a", "submit_quality", 1024))["memory_mb"] == 1024
+    assert size(_spec("a", "cross-sample.compute", 24576))["memory_mb"] == 24576
     assert all(v % 256 == 0 and 512 <= v <= 12288 for v in MEASURED_CEILING_MB.values())   # deg_sql / deg_lookup measured at 259 MiB
 
 
-def test_submit_applies_ceiling_and_still_accepts_the_uncapped_identity(tmp_path):
+def test_sized_requests_keep_the_uncapped_identity(tmp_path):
     root = _pool(tmp_path)
+    submit(root, _spec("u", "submit_quality", 24576))  # the pool caps nothing by name; the stage sizes
+    assert read(root / "requests/u/request.json")["spec"]["memory_mb"] == 24576
     spec = _spec("q", "submit_quality", 24576)
-    assert submit(root, spec)["state"] == "queued"
+    assert submit(root, size(spec))["state"] == "queued"
     saved = read(root / "requests" / "q" / "request.json")
     assert saved["spec"]["memory_mb"] == MEASURED_CEILING_MB["submit_quality"]
     assert saved["digest"] == digest(saved["spec"])
-    submit(root, spec)  # an activity retry re-sends the same request
+    submit(root, size(spec))  # an activity retry re-sends the same request
     # A request saved before ceilings existed keeps answering to its uncapped digest.
     legacy = dict(saved, spec=validate(spec), digest=digest(validate(spec)))
     save(root / "requests" / "q" / "request.json", legacy)

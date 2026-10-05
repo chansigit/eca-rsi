@@ -22,7 +22,7 @@ def plan(request, directory, pool_root):
     if len(args) == 6 and args[:3] == ['-m', 'ecarsi.stages.persample', 'tool']:
         name = args[3]
         if name in {'check_genes', 'check_qc_scores', 'submit_annotation'} and read(args[4])['version'] == 0:
-            from ..warm_pool.budget import from_compute
+            from .resources import from_compute
             optimized = from_compute(optimized, read(args[4])['bundle'], Path(directory) / 'resources.json', pool_root)
         if name == 'read_evidence':
             # No expression matrix is loaded; even the image response is bounded

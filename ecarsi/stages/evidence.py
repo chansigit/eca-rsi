@@ -32,7 +32,8 @@ def plan(request, directory, session, batched=False):
     planned = None if batched else prefetch(request, directory, session)
     if planned is None:
         planned = original_plan(request, directory, session['pool_root'])
-    return budget(planned, directory, session, tool, state_ref)
+    from .resources import size
+    return size(budget(planned, directory, session, tool, state_ref))
 
 
 def prefetch(request, directory, session):
@@ -58,7 +59,7 @@ def prefetch(request, directory, session):
         cpus=max(t['cpus'] for t in budget), memory_mb=max(t['memory_mb'] for t in budget),
         inputs=[*request['inputs'], packet, reference(Path(__file__))])
     if args[1] == 'ecarsi.stages.persample' and read(args[4])['version'] == 0:
-        from ..warm_pool.budget import from_compute
+        from .resources import from_compute
         wrapped = from_compute(wrapped, read(args[4])['bundle'],
                                directory / 'evidence-resources.json', session['pool_root'])
     immutable(path, dict(base_digest=digest(request), request=wrapped))
@@ -91,7 +92,7 @@ def budget(request, directory, session, tool, state_ref):
     else:
         computed = verified(state['evidence']).get('prepared')
         if computed:
-            from ..warm_pool.budget import from_compute
+            from .resources import from_compute
             optimized = from_compute(request, computed, Path(directory) / 'matrix-resources.json', session['pool_root'])
     immutable(path, dict(base_digest=digest(request), request=optimized))
     return optimized

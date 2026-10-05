@@ -13,7 +13,7 @@ from ecarsi.run_state import read_json, write_json
 from ecarsi.sample_mapping import CHUNK, SAMPLE_KEY, build_mapping
 from ecarsi.stages.organize_execute import effective_mapping, unit_batch_key
 from ecarsi.stages.upstream import eca_pp_decision
-from ecarsi.warm_pool.budget import from_cells
+from ecarsi.stages.resources import from_cells
 from tests.test_front_integration import organize, source
 
 

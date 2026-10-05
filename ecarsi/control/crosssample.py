@@ -166,12 +166,13 @@ def crosssample_step(action, args):
            trace=dict(workflow_id='cross-sample/' + spec['run_id'], dataset_id=spec['dataset_id'],
                       unit_id=unit, depends_on=parents))
     if action in {'deg', 'deg-batch'}:
-        from ..warm_pool.budget import from_deg_buffers
+        from ..stages.resources import from_deg_buffers
         request = from_deg_buffers(request, refs[0], root / (request_id + '.resources.json'), spec['pool_root'])
     elif action in {'compute', 'compute-round'}:
-        from ..warm_pool.budget import from_cells
+        from ..stages.resources import from_cells
         request = from_cells(request, cells)
-    submit(spec['pool_root'], request)
+    from ..stages.resources import size
+    submit(spec['pool_root'], size(request))
     return {'id': request_id, 'output': output}
 
 

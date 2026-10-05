@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **The pool names no stage operation.** `warm_pool/budget.py` moved to `stages/resources.py`: the measured ceilings,
+  CPU caps and `from_cells` / `from_artifact` / `from_compute` / `from_deg_buffers`. Stage code sizes each request
+  where it is built (`size` in the three stage workflows, organize prepare and `stages.evidence.plan` for every
+  tool call); `warm_pool.state.submit` applies only the operator's online `ceilings` (`operator_ceiling`).
+  `tests/test_layers.py` fails when a warm_pool module names an operation of the table.
 - **Stage programs and stage workflows share code through `common` modules only.** `stages/common.py` holds sealed
   bundles, artifacts, `png_url` and the DEG comparisons (from `stages/persample.py` and `stages/crosssample.py`);
   `control/common.py` holds `call`, `await_pool`, `handoff`, `stage_with_waits`, `HISTORY_LIMIT`,

@@ -219,17 +219,18 @@ def sample_step(action, args):
         "args": ["-m", "ecarsi.stages.persample", *command], **budget, **accelerator,
         "inputs": inputs + [reference(stages.program("persample")), reference(stages.program("common"))], "outputs": [output]}
     if action == 'finalize':
-        from ..warm_pool.budget import from_compute
+        from ..stages.resources import from_compute
         request = from_compute(request, reference(computed), root / (request_id + '.resources.json'), spec['pool_root'])
     elif action == 'compute':
-        from ..warm_pool.budget import from_cells
+        from ..stages.resources import from_cells
         request = from_cells(request, entry["n_cells"])
     elif action == 'partition':
         # reads the whole organized.h5ad: size it from the file (decision 0016)
-        from ..warm_pool.budget import from_artifact
+        from ..stages.resources import from_artifact
         organized = Path(spec["input_manifest"]["path"]).parent / "organized.h5ad"
         request = from_artifact(request, {"path": str(organized)}, root / (request_id + '.resources.json'), spec['pool_root'])
-    submit(spec["pool_root"], request)
+    from ..stages.resources import size
+    submit(spec["pool_root"], size(request))
     return {"id": request_id, "output": output}
 
 

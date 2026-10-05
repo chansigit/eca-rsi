@@ -92,10 +92,18 @@ def validate(spec):
     return spec
 
 
+def operator_ceiling(spec, ceilings):
+    """Cap a request at the operator's online ceiling for its operation (pool/config.json "ceilings":
+    {operation: MiB}, read at every submit), so a pool can be retuned from its own journals without a
+    release or a restart; never raise. What an operation needs is its submitter's business
+    (stages.resources): the pool names no operation."""
+    memory = min(spec["memory_mb"], (ceilings or {}).get(spec.get("operation_id"), spec["memory_mb"]))
+    return spec if memory == spec["memory_mb"] else dict(spec, memory_mb=memory)
+
+
 def submit(root, spec):
-    from .budget import measured_ceiling
     root, requested = pool_root(root), validate(spec)
-    spec = measured_ceiling(requested, read(root / "config.json", {}).get("ceilings"))
+    spec = operator_ceiling(requested, read(root / "config.json", {}).get("ceilings"))
     folder = root / "requests" / spec["request_id"]
     folder.mkdir(mode=0o700, exist_ok=True)
     sync_directory(folder.parent)

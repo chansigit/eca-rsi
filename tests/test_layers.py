@@ -96,3 +96,18 @@ def test_stage_programs_never_import_each_other():
              if module in PROGRAMS and name in PROGRAMS and name != module}
     assert not wrong, sorted(wrong)
 
+
+def test_the_pool_names_no_stage_operation():
+    """The pool runs what it is asked: which budget an operation or tool needs lives in stages.resources."""
+    from ecarsi.stages.resources import CELL_MB, MEASURED_CEILING_MB, MEASURED_CPUS
+    names = set(MEASURED_CEILING_MB) | set(MEASURED_CPUS) | set(CELL_MB)
+    found = set()
+    for path in sorted((PACKAGE / "warm_pool").glob("*.py")):
+        tree = ast.parse(path.read_text())
+        docstrings = {id(node.body[0].value) for node in ast.walk(tree)
+                      if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                      and node.body and isinstance(node.body[0], ast.Expr)}
+        found |= {f"{path.name}: {node.value}" for node in ast.walk(tree)
+                  if isinstance(node, ast.Constant) and node.value in names and id(node) not in docstrings}
+    assert not found, sorted(found)
+

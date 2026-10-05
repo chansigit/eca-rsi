@@ -492,11 +492,12 @@ def test_a_submission_stranded_by_an_earlier_server_generation_is_submitted_agai
 
 
 def test_memory_ceilings_come_from_the_table_and_the_pool_config(tmp_path):
-    from ecarsi.warm_pool.budget import MEASURED_CEILING_MB, measured_ceiling
+    from ecarsi.stages.resources import MEASURED_CEILING_MB, size
+    from ecarsi.warm_pool.state import operator_ceiling
     deg = dict(request_id="d", operation_id="zoom-in.deg", args=["x"], cpus=2, memory_mb=8192, timeout_seconds=10, outputs=["r"])
-    assert measured_ceiling(deg)["memory_mb"] == MEASURED_CEILING_MB["zoom-in.deg"] == 4096 and measured_ceiling(deg)["cpus"] == 1
-    assert measured_ceiling(deg, {"zoom-in.deg": 1024})["memory_mb"] == 1024
-    assert measured_ceiling(dict(deg, memory_mb=800), {"zoom-in.deg": 1024})["memory_mb"] == 800  # never raised
+    assert size(deg)["memory_mb"] == MEASURED_CEILING_MB["zoom-in.deg"] == 4096 and size(deg)["cpus"] == 1
+    assert operator_ceiling(deg, {"zoom-in.deg": 1024})["memory_mb"] == 1024
+    assert operator_ceiling(dict(deg, memory_mb=800), {"zoom-in.deg": 1024})["memory_mb"] == 800  # never raised
     tmp_path.chmod(0o700)
     (tmp_path / "requests").mkdir()
     save(tmp_path / "config.json", {"runtime": {"command": ["/usr/bin/python3"]}, "ceilings": {"zoom-in.deg": 1280}})

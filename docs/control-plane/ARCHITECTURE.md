@@ -53,14 +53,15 @@ Set `CODE=<checkout>` in the launcher to put a checkout first on `PYTHONPATH`. T
 | | `session` | session contract: create, reset, validate_turn, and continuation; stops after repeated rejections |
 | | `parallel` `tool_errors` | parallel read-only tools, argument rejection |
 | `ecarsi.warm_pool` | `state` `backend` `worker` `allocation` `provision` | requests and receipts, HQ adapter, worker, Slurm probe, `add-worker` |
-| | `budget` `reservation` `measure` | budgets from measured runs, measured ceilings, half-hourly `measured.json` |
+| | `reservation` `measure` | reservations, half-hourly `measured.json`; the pool names no operation: `state.operator_ceiling` applies only the online `ceilings` of `pool/config.json` |
 | `ecarsi.stages` | `organize` `persample` `crosssample` `zoomin` | host programs: compute, validate, publish; they never import each other (`tests/test_layers.py`) |
 | | `common` | what the programs share: sealed bundles and artifacts, figures for the model (`png_url`), the DEG comparisons; pinned with every program that imports it |
 | | `organize_execute` `upstream` `h5ad` `inclusion` `osp_worker` `osp_contract` | organize and per-sample helpers: ECA-PP products, the organized units, OSP calls |
 | | `ledger` `release_state` `archive` | the cell ledger, the atomic release, the work-tree archive |
 | | `release` | dataset release (ledger, review, UMAP data) |
 | | `contract` | shared model contract: tools without parameter lists, `deg_lookup` thresholds, lenient JSON, checklists |
-| | `evidence` `execution` | execution plans on the pool: evidence batch reads, single-tool plans, measured budgets |
+| | `evidence` `execution` | execution plans on the pool: evidence batch reads, single-tool plans |
+| | `resources` | what each operation and tool asks of a worker: measured ceilings and CPU caps (`size`), memory by cells, artifact, upstream peak or DEG buffers; applied where a request is built (`tests/test_layers.py`: the pool names no operation) |
 | `ecarsi` | `files` | durable JSON records every part hands over: `save`, `lock`, `immutable`, `reference` / `verified` |
 | | `observatory` (+ `.html`) | control-plane page, timeline, `status` and `tokens` reports |
 | | `round_policy` | round stopping rules and `loop_control.json` |
