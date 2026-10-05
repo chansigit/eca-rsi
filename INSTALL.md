@@ -30,7 +30,7 @@ The file `container/control-requirements.lock` defines the pinned Python environ
 | ecarsi | 0.4.4 |
 | agent-harness-bridge | 0.2.15 |
 | osp-sc (`osp`) | 0.1.8 |
-| msp-sc (`msp`) | 0.5.3 |
+| msp-sc (`msp`) | 0.5.4 |
 | zmip | 0.3.10 |
 | standissect-lite | 0.2.0 |
 | openai-agents / openai | 0.22.3 / 3.23.0 |

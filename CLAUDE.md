@@ -90,7 +90,7 @@ Agent models come from the catalog `~/.config/ecarsi/models.json` (`ECA_MODEL_CA
 
 ## Versions
 
-The current combination includes ecarsi 0.4.4 (upstream: eca-pp 0.5.3), agent-harness-bridge 0.2.15, OSP 0.1.8, MSP 0.5.3, ZMIP 0.3.10, and standissect-lite 0.2.0. The combination also includes openai-agents 0.22.3 and claude-agent-sdk 0.2.163. HQ is the owner's patched fork on branch `local`. The authoritative lists are [INSTALL.md](INSTALL.md) and `container/control-requirements.lock`.
+The current combination includes ecarsi 0.4.4 (upstream: eca-pp 0.5.3), agent-harness-bridge 0.2.15, OSP 0.1.8, MSP 0.5.4, ZMIP 0.3.10, and standissect-lite 0.2.0. The combination also includes openai-agents 0.22.3 and claude-agent-sdk 0.2.163. HQ is the owner's patched fork on branch `local`. The authoritative lists are [INSTALL.md](INSTALL.md) and `container/control-requirements.lock`.
 
 ## Targeted checks
 

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **MSP 0.5.4**: DEG leaves out the genes no cell of a comparison expresses (a gene expressed in one group only
+  is kept); pvals_adj is still corrected over all genes, so the DEG tables do not change. In the scale test no cell
+  expressed 20 % of the genes and a single cluster none of 49 % (median).
 - **DEG batches follow the cell count** (`control/persample.py` `deg_batches`, workflow patch `deg-batch-cells-v1`):
   eight comparisons per request up to 50,000 cells, fewer above, one from 400,000, and `max_in_flight_deg` grows by
   the same factor. In the scale test (418k cells) one request of eight ran 75 min and timed out once while most of a
