@@ -9,7 +9,7 @@ The zoom-in workflow reuses ZMIP's lineage planning, marker scoring, and merge c
 4. For each lineage, allow at most `max_in_flight_lineages` lineages to compute at once:
    1. `subset`;
    2. `compute`: reset from counts. Then run normalization, HVG, PCA, Harmony, neighbors, Leiden at 1.0 and 2.0, UMAP and QC.
-   3. DEG: run eight comparisons per request (`deg-batch`). Apply the `max_in_flight_deg` limit.
+   3. DEG: run eight comparisons per request (`deg-batch`), fewer for a lineage above 50,000 cells. Apply the `max_in_flight_deg` limit, raised by the same factor.
    4. `assemble`;
    5. lineage annotation: one agent session submits types (`submit_types`, Leiden 1.0). It then submits quality (`submit_quality`, Leiden 2.0). Release numerical admission before the session starts. Another lineage can then compute while this one waits.
    6. `apply`: apply removals and reassignments for the lineage. Produce its report.

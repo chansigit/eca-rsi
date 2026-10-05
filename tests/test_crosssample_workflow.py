@@ -64,7 +64,7 @@ def test_workflow_fanout_and_annotation_order(monkeypatch, change_limit):
         monkeypatch.setattr(module.workflow,'info',lambda:SimpleNamespace(workflow_id='cross-sample/test',get_current_history_length=lambda:0))
         monkeypatch.setattr(module.workflow,'wait',asyncio.wait)
         monkeypatch.setattr(module.workflow,'patched',lambda name:True)
-        monkeypatch.setattr(module,'DEG_BATCH_SIZE',1)   # one comparison per request, as before batching
+        monkeypatch.setattr('ecarsi.control.persample.DEG_BATCH_SIZE',1)   # one comparison per request, as before batching
         workflow=CrosssampleWorkflow()
         assert await workflow.run({'max_in_flight_deg':3,'max_refinements':0})=='publication'
         assert peak==(5 if change_limit else 3) and events.index('assemble')>events.index('deg-7')
@@ -236,7 +236,7 @@ def test_a_long_history_continues_as_new_once_the_comparisons_are_in(monkeypatch
         monkeypatch.setattr(module.workflow,'wait',asyncio.wait)
         monkeypatch.setattr(module.workflow,'patched',lambda name:True)
         monkeypatch.setattr(module.workflow,'continue_as_new',continue_as_new)
-        monkeypatch.setattr(module,'DEG_BATCH_SIZE',1)
+        monkeypatch.setattr('ecarsi.control.persample.DEG_BATCH_SIZE',1)
         spec={'max_in_flight_deg':3,'max_refinements':0}
         with pytest.raises(Continued) as stop:
             await CrosssampleWorkflow().run(spec)
@@ -246,7 +246,8 @@ def test_a_long_history_continues_as_new_once_the_comparisons_are_in(monkeypatch
     asyncio.run(scenario())
 
 
-def test_comparisons_are_batched_eight_per_request(monkeypatch):
+@pytest.mark.parametrize('cells', [None, 418_322])
+def test_comparisons_are_batched_eight_per_request(monkeypatch, cells):
     import ecarsi.control.crosssample as module
     async def scenario():
         active=peak=0;events=[];requests={}
@@ -254,7 +255,7 @@ def test_comparisons_are_batched_eight_per_request(monkeypatch):
             if action in ('read','session'):
                 path=args[0]
                 if path=='inspect':return {'samples':[{},{}]}
-                if path=='compute':return {'tasks':list(range(20))}
+                if path=='compute':return {'tasks':list(range(20)),**({'n_selected':cells} if cells else {})}
                 if path.startswith('agent'):return {'session_id':path}
                 if path=='decision-quality':return {}
                 raise AssertionError(path)
@@ -277,7 +278,20 @@ def test_comparisons_are_batched_eight_per_request(monkeypatch):
         monkeypatch.setattr(module.workflow,'wait',asyncio.wait)
         monkeypatch.setattr(module.workflow,'patched',lambda name:True)
         assert await CrosssampleWorkflow().run({'max_in_flight_deg':2,'max_refinements':0})=='publication'
+        if cells:   # 418k cells: one comparison per request, 2 x 8 requests in flight
+            assert [e for e in events if e.startswith('deg-')]==['deg-'+str(i) for i in range(20)] and peak==16
+            return
         assert [e for e in events if e.startswith('deg-')]==['deg-0','deg-8','deg-16'] and peak==2
         assert requests['deg-8'][0]['indices']==list(range(8,16)) and requests['deg-16'][0]['indices']==[16,17,18,19]
         assert requests['assemble'][0]['paths']==['compute','deg-0','deg-8','deg-16'] and len(requests['assemble'][1])==4
     asyncio.run(scenario())
+
+
+def test_large_units_send_smaller_deg_batches_and_more_of_them_at_once():
+    from ecarsi.control.persample import deg_batches
+    assert deg_batches(20, 0) == ([list(range(0, 8)), list(range(8, 16)), [16, 17, 18, 19]], 1)
+    assert deg_batches(20, 50_000)[1] == 1
+    batches, factor = deg_batches(20, 100_000)
+    assert batches[0] == [0, 1, 2, 3] and len(batches) == 5 and factor == 2
+    batches, factor = deg_batches(20, 418_322)   # the scale test: one comparison per request, 8x in flight
+    assert batches == [[i] for i in range(20)] and factor == 8

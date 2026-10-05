@@ -7,7 +7,7 @@ Temporal coordinates the operations. Warm pool workers run the MSP kernels and t
 1. `inspect`: Verify the published input.
 2. Sample inclusion (round 1, more than one sample): An agent session decides which samples take part. A single sample skips the session (`include-single`).
 3. `compute`: Run merge, normalization, HVG, PCA, Harmony, neighbors, Leiden, UMAP, and numerical QC in one task. For round ≥ 2, run `compute-round` on the previous survivors instead.
-4. DEG: Compute global DEG per resolution. Compute local DEG per target against its pooled PAGA neighbors. Comparisons map shared frozen expression buffers. Each pool request (`deg-batch`) runs eight comparisons. The timeout of the request is twice the per-comparison budget.
+4. DEG: Compute global DEG per resolution. Compute local DEG per target against its pooled PAGA neighbors. Comparisons map shared frozen expression buffers. Each pool request (`deg-batch`) runs eight comparisons up to 50,000 cells and fewer above (one from 400,000); `max_in_flight_deg` is multiplied by the same factor. The timeout of the request is twice the per-comparison budget.
 5. `assemble`: Publish the evidence bundle and a read-only SQLite DEG database.
 6. Type annotation: An agent session labels the clusters.
 7. Quality review: An agent session decides removals, merges, and subclustering.

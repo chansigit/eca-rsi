@@ -1,12 +1,11 @@
 """Durable cross-sample integration, bounded DEG fan-out, then type and quality."""
-import asyncio
 from pathlib import Path
 
 from temporalio import activity, workflow
 from temporalio.exceptions import ApplicationError
 
 from ..contracts import check
-from .persample import DEG_BATCH_SIZE, HISTORY_LIMIT, await_pool, call, handoff, stage_with_waits
+from .persample import HISTORY_LIMIT, await_pool, call, deg_batches, handoff, run_degs, stage_with_waits
 
 
 def validate_spec(spec, *, resume=False):
@@ -235,26 +234,16 @@ class CrosssampleWorkflow:
             plan = await call(crosssample_step, 'read', [prepared])
             n = len(plan['tasks'])
             if workflow.patched('deg-batch-v1'):
-                batches = [list(range(i, min(i + DEG_BATCH_SIZE, n))) for i in range(0, n, DEG_BATCH_SIZE)]
+                cells = (plan.get('n_selected') or plan.get('n_input') or 0) if workflow.patched('deg-batch-cells-v1') else 0
+                batches, factor = deg_batches(n, cells)
                 start = lambda k: run_operation('deg-batch', [prepared], [parent], indices=batches[k])
             else:
-                batches = list(range(n)); start = lambda k: run_operation('deg', [prepared], [parent], index=k)
-            pending, results, next_index = {}, {}, 0
-            while next_index < len(batches) or pending:
-                while next_index < len(batches) and len(pending) < self._deg_limit:
-                    index = next_index
-                    task = asyncio.create_task(start(index))
-                    pending[task] = index
-                    next_index += 1
-                done, _ = await workflow.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-                for task in sorted(done, key=lambda t: pending[t]):
-                    index = pending.pop(task)
-                    results[index] = await task
+                batches, factor = list(range(n)), 1; start = lambda k: run_operation('deg', [prepared], [parent], index=k)
+            ordered = await run_degs(len(batches), start, lambda: self._deg_limit * factor)
             if workflow.patched('cross-sample-continue-as-new-v1') and workflow.info().get_current_history_length() > HISTORY_LIMIT:
                 # Nothing is in flight here. A fresh execution re-drives inspection, inclusion and every
                 # comparison from their saved results in a few events each, then carries on.
                 workflow.continue_as_new(args=[spec, dict(deg_limit=self._deg_limit)])
-            ordered = [results[i] for i in sorted(results)]
             evidence, evidence_parent = await run_operation('assemble', [prepared] + [r[0] for r in ordered],
                 [parent] + [r[1] for r in ordered])
             types, type_parent = await judge('type', evidence, evidence_parent)

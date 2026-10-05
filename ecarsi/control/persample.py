@@ -19,6 +19,35 @@ HISTORY_LIMIT = 5000
 # requests, each paying a process start, a numba warm-up and a SHA pass over the shared buffers; eight
 # per request keeps the fan-out (max_in_flight_deg counts requests) while cutting requests eightfold.
 DEG_BATCH_SIZE = 8
+# Above this many cells a comparison is slow enough that the per-request cost no longer matters (deg_batches).
+DEG_BATCH_CELLS = 50_000
+
+
+def deg_batches(n, n_cells):
+    """The DEG requests of n comparisons over n_cells cells, and the factor on max_in_flight_deg.
+
+    Eight comparisons per request up to 50k cells, fewer above, one from 400k: in the 2026-10-05 scale test
+    (418k cells) one request of eight ran 75 min and timed out once while most of a 64-core node sat idle.
+    The in-flight limit grows by the same factor, so about max_in_flight_deg x 8 comparisons stay in flight.
+    Each comparison runs on its own either way (stages.crosssample.deg_batch loops _deg_one), so results
+    do not change. n_cells 0 (not known) keeps eight per request."""
+    size = max(1, min(DEG_BATCH_SIZE, DEG_BATCH_SIZE * DEG_BATCH_CELLS // max(1, n_cells)))
+    return [list(range(i, min(i + size, n))) for i in range(0, n, size)], -(-DEG_BATCH_SIZE // size)
+
+
+async def run_degs(count, start, limit):
+    """Cross-sample's and zoom-in's DEG fan-out: start(k) for k < count in order with at most limit()
+    in flight (read at every start, so set_deg_limit applies at once); the results in k order."""
+    pending, results, next_index = {}, {}, 0
+    while next_index < count or pending:
+        while next_index < count and len(pending) < limit():
+            pending[asyncio.create_task(start(next_index))] = next_index
+            next_index += 1
+        done, _ = await workflow.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        for task in sorted(done, key=lambda t: pending[t]):
+            index = pending.pop(task)
+            results[index] = await task
+    return [results[i] for i in sorted(results)]
 
 
 def sample_summary(records, skipped, failed):

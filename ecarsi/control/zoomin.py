@@ -6,7 +6,7 @@ from temporalio import activity, workflow
 from temporalio.exceptions import ApplicationError
 
 from ..contracts import check
-from .persample import HISTORY_LIMIT, await_pool, call, handoff, stage_with_waits
+from .persample import HISTORY_LIMIT, await_pool, call, deg_batches, handoff, run_degs, stage_with_waits
 
 
 def validate_spec(spec, *, resume=False):
@@ -151,7 +151,7 @@ class ZoominWorkflow:
     @workflow.run
     async def run(self,spec,progress=None):
         from .coordinator import run_agent
-        from .persample import DEG_BATCH_SIZE,SKIPPED_CELL_LIMIT
+        from .persample import SKIPPED_CELL_LIMIT
         progress=progress or {}  # from continue_as_new: finished lineages and the DEG window
         self._deg_limit=progress.get('deg_limit') or getattr(self,'_deg_limit',spec['max_in_flight_deg'])
         async def run(action,paths,parents,**details):
@@ -184,19 +184,12 @@ class ZoominWorkflow:
                     bundle=await call(zoomin_step,'read',[computed])
                     n=len(bundle['tasks'])
                     if workflow.patched('deg-batch-v1'):
-                        batches=[list(range(i,min(i+DEG_BATCH_SIZE,n))) for i in range(0,n,DEG_BATCH_SIZE)]
+                        cells=(bundle.get('n_input') or 0) if workflow.patched('deg-batch-cells-v1') else 0
+                        batches,factor=deg_batches(n,cells)
                         start=lambda k:run('deg-batch',[computed],[compute_parent],indices=batches[k])
                     else:
-                        batches=list(range(n));start=lambda k:run('deg',[computed],[compute_parent],index=k)
-                    pending,comparisons,next_index={},{},0
-                    while next_index<len(batches) or pending:
-                        while next_index<len(batches) and len(pending)<self._deg_limit:
-                            task=asyncio.create_task(start(next_index))
-                            pending[task]=next_index;next_index+=1
-                        done,_=await workflow.wait(pending,return_when=asyncio.FIRST_COMPLETED)
-                        for task in sorted(done,key=lambda t:pending[t]):
-                            comparisons[pending.pop(task)]=await task
-                    ordered=[comparisons[i] for i in sorted(comparisons)]
+                        batches,factor=list(range(n)),1;start=lambda k:run('deg',[computed],[compute_parent],index=k)
+                    ordered=await run_degs(len(batches),start,lambda:self._deg_limit*factor)
                     evidence,evidence_parent=await run('assemble',[computed]+[v[0] for v in ordered],[compute_parent]+[v[1] for v in ordered])
                 # Free numerical admission before the model session, across every lineage.
                 try:

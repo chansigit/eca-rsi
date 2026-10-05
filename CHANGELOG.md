@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **DEG batches follow the cell count** (`control/persample.py` `deg_batches`, workflow patch `deg-batch-cells-v1`):
+  eight comparisons per request up to 50,000 cells, fewer above, one from 400,000, and `max_in_flight_deg` grows by
+  the same factor. In the scale test (418k cells) one request of eight ran 75 min and timed out once while most of a
+  64-core node sat idle. Each comparison is computed alone either way, so results do not change. Cross-sample and
+  zoom-in share the fan-out loop (`run_degs`). `ops/replay-check.py` takes `--status` and `--where` to replay
+  closed histories.
 - Cross-sample and zoom-in compute ask 0.12 MiB per cell (was an estimate of 0.15): the scale test peaked at
   0.069 (418k cells, 30.3 GiB) and 0.084 (a 181k-cell lineage).
 - Figures above 512 KiB reach the model as a 256-colour palette PNG at full size (`stages.persample.png_url`, used by
