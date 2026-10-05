@@ -1,12 +1,14 @@
 """A dead agent session restarts once as a fresh session; a second death skips the sample or lineage."""
 import asyncio
-from types import SimpleNamespace
 
 import pytest
-from temporalio.exceptions import ApplicationError
+from temporalio import workflow
+from temporalio.client import WorkflowFailureError
 
 from ecarsi.agent.session import reference
 from ecarsi.files import read, save
+from tests.fake_agent import Agent
+from tests.temporal_env import QUEUE, fakes, ready, temporal
 
 
 def test_restart_names_a_fresh_session_and_records_the_superseded_one(tmp_path):
@@ -16,68 +18,73 @@ def test_restart_names_a_fresh_session_and_records_the_superseded_one(tmp_path):
     assert fresh['session_id'] == 'osp-abc-r2' and fresh['output_root'] == str(tmp_path / 'agent-1' / 'restart')
     assert read(tmp_path / 'agent-1' / 'restart.json')['superseded'] == 'osp-abc'
     assert agent_step('restart', [spec, 'turn-3: failed']) == fresh  # an activity retry lands on the same record
+    # a resume names the death in other words (before 2026-10-05: 'Child Workflow execution failed')
+    assert agent_step('restart', [spec, 'Child Workflow execution failed']) == fresh
+    assert read(tmp_path / 'agent-1' / 'restart.json')['reason'] == 'turn-3: failed'
 
 
-def test_run_agent_tries_a_second_session_once(monkeypatch):
-    import ecarsi.control.coordinator as module
+@workflow.defn
+class RunsOneSession:
+    """run_agent is a helper that runs inside a stage workflow; this one runs it alone."""
+    @workflow.run
+    async def run(self) -> str:
+        from ecarsi.control.common import call
+        from ecarsi.control.coordinator import run_agent
+        return await run_agent(dict(session_id="s"), "wf/s", call)
 
-    async def scenario(failures):
+
+def test_run_agent_tries_a_second_session_once():
+    def scenario(failures):
         attempts, restarts = [], []
-
-        async def child(fn, spec, id):
-            attempts.append((spec['session_id'], id))
-            if len(attempts) <= failures:
-                raise RuntimeError('session died')
-            return 'result'
-
-        async def call(fn, action, args):
-            assert action == 'restart'
+        async def agent_outcome(session, workflow_id):
+            attempts.append((session["session_id"], workflow_id))
+            return {"died": "session died"} if len(attempts) <= failures else {"result": "result"}
+        async def agent_step(action, args):
+            assert action == "restart"
             restarts.append(args[1])
-            return dict(args[0], session_id=args[0]['session_id'] + '-r2')
-        monkeypatch.setattr(module.workflow, 'execute_child_workflow', child)
-        return await module.run_agent(dict(session_id='s'), 'wf/s', call), attempts, restarts
-    result, attempts, restarts = asyncio.run(scenario(1))
-    assert result == 'result' and attempts == [('s', 'wf/s'), ('s-r2', 'wf/s/restart')] and restarts == ['session died']
-    with pytest.raises(RuntimeError, match='session died'):
-        asyncio.run(scenario(2))
+            return dict(args[0], session_id=args[0]["session_id"] + "-r2")
+        async def run():
+            async with temporal([RunsOneSession, Agent], fakes(agent_outcome=agent_outcome, agent_step=agent_step)) as client:
+                return await client.execute_workflow(RunsOneSession.run, id="runs-one-session", task_queue=QUEUE)
+        return asyncio.run(run()), attempts, restarts
+    result, attempts, restarts = scenario(1)
+    assert result == "result" and attempts == [("s", "wf/s"), ("s-r2", "wf/s/restart")] and restarts == ["session died"]
+    with pytest.raises(WorkflowFailureError) as failed:
+        scenario(2)
+    assert "session died" in str(failed.value.cause)
 
 
-def test_sample_whose_sessions_died_is_finalized_unannotated(monkeypatch):
-    import ecarsi.control.persample as module
-
-    async def scenario():
-        events = []
-
-        async def call(fn, action, args):
-            events.append(action)
-            if action == 'compute':
-                return dict(id='compute', output='computed.json')
-            if action == 'read':
-                return dict(empty=False)
-            if action == 'agent':
-                return dict(session_id='osp-s')
-            if action == 'restart':
-                return dict(args[0], session_id='osp-s-r2')
-            if action == 'skipped':
-                assert 'osp-s-r2' in args[2]
-                return 'skipped.json'
-            if action == 'finalize':
-                assert args[2] is None and args[3] == 'compute'
-                return dict(id='finalize', output='final.json')
-            raise AssertionError(action)
-
-        async def await_pool(spec, request):
-            return request['id']
-
-        async def child(fn, spec, id):
-            raise RuntimeError('session died: ' + spec['session_id'])
-        monkeypatch.setattr(module, 'call', call)
-        monkeypatch.setattr(module, 'await_pool', await_pool)
-        monkeypatch.setattr(module.workflow, 'execute_child_workflow', child)
-        monkeypatch.setattr(module.workflow, 'info', lambda: SimpleNamespace(workflow_id='persample/r/sample-0'))
-        return await module.SampleWorkflow().run({}, dict(sample_id='s'), 'partition'), events
-    result, events = asyncio.run(scenario())
-    assert result == 'finalize' and events == ['compute', 'read', 'agent', 'restart', 'skipped', 'finalize']
+def test_sample_whose_sessions_died_is_finalized_unannotated():
+    from ecarsi.control.persample import SampleWorkflow
+    events = []
+    async def sample_step(action, args):
+        events.append(action)
+        if action == "compute":
+            return dict(id="compute", output="computed.json")
+        if action == "read":
+            return dict(empty=False)
+        if action == "agent":
+            return dict(session_id="osp-s")
+        if action == "skipped":
+            assert "osp-s-r2" in args[2]
+            return "skipped.json"
+        if action == "finalize":
+            assert args[2] is None and args[3] == "compute"
+            return dict(id="finalize", output="final.json")
+        raise AssertionError(action)
+    async def agent_step(action, args):
+        events.append(action)
+        assert action == "restart"
+        return dict(args[0], session_id="osp-s-r2")
+    async def agent_outcome(session, workflow_id):
+        return {"died": "session died: " + session["session_id"]}
+    async def run():
+        activities = fakes(sample_step=sample_step, agent_step=agent_step, agent_outcome=agent_outcome, check_pool=ready)
+        async with temporal([SampleWorkflow, Agent], activities) as client:
+            return await client.execute_workflow(SampleWorkflow.run, args=[dict(pool_root="pool"), dict(sample_id="s"), "partition"],
+                                                 id="persample/r/sample-0", task_queue=QUEUE)
+    assert asyncio.run(run()) == "finalize"
+    assert events == ["compute", "read", "agent", "restart", "skipped", "finalize"]
 
 
 def test_publication_lists_skipped_samples_and_fails_past_the_limit(tmp_path):
@@ -105,71 +112,29 @@ def test_publication_lists_skipped_samples_and_fails_past_the_limit(tmp_path):
     assert '10%' in lost['failed_samples'][0]['error']
 
 
-@pytest.mark.parametrize('cells,outcome', [(10, 'merged'), (20, 'failed')])
-def test_lineage_whose_sessions_died_keeps_its_labels_within_the_limit(monkeypatch, cells, outcome):
-    import ecarsi.control.zoomin as module
-
-    async def scenario():
-        requests, events = {}, []
-
-        async def call(fn, action, args):
-            if action in ('read', 'session'):
-                path = args[0]
-                if path == 'lineage-decision':
-                    return {'evidence': {'path': 'evidence'}}
-                if path == 'plan-decision':
-                    return {'proposal': {'lineages': [dict(name='A', zoom=True, n_cells=100 - cells), dict(name='B', zoom=True, n_cells=cells)]}}
-                if path.startswith('compute'):
-                    return {'tasks': []}
-                if path.startswith('agent'):
-                    return {'session_id': path}
-            if action == 'restart':
-                return dict(args[0], session_id=args[0]['session_id'] + '-r2')
-            if action == 'accepted':
-                return {'path': args[0], 'parent': args[0]}
-            if action == 'publish':
-                return 'publication'
-            payload = args[1]
-            identifier = action + '-' + str(len(requests))
-            requests[identifier] = (action, payload)
-            return {'id': identifier, 'output': identifier}
-
-        async def await_pool(spec, request):
-            events.append(requests[request['id']])
-            return request['id']
-
-        def lineage_index(session_id):
-            _, agent = requests[session_id.replace('-r2', '')]
-            _, assemble = requests[agent['paths'][0]]
-            _, compute = requests[assemble['paths'][0]]
-            _, subset = requests[compute['paths'][0]]
-            return subset['index']
-
-        async def child(fn, session, id):
-            _, payload = requests[session['session_id'].replace('-r2', '')]
-            if payload['kind'] == 'plan':
-                return 'plan-decision'
-            if lineage_index(session['session_id']) == 1:
-                raise RuntimeError('session died: ' + session['session_id'])
-            return 'lineage-decision'
-        monkeypatch.setattr(module, 'call', call)
-        monkeypatch.setattr(module, 'await_pool', await_pool)
-        monkeypatch.setattr(module.workflow, 'execute_child_workflow', child)
-        monkeypatch.setattr(module.workflow, 'info', lambda: SimpleNamespace(workflow_id='zoom-test', get_current_history_length=lambda: 0))
-        monkeypatch.setattr(module.workflow, 'patched', lambda name: True)
-        monkeypatch.setattr(module.workflow, 'wait', asyncio.wait)
-        result = await module.ZoominWorkflow().run(dict(max_in_flight_lineages=1, max_in_flight_deg=2))
-        return result, events
-    if outcome == 'failed':
-        with pytest.raises(ApplicationError, match='over 10%'):
-            asyncio.run(scenario())
+@pytest.mark.parametrize("cells,outcome", [(10, "merged"), (20, "failed")])
+def test_lineage_whose_sessions_died_keeps_its_labels_within_the_limit(cells, outcome):
+    from tests.test_zoomin_workflow import run_zoom, sessions, zoom_fakes
+    requests, events = {}, []
+    lines = [dict(name="A", zoom=True, n_cells=100 - cells), dict(name="B", zoom=True, n_cells=cells)]
+    def answer(session, workflow_id):  # both sessions of lineage 1 die; lineage 0 is annotated
+        if session["session_id"].startswith("agent-lineage-1-"):
+            return {"died": "session died: " + session["session_id"]}
+        return {"result": "lineage-decision"}
+    async def agent_step(action, args):
+        assert action == "restart"
+        return dict(args[0], session_id=args[0]["session_id"] + "-r2")
+    activities = zoom_fakes(lines, requests, events) + sessions(answer) + fakes(agent_step=agent_step)
+    if outcome == "failed":
+        with pytest.raises(WorkflowFailureError) as failed:
+            run_zoom(activities)
+        assert "over 10%" in str(failed.value.cause)
         return
-    result, events = asyncio.run(scenario())
-    assert result == 'publication' and [a for a, _ in events].count('apply') == 1
+    assert run_zoom(activities) == "publication" and [a for a, _ in events].count("apply") == 1
     action, payload = events[-1]
-    assert action == 'merge' and len(payload['paths']) == 3
-    assert [(s['index'], s['name'], s['n_cells']) for s in payload['skipped']] == [(1, 'B', 10)]
-    assert 'session died: agent' in payload['skipped'][0]['error'] and payload['skipped'][0]['error'].endswith('-r2')
+    assert action == "merge" and len(payload["paths"]) == 3
+    assert [(s["index"], s["name"], s["n_cells"]) for s in payload["skipped"]] == [(1, "B", 10)]
+    assert "session died: agent" in payload["skipped"][0]["error"] and payload["skipped"][0]["error"].endswith("-r2")
 
 
 def test_plan_without_marks_skipped_lineages_as_not_zoomed():

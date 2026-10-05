@@ -301,31 +301,33 @@ class PersampleWorkflow:
     async def run(self, spec):
         self._batch_size = spec["batch_size"]
         self._in_flight_limit = getattr(self, "_in_flight_limit", spec["max_in_flight_samples"])
-        separate = workflow.patched('persample-compute-admission-v2')
+        workflow.deprecate_patch("persample-compute-admission-v2")
         prepared_limit = spec.get('max_prepared_samples', max(32, spec['max_in_flight_samples'] * 4))
         offset, total, pending, completed, failed, parent = 0, None, {}, [], [], None
         totals, inputs, replayed = None, {}, set()
         while True:
-            recover = bool(failed) and workflow.patched("persample-recovered-receipts-v1")
+            recover = bool(failed)
+            if recover:
+                workflow.deprecate_patch("persample-recovered-receipts-v1")
             if recover:
                 for failure in list(failed):
-                    if len(pending) >= (prepared_limit if separate else self._in_flight_limit):
+                    if len(pending) >= prepared_limit:
                         break
                     sample = failure["sample"]
                     if sample in replayed or not await call(sample_step, "recoverable", [spec, sample]):
                         continue
                     entry, predecessor, identity = inputs[sample]
                     handle = await workflow.start_child_workflow(SampleWorkflow.run,
-                        args=[spec, entry, predecessor, True] if separate else [spec, entry, predecessor],
+                        args=[spec, entry, predecessor, True],
                         id=identity + "/recovered")
                     pending[handle] = sample
                     replayed.add(sample)
                     failed.remove(failure)
             if total is not None and offset >= total and not pending:
                 break
-            computing = sum(sample not in self._computed for sample in pending.values()) if separate else len(pending)
+            computing = sum(sample not in self._computed for sample in pending.values())
             if ((total is None or offset < total) and computing <= self._in_flight_limit - spec["batch_size"]
-                    and (not separate or len(pending) <= prepared_limit - spec['batch_size'])):
+                    and len(pending) <= prepared_limit - spec['batch_size']):
                 self._stage = "partitioning"
                 request = await call(sample_step, "partition", [spec, offset, parent])
                 path = await await_pool(spec, request)
@@ -336,7 +338,7 @@ class PersampleWorkflow:
                     # IDs depend on immutable sample order, not worker placement or completion order.
                     identity = workflow.info().workflow_id + "/sample-" + str(offset - len(batch["entries"]) + index)
                     handle = await workflow.start_child_workflow(SampleWorkflow.run,
-                        args=[spec, entry, parent, True] if separate else [spec, entry, parent], id=identity)
+                        args=[spec, entry, parent, True], id=identity)
                     pending[handle] = entry["sample_id"]
                     inputs[entry["sample_id"]] = (entry, parent, identity)
                 if not pending and offset < total:

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **No workflow patch branches left.** All 21 `workflow.patched` branches of the stage workflows lost their old path;
+  each patch id keeps one `workflow.deprecate_patch` line so the histories since 2026-10-04 still replay (139 of 141;
+  the scale test's cross-sample and zoom-in predate DEG batching by cells). The dead organize `submit_plan` activity is
+  gone and organize's tools are sized by `stages.resources.size`. Deploy only at 0 running executions.
+- **Turn results are contract `turn/1`** (outcome one of seven, a worker record), checked by both writers and the reader.
+- **Workflow tests run on Temporal's time-skipping test server** (`tests/temporal_env.py`): the real workflow classes,
+  fake activities and child workflows registered under their real names, real updates, queries, timers and
+  continue-as-new. No test patches `ecarsi.control` internals or `temporalio.workflow` any more.
 - **The pool names no stage operation.** `warm_pool/budget.py` moved to `stages/resources.py`: the measured ceilings,
   CPU caps and `from_cells` / `from_artifact` / `from_compute` / `from_deg_buffers`. Stage code sizes each request
   where it is built (`size` in the three stage workflows, organize prepare and `stages.evidence.plan` for every

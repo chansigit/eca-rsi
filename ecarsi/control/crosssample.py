@@ -200,6 +200,7 @@ class CrosssampleWorkflow:
     @workflow.run
     async def run(self, spec, progress=None):
         progress = progress or {}  # from continue_as_new: the DEG window
+        history_limit = progress.get('history_limit', HISTORY_LIMIT)  # a caller (a test) may lower it; never carried on
         self._deg_limit = progress.get('deg_limit') or getattr(self, '_deg_limit', spec['max_in_flight_deg'])
 
         async def run_operation(action, paths, parents, **details):
@@ -210,8 +211,8 @@ class CrosssampleWorkflow:
         async def judge(phase, evidence, parent, types=None):
             self._stage = phase + ' annotation' if phase != 'inclusion' else 'sample inclusion'
             path, _ = await run_operation('agent', [evidence] + ([types] if types else []), [parent], phase=phase)
-            policy = 'session' if workflow.patched('agent-session-policy-v1') else 'read'
-            session = await call(crosssample_step, policy, [path])
+            workflow.deprecate_patch('agent-session-policy-v1')
+            session = await call(crosssample_step, 'session', [path])
             from .coordinator import run_agent
             result = await run_agent(session, workflow.info().workflow_id + '/' + session['session_id'], call)
             accepted = await call(crosssample_step, 'accepted', [result])
@@ -234,14 +235,12 @@ class CrosssampleWorkflow:
             self._stage = 'DEG comparisons'
             plan = await call(crosssample_step, 'read', [prepared])
             n = len(plan['tasks'])
-            if workflow.patched('deg-batch-v1'):
-                cells = (plan.get('n_selected') or plan.get('n_input') or 0) if workflow.patched('deg-batch-cells-v1') else 0
-                batches, factor = deg_batches(n, cells)
-                start = lambda k: run_operation('deg-batch', [prepared], [parent], indices=batches[k])
-            else:
-                batches, factor = list(range(n)), 1; start = lambda k: run_operation('deg', [prepared], [parent], index=k)
+            workflow.deprecate_patch('deg-batch-v1'); workflow.deprecate_patch('deg-batch-cells-v1')
+            batches, factor = deg_batches(n, plan.get('n_selected') or plan.get('n_input') or 0)
+            start = lambda k: run_operation('deg-batch', [prepared], [parent], indices=batches[k])
             ordered = await run_degs(len(batches), start, lambda: self._deg_limit * factor)
-            if workflow.patched('cross-sample-continue-as-new-v1') and workflow.info().get_current_history_length() > HISTORY_LIMIT:
+            workflow.deprecate_patch('cross-sample-continue-as-new-v1')
+            if workflow.info().get_current_history_length() > history_limit:
                 # Nothing is in flight here. A fresh execution re-drives inspection, inclusion and every
                 # comparison from their saved results in a few events each, then carries on.
                 workflow.continue_as_new(args=[spec, dict(deg_limit=self._deg_limit)])

@@ -35,6 +35,7 @@ def planning_spec(spec, prepared_path):
     """The immutable agent policy names worker programs, never a Bridge-side harness."""
     from ..files import reference
     from ..plan import PLAN_SCHEMA
+    from .resources import size
     prepared = read(prepared_path)
     if prepared is None or Path(prepared["input_root"]).resolve() != Path(spec["input_root"]).resolve():
         raise ValueError("prepared input identity does not match this dataset")
@@ -49,11 +50,12 @@ def planning_spec(spec, prepared_path):
         ("submit_plan", {"plan_json": {"type": "string"}},
          "Validate and submit the complete plan on a worker. Correct any returned error and resubmit. "
          "plan_json is JSON matching this schema: " + json.dumps(PLAN_SCHEMA))):
+        budget = size(dict(operation_id=name, cpus=spec["prepare_cpus"], memory_mb=spec["prepare_memory_mb"]))
         tools.append(dict(name=name, description=description,
             parameters={"type": "object", "properties": parameters,
                         "required": list(parameters), "additionalProperties": False},
             args=["-m", "ecarsi.stages.organize", "plan-tool", name, str(prepared_path), "{arguments}", "result.json"],
-            cpus=spec["prepare_cpus"], memory_mb=spec["prepare_memory_mb"],
+            cpus=budget["cpus"], memory_mb=budget["memory_mb"],
             timeout_seconds=spec["prepare_timeout_seconds"],
             inputs=[reference(prepared_path), *[reference(package / p) for p in (
                 "stages/organize.py", "plan.py", "stages/organize_execute.py", "stages/upstream.py", "stages/h5ad.py")]],

@@ -1,10 +1,11 @@
 """Bounded numerical work must finish before type -> quality -> publication."""
 import asyncio
-from types import SimpleNamespace
 
 import pytest
+from temporalio import workflow
 
 from ecarsi.control.crosssample import CrosssampleWorkflow, crosssample_step, validate_spec
+from tests.temporal_env import QUEUE, fakes, temporal
 from ecarsi.agent.session import reference
 from ecarsi.files import save, read
 from ecarsi.warm_pool.state import validate_trace
@@ -29,50 +30,6 @@ def test_gpu_selection_and_large_fanin(tmp_path):
     with pytest.raises(ValueError):validate_trace({**trace,'depends_on':['d'+str(i) for i in range(4097)]})
 
 
-@pytest.mark.parametrize('change_limit', [False, True])
-def test_workflow_fanout_and_annotation_order(monkeypatch, change_limit):
-    import ecarsi.control.crosssample as module
-    async def scenario():
-        active=peak=0;events=[];requests={}
-        async def call(fn,action,args):
-            if action in ('read','session'):
-                path=args[0]
-                if path=='inspect':return {'samples':[{},{}]}
-                if path=='compute':return {'tasks':list(range(8))}
-                if path.startswith('agent'):return {'session_id':path}
-                if path=='decision-quality':return {}
-                raise AssertionError(path)
-            if action=='accepted':return {'path':args[0],'parent':args[0]}
-            if action=='publish':events.append('publish');return 'publication'
-            _,payload,parents=args
-            name=('deg-'+str(payload['indices'][0]) if action=='deg-batch' else
-                  action+('-'+payload['phase'] if action=='agent' else '-'+str(payload['index']) if action=='deg' else ''))
-            requests[name]=(payload,parents);events.append(name)
-            return {'id':name,'output':name}
-        async def await_pool(spec,request):
-            nonlocal active,peak
-            if request['id'].startswith('deg-'):
-                active+=1;peak=max(peak,active)
-                await asyncio.sleep(.001)
-                if change_limit and request['id']=='deg-0':
-                    assert workflow.set_deg_limit(5) == 5
-                active-=1
-            return request['id']
-        async def child(fn,session,**kwargs):return 'decision-'+session['session_id'].split('-')[1]
-        monkeypatch.setattr(module,'call',call);monkeypatch.setattr(module,'await_pool',await_pool)
-        monkeypatch.setattr(module.workflow,'execute_child_workflow',child)
-        monkeypatch.setattr(module.workflow,'info',lambda:SimpleNamespace(workflow_id='cross-sample/test',get_current_history_length=lambda:0))
-        monkeypatch.setattr(module.workflow,'wait',asyncio.wait)
-        monkeypatch.setattr(module.workflow,'patched',lambda name:True)
-        monkeypatch.setattr('ecarsi.control.common.DEG_BATCH_SIZE',1)   # one comparison per request, as before batching
-        workflow=CrosssampleWorkflow()
-        assert await workflow.run({'max_in_flight_deg':3,'max_refinements':0})=='publication'
-        assert peak==(5 if change_limit else 3) and events.index('assemble')>events.index('deg-7')
-        assert events.index('agent-type')<events.index('agent-quality')<events.index('finalize')
-        assert len(requests['assemble'][1])==9
-        assert requests['finalize'][0]['paths']==['assemble','decision-type','decision-quality']
-        assert workflow.stage()=='complete'
-    asyncio.run(scenario())
 
 
 def test_confirmed_worker_interruption_recovers_with_a_finite_attempt_budget(tmp_path):
@@ -89,30 +46,6 @@ def test_confirmed_worker_interruption_recovers_with_a_finite_attempt_budget(tmp
         assert check_pool(str(tmp_path),'r','result.json')['state']==('waiting' if retry_number<2 else 'failed')
 
 
-def test_a_blocked_pool_request_shows_why_it_waits(tmp_path, monkeypatch):
-    # #18: the scheduler's infeasible reason reaches the waiting workflow's stage query.
-    from ecarsi.control.coordinator import check_pool
-    import ecarsi.control.common as module
-    from ecarsi.warm_pool.backend import observe
-    from ecarsi.warm_pool.state import submit
-    tmp_path.chmod(0o700); (tmp_path/'requests').mkdir(); save(tmp_path/'config.json', {'runtime': {}})
-    submit(tmp_path, dict(request_id='r', operation_id='compute', args=['-c', 'pass'], cpus=1,
-        memory_mb=64, timeout_seconds=30, outputs=['result.json']))
-    folder, why = tmp_path/'requests/r', 'no worker that holds 1 cpus / 64 MB has 60 s left'
-    observe(folder, read(folder/'request.json'), dict(state='queued', infeasible=why))
-    assert check_pool(str(tmp_path), 'r', 'result.json') == dict(state='waiting', detail='infeasible: ' + why)
-    owner, seen = SimpleNamespace(_stage='DEG comparisons'), []
-    answers = iter([check_pool(str(tmp_path), 'r', 'result.json'), dict(state='ready', path='/done')])
-    async def call(fn, *args):
-        return next(answers)
-    async def sleep(seconds):
-        seen.append(module.stage_with_waits(owner))
-    monkeypatch.setattr(module, 'call', call)
-    monkeypatch.setattr(module.workflow, 'instance', lambda: owner)
-    monkeypatch.setattr(module.workflow, 'sleep', sleep)
-    assert asyncio.run(module.await_pool(dict(pool_root=str(tmp_path)), dict(id='r', output='result.json'))) == '/done'
-    assert seen == ['DEG comparisons; waiting: infeasible: ' + why]
-    assert module.stage_with_waits(owner) == 'DEG comparisons'
 
 
 def test_a_time_limit_is_doubled_once(tmp_path):
@@ -206,85 +139,8 @@ def test_a_workflow_holds_the_handoff_without_the_sample_manifest(tmp_path):
     assert crosssample_step('read', [str(path)]) == later
 
 
-def test_a_long_history_continues_as_new_once_the_comparisons_are_in(monkeypatch):
-    import ecarsi.control.crosssample as module
-    class Continued(BaseException):
-        def __init__(self, args): self.carried = args
-    async def scenario():
-        events=[];requests={};history={'n':10000}
-        async def call(fn,action,args):
-            if action in ('read','session'):
-                path=args[0]
-                if path=='inspect':return {'samples':[{},{}]}
-                if path=='compute':return {'tasks':list(range(4))}
-                if path.startswith('agent'):return {'session_id':path}
-                if path=='decision-quality':return {}
-                raise AssertionError(path)
-            if action=='accepted':return {'path':args[0],'parent':args[0]}
-            if action=='publish':events.append('publish');return 'publication'
-            _,payload,parents=args
-            name=('deg-'+str(payload['indices'][0]) if action=='deg-batch' else
-                  action+('-'+payload['phase'] if action=='agent' else '-'+str(payload['index']) if action=='deg' else ''))
-            requests[name]=(payload,parents);events.append(name)
-            return {'id':name,'output':name}
-        async def await_pool(spec,request):return request['id']
-        async def child(fn,session,**kwargs):return 'decision-'+session['session_id'].split('-')[1]
-        def continue_as_new(args):raise Continued(args)
-        monkeypatch.setattr(module,'call',call);monkeypatch.setattr(module,'await_pool',await_pool)
-        monkeypatch.setattr(module.workflow,'execute_child_workflow',child)
-        monkeypatch.setattr(module.workflow,'info',lambda:SimpleNamespace(workflow_id='cross-sample/test',get_current_history_length=lambda:history['n']))
-        monkeypatch.setattr(module.workflow,'wait',asyncio.wait)
-        monkeypatch.setattr(module.workflow,'patched',lambda name:True)
-        monkeypatch.setattr(module.workflow,'continue_as_new',continue_as_new)
-        monkeypatch.setattr('ecarsi.control.common.DEG_BATCH_SIZE',1)
-        spec={'max_in_flight_deg':3,'max_refinements':0}
-        with pytest.raises(Continued) as stop:
-            await CrosssampleWorkflow().run(spec)
-        assert stop.value.carried==[spec,{'deg_limit':3}] and 'deg-3' in events and 'assemble' not in events
-        history['n']=0
-        assert await CrosssampleWorkflow().run(spec,{'deg_limit':3})=='publication'
-    asyncio.run(scenario())
 
 
-@pytest.mark.parametrize('cells', [None, 418_322])
-def test_comparisons_are_batched_eight_per_request(monkeypatch, cells):
-    import ecarsi.control.crosssample as module
-    async def scenario():
-        active=peak=0;events=[];requests={}
-        async def call(fn,action,args):
-            if action in ('read','session'):
-                path=args[0]
-                if path=='inspect':return {'samples':[{},{}]}
-                if path=='compute':return {'tasks':list(range(20)),**({'n_selected':cells} if cells else {})}
-                if path.startswith('agent'):return {'session_id':path}
-                if path=='decision-quality':return {}
-                raise AssertionError(path)
-            if action=='accepted':return {'path':args[0],'parent':args[0]}
-            if action=='publish':events.append('publish');return 'publication'
-            _,payload,parents=args
-            assert action!='deg'   # the patched path never submits single comparisons
-            name=('deg-'+str(payload['indices'][0]) if action=='deg-batch' else action+('-'+payload['phase'] if action=='agent' else ''))
-            requests[name]=(payload,parents);events.append(name)
-            return {'id':name,'output':name}
-        async def await_pool(spec,request):
-            nonlocal active,peak
-            if request['id'].startswith('deg-'):
-                active+=1;peak=max(peak,active);await asyncio.sleep(.001);active-=1
-            return request['id']
-        async def child(fn,session,**kwargs):return 'decision-'+session['session_id'].split('-')[1]
-        monkeypatch.setattr(module,'call',call);monkeypatch.setattr(module,'await_pool',await_pool)
-        monkeypatch.setattr(module.workflow,'execute_child_workflow',child)
-        monkeypatch.setattr(module.workflow,'info',lambda:SimpleNamespace(workflow_id='cross-sample/test',get_current_history_length=lambda:0))
-        monkeypatch.setattr(module.workflow,'wait',asyncio.wait)
-        monkeypatch.setattr(module.workflow,'patched',lambda name:True)
-        assert await CrosssampleWorkflow().run({'max_in_flight_deg':2,'max_refinements':0})=='publication'
-        if cells:   # 418k cells: one comparison per request, 2 x 8 requests in flight
-            assert [e for e in events if e.startswith('deg-')]==['deg-'+str(i) for i in range(20)] and peak==16
-            return
-        assert [e for e in events if e.startswith('deg-')]==['deg-0','deg-8','deg-16'] and peak==2
-        assert requests['deg-8'][0]['indices']==list(range(8,16)) and requests['deg-16'][0]['indices']==[16,17,18,19]
-        assert requests['assemble'][0]['paths']==['compute','deg-0','deg-8','deg-16'] and len(requests['assemble'][1])==4
-    asyncio.run(scenario())
 
 
 def test_large_units_send_smaller_deg_batches_and_more_of_them_at_once():
@@ -295,3 +151,160 @@ def test_large_units_send_smaller_deg_batches_and_more_of_them_at_once():
     assert batches[0] == [0, 1, 2, 3] and len(batches) == 5 and factor == 2
     batches, factor = deg_batches(20, 418_322)   # the scale test: one comparison per request, 8x in flight
     assert batches == [[i] for i in range(20)] and factor == 8
+
+
+@workflow.defn(name="AgentWorkflow")
+class Agent:
+    """Every session answers at once with 'decision-<phase>'."""
+    @workflow.run
+    async def run(self, session: dict) -> str:
+        return "decision-" + session["session_id"].split("-")[1]
+
+
+def stage_fakes(tasks, events, requests, prepared=None):
+    """crosssample_step: inspection of two samples, `tasks` comparisons, sessions named after their phase;
+    every submitted request is named after its action and returns its name as the pool path."""
+    async def step(action, args):
+        if action in ("read", "session"):
+            path = args[0]
+            if path == "inspect":
+                return {"samples": [{}, {}]}
+            if path == "compute":
+                return {"tasks": list(range(tasks)), **(prepared or {})}
+            if path.startswith("agent"):
+                return {"session_id": path}
+            if path == "decision-quality":
+                return {}
+            raise AssertionError(path)
+        if action == "accepted":
+            return {"path": args[0], "parent": args[0]}
+        if action == "publish":
+            events.append("publish")
+            return "publication"
+        _, payload, parents = args
+        assert action != "deg"  # single comparisons are never submitted
+        name = "deg-" + str(payload["indices"][0]) if action == "deg-batch" else action + ("-" + payload["phase"] if action == "agent" else "")
+        requests[name] = (payload, parents)
+        events.append(name)
+        return {"id": name, "output": name}
+    return step
+
+
+def overlapping_pool(live, on_first=None):
+    """check_pool that keeps each DEG request waiting for two polls, counting the requests in flight."""
+    polls = {}
+    async def check_pool(pool_root, request_id, output):
+        polls[request_id] = polls.get(request_id, 0) + 1
+        if request_id.startswith("deg-"):
+            if polls[request_id] == 1:
+                live["active"] += 1
+                live["peak"] = max(live["peak"], live["active"])
+                if on_first:
+                    await on_first(request_id)
+            if polls[request_id] < 3:
+                return {"state": "waiting"}
+            if polls[request_id] == 3:
+                live["active"] -= 1
+        return {"state": "ready", "path": request_id}
+    return check_pool
+
+
+SPEC = {"max_in_flight_deg": 3, "max_refinements": 0, "pool_root": "pool"}
+
+
+@pytest.mark.parametrize("change_limit", [False, True])
+def test_workflow_fanout_and_annotation_order(change_limit):
+    events, requests, live, client = [], {}, {"active": 0, "peak": 0}, {}
+    async def raise_the_limit(request_id):
+        if change_limit and request_id == "deg-0":
+            handle = client["client"].get_workflow_handle("cross-sample/test")
+            assert await handle.execute_update(CrosssampleWorkflow.set_deg_limit, 5) == 5
+    async def scenario():
+        activities = fakes(crosssample_step=stage_fakes(80, events, requests),
+                           check_pool=overlapping_pool(live, raise_the_limit))
+        async with temporal([CrosssampleWorkflow, Agent], activities) as client["client"]:
+            handle = await client["client"].start_workflow(CrosssampleWorkflow.run, SPEC, id="cross-sample/test", task_queue=QUEUE)
+            assert await handle.result() == "publication"
+            return await handle.query(CrosssampleWorkflow.stage)
+    assert asyncio.run(scenario()) == "complete"
+    assert live["peak"] == (5 if change_limit else 3) and events.index("assemble") > events.index("deg-72")
+    assert events.index("agent-type") < events.index("agent-quality") < events.index("finalize")
+    assert len(requests["assemble"][1]) == 11  # the computed bundle and ten batches of eight
+    assert requests["finalize"][0]["paths"] == ["assemble", "decision-type", "decision-quality"]
+
+
+@workflow.defn
+class WaitsForOneRequest:
+    @workflow.query
+    def stage(self) -> str:
+        from ecarsi.control.common import stage_with_waits
+        return stage_with_waits(self)
+
+    @workflow.run
+    async def run(self, pool_root: str) -> str:
+        from ecarsi.control.common import await_pool
+        self._stage = "DEG comparisons"
+        return await await_pool({"pool_root": pool_root}, {"id": "r", "output": "result.json"})
+
+
+def test_a_blocked_pool_request_shows_why_it_waits(tmp_path):
+    # #18: the scheduler's infeasible reason reaches the waiting workflow's stage query.
+    from ecarsi.control.coordinator import check_pool
+    from ecarsi.warm_pool.backend import observe
+    from ecarsi.warm_pool.state import submit
+    tmp_path.chmod(0o700); (tmp_path/"requests").mkdir(); save(tmp_path/"config.json", {"runtime": {}})
+    submit(tmp_path, dict(request_id="r", operation_id="compute", args=["-c", "pass"], cpus=1,
+        memory_mb=64, timeout_seconds=30, outputs=["result.json"]))
+    folder, why = tmp_path/"requests/r", "no worker that holds 1 cpus / 64 MB has 60 s left"
+    observe(folder, read(folder/"request.json"), dict(state="queued", infeasible=why))
+    assert check_pool(str(tmp_path), "r", "result.json") == dict(state="waiting", detail="infeasible: " + why)
+    seen, client = [], {}
+    async def blocked_then_ready(pool_root, request_id, output):
+        if not seen:
+            seen.append(None)
+            return check_pool(pool_root, request_id, output)
+        seen.append(await client["client"].get_workflow_handle("wait-test").query(WaitsForOneRequest.stage))
+        return {"state": "ready", "path": "/done"}
+    async def scenario():
+        async with temporal([WaitsForOneRequest], fakes(check_pool=blocked_then_ready)) as client["client"]:
+            handle = await client["client"].start_workflow(WaitsForOneRequest.run, str(tmp_path), id="wait-test", task_queue=QUEUE)
+            assert await handle.result() == "/done"
+            return await handle.query(WaitsForOneRequest.stage)
+    assert asyncio.run(scenario()) == "DEG comparisons"
+    assert seen[1] == "DEG comparisons; waiting: infeasible: " + why
+
+
+def test_a_long_history_continues_as_new_once_the_comparisons_are_in():
+    events, requests = [], {}
+    async def scenario():
+        activities = fakes(crosssample_step=stage_fakes(4, events, requests), check_pool=overlapping_pool({"active": 0, "peak": 0}))
+        async with temporal([CrosssampleWorkflow, Agent], activities) as client:
+            # A history budget of one event: the first run continues as new right after its comparisons and
+            # carries only the DEG window, so the continued run has the normal budget and finishes.
+            return await client.execute_workflow(CrosssampleWorkflow.run, args=[SPEC, {"history_limit": 1}],
+                                                 id="cross-sample/test", task_queue=QUEUE)
+    assert asyncio.run(scenario()) == "publication"
+    second = [i for i, e in enumerate(events) if e == "inspect"][1]
+    assert events.count("inspect") == 2 and "deg-0" in events[:second] and "assemble" not in events[:second]
+    assert events.count("assemble") == 1 and events.count("publish") == 1
+
+
+@pytest.mark.parametrize("cells", [None, 418_322])
+def test_comparisons_are_batched_eight_per_request(cells):
+    events, requests, live = [], {}, {"active": 0, "peak": 0}
+    async def scenario():
+        activities = fakes(crosssample_step=stage_fakes(20, events, requests, {"n_selected": cells} if cells else None),
+                           check_pool=overlapping_pool(live))
+        async with temporal([CrosssampleWorkflow, Agent], activities) as client:
+            return await client.execute_workflow(CrosssampleWorkflow.run, dict(SPEC, max_in_flight_deg=2),
+                                                 id="cross-sample/test", task_queue=QUEUE)
+    assert asyncio.run(scenario()) == "publication"
+    # submitted in any order: Temporal runs the concurrent submit activities in parallel
+    degs = sorted((e for e in events if e.startswith("deg-")), key=lambda d: int(d[4:]))
+    if cells:   # 418k cells: one comparison per request, 2 x 8 requests in flight
+        assert degs == ["deg-" + str(i) for i in range(20)] and live["peak"] == 16
+        return
+    assert degs == ["deg-0", "deg-8", "deg-16"] and live["peak"] == 2
+    assert requests["deg-8"][0]["indices"] == list(range(8, 16)) and requests["deg-16"][0]["indices"] == [16, 17, 18, 19]
+    assert requests["assemble"][0]["paths"] == ["compute", "deg-0", "deg-8", "deg-16"] and len(requests["assemble"][1]) == 4
+

@@ -602,10 +602,8 @@ async def show(spec, stage, unit=None, final=False):
 
 async def degraded(spec, unit, label, exc):
     """Keep a step that failed without failing the run (ecarsi.degraded). In strict mode the activity raises."""
-    if workflow.patched('degraded-v1'):
-        await call(dataset_step, 'degraded', [spec, unit['name'] if unit else None, label, f'{type(exc).__name__}: {exc}'])
-    else:
-        print(f'[degraded] {label}: {exc!r}', flush=True)
+    workflow.deprecate_patch('degraded-v1')
+    await call(dataset_step, 'degraded', [spec, unit['name'] if unit else None, label, f'{type(exc).__name__}: {exc}'])
 
 
 @workflow.defn
@@ -635,25 +633,24 @@ class AnalysisUnitWorkflow:
         self._stage = f'round {number}: cross-sample'
         cross = await execute('cross_sample', progress['input'], number, CrosssampleWorkflow.run, 'cross-sample/')
         await show(spec, f'round{number:02d}/cross-sample', unit)
-        if workflow.patched('pause-after-stage-v1'):
-            await pause_if_asked(spec, unit, 'crosssample')
+        workflow.deprecate_patch('pause-after-stage-v1')
+        await pause_if_asked(spec, unit, 'crosssample')
         self._stage = f'round {number}: zoom-in'
         zoom = await execute('zoom_in', cross, number, ZoominWorkflow.run, 'zoom-in/')
         await show(spec, f'round{number:02d}/zoom-in', unit)
-        if workflow.patched('pause-after-stage-v1'):
-            await pause_if_asked(spec, unit, 'zoomin')
+        await pause_if_asked(spec, unit, 'zoomin')
         progress = await call(dataset_step, 'round', [spec, unit, progress, cross, zoom])
-        if workflow.patched('round-ledger-v1'):
-            # The round's own Sankey and ledger, the way generation 1 published them: a
-            # reader should not have to wait for the release to see where the cells went.
-            try:
-                request = await call(dataset_step, 'round-ledger', [spec, unit, progress])
-                # Bounded: the next round waits on this report, and an infeasible request held it forever (#18).
-                limit = 2 * spec['zoom_in']['merge_budget']['timeout_seconds']
-                result = await asyncio.wait_for(await_pool(spec, request), limit)
-                await call(dataset_step, 'round-ledger-published', [spec, unit, progress, result])
-            except Exception as exc:  # a report is not worth failing a finished round over
-                await degraded(spec, unit, f'round{number:02d} ledger', exc)
+        workflow.deprecate_patch('round-ledger-v1')
+        # The round's own Sankey and ledger, the way generation 1 published them: a
+        # reader should not have to wait for the release to see where the cells went.
+        try:
+            request = await call(dataset_step, 'round-ledger', [spec, unit, progress])
+            # Bounded: the next round waits on this report, and an infeasible request held it forever (#18).
+            limit = 2 * spec['zoom_in']['merge_budget']['timeout_seconds']
+            result = await asyncio.wait_for(await_pool(spec, request), limit)
+            await call(dataset_step, 'round-ledger-published', [spec, unit, progress, result])
+        except Exception as exc:  # a report is not worth failing a finished round over
+            await degraded(spec, unit, f'round{number:02d} ledger', exc)
         await show(spec, f'round{number:02d}/decided', unit)
         if progress.get('paused'):
             # The round is complete and published, with its ledger; only the next one is withheld.
@@ -661,12 +658,12 @@ class AnalysisUnitWorkflow:
             # contract `resume-dataset` already serves, and generation 1's exit code 3.
             raise ApplicationError(progress['paused'], non_retryable=True)
         if 'publication' in progress:
-            if workflow.patched('analysis-unit-release-v1'):
-                self._stage = 'publishing final results'
-                request = await call(dataset_step, 'release', [spec, progress['publication']])
-                result = await await_pool(spec, request)
-                await call(dataset_step, 'released', [progress['publication'], result])
-                await show(spec, 'release', unit)
+            workflow.deprecate_patch('analysis-unit-release-v1')
+            self._stage = 'publishing final results'
+            request = await call(dataset_step, 'release', [spec, progress['publication']])
+            result = await await_pool(spec, request)
+            await call(dataset_step, 'released', [progress['publication'], result])
+            await show(spec, 'release', unit)
             self._stage = 'complete'
             return progress['publication']
         # Bound each unit's Temporal history; continued runs preserve the child result contract.
@@ -703,7 +700,8 @@ class DatasetWorkflow:
                 try:
                     results.append(await child)
                 except Exception as exc:
-                    failures.append(dict(unit=name, error=str(exc)))
+                    # A child's failure arrives as 'Child Workflow execution failed'; record its cause.
+                    failures.append(dict(unit=name, error=str(getattr(exc, 'cause', None) or exc)))
         output = await call(dataset_step, 'publish', [spec, results, failures])
         # The finished page; a complete dataset's work tree is archived with it.
         await show(spec, 'published', final=not failures)

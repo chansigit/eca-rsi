@@ -46,20 +46,6 @@ def submit_prepare(spec: dict) -> str:
     return request_id
 
 
-@activity.defn
-def submit_plan(spec: dict, prepared_path: str) -> str:
-    from ..agent import submit
-    from ..files import read
-    prepared = read(prepared_path)
-    if prepared is None or Path(prepared["input_root"]).resolve() != Path(spec["input_root"]).resolve():
-        raise ValueError("prepared input identity does not match this dataset")
-    request_id = spec["run_id"] + ".plan"
-    submit(spec["bridge_root"], dict(request_id=request_id, operation_id="organize.plan",
-                                   trace=task_trace(spec, "organize.plan"),
-                                   profiles=prepared["profiles"], cwd=spec["input_root"]))
-    return request_id
-
-
 def validate_sample_map(sample_map):
     """The owner's explicit sample map (spec `organize.sample_map`); build_mapping checks it against the data."""
     from ..policies import check_spec_keys
@@ -240,25 +226,12 @@ class OrganizeWorkflow:
         prepare_id = await call(submit_prepare, spec)
         prepared_path = await await_pool(prepare_id, "prepared.json")
         self._stage = "planning"
-        if workflow.patched("organize-worker-plan-v1"):
-            agent_spec = await call(organize_agent_step, "spec", [spec, prepared_path])
-            result = await workflow.execute_child_workflow(AgentWorkflow.run, agent_spec,
-                id=workflow.info().workflow_id + "/plan")
-            accepted = await call(organize_agent_step, "accept", [spec, result, prepared_path])
-            execute_args = [spec, prepared_path, accepted["path"], accepted["request_id"]]
-        else:
-            # Existing histories retain the original planning activities on replay.
-            plan_id = await call(submit_plan, spec, prepared_path)
-            while True:
-                result = await call(check_bridge, spec["bridge_root"], plan_id)
-                if result["state"] == "ready":
-                    reply_path = result["path"]
-                    break
-                if result["state"] != "waiting":
-                    raise ApplicationError(f"{plan_id}: {result['state']}: {result.get('detail')}",
-                                           non_retryable=True)
-                await workflow.sleep(5)
-            execute_args = [spec, prepared_path, reply_path]
+        workflow.deprecate_patch("organize-worker-plan-v1")
+        agent_spec = await call(organize_agent_step, "spec", [spec, prepared_path])
+        result = await workflow.execute_child_workflow(AgentWorkflow.run, agent_spec,
+            id=workflow.info().workflow_id + "/plan")
+        accepted = await call(organize_agent_step, "accept", [spec, result, prepared_path])
+        execute_args = [spec, prepared_path, accepted["path"], accepted["request_id"]]
         self._stage = "executing"
         execute_id = await call(submit_execute, *execute_args)
         completion = await await_pool(execute_id, "completion.json")
@@ -266,7 +239,7 @@ class OrganizeWorkflow:
         return await call(accept_organize, completion, spec["output_root"])
 
 
-ACTIVITIES = [submit_prepare, submit_plan, submit_execute, check_pool, check_bridge, accept_organize, organize_agent_step]
+ACTIVITIES = [submit_prepare, submit_execute, check_pool, check_bridge, accept_organize, organize_agent_step]
 
 
 @activity.defn
@@ -313,8 +286,11 @@ def agent_step(action: str, args: list):
         fresh["tools"] = [dict(tool, inputs=[dict(item, **reference(item["path"])) if isinstance(item, dict)
                                and "sha256" in item and Path(str(item.get("path"))).is_file() else item
                                for item in tool.get("inputs", [])]) for tool in spec.get("tools", [])]
-        intent = immutable(root / "restart.json", dict(reason=reason, superseded=spec["session_id"], spec=fresh))
-        return verified(intent)["spec"]
+        record = dict(reason=reason, superseded=spec["session_id"], spec=fresh)
+        existing = read(root / "restart.json")
+        if existing is not None and dict(existing, reason=reason) == record:
+            return existing["spec"]  # a retry or a resume: the first death's words stand, as recorded then
+        return verified(immutable(root / "restart.json", record))["spec"]
     if action == "tool":
         from jsonschema import ValidationError
         from ..agent.tool_errors import reject_arguments
@@ -348,13 +324,13 @@ class AgentWorkflow:
                 start_to_close_timeout=SHORT, retry_policy=activity_retry(fn))
 
         session = await call(agent_step, "create", [spec])
-        if workflow.patched("agent-reuse-completed-submission-v1"):
-            completed = await call(agent_step, "cached_completion", [session])
-            if completed:
-                self._stage = "complete"
-                return completed
+        workflow.deprecate_patch("agent-reuse-completed-submission-v1")
+        completed = await call(agent_step, "cached_completion", [session])
+        if completed:
+            self._stage = "complete"
+            return completed
         context, parents, number, resets = None, [], 0, 0
-        resettable = workflow.patched("agent-context-reset-v1")
+        workflow.deprecate_patch("agent-context-reset-v1")
         for turn in range(spec["max_turns"]):
             self._stage = "model"
             request = await call(agent_step, "model", [session, number, context, parents])
@@ -363,13 +339,13 @@ class AgentWorkflow:
                 if result["state"] == "ready":
                     break
                 if result["state"] != "waiting":
-                    if (resettable and context is not None and resets < MAX_CONTEXT_RESETS
+                    if (context is not None and resets < MAX_CONTEXT_RESETS
                             and result.get("detail") in RESETTABLE):
                         request = None
                         break
                     raise ApplicationError(f"{request}: {result['state']}", non_retryable=True)
-                await workflow.sleep(result.get('poll_seconds', 2)
-                    if workflow.patched('agent-queued-poll-backoff-v1') else 2)
+                workflow.deprecate_patch('agent-queued-poll-backoff-v1')
+                await workflow.sleep(result.get('poll_seconds', 2))
             if request is None:
                 # The provider kept rejecting the grown transcript: the same judgement continues
                 # in a fresh conversation, with the host state carried over.
@@ -383,12 +359,12 @@ class AgentWorkflow:
             if decision["kind"] == "final":
                 self._stage = "complete"
                 return await call(agent_step, "finish", [session, reply])
-            wider_batch = workflow.patched('agent-read-batch-window-v1')
-            if decision["kind"] != "tools" or not 1 <= decision["calls"] <= (64 if wider_batch else 16):
+            workflow.deprecate_patch('agent-read-batch-window-v1')
+            if decision["kind"] != "tools" or not 1 <= decision["calls"] <= 64:
                 raise ApplicationError("Invalid agent tool boundary", non_retryable=True)
             self._stage = "tools"
             accepted, parents = [], []
-            parallel = await call(agent_step, 'parallel', [session, reply]) if wider_batch else False
+            parallel = await call(agent_step, 'parallel', [session, reply])
 
             async def run_tool(index, previous):
                 item = await call(agent_step, "tool", [session, reply, index, previous])
@@ -429,15 +405,26 @@ class AgentWorkflow:
         raise ApplicationError("Agent model-turn budget exhausted", non_retryable=True)
 
 
+def failure_reason(exc):
+    """The innermost failure message: a dead child reaches its parent as 'Child Workflow execution failed'."""
+    while getattr(exc, "cause", None) is not None:
+        exc = exc.cause
+    return str(exc)
+
+
 async def run_agent(spec, identity, call):
     """One session's AgentWorkflow child. A session that dies (turn budget, provider, host error)
     runs once more from the same evidence as a fresh session with a new id and directory before
-    the failure reaches the stage; resume treats the dead session's requests as superseded."""
+    the failure reaches the stage; resume treats the dead session's requests as superseded. Both
+    the restart record and the stage (a skipped sample or lineage) get the session's own reason."""
     try:
         return await workflow.execute_child_workflow(AgentWorkflow.run, spec, id=identity)
     except Exception as exc:
-        fresh = await call(agent_step, "restart", [spec, str(exc)])
+        fresh = await call(agent_step, "restart", [spec, failure_reason(exc)])
+    try:
         return await workflow.execute_child_workflow(AgentWorkflow.run, fresh, id=identity + "/restart")
+    except Exception as exc:
+        raise ApplicationError(failure_reason(exc), non_retryable=True) from exc
 
 
 def validate_spec(spec):

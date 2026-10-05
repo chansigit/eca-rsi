@@ -76,45 +76,38 @@ def test_archive_round_trips_and_keeps_an_existing_one(tmp_path):
     assert archive.pack(src, out)["state"] == "exists" and not list(out.parent.glob("*.partial"))
 
 
-def unit_run(monkeypatch, spec, fail_display=False):
-    import ecarsi.control.dataset as module
-    actions, awaited = [], []
-    async def call(fn, action, args):
-        if action == "display":
-            actions.append(("display", args[1], args[2]))
-            if fail_display:
-                raise RuntimeError("pool unreachable")
-            return {"id": "sync-" + args[1], "output": "synced.json"}
-        actions.append(action)
-        return {"round": {"publication": "unit.json"}, "release": {"id": "release", "output": "r.json"},
-                "round-ledger": {"id": "ledger", "output": "l.json"}, "stage": {"run_id": "s"}}.get(action)
-    async def pool(spec, request):
-        awaited.append(request["id"])
-        return "result.json"
-    async def child(*args, **kwargs):
-        return "stage.json"
-    monkeypatch.setattr(module, "call", call)
-    monkeypatch.setattr(module, "await_pool", pool)
-    monkeypatch.setattr(module.workflow, "execute_child_workflow", child)
-    monkeypatch.setattr(module.workflow, "patched", lambda name: True)
-    out = asyncio.run(module.AnalysisUnitWorkflow().run(spec, {"name": "u"}, None))
-    return out, actions, awaited
+def unit_run(spec, fail_display=False):
+    """One analysis unit on the Temporal test server; returns its result, the display syncs it submitted
+    and the Pool requests it waited for."""
+    from .test_dataset_workflow import run_unit, unit_step
+    from tests.temporal_env import fakes
+    actions, syncs, awaited = [], [], []
+    def display_(args):
+        syncs.append((args[1], args[2]))
+        if fail_display:
+            raise RuntimeError("pool unreachable")
+        return {"id": "sync-" + args[1], "output": "synced.json"}
+    def pool(pool_root, request_id, output):
+        awaited.append(request_id)
+        return {"state": "ready", "path": "result.json"}
+    activities = fakes(dataset_step=unit_step(actions, {"display": display_}), check_pool=pool)
+    out = asyncio.run(run_unit(activities, spec, {"name": "u"}, None))
+    return out, syncs, awaited
 
 
-def test_every_stage_of_a_unit_syncs_its_display_zone_without_waiting_for_it(monkeypatch):
-    spec = {"storage": STORAGE, "zoom_in": {"merge_budget": {"timeout_seconds": 60}}}
-    out, actions, awaited = unit_run(monkeypatch, spec)
-    syncs = [a[1] for a in actions if a[0] == "display"]
-    assert out == "unit.json" and syncs == ["u/per-sample", "u/round01/cross-sample", "u/round01/zoom-in",
-                                             "u/round01/decided", "u/release"]
-    assert not any(r.startswith("sync-") for r in awaited)  # submitted, never awaited
+def test_every_stage_of_a_unit_syncs_its_display_zone_without_waiting_for_it():
+    spec = {"storage": STORAGE, "pool_root": "pool", "zoom_in": {"merge_budget": {"timeout_seconds": 60}}}
+    out, syncs, awaited = unit_run(spec)
+    assert out == "unit.json" and [label for label, _ in syncs] == ["u/per-sample", "u/round01/cross-sample",
+                                                                   "u/round01/zoom-in", "u/round01/decided", "u/release"]
+    assert not any(final for _, final in syncs) and not any(r.startswith("sync-") for r in awaited)  # never awaited
 
 
-def test_a_failing_sync_never_fails_the_run_and_no_storage_means_no_sync(monkeypatch):
-    spec = {"storage": STORAGE, "zoom_in": {"merge_budget": {"timeout_seconds": 60}}}
-    assert unit_run(monkeypatch, spec, fail_display=True)[0] == "unit.json"
-    out, actions, _ = unit_run(monkeypatch, {"zoom_in": spec["zoom_in"]})
-    assert out == "unit.json" and not any(isinstance(a, tuple) for a in actions)
+def test_a_failing_sync_never_fails_the_run_and_no_storage_means_no_sync():
+    spec = {"storage": STORAGE, "pool_root": "pool", "zoom_in": {"merge_budget": {"timeout_seconds": 60}}}
+    assert unit_run(spec, fail_display=True)[0] == "unit.json"
+    out, syncs, _ = unit_run({k: v for k, v in spec.items() if k != "storage"})
+    assert out == "unit.json" and not syncs
 
 
 def test_storage_is_optional_but_must_name_two_absolute_roots():
@@ -133,18 +126,21 @@ def test_a_display_sync_rides_the_tool_priority_class():
     assert request_class({"operation_id": "dataset.release", "request_id": "run.release-0123"}) == "work"
 
 
-def test_the_display_activity_writes_its_packet_and_submits_a_tool_class_request(tmp_path, monkeypatch):
+def test_the_display_activity_writes_its_packet_and_submits_a_tool_class_request(tmp_path):
     """The activity itself, not a stand-in: its first call in a run must create display-sync/ (it did not, 2026-10-02)."""
     import ecarsi.control.dataset as module
-    import ecarsi.warm_pool.state as state
-    submitted = []
-    monkeypatch.setattr(state, "submit", lambda root, request: submitted.append((root, request)))
+    from ecarsi.files import read, save
+    pool = tmp_path / "pool"
+    (pool / "requests").mkdir(parents=True)
+    pool.chmod(0o700)
+    save(pool / "config.json", {"runtime": {}})
     out = tmp_path / "runs" / "11_Shietal"
     out.mkdir(parents=True)
-    spec = dict(storage=STORAGE, run_id="t1", dataset_id="T", output_root=str(out), pool_root=str(tmp_path / "pool"),
+    spec = dict(storage=STORAGE, run_id="t1", dataset_id="T", output_root=str(out), pool_root=str(pool),
                 input_root="/oak/sc/chondroatlas/eca-pp/11_Shietal/standardize")
     result = module.dataset_step("display", [spec, "organize", False])
-    (root, request), = submitted
+    folder, = (pool / "requests").iterdir()
+    request = read(folder / "request.json")["spec"]
     assert result == {"id": request["request_id"], "output": "synced.json"} and ".display-" in request["request_id"]
     packet = json.loads(Path(request["inputs"][0]["path"]).read_text())
     assert packet["dest"] == "/oak/eca/display/chondroatlas/11_Shietal/t1" and packet["root"] == str(out) and not packet["final"]

@@ -1,10 +1,12 @@
 import asyncio
-from types import SimpleNamespace
+
 import pytest
-from temporalio.exceptions import ApplicationError
+from temporalio.client import WorkflowFailureError
 
 from ecarsi.control.zoomin import ZoominWorkflow, zoomin_step
 from ecarsi.files import save, read
+from tests.fake_agent import Agent
+from tests.temporal_env import QUEUE, fakes, temporal
 
 
 def test_gpu_grant_is_selected_for_lineage_compute(tmp_path):
@@ -23,90 +25,106 @@ def test_gpu_grant_is_selected_for_lineage_compute(tmp_path):
     assert stored['trace']['depends_on']==['part','markers']
 
 
-@pytest.mark.parametrize('fail_first', [False, True])
-def test_model_wait_releases_lineage_compute_admission(monkeypatch, fail_first):
-    import ecarsi.control.zoomin as module
-    async def scenario():
-        second_compute=asyncio.Event();requests={};prepared_count=0;events=[]
-        async def call(fn,action,args):
-            if action in ('read','session'):
-                path=args[0]
-                if path=='lineage-decision':return {'evidence':{'path':'evidence'}}
-                if path=='plan-decision':return {'proposal':{'lineages':[{'zoom':True},{'zoom':True}]}}
-                if path.startswith('compute'):return {'tasks':[]}
-                if path.startswith('agent'):return {'session_id':path}
-            if action=='accepted':return {'path':args[0],'parent':args[0]}
-            if action=='publish':return 'publication'
-            payload=args[1]
-            identifier=action+'-'+str(len(requests));requests[identifier]=(action,payload)
-            return {'id':identifier,'output':identifier}
-        async def await_pool(spec,request):
-            action,payload=requests[request['id']]
-            events.append(action)
-            if action=='compute':
-                nonlocal prepared_count
-                prepared_count+=1
-                if fail_first and prepared_count==1:raise RuntimeError('one lineage failed')
-                if prepared_count==2:second_compute.set()
-            return request['id']
-        async def child(fn,session,**kw):
-            action,payload=requests[session['session_id']]
-            if payload['kind']=='plan':return 'plan-decision'
-            await asyncio.wait_for(second_compute.wait(),timeout=1)
-            return 'lineage-decision'
-        monkeypatch.setattr(module,'call',call);monkeypatch.setattr(module,'await_pool',await_pool)
-        monkeypatch.setattr(module.workflow,'execute_child_workflow',child)
-        monkeypatch.setattr(module.workflow,'info',lambda:SimpleNamespace(workflow_id='zoom-test',get_current_history_length=lambda:0))
-        monkeypatch.setattr(module.workflow,'patched',lambda name:True)
-        if fail_first:
-            with pytest.raises(ApplicationError,match='completed lineages retained'):
-                await ZoominWorkflow().run(dict(max_in_flight_lineages=1,max_in_flight_deg=2))
-            assert second_compute.is_set() and events.count('apply')==1 and 'merge' not in events
+def zoom_fakes(lines, requests, events, fail=lambda action, n: False, on_ready=lambda action, n: None):
+    """zoomin_step and check_pool for a plan of `lines`: each request is named after its action (a session after
+    its kind and, for a lineage, its index), and the pool records (action, payload) when it hands the result."""
+    async def step(action, args):
+        if action in ("read", "session"):
+            path = args[0]
+            if path == "lineage-decision":
+                return {"evidence": {"path": "evidence"}}
+            if path == "plan-decision":
+                return {"proposal": {"lineages": lines}}
+            if path.startswith("compute"):
+                return {"tasks": []}
+            if path.startswith("agent"):
+                return {"session_id": path}
+            raise AssertionError(path)
+        if action == "accepted":
+            return {"path": args[0], "parent": args[0]}
+        if action == "publish":
+            return "publication"
+        payload = args[1]
+        n = len(requests)
+        if action == "agent":
+            lineage = payload["kind"] == "lineage" and requests[payload["paths"][0]][1]["lineage"]
+            identifier = f"agent-{payload['kind']}-{lineage}-{n}"
         else:
-            result=await ZoominWorkflow().run(dict(max_in_flight_lineages=1,max_in_flight_deg=2))
-            assert result=='publication' and events.count('compute')==2 and events[-1]=='merge'
-    asyncio.run(scenario())
+            identifier = f"{action}-{n}"
+        if action == "subset":
+            payload = dict(payload, lineage=payload["index"])
+        elif action in ("compute", "assemble"):
+            payload = dict(payload, lineage=requests[payload["paths"][0]][1].get("lineage"))
+        requests[identifier] = (action, payload)
+        return {"id": identifier, "output": identifier}
+    counts = {}
+    async def check_pool(pool_root, request_id, output):
+        action, payload = requests[request_id]
+        counts[action] = counts.get(action, 0) + 1
+        if fail(action, counts[action]):
+            return {"state": "failed", "detail": "one lineage failed"}
+        events.append((action, payload))
+        on_ready(action, counts[action])
+        return {"state": "ready", "path": request_id}
+    return fakes(zoomin_step=step, check_pool=check_pool)
 
 
-def test_lineage_window_continues_as_new_and_the_continued_run_finishes_the_rest(monkeypatch):
-    import ecarsi.control.zoomin as module
-    class Continued(BaseException):
-        def __init__(self, args): self.carried = args
+def sessions(answer):
+    """agent_outcome: the plan session decides at once; a lineage session gets answer(session, workflow id)."""
+    async def agent_outcome(session, workflow_id):
+        if session["session_id"].startswith("agent-plan"):
+            return {"result": "plan-decision"}
+        return answer(session, workflow_id)
+    return fakes(agent_outcome=agent_outcome)
+
+
+def run_zoom(activities, progress=None, spec=None):
     async def scenario():
-        requests={};events=[];history={'n':0}
-        async def call(fn,action,args):
-            if action in ('read','session'):
-                path=args[0]
-                if path=='lineage-decision':return {'evidence':{'path':'evidence'}}
-                if path=='plan-decision':return {'proposal':{'lineages':[{'zoom':True,'name':n,'n_cells':1} for n in 'abc']}}
-                if path.startswith('compute'):return {'tasks':[]}
-                if path.startswith('agent'):return {'session_id':path}
-            if action=='accepted':return {'path':args[0],'parent':args[0]}
-            if action=='publish':return 'publication'
-            payload=args[1];identifier=action+'-'+str(len(requests));requests[identifier]=(action,payload)
-            if action=='merge':events.append(('merge',len(payload['paths'])))
-            return {'id':identifier,'output':identifier}
-        async def await_pool(spec,request):
-            action,_=requests[request['id']];events.append(action)
-            if action=='apply':history['n']+=10000  # a finished lineage pushes the history past the limit
-            return request['id']
-        async def child(fn,session,**kw):
-            action,payload=requests[session['session_id']]
-            return 'plan-decision' if payload['kind']=='plan' else 'lineage-decision'
-        def continue_as_new(args):raise Continued(args)
-        monkeypatch.setattr(module,'call',call);monkeypatch.setattr(module,'await_pool',await_pool)
-        monkeypatch.setattr(module.workflow,'execute_child_workflow',child)
-        monkeypatch.setattr(module.workflow,'info',lambda:SimpleNamespace(workflow_id='zoom-test',get_current_history_length=lambda:history['n']))
-        monkeypatch.setattr(module.workflow,'wait',asyncio.wait)
-        monkeypatch.setattr(module.workflow,'patched',lambda name:True)
-        monkeypatch.setattr(module.workflow,'continue_as_new',continue_as_new)
-        spec=dict(max_in_flight_lineages=1,max_in_flight_deg=2)  # a window of two lineages
-        with pytest.raises(Continued) as first:
-            await ZoominWorkflow().run(spec)
-        carried=first.value.carried[1]
-        assert set(carried['lineages'])=={'0','1'} and carried['deg_limit']==2  # the window drained; the third never started
-        assert events.count('apply')==2 and 'merge' not in [e[0] if isinstance(e,tuple) else e for e in events]
-        history['n']=0
-        assert await ZoominWorkflow().run(spec,carried)=='publication'
-        assert events.count('apply')==3 and ('merge',5) in events  # prepared, plan and all three lineages, in order
-    asyncio.run(scenario())
+        async with temporal([ZoominWorkflow, Agent], activities) as client:
+            return await client.execute_workflow(ZoominWorkflow.run, args=[spec or SPEC] + ([progress] if progress else []),
+                                                 id="zoom-test", task_queue=QUEUE)
+    return asyncio.run(scenario())
+
+
+SPEC = dict(max_in_flight_lineages=1, max_in_flight_deg=2, pool_root="pool")
+
+
+@pytest.mark.parametrize("fail_first", [False, True])
+def test_model_wait_releases_lineage_compute_admission(fail_first):
+    # One compute slot: a lineage's session waits until the second lineage has computed, which only
+    # happens if the first lineage gave its compute admission back before its model wait.
+    requests, events, computed = {}, [], {"n": 0}
+    def counted(action, n):
+        if action == "compute":
+            computed["n"] = n
+    def answer(session, workflow_id):
+        return {"result": "lineage-decision"} if computed["n"] >= 2 else {"wait": True}
+    activities = zoom_fakes([{"zoom": True}, {"zoom": True}], requests, events,
+                            fail=lambda action, n: fail_first and action == "compute" and n == 1, on_ready=counted)
+    actions = lambda: [a for a, _ in events]
+    if fail_first:
+        with pytest.raises(WorkflowFailureError) as failed:
+            run_zoom(activities + sessions(answer))
+        assert "completed lineages retained" in str(failed.value.cause)
+        assert computed["n"] == 2 and actions().count("apply") == 1 and "merge" not in actions()
+    else:
+        assert run_zoom(activities + sessions(answer)) == "publication"
+        assert actions().count("compute") == 2 and actions()[-1] == "merge"
+
+
+def test_lineage_window_continues_as_new_and_the_continued_run_finishes_the_rest():
+    requests, events = {}, []
+    lines = [{"zoom": True, "name": n, "n_cells": 1} for n in "abc"]
+    activities = zoom_fakes(lines, requests, events) + sessions(lambda session, workflow_id: {"result": "lineage-decision"})
+    # A window of two lineages (one compute slot) and a history budget the first window outgrows: the
+    # first run starts lineages 0 and 1, never 2, and continues as new once both are applied; the continued
+    # run has the normal budget (the limit is never carried) and finishes lineage 2. Measured 2026-10-05: the
+    # first window check sees fewer than 60 events, one finished lineage far more than 200.
+    assert run_zoom(activities, progress={"history_limit": 100}) == "publication"
+    actions = [a for a, _ in events]
+    second = [i for i, a in enumerate(actions) if a == "prepare"][1]
+    first_run = [p["lineage"] for a, p in events[:second] if a == "subset"]
+    continued = [p["lineage"] for a, p in events[second:] if a == "subset"]
+    assert sorted(first_run) == [0, 1] and continued == [2] and actions.count("apply") == 3
+    assert "merge" not in actions[:second] and len(events[-1][1]["paths"]) == 5  # prepared, plan and all three lineages
+

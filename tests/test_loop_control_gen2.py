@@ -3,6 +3,7 @@ immutable workflow spec, so loop_control.json is the one thing allowed to move i
 import json
 from pathlib import Path
 
+import pytest
 
 from ecarsi import round_policy
 from ecarsi.ui import index
@@ -103,7 +104,21 @@ def test_pause_after_stage_stops_between_stages(tmp_path):
     assert reason.startswith('PAUSED: loop_control stopped the unit after crosssample')
     assert 'clear pause_after_stage' in reason, 'the way out is in the message'
 
-    source = (Path(__file__).parent.parent / 'ecarsi' / 'control' / 'dataset.py').read_text()
-    assert source.count("await pause_if_asked(spec, unit, ") == 2      # after each stage, both rounds
-    assert "workflow.patched('pause-after-stage-v1')" in source        # falsy for histories without it
-    assert 'raise ApplicationError(reason, non_retryable=True)' in source
+    # The unit itself, on the Temporal test server: it stops after the named stage, before the next starts,
+    # with a final (non-retryable) failure that carries the reason.
+    import asyncio
+    from temporalio.client import WorkflowFailureError
+    from tests.temporal_env import fakes
+    from tests.test_dataset_workflow import BUDGET, run_unit, unit_step
+    for stage, before in (('crosssample', 'zoom_in'), ('zoomin', 'round')):
+        (unit_root / 'loop_control.json').write_text(json.dumps({'pause_after_stage': stage}))
+        actions, stages = [], []
+        def stage_(args):
+            stages.append(args[2])
+            return {'run_id': args[2]}
+        answers = {'stage': stage_, 'pause-after-stage': lambda args: dataset_step('pause-after-stage', args)}
+        activities = fakes(dataset_step=unit_step(actions, answers), check_pool=lambda *args: {'state': 'ready', 'path': args[1]})
+        with pytest.raises(WorkflowFailureError) as failure:
+            asyncio.run(run_unit(activities, {**BUDGET, **spec}, unit, None))
+        assert failure.value.cause.message.startswith('PAUSED: loop_control stopped the unit after ' + stage)
+        assert failure.value.cause.non_retryable and before not in stages + actions

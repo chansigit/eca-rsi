@@ -153,14 +153,15 @@ class ZoominWorkflow:
     async def run(self,spec,progress=None):
         from .coordinator import run_agent
         progress=progress or {}  # from continue_as_new: finished lineages and the DEG window
+        history_limit=progress.get('history_limit',HISTORY_LIMIT)  # a caller (a test) may lower it; never carried on
         self._deg_limit=progress.get('deg_limit') or getattr(self,'_deg_limit',spec['max_in_flight_deg'])
         async def run(action,paths,parents,**details):
             request=await call(zoomin_step,action,[spec,dict(paths=paths,**details),parents])
             return await await_pool(spec,request),request['id']
         async def judge(kind,evidence,parent):
             path,_=await run('agent',[evidence],[parent],kind=kind)
-            policy='session' if workflow.patched('agent-session-policy-v1') else 'read'
-            session=await call(zoomin_step,policy,[path])
+            workflow.deprecate_patch('agent-session-policy-v1')
+            session=await call(zoomin_step,'session',[path])
             result=await run_agent(session,workflow.info().workflow_id+'/'+session['session_id'],call)
             accepted=await call(zoomin_step,'accepted',[result])
             return accepted['path'],accepted['parent']
@@ -183,12 +184,9 @@ class ZoominWorkflow:
                     computed,compute_parent=await run('compute',[part,markers],[part_parent,marker_parent])
                     bundle=await call(zoomin_step,'read',[computed])
                     n=len(bundle['tasks'])
-                    if workflow.patched('deg-batch-v1'):
-                        cells=(bundle.get('n_input') or 0) if workflow.patched('deg-batch-cells-v1') else 0
-                        batches,factor=deg_batches(n,cells)
-                        start=lambda k:run('deg-batch',[computed],[compute_parent],indices=batches[k])
-                    else:
-                        batches,factor=list(range(n)),1;start=lambda k:run('deg',[computed],[compute_parent],index=k)
+                    workflow.deprecate_patch('deg-batch-v1');workflow.deprecate_patch('deg-batch-cells-v1')
+                    batches,factor=deg_batches(n,bundle.get('n_input') or 0)
+                    start=lambda k:run('deg-batch',[computed],[compute_parent],indices=batches[k])
                     ordered=await run_degs(len(batches),start,lambda:self._deg_limit*factor)
                     evidence,evidence_parent=await run('assemble',[computed]+[v[0] for v in ordered],[compute_parent]+[v[1] for v in ordered])
                 # Free numerical admission before the model session, across every lineage.
@@ -208,7 +206,7 @@ class ZoominWorkflow:
                 window=2*spec['max_in_flight_lineages']
                 running,failures={},[]
                 while remaining or running:
-                    full=workflow.info().get_current_history_length()>HISTORY_LIMIT
+                    full=workflow.info().get_current_history_length()>history_limit
                     while remaining and len(running)<window and not full:
                         index=remaining.pop(0)
                         running[asyncio.create_task(lineage(index))]=index
@@ -227,16 +225,9 @@ class ZoominWorkflow:
                     raise ApplicationError(f'{len(failures)} lineages failed; completed lineages retained: {failures[0]}',
                                            non_retryable=True)
                 return [done[i] for i in chosen]
-            if workflow.patched('zoomin-continue-as-new-v1'):
-                results=await windowed()
-            elif workflow.patched('zoomin-preserve-independent-lineages-v1'):
-                results=await asyncio.gather(*[lineage(i) for i in chosen],return_exceptions=True)
-                failures=[r for r in results if isinstance(r,BaseException)]
-                if failures:
-                    raise ApplicationError(f'{len(failures)} lineages failed; completed lineages retained: {failures[0]}',
-                                           non_retryable=True)
-            else:
-                results=await asyncio.gather(*[lineage(i) for i in chosen])
+            workflow.deprecate_patch('zoomin-continue-as-new-v1')
+            workflow.deprecate_patch('zoomin-preserve-independent-lineages-v1')
+            results=await windowed()
             skipped=[r['skipped'] for r in results if isinstance(r,dict)]
             results=[r for r in results if not isinstance(r,dict)]
             lost=sum(s['n_cells'] for s in skipped)
