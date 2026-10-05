@@ -9,6 +9,7 @@ import socket
 import subprocess
 import time
 
+from ..contracts import check
 from ..files import digest, file_digest, lock, read, save
 from ..warm_pool.state import submit, status
 
@@ -214,7 +215,7 @@ def _reconcile_pool(root, folder, config, events):
     response = None
     if current["state"] == "succeeded":
         ref = next(o for o in current["receipt"]["outputs"] if Path(o["path"]).name == "result.json")
-        response = verified({k: ref[k] for k in ("path", "sha256")})
+        response = check("turn", verified({k: ref[k] for k in ("path", "sha256")}))
         outcome = response["outcome"]
         elapsed = response.get("elapsed_seconds", elapsed)
     elif current["receipt"]:
@@ -248,7 +249,7 @@ def _reconcile_service(root, folder, config, events, state, attempt):
     elapsed = time.time() - started["started_at"] if started else None
     outcome = None
     if response is not None:
-        outcome, elapsed = response["outcome"], response.get("elapsed_seconds", elapsed)
+        outcome, elapsed = check("turn", response)["outcome"], response.get("elapsed_seconds", elapsed)
     elif started and elapsed > settings_timeout(attempt) + 30:
         outcome = "timeout"
     elif stale:
@@ -601,9 +602,9 @@ async def perform(plan, folder, *, setup=None):
         # This turn cannot execute tools. A free-text conclusion is not a
         # submitted scientific result; bounded model fallback can safely retry.
         outcome, error = 'incomplete_submission', 'Required completion tool was not called'
-    save(folder / "result.json", dict(outcome=outcome, response=response, error=error, error_detail=detail, worker=worker,
-                                     elapsed_seconds=time.time()-started, model=plan["model"],
-                                     provider_response=read(folder / 'provider-response.json')))
+    save(folder / "result.json", check("turn", dict(outcome=outcome, response=response, error=error, error_detail=detail,
+                                     worker=worker, elapsed_seconds=time.time()-started, model=plan["model"],
+                                     provider_response=read(folder / 'provider-response.json'))))
 
 
 if __name__ == "__main__":

@@ -67,7 +67,7 @@ def test_recovery_ignores_only_terminal_model_attempts_with_an_accepted_replacem
     turn = session.submit_turn(ref, 0)
     bridge.serve(root, once=True)
     first = bridge.status(root, turn)['attempts'][0]['pool_request_id']
-    completed_tool(spec, dict(request_id=first), dict(outcome='timeout', elapsed_seconds=5))
+    completed_tool(spec, dict(request_id=first), dict(outcome='timeout', elapsed_seconds=5, worker={}))
     bridge.serve(root, once=True)
     second = bridge.status(root, turn)['attempts'][-1]['pool_request_id']
     assert second != first
@@ -105,7 +105,7 @@ def test_audited_retry_survives_dispatch_restart_and_preserves_failed_attempt(tm
     bridge.serve(root, once=True)
     attempt = bridge.status(root, request_id)['attempts'][0]
     completed_tool(spec, dict(request_id=attempt['pool_request_id']),
-                   dict(outcome=outcome, elapsed_seconds=5))
+                   dict(outcome=outcome, elapsed_seconds=5, worker={}))
     bridge.serve(root, once=True)
     folder = root / 'requests' / request_id
     failure = read(folder / 'result.json')

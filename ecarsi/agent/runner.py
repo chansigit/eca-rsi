@@ -18,6 +18,7 @@ import sys
 import time
 from pathlib import Path
 
+from ..contracts import check
 from ..files import digest, read, save
 from .dispatch import configure, model_key, perform, policy
 
@@ -87,10 +88,10 @@ async def run_one(marker, item):
 
 def unfinished(turn_dir, item, outcome, exc=None):
     """result.json for a turn perform() did not finish; the bridge reads only this file."""
-    save(turn_dir / "result.json", dict(outcome=outcome, response=None, error=exc and type(exc).__name__,
+    save(turn_dir / "result.json", check("turn", dict(outcome=outcome, response=None, error=exc and type(exc).__name__,
                                          error_detail=exc and str(exc)[:2000],
                                          worker=dict(host=os.uname().nodename.split(".")[0], pid=os.getpid()),
-                                         elapsed_seconds=None, model=item.get("model"), provider_response=None))
+                                         elapsed_seconds=None, model=item.get("model"), provider_response=None)))
 
 
 def supervise(root, interval=5):

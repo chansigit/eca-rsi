@@ -10,6 +10,8 @@ readers accept both, then make the writer stamp it.
 REF = dict  # {"path": ..., "sha256": ...}
 COUNTS = {"n_input": int, "n_survived": int, "n_removed": int}
 STATE = ("complete", "incomplete")
+TURN_OUTCOMES = ("success", "timeout", "provider_error", "incomplete_submission", "worker_setup_timeout",
+                 "local_error", "worker_lost")
 
 KINDS = {
     # <display zone>/display.json: written by ecarsi.display.sync, read by Periscope's display-root scan
@@ -27,6 +29,9 @@ KINDS = {
     "dataset/1": {"state": STATE, "dataset_id": str, "units": list, "failed_units": list, "forced_release": bool, **COUNTS},
     # <pool>/requests/<id>/<attempt>/receipt.json: the pool worker, read by status() for control, agents and Periscope
     "receipt/1": {"state": ("succeeded", "failed", "cancelled"), "outputs": list},
+    # <bridge>/turns/<turn>/result.json, or a pool turn attempt's result.json: ecarsi.agent.dispatch.perform and
+    # ecarsi.agent.runner, read by ecarsi.agent.dispatch when it settles the attempt
+    "turn/1": {"outcome": TURN_OUTCOMES, "worker": dict},
     # <run>/degraded/*.json: ecarsi.degraded, read by release and Periscope
     "degraded/1": {"what": str, "error": str, "at": int, "id": str},
     # <ECA-PP output>/identify_columns/result.json: eca-pp identify-columns (another repository), read by

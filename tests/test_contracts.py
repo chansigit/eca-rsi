@@ -46,3 +46,18 @@ def test_a_receipt_names_one_of_three_endings():
     assert check("receipt", dict(state="failed", outputs=[], error="WorkerLost"))
     with pytest.raises(ValueError, match="state is 'timeout'"):
         check("receipt", dict(state="timeout", outputs=[]))
+
+
+def test_a_turn_result_names_its_outcome_and_worker():
+    worker = {"host": "sh03-01n29", "pid": 1}
+    assert check("turn", dict(outcome="provider_error", response=None, worker=worker, error="APIConnectionError"))
+    with pytest.raises(ValueError, match="outcome is 'ok'"):
+        check("turn", dict(outcome="ok", worker=worker))
+    with pytest.raises(ValueError, match="worker missing"):
+        check("turn", dict(outcome="success", response={}))
+
+
+def test_an_eca_pp_result_names_its_step_and_columns():
+    assert check("eca-pp-identify-columns", dict(step="identify_columns", columns={}, sample_unit={"value": "whole"}))
+    with pytest.raises(ValueError, match="step is 'standardize'"):
+        check("eca-pp-identify-columns", dict(step="standardize", columns={}))
