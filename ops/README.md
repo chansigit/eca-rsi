@@ -28,3 +28,8 @@ Logs of builds and switches go to `$BASE/control-logs/`.
 
 Python helpers run inside an image: `bash ops/runpy.sh ops/count-wf.py`.
 Tests: `bash ops/runsci-dev.sh -m pytest -q tests` (the whole suite, in the compute image).
+
+Images (#36): keep every image pair that a published version names in its `version.json` while that version is
+current, is `INFRA`, or has datasets that ended unfinished (`retire-version.sh` lists them: a resume runs in the
+version's own images), and the base images in `images/base/`. Delete the rest by hand once the next version's gate
+has passed; no script removes images.
