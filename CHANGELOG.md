@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **The compute image's Python environment is locked (decision 0019, step 5).** `container/science-requirements.lock`
+  pins the 118 distributions of `/opt/rsi-python` with their hashes; installed from it into the base image, they
+  reproduce the image's environment file for file. INSTALL.md B.5 has the command.
+- **Versions on the control page (decision 0019).** fleet-status records each workflow's task queue, and
+  Periscope's `/_control/` names the version each running dataset runs on. `ops/control-plane.sh` keeps the two
+  settings apart: `VERSION` (or the current version) for coordinators and runners, `INFRA` for the shared components.
 - **No more workflow patch markers (decision 0019).** A version replays only the histories of its own task queue,
   so the `workflow.deprecate_patch` lines are gone and the replay check is no longer a deployment step. CLAUDE.md,
   INSTALL.md (new A.10) and the decisions describe shipping a change as a version.

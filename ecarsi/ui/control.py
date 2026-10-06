@@ -352,13 +352,19 @@ def snapshot(root: Path, temporal_port: int = 8233, temporal_host: str = "127.0.
         "scheduler": scheduler, "bridge_summary": bridge_summary,
         "worker_live_count": sum(w["reporting"] for w in workers), "workers": workers,
         "productivity": nodes,
-        "running_datasets": sorted({w.get("dataset_id") or k for k, w in
-                                    (read(root / "fleet-status.json", {}).get("workflows") or {}).items()
-                                    if w.get("kind") == "DatasetWorkflow" and w.get("status") == "RUNNING"}),
+        **dict(zip(("running_datasets", "running_versions"), running(read(root / "fleet-status.json", {})))),
         "pool_waiting": sum(t["state"] == "queued" for t in pool_rows),
         "pool_requests": sorted(pool_rows, key=lambda x: x["submitted_at"], reverse=True),
         "bridge_requests": sorted(bridge_rows, key=lambda x: x["submitted_at"], reverse=True),
     }
+
+
+def running(fleet):
+    """The running datasets of fleet-status.json, and the version each runs on when it runs on one (decision 0019)."""
+    queues = {w.get("dataset_id") or k: (w.get("task_queue") or "").removeprefix("ecarsi-")
+              for k, w in (fleet.get("workflows") or {}).items()
+              if w.get("kind") == "DatasetWorkflow" and w.get("status") == "RUNNING"}
+    return sorted(queues), {n: v for n, v in queues.items() if v not in ("", "durable-v2")}
 
 
 class ControlPlane:

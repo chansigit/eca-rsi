@@ -225,3 +225,14 @@ def test_the_workflows_load_in_temporals_sandbox_from_a_checkout_and_from_a_vers
     save(tmp_path / "version.json", dict(name="0123456789ab", commit="0" * 40))
     published = probe(tmp_path, tmp_path)
     assert published.returncode == 0 and published.stdout.split()[-1] == "ecarsi-0123456789ab", published.stderr[-2000:]
+
+
+def test_the_control_page_names_the_version_of_each_running_dataset():
+    from ecarsi.ui.control import running
+    fleet = {"workflows": {
+        "dataset/a": dict(kind="DatasetWorkflow", status="RUNNING", dataset_id="A", task_queue="ecarsi-0123456789ab"),
+        "dataset/b": dict(kind="DatasetWorkflow", status="RUNNING", task_queue="ecarsi-durable-v2"),
+        "dataset/c": dict(kind="DatasetWorkflow", status="COMPLETED", task_queue="ecarsi-0123456789ab"),
+        "unit/a": dict(kind="AnalysisUnitWorkflow", status="RUNNING", task_queue="ecarsi-0123456789ab")}}
+    assert running(fleet) == (["A", "dataset/b"], {"A": "0123456789ab"})
+    assert running({}) == ([], {})

@@ -23,7 +23,7 @@ See [README.md](README.md) to learn what the system does and how to read its res
 
 Keep the images on a non-purged filesystem, for example `$GROUP_HOME/<user>/eca/images/`. Use one `<stamp>` for a pair. The HyperQueue binary is the owner's patched build (branch `local` of `chansigit/hyperqueue`).
 
-The file `container/control-requirements.lock` defines the pinned Python environment of the control image. The package versions inside the images are:
+The files `container/control-requirements.lock` and `container/science-requirements.lock` define the pinned Python environments of the two images (`/opt/rsi-control`, `/opt/rsi-python`). The package versions inside the images are:
 
 | Package | Version |
 |---|---|
@@ -267,7 +267,14 @@ It extracts both images into sandboxes on node-local disk. It replaces `/opt/eca
 
 Pack by hand. `apptainer build` from a sandbox segfaults in its mksquashfs step on the compute sandbox. The script runs `mksquashfs ... -processors 4`. Then it runs `apptainer sif new` and `apptainer sif add --datatype 4 --parttype 2 --partfs 1 --partarch 2 --groupid 1`.
 
-A full rebuild (`ops/build-images.sh`) starts from the two base images, whose Python environments come from `container/control-requirements.lock` with `--require-hashes`. It adds the eca-rsi snapshot, and Temporal, PostgreSQL and HQ taken from an existing control image (every control image carries them; nothing on scratch does). The Python environments' own root is `$GROUP_HOME/chensj16/eca/images/base/python312-slim.sif` ([docs/history/CONTAINER_LEGACY.md](docs/history/CONTAINER_LEGACY.md)). Record the sha256 of every new image. Then switch (A.9). Run an end-to-end regression on a small dataset.
+A full rebuild (`ops/build-images.sh`) starts from the two base images, whose Python environments come from the two locks with `--require-hashes`. The compute environment installs into a sandbox of `python312-slim.sif` with
+
+```bash
+apptainer exec --cleanenv --bind <sandbox dir> images/base/python312-slim.sif python3 -m pip install --no-deps \
+  --require-hashes --extra-index-url https://pypi.nvidia.com --target <sandbox>/opt/rsi-python -r container/science-requirements.lock
+```
+
+(3.6 GB of wheels; docrep comes as an sdist). On 2026-10-06 this reproduced the `/opt/rsi-python` of the images file for file (every `RECORD` of the 118 distributions identical). A new third-party version goes into the lock first; `build-images-update.sh` with `WHEELS=` swaps it into the current pair. It adds the eca-rsi snapshot, and Temporal, PostgreSQL and HQ taken from an existing control image (every control image carries them; nothing on scratch does). The Python environments' own root is `$GROUP_HOME/chensj16/eca/images/base/python312-slim.sif` ([docs/history/CONTAINER_LEGACY.md](docs/history/CONTAINER_LEGACY.md)). Record the sha256 of every new image. Then switch (A.9). Run an end-to-end regression on a small dataset.
 
 ### B.6 Source repositories
 

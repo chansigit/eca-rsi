@@ -65,6 +65,7 @@ async def collect(client, specs: dict | None = None) -> dict:
                 "status": wf.status.name,
                 "started": started,
                 "closed": wf.close_time.timestamp() if wf.close_time else None,
+                "task_queue": wf.task_queue,   # ecarsi-<version> for a published version (decision 0019)
             }
             if kind == "DatasetWorkflow" and specs is not None:
                 out[wf.id].update(await where(client, wf.id, specs))

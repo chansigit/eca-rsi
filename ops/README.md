@@ -13,7 +13,7 @@ Logs of builds and switches go to `$BASE/control-logs/`.
 | `set-current.sh <name>` | new datasets and `run.sh` use that version from now on; refused while no coordinator serves it |
 | `retire-version.sh <name>` | stops a version's coordinators and runners once its queue has no running execution; lists its datasets that ended unfinished; refused for the current version; the directory stays |
 | `worker-node.sh` | Slurm job script: the job itself becomes a pool worker (`sbatch … ops/worker-node.sh`) |
-| `start-periscope.sh`, `restart-periscope.sh` | Periscope from the science image, public through ngrok when `PERISCOPE_DOMAIN` is set |
+| `start-periscope.sh`, `restart-periscope.sh` | Periscope from the science image, on `INFRA`'s version when set, public through ngrok when `PERISCOPE_DOMAIN` is set |
 | `run.sh control\|compute [--dev] <python args>` | Python inside an image; `runpy.sh`, `runsci.sh` and their `-dev` forms are shorthands. `--dev` runs `$DEV_WORKTREE` instead of the image snapshot; `VERSION=<name>` a published version, by default the current one |
 | `count-wf.py` | running Temporal executions by type and by task queue (one per version) |
 | `replay-check.py` | replays workflow histories against the dev checkout; no longer a deployment step, since a version replays only its own histories (0019) |
