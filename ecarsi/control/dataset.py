@@ -606,7 +606,6 @@ async def show(spec, stage, unit=None, final=False):
 
 async def degraded(spec, unit, label, exc):
     """Keep a step that failed without failing the run (ecarsi.degraded). In strict mode the activity raises."""
-    workflow.deprecate_patch('degraded-v1')
     await call(dataset_step, 'degraded', [spec, unit['name'] if unit else None, label, f'{type(exc).__name__}: {exc}'])
 
 
@@ -637,14 +636,12 @@ class AnalysisUnitWorkflow:
         self._stage = f'round {number}: cross-sample'
         cross = await execute('cross_sample', progress['input'], number, CrosssampleWorkflow.run, 'cross-sample/')
         await show(spec, f'round{number:02d}/cross-sample', unit)
-        workflow.deprecate_patch('pause-after-stage-v1')
         await pause_if_asked(spec, unit, 'crosssample')
         self._stage = f'round {number}: zoom-in'
         zoom = await execute('zoom_in', cross, number, ZoominWorkflow.run, 'zoom-in/')
         await show(spec, f'round{number:02d}/zoom-in', unit)
         await pause_if_asked(spec, unit, 'zoomin')
         progress = await call(dataset_step, 'round', [spec, unit, progress, cross, zoom])
-        workflow.deprecate_patch('round-ledger-v1')
         # The round's own Sankey and ledger, the way generation 1 published them: a
         # reader should not have to wait for the release to see where the cells went.
         try:
@@ -662,7 +659,6 @@ class AnalysisUnitWorkflow:
             # contract `resume-dataset` already serves, and generation 1's exit code 3.
             raise ApplicationError(progress['paused'], non_retryable=True)
         if 'publication' in progress:
-            workflow.deprecate_patch('analysis-unit-release-v1')
             self._stage = 'publishing final results'
             request = await call(dataset_step, 'release', [spec, progress['publication']])
             result = await await_pool(spec, request)

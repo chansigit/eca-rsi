@@ -16,7 +16,7 @@ Logs of builds and switches go to `$BASE/control-logs/`.
 | `start-periscope.sh`, `restart-periscope.sh` | Periscope from the science image, public through ngrok when `PERISCOPE_DOMAIN` is set |
 | `run.sh control\|compute [--dev] <python args>` | Python inside an image; `runpy.sh`, `runsci.sh` and their `-dev` forms are shorthands. `--dev` runs `$DEV_WORKTREE` instead of the image snapshot; `VERSION=<name>` a published version, by default the current one |
 | `count-wf.py` | running Temporal executions by type and by task queue (one per version) |
-| `replay-check.py` | replays running workflow histories against the dev checkout; run before deploying a `control/` change |
+| `replay-check.py` | replays workflow histories against the dev checkout; no longer a deployment step, since a version replays only its own histories (0019) |
 | `build-images-update.sh` | new image pair from the current one with a fresh eca-rsi snapshot (and optional wheels) |
 | `build-images.sh` | full rebuild from base images (Temporal, PostgreSQL, HQ added) |
 | `switch-images.sh <stamp> <science sha256> <host:job>…` | stop, repoint `deployment.env`, start, re-add workers |

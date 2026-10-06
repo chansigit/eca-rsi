@@ -190,6 +190,25 @@ Switch only when the report shows `running executions: 0`. The script `ops/switc
 
 Then run the release gate on the new pair, in the background: `bash ops/runpy.sh ops/gate.py start`, then `bash ops/runpy.sh ops/gate.py wait <run_id>`. It runs `gate-dataset.json` end to end and checks that every unit is released, that no step degraded, that every zoomed lineage has its report and that the display zone and work archive exist. Keep the previous pair until the gate passes; if it fails, switch back.
 
+### A.10 Ship a code change as a version
+
+A change to eca-rsi's own code (`ecarsi/`, the kernels, `harness_bridge/`) ships as a version (decision 0019); it
+does not wait for running executions, and executions already running finish on the version that started them.
+
+1. Fast-forward `main` after the full suite passes, then `bash ops/publish-version.sh` (default: `main`). It prints
+   the version name, the first 12 characters of the commit.
+2. `bash ops/start-version.sh <name> 1` starts one coordinator on its task queue `ecarsi-<name>` and its runners.
+3. `VERSION=<name> bash ops/runpy.sh ops/gate.py start`, then `... gate.py wait <run_id>`: the gate runs on the new
+   version next to production.
+4. After the gate passes: `bash ops/set-current.sh <name>` (new datasets use it from now on) and
+   `bash ops/start-version.sh <name> 4`.
+5. When `bash ops/runpy.sh ops/count-wf.py` shows no running execution on the old version's queue,
+   `bash ops/retire-version.sh <old name>` stops its coordinators and runners. Its directory stays.
+
+`ops/control-plane.sh start|stop|restart|status` runs the current version's coordinators and runners beside the
+image's shared components. Changes to `ops/` take effect when `main` is fast-forwarded. A change to the images
+(third-party packages, HQ, Temporal) still needs A.9.
+
 ## B. Development
 
 ### B.1 Checkouts

@@ -162,7 +162,6 @@ class ZoominWorkflow:
             return await await_pool(spec,request),request['id']
         async def judge(kind,evidence,parent):
             path,_=await run('agent',[evidence],[parent],kind=kind)
-            workflow.deprecate_patch('agent-session-policy-v1')
             session=await call(zoomin_step,'session',[path])
             result=await run_agent(session,workflow.info().workflow_id+'/'+session['session_id'],call)
             accepted=await call(zoomin_step,'accepted',[result])
@@ -186,7 +185,6 @@ class ZoominWorkflow:
                     computed,compute_parent=await run('compute',[part,markers],[part_parent,marker_parent])
                     bundle=await call(zoomin_step,'read',[computed])
                     n=len(bundle['tasks'])
-                    workflow.deprecate_patch('deg-batch-v1');workflow.deprecate_patch('deg-batch-cells-v1')
                     batches,factor=deg_batches(n,bundle.get('n_input') or 0)
                     start=lambda k:run('deg-batch',[computed],[compute_parent],indices=batches[k])
                     ordered=await run_degs(len(batches),start,lambda:self._deg_limit*factor)
@@ -227,8 +225,6 @@ class ZoominWorkflow:
                     raise ApplicationError(f'{len(failures)} lineages failed; completed lineages retained: {failures[0]}',
                                            non_retryable=True)
                 return [done[i] for i in chosen]
-            workflow.deprecate_patch('zoomin-continue-as-new-v1')
-            workflow.deprecate_patch('zoomin-preserve-independent-lineages-v1')
             results=await windowed()
             skipped=[r['skipped'] for r in results if isinstance(r,dict)]
             results=[r for r in results if not isinstance(r,dict)]

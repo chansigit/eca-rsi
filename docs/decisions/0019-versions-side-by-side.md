@@ -40,3 +40,11 @@ version keeps its own coordinators while it drains. Still to build: a version th
 image first needs a dependency lock), retiring versions, contracts on the files the shared components and versions
 both read, and showing the version on Periscope; then the workflow `deprecate_patch` lines and the replay check stop
 being deployment steps (0003), and `switch-images.sh` retires.
+
+**Status 2026-10-06.** The first version became current at 04:10 after its gate passed beside production; the
+second (the kernels without their standalone flows, #28) at 11:05 after its gate ran beside the first one's, every
+workflow on its own queue and no turn planned with another version's adapter. `ops/control-plane.sh` starts the
+current version's coordinators and runners; `ops/retire-version.sh` retires a drained version; the
+`deprecate_patch` lines are gone and the replay check is no longer a deployment step. Still to build: versions that
+bring new images, the contracts, and the version on Periscope; until the first, `switch-images.sh` stays for image
+changes.

@@ -10,6 +10,6 @@ agent session. Temporal Server and PostgreSQL run from the control image and kee
 coordinators are workers that execute workflow code by replaying its history.
 
 **Consequences.** A run survives coordinator restarts and moves of the plane (start the components on the new
-node; workflows continue). Workflow code must stay deterministic: run `ops/replay-check.py` before deploying a
-change under `ecarsi/control/`. Long histories are slow to replay, so cross-sample and zoom-in continue as new
+node; workflows continue). Workflow code must stay deterministic: until decision 0019 every change
+under `ecarsi/control/` was replayed first (`ops/replay-check.py`); since then a version replays only its own histories. Long histories are slow to replay, so cross-sample and zoom-in continue as new
 past 5,000 events, and replay is CPU-bound (see 0008). Code: `ecarsi/control/`, `ecarsi/control/temporal.py`.

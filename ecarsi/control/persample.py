@@ -301,14 +301,11 @@ class PersampleWorkflow:
     async def run(self, spec):
         self._batch_size = spec["batch_size"]
         self._in_flight_limit = getattr(self, "_in_flight_limit", spec["max_in_flight_samples"])
-        workflow.deprecate_patch("persample-compute-admission-v2")
         prepared_limit = spec.get('max_prepared_samples', max(32, spec['max_in_flight_samples'] * 4))
         offset, total, pending, completed, failed, parent = 0, None, {}, [], [], None
         totals, inputs, replayed = None, {}, set()
         while True:
             recover = bool(failed)
-            if recover:
-                workflow.deprecate_patch("persample-recovered-receipts-v1")
             if recover:
                 for failure in list(failed):
                     if len(pending) >= prepared_limit:

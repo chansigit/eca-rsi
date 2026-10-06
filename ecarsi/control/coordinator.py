@@ -227,7 +227,6 @@ class OrganizeWorkflow:
         prepare_id = await call(submit_prepare, spec)
         prepared_path = await await_pool(prepare_id, "prepared.json")
         self._stage = "planning"
-        workflow.deprecate_patch("organize-worker-plan-v1")
         agent_spec = await call(organize_agent_step, "spec", [spec, prepared_path])
         result = await workflow.execute_child_workflow(AgentWorkflow.run, agent_spec,
             id=workflow.info().workflow_id + "/plan")
@@ -325,13 +324,11 @@ class AgentWorkflow:
                 start_to_close_timeout=SHORT, retry_policy=activity_retry(fn))
 
         session = await call(agent_step, "create", [spec])
-        workflow.deprecate_patch("agent-reuse-completed-submission-v1")
         completed = await call(agent_step, "cached_completion", [session])
         if completed:
             self._stage = "complete"
             return completed
         context, parents, number, resets = None, [], 0, 0
-        workflow.deprecate_patch("agent-context-reset-v1")
         for turn in range(spec["max_turns"]):
             self._stage = "model"
             request = await call(agent_step, "model", [session, number, context, parents])
@@ -345,7 +342,6 @@ class AgentWorkflow:
                         request = None
                         break
                     raise ApplicationError(f"{request}: {result['state']}", non_retryable=True)
-                workflow.deprecate_patch('agent-queued-poll-backoff-v1')
                 await workflow.sleep(result.get('poll_seconds', 2))
             if request is None:
                 # The provider kept rejecting the grown transcript: the same judgement continues
@@ -360,7 +356,6 @@ class AgentWorkflow:
             if decision["kind"] == "final":
                 self._stage = "complete"
                 return await call(agent_step, "finish", [session, reply])
-            workflow.deprecate_patch('agent-read-batch-window-v1')
             if decision["kind"] != "tools" or not 1 <= decision["calls"] <= 64:
                 raise ApplicationError("Invalid agent tool boundary", non_retryable=True)
             self._stage = "tools"

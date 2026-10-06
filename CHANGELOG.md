@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **No more workflow patch markers (decision 0019).** A version replays only the histories of its own task queue,
+  so the `workflow.deprecate_patch` lines are gone and the replay check is no longer a deployment step. CLAUDE.md,
+  INSTALL.md (new A.10) and the decisions describe shipping a change as a version.
 - **Retiring a version (decision 0019).** `ops/retire-version.sh <name>` stops a version's coordinators and runners once
   no execution runs on its queue (refused for the current version) and lists its datasets that ended unfinished;
   `ops/count-wf.py` counts running executions per task queue.
