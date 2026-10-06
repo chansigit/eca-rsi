@@ -8,11 +8,11 @@
 
 | Part | Code | Does | Talks to the others through |
 |---|---|---|---|
-| Scientific kernels | `osp`, `msp`, `zmip` (separate repositories) | QC, clustering, integration, DEG, embeddings, lineage zoom-in | Python calls from the stage programs, only through each kernel's `api` module |
+| Scientific kernels | `osp/`, `msp/`, `zmip/` (in this repository since decision 0018) | QC, clustering, integration, DEG, embeddings, lineage zoom-in | Python calls from the stage programs, only through each kernel's `api` module |
 | Stage programs | `ecarsi/stages/` | wrap the kernels as pool tasks, validate agent proposals, publish each stage | files: a request spec in; `publication.json` and outputs out (fields in `ecarsi/contracts.py`) |
 | Orchestration | `ecarsi/control/`, run by the coordinators on Temporal | decides what a dataset does next: stages, rounds, sessions, release | submits requests to the pool and turns to the agent service, polls their receipts |
 | Execution pool | `ecarsi/warm_pool/` and HyperQueue | runs bounded compute requests on Slurm worker jobs, by priority | request folders under `pool/requests/` |
-| Agent service | `ecarsi/agent/` and agent-harness-bridge | runs model turns (Doubao through Ark by default) with resident runners | turn folders under `bridge/` |
+| Agent service | `ecarsi/agent/` and `harness_bridge/` | runs model turns (Doubao through Ark by default) with resident runners | turn folders under `bridge/` |
 | Presentation | `ecarsi/ui/` (Periscope), `ecarsi/display.py`, `ecarsi/observatory.py` | renders pages from run directories, keeps each run's display zone, shows the control plane | reads run directories and display zones |
 
 ```text

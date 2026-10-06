@@ -4,37 +4,48 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ecarsi"
-version = "0.4.4"
-description = "eca-rsi main line: organize → persample (osp) → self-driving rounds of crosssample (msp) + zoomin (zmip), ledger, landing pages and serving"
+version = "0.4.5"
+description = "eca-rsi: organize → persample (osp) → self-driving rounds of crosssample (msp) + zoomin (zmip), ledger, landing pages and serving; the kernels and the agent harness live in this repository (decision 0018)"
 readme = "README.md"
 license = "MIT"
 authors = [{ name = "chansigit", email = "chansigit@gmail.com" }]
 requires-python = ">=3.10"
-# The kernels (osp, msp, zmip) are separate packages driven through
-# `python -m osp|msp|zmip` subprocesses (OSP_PYTHON / MSP_PYTHON / ZMIP_PYTHON
-# may point at other interpreters), so they are not import-time dependencies
-# of ecarsi. Install them per INSTALL.md.
+# One repository (decision 0018): ecarsi, the kernels osp / msp / zmip, standissect_lite and harness_bridge.
+# The dependencies are theirs together; production runs from the images (decision 0010), not from this list.
 dependencies = [
-    "agent-harness-bridge[all]>=0.2.14,<0.3",
     "anndata>=0.11",
-    "scanpy",
+    "scanpy[scrublet]>=1.10",
     "h5py",
     "numpy",
-    "pandas",
-    "matplotlib",                  # ledger Sankey PNG
+    "pandas>=2",
+    "scipy",
+    "scikit-learn",
+    "matplotlib",
+    "seaborn",
+    "adjustText",
+    "igraph",
+    "python-igraph",
+    "leidenalg",
+    "harmonypy>=2.0.0,<3",
+    "stanhue>=1.1.0",
 ]
 
 [project.scripts]
 eca-rsi = "ecarsi.__main__:main"
 
 [project.optional-dependencies]
-kernels = ["osp-sc[agent]>=0.1.8,<0.2", "msp-sc[agent]>=0.5.3,<0.6", "zmip>=0.3.10,<0.4"]  # each with its api module
-front = ["osp-sc[agent]>=0.1.3,<0.2"]  # tested source revision is recorded in docs/history/FRONT_COMPATIBILITY.json
+agent = ["openai-agents==0.22.3", "claude-agent-sdk>=0.2.163"]
+deepseek = ["mcp>=1.19,<2", "PyYAML>=6", "uvicorn>=0.30", "sse-starlette>=3,<4"]
 coordinator = ["temporalio==1.32.0", "openai-agents==0.22.3", "jsonschema>=4,<5"]
 
 [tool.setuptools]
-packages = ["ecarsi", "ecarsi.warm_pool", "ecarsi.agent", "ecarsi.control", "ecarsi.stages", "ecarsi.ui"]
+packages = ["ecarsi", "ecarsi.warm_pool", "ecarsi.agent", "ecarsi.control", "ecarsi.stages", "ecarsi.ui",
+            "osp", "osp._decontx", "msp", "msp.integrate", "zmip", "standissect_lite", "harness_bridge"]
 
 [tool.setuptools.package-data]
 ecarsi = ["prompts/*.md", "*.html"]
 "ecarsi.warm_pool" = ["numba_site/sitecustomize.py"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error::FutureWarning:msp"]

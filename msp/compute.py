@@ -16,11 +16,6 @@ Design record: docs/compute-endpoint-design.md. Backends, picked by
     the shared warm pool of eca-rsi#8. The pool outlives any one step or run;
     this backend only ever opens/closes a client to it.
 
-``pool`` / ``auto``
-    optional ``ecarsi[pool]`` adapter, using ``ECA_POOL_SCHEDULER``. ``pool``
-    queues work in the separate Slurm pool; ``auto`` can retain suitable work
-    locally. This import is only needed when either mode is selected.
-
 An unknown name raises rather than silently falling back to ``local``, so a
 misconfigured environment variable never passes unnoticed.
 
@@ -212,11 +207,6 @@ def resolve_endpoint() -> ComputeEndpoint:
     kind = os.environ.get("MSP_COMPUTE_ENDPOINT", "local")
     if kind == "local":
         return LocalEndpoint()
-    if kind in {"pool", "auto"}:
-        # Optional driver adapter; standalone MSP/local/Dask need no RSI install.
-        from ecarsi.pool.client import PoolEndpoint
-
-        return PoolEndpoint(mode=kind)
     if kind == "dask-local":
         return DaskLocalEndpoint()
     if kind == "dask":

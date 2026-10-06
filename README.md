@@ -29,13 +29,13 @@ establish biological accuracy.
 | --- | --- |
 | [ECA-PP](https://github.com/chansigit/eca-pp) | Prepare counts, gene names, species information, QC measurements, and metadata evidence. Run this component before ECA-RSI. |
 | ECA-RSI (`ecarsi`) | Organize analysis units. Identify sample columns. Decide sample inclusion. Drive rounds. Assemble releases and browser pages. |
-| [OSP](https://github.com/chansigit/osp) (`osp-sc`) | Run QC, doublet detection, contamination estimation, clustering, and annotation proposals within each sample. |
-| [MSP](https://github.com/chansigit/msp) (`msp-sc`) | Recompute the shared feature space. Integrate samples. Inspect populations. Apply annotations and removals. |
-| [ZMIP](https://github.com/chansigit/zmip) | Plan lineages. Re-embed selected lineages. Refine labels. Record removals and reassignments. Merge results. |
-| [agent-harness-bridge](https://github.com/chansigit/agent-harness-bridge) | Provide the shared agent/tool interface, runtime adapters, and failure recovery. |
+| OSP (`osp/`) | Run QC, doublet detection, contamination estimation, clustering, and annotation proposals within each sample. |
+| MSP (`msp/`) | Recompute the shared feature space. Integrate samples. Inspect populations. Apply annotations and removals. |
+| ZMIP (`zmip/`) | Plan lineages. Re-embed selected lineages. Refine labels. Record removals and reassignments. Merge results. |
+| `harness_bridge/` | Provide the shared agent/tool interface, runtime adapters, and failure recovery. |
 | [eca-grain](https://github.com/chansigit/eca-grain) (`eca-grain`) | Aggregate a unit into audited grains after release. Use these grains for downstream work such as GRN inference. Use metacell-style aggregation in one pass. Keep every cell on the ledger. This component does not modify the release. |
 
-The analysis packages implement computation. They also apply decisions. Agents inspect evidence. They submit structured decisions through tools. The calling package checks these decisions. MSP also uses [standissect-lite](https://github.com/chansigit/standissect-lite) to identify smaller fragments within populations.
+OSP, MSP, ZMIP and `harness_bridge` are packages of this repository (decision 0018; formerly separate repositories, now archived). The analysis packages implement computation. They also apply decisions. Agents inspect evidence. They submit structured decisions through tools. The calling package checks these decisions. MSP also uses `standissect_lite/` to identify smaller fragments within populations.
 
 ## Prepare the input
 

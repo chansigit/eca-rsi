@@ -27,16 +27,11 @@ use `from msp.inspect import inspect_clusters` / `from msp.annotate import
 annotate_clusters` when needed.
 """
 
-from importlib.metadata import PackageNotFoundError, version
-
 from .integrate import integrate_adata, load_and_merge, run_multi_sample_pipeline
 from .plots import save_single_umap
 from .report import generate_report
 
-try:
-    __version__ = version("msp-sc")
-except PackageNotFoundError:  # running from a checkout that was never installed
-    __version__ = "0+unknown"
+__version__ = "0.5.4"  # the last msp-sc release; since decision 0018 msp ships inside eca-rsi and has no version of its own
 
 __all__ = [
     "__version__",

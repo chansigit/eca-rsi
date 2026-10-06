@@ -21,7 +21,7 @@ granularity-matching behaviour of ``umap_target_k``.
 """
 from .core import PartitionResult, dissect_partition, umap_leiden_partition
 
-__version__ = "0.2.0"
+__version__ = "0.2.0"  # the last standissect-lite release; inside eca-rsi since decision 0018
 # 0.2.0: renamed the raw, globally-ranked UMAP-side partition column from
 # "umap_cluster" to "_umap_partition" (in both labels and fragments) to stop
 # it being mistaken for a per-parent rank — "subcluster"/"rank" (already

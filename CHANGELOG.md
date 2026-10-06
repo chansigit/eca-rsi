@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **One repository (decision 0018), 0.4.5.** osp, msp, zmip, standissect-lite and agent-harness-bridge now live at
+  the top of this repository with their histories (`git log msp/` reaches msp's first commit); their tests are in
+  `tests/<package>/` and run with the suite, their READMEs and changelogs in `docs/kernels/<package>/`. Import names
+  are unchanged. The images take the packages from the `git archive` snapshot and lose their old wheels
+  (`ops/build-images-update.sh` checks each comes from `/opt/eca-rsi`); `ops/run.sh` drops `DEV_PATHS` and
+  `ECA_SIBLINGS`. `tests/test_layers.py` scans the merged packages: none imports `ecarsi` (msp's dead
+  `ecarsi.pool` endpoint is gone), osp/msp/zmip may import only the packages listed in `MAY_IMPORT`. One version for
+  everything; the merged packages keep their last release number as a constant. The former repositories are archived.
 - **Stress policy (decision 0017, issue #9).** Spec key `stress_policy`: `remove` (default) or `keep`. Under remove,
   an agent's removal of 10 or more cells as stress or dissociation stands only when msp's `stress_clusters.csv` marks
   its cluster, as dying only on a clearly higher mitochondrial fraction or fewer genes than the same identity

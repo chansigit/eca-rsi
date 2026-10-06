@@ -24,7 +24,7 @@ mkdir -p "$WORK"; cd "$WORK"
 
 echo "$(date +%T) stage shared payload (eca-rsi @ $COMMIT, hq from $SERVICES_FROM)"
 mkdir -p payload/opt/eca-rsi payload/opt/rsi-bin services/opt
-git -C "$REPO" archive HEAD ecarsi container pyproject.toml README.md | tar -C payload/opt/eca-rsi -xf -
+git -C "$REPO" archive HEAD ecarsi osp msp zmip standissect_lite harness_bridge container pyproject.toml README.md | tar -C payload/opt/eca-rsi -xf -   # decision 0018
 printf '{"eca_rsi_commit": "%s", "built": "%s", "image_stamp": "%s"}\n' "$COMMIT" "$(date -Iseconds)" "$STAMP" > payload/opt/eca-rsi/BUILD.json
 apptainer exec "$SERVICES_FROM" cat /opt/rsi-bin/hq > payload/opt/rsi-bin/hq; chmod 755 payload/opt/rsi-bin/hq
 "$WORK/payload/opt/rsi-bin/hq" --version
@@ -54,7 +54,9 @@ apptainer exec --cleanenv "$OUT/rsi-control-$STAMP.sif" sh -c '
   ldd /opt/rsi-services/postgres/bin/psql | grep -E "not found" && exit 1 || true
   test -d /opt/rsi-services/temporal/schema/postgresql/v12/temporal/versioned && cat /opt/eca-rsi/BUILD.json'
 cd /tmp; apptainer exec --cleanenv --env PYTHONSAFEPATH=1 --env PYTHONPATH=/opt/eca-rsi:/opt/rsi-control:/opt/rsi-python "$OUT/rsi-science-$STAMP.sif" /usr/local/bin/python3.12 -c "
-import ecarsi, msp, zmip, osp; print('science: ecarsi from', ecarsi.__file__)"
+import ecarsi, msp, zmip, osp, standissect_lite, harness_bridge
+assert all(m.__file__.startswith('/opt/eca-rsi/') for m in (msp, zmip, osp, standissect_lite, harness_bridge)), 'a package not from the snapshot'
+print('science: ecarsi and the kernels from', ecarsi.__file__)"
 apptainer exec --cleanenv "$OUT/rsi-science-$STAMP.sif" /opt/rsi-bin/hq --version
 sha256sum "$OUT/rsi-control-$STAMP.sif" "$OUT/rsi-science-$STAMP.sif"
 echo "$(date +%T) BUILD DONE"

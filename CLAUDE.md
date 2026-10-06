@@ -1,12 +1,12 @@
 # ECA-RSI: recursive self-improvement for an Ensemble Cell Atlas
 
-ECA-RSI is the `ecarsi/` package. Deterministic kernels (osp / msp / zmip) do the computation. Agents make narrow decisions. The host validates these decisions. A round loop repeats integration and refinement until it meets a cell-count rule.
+ECA-RSI is the `ecarsi/` package, with its kernels and agent harness in the same repository (decision 0018). Deterministic kernels (osp / msp / zmip) do the computation. Agents make narrow decisions. The host validates these decisions. A round loop repeats integration and refinement until it meets a cell-count rule.
 
 ## Read this first
 
 - **New to the code:** [docs/OVERVIEW.md](docs/OVERVIEW.md) (one page: six parts, one dataset start to finish), then [docs/decisions/](docs/decisions/README.md) (why each design choice was made).
 - **One supported way to run: the control-plane path.** Start Temporal, the HyperQueue (HQ) warm pool, and the bridge from `container/control-plane.sh`. It is the only path: 0.4.0 removed the local path (`eca-rsi run`, `run-eca-rsi.sh`, `--mirror`). Its old runs are still shown from their display zones, so `ecarsi/ui` and `layout.py` keep reading their layout (generation 1).
-- **Code lives in `$GROUP_HOME/chensj16/eca/src/`** (eca-rsi, osp, msp, zmip, agent-harness-bridge, standissect-lite, and the upstream eca-pp). Worktrees are in `$GROUP_HOME/chensj16/eca/worktrees/`. The paths in `$SCRATCH/projects/*` are symlinks to these checkouts.
+- **Code lives in `$GROUP_HOME/chensj16/eca/src/`**: eca-rsi (with `osp/`, `msp/`, `zmip/`, `standissect_lite/`, `harness_bridge/` at its top since 0018; the old separate checkouts are frozen) and the upstream eca-pp. Worktrees are in `$GROUP_HOME/chensj16/eca/worktrees/`. The paths in `$SCRATCH/projects/*` are symlinks to these checkouts.
 - **Production code is the snapshot inside the two images** in `$GROUP_HOME/chensj16/eca/images/`. Editing a checkout changes nothing in production. New code reaches production only through a rebuilt image (`ops/build-images-update.sh`, `ops/switch-images.sh`; the deployment scripts are in [ops/](ops/README.md), and `$BASE/ops` links there).
 - **Change code like this:** Edit in `worktrees/eca-rsi-dev`. Run the tests inside the images. Fast-forward `main`. Rebuild and switch images when no execution is running.
 - **Test like this:** Run `bash ops/runsci-dev.sh -m pytest -q tests`. This command runs the whole suite inside the compute image (~4 min). The script `runpy-dev.sh` uses the control image and cannot import the kernels. For pure document changes, run only `git diff --check` and a link check.
@@ -32,7 +32,7 @@ ops/                the deployment scripts ($BASE/ops links here; ops/README.md)
 
 Boundaries (0014, `tests/test_layers.py`): only `ecarsi/stages/` uses the kernels, and only through `osp.api`, `msp.api`, `zmip.api`; a name the stages need goes into that kernel's `api` module first. The pool, agents, stages and Periscope never import orchestration; the shared modules import no part; see the test for the full table.
 
-The kernels are osp, msp, and zmip. The osp kernel performs per-sample QC, clustering, and annotation. The msp kernel performs cross-sample integration, inspection, and annotation. The zmip kernel performs lineage zoom-in. The zmip kernel reuses the DEG, evidence, and report code from the msp kernel. The bridge (agent-harness-bridge) is the agent runtime.
+The kernels are osp, msp, and zmip, top-level packages of this repository (0018). The osp kernel performs per-sample QC, clustering, and annotation. The msp kernel performs cross-sample integration, inspection, and annotation. The zmip kernel performs lineage zoom-in. The zmip kernel reuses the DEG, evidence, and report code from the msp kernel; msp uses `standissect_lite` for fragments. `harness_bridge` is the agent runtime. Their tests are in `tests/<package>/`; `test_layers` says what each may import (none imports `ecarsi`).
 
 Run directory layout (one run = one dataset):
 
@@ -91,7 +91,7 @@ Agent models come from the catalog `~/.config/ecarsi/models.json` (`ECA_MODEL_CA
 
 ## Versions
 
-The current combination includes ecarsi 0.4.4 (upstream: eca-pp 0.5.3), agent-harness-bridge 0.2.15, OSP 0.1.8, MSP 0.5.4, ZMIP 0.3.10, and standissect-lite 0.2.0. The combination also includes openai-agents 0.22.3 and claude-agent-sdk 0.2.163. HQ is the owner's patched fork on branch `local`. The authoritative lists are [INSTALL.md](INSTALL.md) and `container/control-requirements.lock`.
+The current version is ecarsi 0.4.5 (upstream: eca-pp 0.5.4); since 0018 it covers the kernels and harness_bridge, which keep their last release numbers (OSP 0.1.8, MSP 0.5.4, ZMIP 0.3.10, harness_bridge 0.2.15, standissect-lite 0.2.0) only as history. The combination also includes openai-agents 0.22.3 and claude-agent-sdk 0.2.163. HQ is the owner's patched fork on branch `local`. The authoritative lists are [INSTALL.md](INSTALL.md) and `container/control-requirements.lock`.
 
 ## Targeted checks
 

@@ -19,7 +19,7 @@ See [README.md](README.md) to learn what the system does and how to read its res
 | Image | File | Carries |
 |---|---|---|
 | control image | `rsi-control-<stamp>.sif` (~250 MB) | the control Python environment (`/opt/rsi-control`), Temporal 1.32.0 and PostgreSQL 16.15 (`/opt/rsi-services/{temporal,postgres}`), HyperQueue (`/opt/rsi-bin/hq`), and a snapshot of eca-rsi (`/opt/eca-rsi`, with `BUILD.json`) |
-| compute image | `rsi-science-<stamp>.sif` (~3.9 GB) | the kernels and numerical stack (`/opt/rsi-python`, Python 3.12.14), `/opt/rsi-control`, HyperQueue, and the same eca-rsi snapshot. Workers and Periscope run here |
+| compute image | `rsi-science-<stamp>.sif` (~3.9 GB) | the numerical stack (`/opt/rsi-python`, Python 3.12.14), `/opt/rsi-control`, HyperQueue, and the same eca-rsi snapshot, which carries the kernels (decision 0018). Workers and Periscope run here |
 
 Keep the images on a non-purged filesystem, for example `$GROUP_HOME/<user>/eca/images/`. Use one `<stamp>` for a pair. The HyperQueue binary is the owner's patched build (branch `local` of `chansigit/hyperqueue`).
 
@@ -27,12 +27,7 @@ The file `container/control-requirements.lock` defines the pinned Python environ
 
 | Package | Version |
 |---|---|
-| ecarsi | 0.4.4 |
-| agent-harness-bridge | 0.2.15 |
-| osp-sc (`osp`) | 0.1.8 |
-| msp-sc (`msp`) | 0.5.4 |
-| zmip | 0.3.10 |
-| standissect-lite | 0.2.0 |
+| ecarsi, with `osp`, `msp`, `zmip`, `standissect_lite`, `harness_bridge` (one repository, decision 0018) | 0.4.5 |
 | openai-agents / openai | 0.22.3 / 3.23.0 |
 | claude-agent-sdk | 0.2.163 (bundles Claude Code 2.1.286) |
 | temporalio | 1.32.0 |
@@ -204,8 +199,8 @@ Store the source repositories next to each other on a non-purged filesystem:
 ```text
 $GROUP_HOME/<user>/eca/
   images/
-  src/{eca-rsi,osp,msp,zmip,agent-harness-bridge,standissect-lite}   # main checkouts
-  worktrees/eca-rsi-dev                                              # development worktree, branch dev
+  src/eca-rsi              # main checkout: ecarsi and, since decision 0018, the kernels and harness_bridge
+  worktrees/eca-rsi-dev    # development worktree, branch dev
 ```
 
 Develop in the `dev` worktree. Fast-forward `main` after the tests pass. Do not edit code that a running plane imports.
@@ -222,10 +217,8 @@ The tests run inside the images. You do not need a host environment. The images 
 
 ```bash
 cd $GROUP_HOME/$USER/eca/worktrees/eca-rsi-dev
-SIB=$GROUP_HOME/$USER/eca/src
 apptainer exec --cleanenv --bind /scratch,/oak,/home,/lscratch --env LC_ALL=C --env LANG=C --env PYTHONDONTWRITEBYTECODE=1 \
-  --env "PYTHONPATH=$PWD:/opt/rsi-control:$GROUP_HOME/$USER/pytest-only" \
-  --env "ECA_SIBLINGS=$SIB/msp:$SIB/osp:$SIB/zmip:$SIB/agent-harness-bridge" \
+  --env "PYTHONPATH=$PWD:/opt/rsi-control:/opt/rsi-python:$GROUP_HOME/$USER/pytest-only" \
   "$SCI" /usr/local/bin/python3 -m pytest -q -p no:cacheprovider tests
 ```
 
@@ -241,7 +234,7 @@ Use an editable install only for IDEs and quick experiments on a host with Pytho
 python -m pip install -e $GROUP_HOME/$USER/eca/src/eca-rsi --no-deps
 ```
 
-The kernels are separate packages. Install each kernel the same way with `pip install -e`. Dependency ranges are in `pyproject.toml`. The images contain the versions that are tested together (A.2).
+The kernels and harness_bridge are packages of the same repository (decision 0018), so this one install covers them. Dependency ranges are in `pyproject.toml`. The images contain the versions that are tested together (A.2).
 
 ### B.5 Rebuild the images
 
@@ -251,7 +244,7 @@ The kernels are separate packages. Install each kernel the same way with `pip in
 FROM=<old stamp> STAMP=<new stamp> [WHEELS=<dir of wheels>] bash ops/build-images-update.sh
 ```
 
-It extracts both images into sandboxes on node-local disk. It replaces `/opt/eca-rsi` with `git archive HEAD` of the `dev` worktree. It writes `BUILD.json`. Optionally, it swaps Python distributions by their `RECORD` files. Then it packs each sandbox. The checkout must be clean.
+It extracts both images into sandboxes on node-local disk. It replaces `/opt/eca-rsi` with `git archive HEAD` of the `dev` worktree: ecarsi, the kernels and harness_bridge (decision 0018). It writes `BUILD.json`, takes the old wheels of those packages out of the images, and checks that each is imported from `/opt/eca-rsi`. Optionally, it swaps third-party Python distributions by their `RECORD` files. Then it packs each sandbox. The checkout must be clean.
 
 Pack by hand. `apptainer build` from a sandbox segfaults in its mksquashfs step on the compute sandbox. The script runs `mksquashfs ... -processors 4`. Then it runs `apptainer sif new` and `apptainer sif add --datatype 4 --parttype 2 --partfs 1 --partarch 2 --groupid 1`.
 
@@ -259,12 +252,10 @@ A full rebuild (`ops/build-images.sh`) starts from the two base images, whose Py
 
 ### B.6 Source repositories
 
-[eca-rsi](https://github.com/chansigit/eca-rsi),
-[osp](https://github.com/chansigit/osp),
-[msp](https://github.com/chansigit/msp),
-[zmip](https://github.com/chansigit/zmip),
-[agent-harness-bridge](https://github.com/chansigit/agent-harness-bridge),
-[standissect-lite](https://github.com/chansigit/standissect-lite).
+[eca-rsi](https://github.com/chansigit/eca-rsi) holds everything since decision 0018. The former repositories
+[osp](https://github.com/chansigit/osp), [msp](https://github.com/chansigit/msp), [zmip](https://github.com/chansigit/zmip),
+[agent-harness-bridge](https://github.com/chansigit/agent-harness-bridge) and
+[standissect-lite](https://github.com/chansigit/standissect-lite) are archived; their histories are part of eca-rsi's.
 
 ## C. Run-time configuration
 

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from tests.bridge_contract import BRIDGE_LEGACY_API
 
-import os
 from pathlib import Path
 
 import harness_bridge
@@ -28,19 +27,6 @@ LEGACY_SHIM_EXPORTS = {
 }
 
 
-def sibling(name: str) -> Path:
-    env = os.environ.get("ECA_SIBLINGS")
-    if env:
-        for directory in env.split(":"):
-            if Path(directory).name.startswith(name):
-                return Path(directory)
-    suffix = HERE.name[len("eca-rsi"):] if HERE.name.startswith("eca-rsi") else ""
-    for candidate in (HERE.parent / f"{name}{suffix}", HERE.parent / name):
-        if candidate.is_dir():
-            return candidate
-    raise FileNotFoundError(f"no sibling checkout for {name} next to {HERE} (set ECA_SIBLINGS)")
-
-
 def test_legacy_harness_modules_reexport_shared_objects():
     # msp.harness was removed in msp 0.4 and ecarsi.harness in ecarsi 0.4.3; osp still carries its shim.
     from osp import harness as osp_harness
@@ -54,11 +40,9 @@ def test_legacy_harness_modules_reexport_shared_objects():
 
 
 def test_no_project_keeps_private_harness_implementations():
-    for package_dir in (HERE / "ecarsi", sibling("msp") / "msp", sibling("osp") / "osp"):
+    for package_dir in (HERE / "ecarsi", HERE / "msp", HERE / "osp"):
         assert not list(package_dir.glob("_harness_*.py")), package_dir
 
 
 def test_resource_copies_still_match():
-    assert (HERE / "ecarsi" / "resources.py").read_bytes() == (
-        sibling("msp") / "msp" / "resources.py"
-    ).read_bytes()
+    assert (HERE / "ecarsi" / "resources.py").read_bytes() == (HERE / "msp" / "resources.py").read_bytes()

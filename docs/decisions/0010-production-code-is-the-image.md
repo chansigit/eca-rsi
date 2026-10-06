@@ -15,3 +15,5 @@ previous pair stays until it passes (2026-10-02).
 
 **Consequences.** What runs is always a named, verified build. Every fix needs a rebuild and a switch; the
 host needs nothing but Apptainer and a Python for the worker launcher. Docs: `container/README.md`, INSTALL.md.
+
+**Amended 2026-10-06 (decision 0018).** The kernels and harness_bridge are packages of this repository; the image snapshot carries them, and `tests/test_layers.py` also says what each of them may import.

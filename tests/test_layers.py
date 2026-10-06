@@ -2,11 +2,13 @@
 fails here; change these tables only together with the design.
 
 The subsystems are the packages under ecarsi/. The modules directly in ecarsi/ are the vocabulary they
-share (layout, files, contracts, run_state, review, ...): they import no subsystem at all."""
+share (layout, files, contracts, run_state, review, ...): they import no subsystem at all. The kernels and
+harness_bridge live in this repository too (decision 0018); MAY_IMPORT says which of its packages each may use."""
 import ast
 from pathlib import Path
 
-PACKAGE = Path(__file__).resolve().parents[1] / "ecarsi"
+REPO = Path(__file__).resolve().parents[1]
+PACKAGE = REPO / "ecarsi"
 
 # subsystem: the subsystems it must not import
 FORBIDDEN = {
@@ -26,8 +28,17 @@ ALLOWED = {
 }
 KERNELS = {"msp", "osp", "zmip"}
 # Only the programs of the compute image use the kernels; everything else also runs in the control image,
-# which has none. They reach a kernel only through its api module, the kernel's contract with eca-rsi.
+# which carries their source but not the numerical stack they need. They reach a kernel only through its api
+# module, the kernel's contract with eca-rsi.
 KERNEL_USERS = {"ecarsi.stages"}
+# The repository's other packages (decision 0018): which of its own packages each may import. None imports ecarsi.
+MAY_IMPORT = {
+    "osp": {"harness_bridge"},
+    "msp": {"standissect_lite", "harness_bridge"},
+    "zmip": {"msp", "harness_bridge"},  # reaches into msp's modules, not only msp.api: tighten when they are cleaned up
+    "standissect_lite": set(),
+    "harness_bridge": set(),
+}
 
 
 def subsystem(module):
@@ -35,9 +46,9 @@ def subsystem(module):
     return ".".join(parts[:2]) if parts[0] == "ecarsi" and len(parts) > 1 else parts[0]
 
 
-def imports():
-    for path in sorted(PACKAGE.rglob("*.py")):
-        relative = path.relative_to(PACKAGE.parent)
+def imports(root=PACKAGE):
+    for path in sorted(root.rglob("*.py")):
+        relative = path.relative_to(root.parent)
         package = ".".join(relative.parent.parts)
         for node in ast.walk(ast.parse(path.read_text())):
             if isinstance(node, ast.Import):
@@ -77,6 +88,13 @@ def test_kernels_only_through_their_api():
             wrong.add(f"{path} imports {name}: only {sorted(KERNEL_USERS)} may use the kernels")
         elif name not in KERNELS and not name.startswith(f"{top}.api"):
             wrong.add(f"{path} imports {name}: use {top}.api")
+    assert not wrong, sorted(wrong)
+
+
+def test_the_repository_packages_import_only_what_they_may():
+    own = set(MAY_IMPORT) | {"ecarsi"}
+    wrong = {f"{path} imports {name}" for package, may in MAY_IMPORT.items() for path, _, name in imports(REPO / package)
+             if name.split(".")[0] in own - {package} - may}
     assert not wrong, sorted(wrong)
 
 

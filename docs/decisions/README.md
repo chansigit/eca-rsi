@@ -23,3 +23,4 @@ decision that is replaced keeps its page and says so at the top.
 | [0015](0015-image-versions-side-by-side.md) | Two image versions side by side (proposed, not built) |
 | [0016](0016-samples-and-batches-from-eca-pp.md) | Samples and batches come from ECA-PP; big samples run as chunks |
 | [0017](0017-stress-population-policy.md) | Stress, dissociation and dying removals follow a policy the code checks |
+| [0018](0018-one-repository.md) | One repository: the kernels and the agent harness live in eca-rsi |

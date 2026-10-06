@@ -5,7 +5,7 @@ ECA-RSI runs from two Apptainer images. You install nothing on the host.
 | Image | File | Size | Contents |
 |---|---|---|---|
 | Control image | `rsi-control-<stamp>.sif` | ~250 MB | the control Python environment (`/opt/rsi-control`), Temporal server, sql-tool and ui-server with the PostgreSQL v12 schema (`/opt/rsi-services/temporal`), PostgreSQL 16 (`/opt/rsi-services/postgres`, RUNPATH relative), HQ (`/opt/rsi-bin/hq`), an eca-rsi snapshot (`/opt/eca-rsi`; `BUILD.json` names the commit) |
-| Compute image | `rsi-science-<stamp>.sif` | ~3.9 GB | the kernels and the numerical stack, CPU and RAPIDS (`/opt/rsi-python`), `/opt/rsi-control`, HQ, the same eca-rsi snapshot |
+| Compute image | `rsi-science-<stamp>.sif` | ~3.9 GB | the numerical stack, CPU and RAPIDS (`/opt/rsi-python`), `/opt/rsi-control`, HQ, the same eca-rsi snapshot, which carries the kernels (decision 0018) |
 
 The current pair is `rsi-control-20261001-3.sif` and `rsi-science-20261001-3.sif` in `$GROUP_HOME/chensj16/eca/images/`. Keep the `-2` pair as a rollback image until the next production batch runs on `-3`.
 
@@ -60,9 +60,9 @@ Workers advertise the runtime digest. After you switch images, stop the worker s
 
 ## Build
 
-For a full build, run [ops/build-images.sh](../ops/build-images.sh). It starts from base images whose control environment comes from [control-requirements.lock](control-requirements.lock) (CPython 3.12 x86_64 hashed wheels). It takes Temporal, PostgreSQL, and HQ out of an existing control image. It then copies the eca-rsi checkout to `/opt/eca-rsi`.
+For a full build, run [ops/build-images.sh](../ops/build-images.sh). It starts from base images whose control environment comes from [control-requirements.lock](control-requirements.lock) (CPython 3.12 x86_64 hashed wheels). It takes Temporal, PostgreSQL, and HQ out of an existing control image. It then copies the eca-rsi checkout, kernels and harness_bridge included (decision 0018), to `/opt/eca-rsi`.
 
-For an incremental build, run `ops/build-images-update.sh`. Extract the current images into a sandbox directory on local node storage. Replace `/opt/eca-rsi` and any updated wheels. Pack the sandbox directory and wrap it as a SIF file.
+For an incremental build, run `ops/build-images-update.sh`. Extract the current images into a sandbox directory on local node storage. Replace `/opt/eca-rsi`, take out the old wheels of the repository's own packages, and replace any updated third-party wheels. Pack the sandbox directory and wrap it as a SIF file.
 
 Pack the sandbox manually. The command `apptainer build` causes a segmentation fault during mksquashfs on the 6.6 GB compute sandbox. This fault occurs in apptainer 1.4 with mksquashfs 4.7.5, with or without `--mksquashfs-args`. Use this manual procedure instead:
 
@@ -83,11 +83,11 @@ Moving Temporal or PostgreSQL into an image changed the binary bytes because of 
 
 ## Rules learned the hard way
 
-- **Equal version numbers are not equal code.** An image once contained msp and zmip with matching checkout version numbers, but 11 source files differed. Compare source digests in `/opt/rsi-runtime.json` rather than version numbers.
+- **Equal version numbers are not equal code.** An image once contained msp and zmip with matching checkout version numbers, but 11 source files differed. Since decision 0018 the kernels are part of the snapshot, so `BUILD.json`'s commit names their source too.
 - **Never edit the live code path.** Pool tasks import eca-rsi for each task. A draft edit in the live worktree caused 21 tasks to fail in one minute. Develop in a separate worktree, run tests, and then build a new image.
 - **Deploy pinned stage files only with zero running executions.** Requests pin program files by content. A modified file causes queued requests and active sessions to fail.
 - **`pandas<3` is pinned.** In pandas 3, Copy-on-Write returns read-only arrays from `Series.values`. This behavior broke OSP quality control actions, even though every test passed.
-- **`scikit-image` is installed explicitly.** The scrublet path in scanpy imports `scikit-image`. The osp package does not declare `scanpy[scrublet]`.
+- **`scikit-image` is installed explicitly.** The scrublet path in scanpy imports `scikit-image`.
 - **`HARNESS=claude` needs the Claude Code CLI.** The control image includes claude-agent-sdk with the bundled CLI. The default configuration `HARNESS=openai` requires no extra packages.
 - **Run in-image checks from `/tmp` or with `PYTHONSAFEPATH=1`.** A repository checkout in the current directory shadows the image snapshot.
 - **A SIF is never edited in place.** The pool runtime records the SIF sha256 hash. A patched file invalidates every stage that verifies against this hash. To change the image, write a new file.

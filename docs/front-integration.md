@@ -105,6 +105,6 @@ bash ops/runsci-dev.sh -m pytest -q tests/test_front_integration.py tests/test_o
 [history/FRONT_VALIDATION.md](history/FRONT_VALIDATION.md) contains the September 2026 validation record. [history/FRONT_COMPATIBILITY.json](history/FRONT_COMPATIBILITY.json) lists the source revisions tested during that validation.
 ## Bridge compatibility layer
 
-eca-rsi imports the agent runtime from `harness_bridge` directly. Its `ecarsi.harness` compatibility shim was removed in 0.4.3; osp still keeps one, and `tests/test_harness_sync.py` checks that it re-exports the bridge's objects.
+eca-rsi imports the agent runtime from `harness_bridge` (in this repository since decision 0018). Its `ecarsi.harness` compatibility shim was removed in 0.4.3; osp still keeps one, and `tests/test_harness_sync.py` checks that it re-exports the bridge's objects.
 
-The CLI calls `configure_logging("ecarsi", stream=sys.stderr)` at entry. Library functions do not reconfigure logging. The bridge's `ensure_logging` respects existing handlers. The source dependency is `agent-harness-bridge[all]>=0.2.14,<0.3`.
+The CLI calls `configure_logging("ecarsi", stream=sys.stderr)` at entry. Library functions do not reconfigure logging. The bridge's `ensure_logging` respects existing handlers. The bridge's third-party dependencies are the `agent` and `deepseek` extras of `pyproject.toml`.

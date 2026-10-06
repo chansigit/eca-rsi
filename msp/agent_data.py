@@ -68,47 +68,8 @@ def work(ad=None):
     return budget.work()
 
 
-def _invoke(function, source, obs, uns, args, kwargs):
-    """Worker operation: file carries expression; small metadata carries refinements."""
-    path, size, modified = source
-    ad = metadata(path)
-    if ad._agent_source[1:] != (size, modified):
-        raise ValueError('agent input changed before pool execution')
-    ad.obs, ad.uns = obs, uns
-    with materialize(ad) as full:
-        result = function(full, *args, **kwargs)
-    return result, ad.obs, ad.uns
-
-
 def apply(function, ad, *args, **kwargs):
     from harness_bridge.control import safe_point
     safe_point()
-    source = getattr(ad, '_agent_source', None)
-    if source is None or os.environ.get('MSP_COMPUTE_ENDPOINT') != 'pool':
-        with materialize(ad) as full:
-            return function(full, *args, **kwargs)
-    from ecarsi.pool.client import PoolEndpoint
-
-    # The batch admission estimate already covers full local matrix work. Use
-    # it conservatively on the worker too; standalone callers use cell count.
-    memory = int(os.environ.get('ECA_DRIVER_MEMORY_BYTES', '0')) or max(2*2**30, ad.n_obs*4*2**20)
-    module = os.environ.get('ECA_DRIVER_BUDGET_MODULE')
-    if module:
-        budget = importlib.import_module(module)
-        if hasattr(budget, 'matrix_working_bytes'):
-            memory = budget.matrix_working_bytes(source[0])
-    from functools import partial
-    root = Path(os.environ.get('ECA_POOL_DATA_ROOT', str(source[0].parent))).resolve()
-    if not source[0].is_relative_to(root):
-        raise ValueError('agent input is outside ECA_POOL_DATA_ROOT')
-    invocation = partial(_invoke, function, source, ad.obs, ad.uns, args, kwargs)
-    invocation.__module__, invocation.__name__ = function.__module__, function.__name__
-    with PoolEndpoint(mode='pool') as pool:
-        result, updated, updated_uns = pool.submit(invocation,
-            needs=dict(cpus=1, memory=memory, seconds=max(60, ad.n_obs/20),
-                       roots=[str(root)], modules=['msp'])).result()
-    safe_point()
-    if not updated.index.equals(ad.obs.index):
-        raise ValueError('pool tool returned misaligned cell metadata')
-    ad.obs, ad.uns = updated, updated_uns
-    return result
+    with materialize(ad) as full:
+        return function(full, *args, **kwargs)
