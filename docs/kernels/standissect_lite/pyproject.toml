@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "standissect-lite"
+version = "0.2.0"
+description = "Minor-sibling detection inside existing single-cell clusters — the detection core of standissect, without the heavy stack."
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [{name = "chansigit", email = "chansigit@gmail.com"}]
+requires-python = ">=3.10"
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+    "numpy",
+    "pandas",
+    "scikit-learn",
+    "python-igraph",
+    "leidenalg",
+    "anndata",
+]
+
+[project.urls]
+Homepage = "https://github.com/chansigit/standissect-lite"
+Repository = "https://github.com/chansigit/standissect-lite"
+
+[tool.setuptools.packages.find]
+include = ["standissect_lite*"]
