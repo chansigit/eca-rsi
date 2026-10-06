@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from msp.annotate import REMOVE_REASONS, _guard_batch_annotation
+from msp.api import REMOVE_REASONS, guard_batch_annotation as _guard_batch_annotation
 
 from .annotate import _validate_cluster, _validate_final, components
 
@@ -140,7 +140,7 @@ def apply_decisions(obs, types, quality, own_labels, other_labels, lineage, pre_
 def compute_lineage(sub, name, labels, markers, outdir, *, batch_col, species,
                     n_top_genes=3000, n_pcs=50, n_neighbors=15):
     """One numerical unit up through UMAP/QC; persist the independent DEG plan."""
-    from msp.integrate import integrate_adata
+    from msp.api import integrate_adata
     from .foreign import score_foreign
     if not sub.obs_names.is_unique or not len(sub):
         raise ValueError('Lineage input must be nonempty with unique cell IDs')

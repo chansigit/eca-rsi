@@ -31,11 +31,12 @@ KERNELS = {"msp", "osp", "zmip"}
 # which carries their source but not the numerical stack they need. They reach a kernel only through its api
 # module, the kernel's contract with eca-rsi.
 KERNEL_USERS = {"ecarsi.stages"}
-# The repository's other packages (decision 0018): which of its own packages each may import. None imports ecarsi.
+# The repository's other packages (decision 0018): which of its own modules each may import (a name and what is
+# under it). None imports ecarsi.
 MAY_IMPORT = {  # the kernels run no agents since #28: eca-rsi's sessions do, so none imports harness_bridge
     "osp": set(),
     "msp": {"standissect_lite"},
-    "zmip": {"msp"},  # reaches into msp's modules, not only msp.api: tighten when they are cleaned up
+    "zmip": {"msp.api"},  # like eca-rsi, through msp's contract module
     "standissect_lite": set(),
     "harness_bridge": set(),
 }
@@ -48,20 +49,24 @@ def subsystem(module):
 
 def imports(root=PACKAGE):
     for path in sorted(root.rglob("*.py")):
-        relative = path.relative_to(root.parent)
-        package = ".".join(relative.parent.parts)
-        for node in ast.walk(ast.parse(path.read_text())):
-            if isinstance(node, ast.Import):
-                names = [alias.name for alias in node.names]
-            elif isinstance(node, ast.ImportFrom):
-                base = package.split(".")[: len(package.split(".")) - node.level + 1] if node.level else []
-                module = ".".join(base + ([node.module] if node.module else []))
-                # `from ..x import y` may name a module y: count both spellings
-                names = [module] + [f"{module}.{alias.name}" for alias in node.names]
-            else:
-                continue
-            for name in names:
-                yield relative.as_posix(), ".".join(relative.with_suffix("").parts), name
+        yield from imports_of(path, root.parent)
+
+
+def imports_of(path, top=REPO):
+    relative = path.relative_to(top)
+    package = ".".join(relative.parent.parts)
+    for node in ast.walk(ast.parse(path.read_text())):
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            base = package.split(".")[: len(package.split(".")) - node.level + 1] if node.level else []
+            module = ".".join(base + ([node.module] if node.module else []))
+            # `from ..x import y` may name a module y: count both spellings
+            names = [module] + [f"{module}.{alias.name}" for alias in node.names]
+        else:
+            continue
+        for name in names:
+            yield relative.as_posix(), ".".join(relative.with_suffix("").parts), name
 
 
 def allowed(path, name):
@@ -94,8 +99,47 @@ def test_kernels_only_through_their_api():
 def test_the_repository_packages_import_only_what_they_may():
     own = set(MAY_IMPORT) | {"ecarsi"}
     wrong = {f"{path} imports {name}" for package, may in MAY_IMPORT.items() for path, _, name in imports(REPO / package)
-             if name.split(".")[0] in own - {package} - may}
+             if name.split(".")[0] in own - {package} and not any(name == m or name.startswith(m + ".") for m in may)}
     assert not wrong, sorted(wrong)
+
+
+SCRIPTS = sorted(path for folder in ("ops", "container") for path in (REPO / folder).glob("*.[ps][yh]"))
+
+
+def resolves(name):
+    """Whether a dotted name is a module or a name in one, e.g. ecarsi.control.temporal.endpoint."""
+    import importlib
+    parts = name.split(".")
+    for cut in range(len(parts), 0, -1):
+        try:
+            target = importlib.import_module(".".join(parts[:cut]))
+        except ModuleNotFoundError:
+            continue
+        for attribute in parts[cut:]:
+            if not hasattr(target, attribute):
+                return False
+            target = getattr(target, attribute)
+        return True
+    return False
+
+
+def test_every_name_the_scripts_use_still_exists():
+    """The scripts in ops/ and container/ import the repository's modules too, in Python or in the Python their
+    shell lines run (#42: the pruner broke when 0.4.3 moved the files and only a test that happened to import it saw it)."""
+    import re
+    own = "|".join(["ecarsi"] + sorted(MAY_IMPORT))
+    missing = set()
+    for script in SCRIPTS:
+        text = script.read_text()
+        if script.suffix == ".py":
+            names = [name for _, _, name in imports_of(script)]
+        else:
+            names = re.findall(rf"\b(?:{own})(?:\.\w+)+", text)
+            names += [f"{module}.{n.strip()}" for module, listed in re.findall(rf"from ((?:{own})[\w.]*) import ([\w, ]+)", text)
+                      for n in listed.split(",")]
+        missing |= {f"{script.relative_to(REPO)}: {name}" for name in names
+                    if name.split(".")[0] in {"ecarsi", *MAY_IMPORT} and not resolves(name)}
+    assert not missing, sorted(missing)
 
 
 def test_the_allowed_crossings_still_exist():

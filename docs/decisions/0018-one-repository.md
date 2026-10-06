@@ -33,8 +33,8 @@ more than it bought:
 
 **What it costs.** The repository is larger (about 18,000 more lines and 290 more tests; the full suite runs them
 in the compute image). zmip's compute identity changed once at the first image built this way (the packages lost
-their distribution metadata), so lineage caches from before were invalidated. zmip still reaches into msp's modules
-beyond `msp.api`; tighten that when the standalone flows go (#28).
+their distribution metadata), so lineage caches from before were invalidated. zmip reached into msp's modules
+beyond `msp.api` until 2026-10-06; since then it uses `msp.api` like eca-rsi (`tests/test_layers.py`).
 
 **Update 2026-10-06 (#28).** The standalone flows are gone: about 4,800 lines of kernel code (command lines, agent
 flows, the zmip lineage runner, msp's dask endpoints and agent checkpoints) and 2,700 lines of their tests, plus the

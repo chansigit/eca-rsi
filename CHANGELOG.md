@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **The scripts and zmip are inside the layer test (#42).** `tests/test_layers.py` checks that every repository name
+  the scripts in `ops/` and `container/` import, or name in their shell lines, still exists, so moving a module they
+  use fails a test (the pruner broke silently on the 0.4.3 move). zmip now reaches msp only through `msp.api` (10 more
+  names there), and msp's aliases kept for 0.3 callers (`evidence.components`, `report.csv_table`, `report.img`) are gone.
 - **Zoom-in low-confidence keeps no longer flood needs_review (#45).** A QC cluster's keeps at low confidence share
   one `inspect_flag` line with their intersections and cell counts, and intersections under 20 cells
   (`release.LOW_KEEP_MIN_CELLS`) are left out. On gate-20261006-0202 the 123 such lines (1-16 cells each) become none.

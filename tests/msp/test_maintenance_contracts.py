@@ -4,9 +4,8 @@ import warnings
 
 import pytest
 
+import msp.api as api
 import msp.deg_logging as deg_logging
-import msp.evidence as evidence
-import msp.report as report
 
 
 def test_deg_warning_summary_preserves_other_warnings_and_results(monkeypatch, caplog):
@@ -41,10 +40,8 @@ def test_deg_errors_propagate(monkeypatch):
         deg_logging.rank_genes_groups(None)
 
 
-def test_public_helpers_keep_legacy_behavior(tmp_path):
+def test_merge_components():
     entries = {"0": {"merge_target": "1"}, "1": {"merge_target": None}}
-    assert evidence.components(entries) == {"0": ["0", "1"], "1": ["0", "1"]}
-    assert report.csv_table is report._csv_table
-    assert report.img is report._img
+    assert api.components(entries) == {"0": ["0", "1"], "1": ["0", "1"]}
 
 

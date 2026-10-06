@@ -973,10 +973,3 @@ def generate_report(outdir: str, out_html: str | None = None, title: str | None 
         fh.write(html_doc)
     os.replace(tmp_html, out_html)
     return out_html
-
-
-
-
-# Public rendering helpers; old names remain compatible with 0.3 callers.
-csv_table = _csv_table
-img = _img

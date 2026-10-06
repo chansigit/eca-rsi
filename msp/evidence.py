@@ -663,13 +663,6 @@ class DegCache:
         return text if complete else text + "\n(cached ranked prefix; more genes may pass)"
 
 
-def components(entries):
-    """Return connected annotation merge components from cluster entries."""
-    from .annotate import _components
-
-    return _components(entries)
-
-
 def palette(ad, col):
     """Assign the annotation palette for an observation column."""
     from .annotate import _palette

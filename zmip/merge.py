@@ -24,10 +24,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scanpy as sc
-from msp.plots import UMAP_DPI, save_single_umap, umap_axes
+from msp.api import UMAP_DPI, palette, save_single_umap, umap_axes
 
 from . import publication
-from msp.evidence import palette
 
 log = logging.getLogger(__name__)
 

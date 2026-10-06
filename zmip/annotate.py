@@ -3,18 +3,13 @@ validation (coverage of the current clustering, union-find over merge_target, th
 rules). The agent session runs in eca-rsi (ecarsi/stages/zoomin.py, through zmip.api); quality decisions are
 validated and applied by zmip.scheduled. The standalone agent flow was removed with #28.
 
-Actions: keep (coarse_label one of this lineage's labels), remove (a reason from msp.annotate.REMOVE_REASONS),
+Actions: keep (coarse_label one of this lineage's labels), remove (a reason from msp.api.REMOVE_REASONS),
 reassign (another lineage's coarse label; relabel only, the cells are not re-embedded there this round).
 """
 
 import logging
 
-from msp.annotate import (
-    CONFIDENCES,
-    REMOVE_REASONS,
-)
-
-from msp.evidence import components
+from msp.api import CONFIDENCES, REMOVE_REASONS, components
 
 log = logging.getLogger(__name__)
 

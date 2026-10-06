@@ -21,11 +21,9 @@ import json
 import os
 import re
 
-from msp.plots import slug
-from msp.report import CSS, TOC_PIN_SCRIPT
+from msp.api import CSS, TOC_PIN_SCRIPT, csv_table, img, slug
 
 from . import publication
-from msp.report import csv_table, img
 
 _LABELS = {
     "plan": "Lineage plan",
@@ -303,7 +301,7 @@ def generate_report(outdir, out_html=None, title=None, *, result_dir=None):
         sections += [_section_plan(outdir, plan), _section_lineages(outdir, plan)]
     sections += [_section_final(results, kept_counts), _section_removed(results)]
     sections, toc = _number([s for s in sections if s])
-    from msp.report import compose_title
+    from msp.api import compose_title
 
     # Per-lineage reports are MSP reports (see zmip.annotate); this module renders the global one only.
     title = title or compose_title("zoom-in by lineage (zmip)", outdir)

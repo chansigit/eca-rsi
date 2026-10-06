@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 import scanpy as sc
 from anndata import AnnData
-from msp.plots import save_single_umap, slug
+from msp.api import save_single_umap, slug
 
 log = logging.getLogger(__name__)
 

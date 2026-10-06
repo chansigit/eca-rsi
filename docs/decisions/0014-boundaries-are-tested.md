@@ -29,4 +29,4 @@ on, so old runs keep passing. Since 0.4.3 the stage-only helpers live in `ecarsi
 file helpers every part uses moved from `warm_pool/state.py` to `ecarsi/files.py`, and the modules left directly
 in `ecarsi/` are the shared vocabulary, which may import no part (two listed exceptions: `display`, `observatory`).
 
-**Amended 2026-10-06 (decision 0018).** The kernels and harness_bridge are packages of this repository; the image snapshot carries them, and `tests/test_layers.py` also says what each of them may import.
+**Amended 2026-10-06 (decision 0018).** The kernels and harness_bridge are packages of this repository; the image snapshot carries them, and `tests/test_layers.py` also says what each of them may import. Since #42 it also checks that every repository name the scripts in `ops/` and `container/` use still exists.

@@ -37,7 +37,7 @@ import pandas as pd
 import scanpy as sc
 import scipy.sparse as sp
 from anndata import AnnData
-from msp.plots import save_single_umap, slug
+from msp.api import save_single_umap, slug
 
 
 log = logging.getLogger(__name__)
