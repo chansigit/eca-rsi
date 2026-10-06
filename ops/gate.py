@@ -12,7 +12,8 @@ usage (control image; ops/run.sh passes BASE and CONTROL):
 gate-dataset.json is a dataset spec (examples/dataset-v2.json) without run_id, output_root and dataset_id; give it
 `storage` roots apart from the production ones so gate runs stay off the main Periscope list. The checks: the
 dataset completed with no failed unit; every unit is released; no step degraded (decision 0013); every zoomed
-lineage has its report.html (#26); the display zone record meets its contract and the work archive exists (#25).
+lineage has its report.html (#26); the display zone record meets its contract and the work archive exists (#25);
+every link of the zone's pages and reports reaches a file of the zone (#41).
 Run it right after ops/switch-images.sh; a failing gate means switching back to the previous pair.
 """
 import asyncio
@@ -72,12 +73,15 @@ def problems(root):
     found += [f"degraded: {r.get('unit') or 'dataset'} {r.get('stage', '')}: {r['what']}: {r['error']}" for r in degraded(root)]
     spec = read(root / "spec.json") or {}
     if spec.get("storage"):
-        from ecarsi.display import zone
+        from ecarsi.display import broken_links, zone
         place = zone(spec)
         try:
             contract("display", json.loads((Path(place["dest"]) / "display.json").read_text()))
         except (OSError, ValueError) as exc:
             found.append(f"display zone {place['dest']}: {exc} (#25)")
+        else:
+            found += [f"broken link on the display zone: {page} -> {target} (#41)"
+                      for target, page in sorted(broken_links(Path(place["dest"]), place["record"]["name"]).items())]
         if not Path(place["record"]["work"]).is_file():
             found.append(f"no work archive {place['record']['work']} (#25)")
     return found

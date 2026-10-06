@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **The gate checks the display zone's links (#41).** `gate.py check` renders the zone with Periscope's renderer,
+  follows every link of its pages and reports, and fails on a target the zone lacks or one outside it
+  (`display.broken_links`). The walk it shares with the display sync now reads a unit page's links from the unit: in
+  a run of several units, files linked only from a unit's reports (tables, figures) never reached the display zone.
 - **Periscope split by responsibility (#43).** `ecarsi/ui/serve.py` (2,055 lines) and `index.py` (1,576) become
   `serve` (HTTP handler, command line), `registry` (dataset list, display zones, scan-add and the other subcommands),
   `fleet` (dataset summaries, their cache, control-plane verdicts), `home` (navigator and overview), `index` (run and

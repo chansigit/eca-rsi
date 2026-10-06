@@ -47,6 +47,33 @@ def test_sync_copies_only_what_the_pages_need_and_only_what_changed(tmp_path):
     assert display.sync(root, dest, record)["copied"] == 1
 
 
+def test_broken_links_names_what_a_zone_lacks(tmp_path):
+    """#41: the gate fails on a link of the display zone that reaches nothing."""
+    root, dest = gen2_run(tmp_path / "run"), tmp_path / "display" / "c" / "d" / "r"
+    record = dict(name="run", collection="c", dataset="d", run="r", source=str(root), work="/w.tar.zst")
+    display.sync(root, dest, record)
+    assert display.broken_links(dest, "run") == {}
+    report = root / "units" / "u" / "rounds" / "round01" / "02-cross-sample" / "report.html"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text('<a href="removed.csv">removals</a> <a href="/scratch/pool/requests/r1/outputs/x.json">x</a>')
+    display.sync(root, dest, record)
+    assert display.broken_links(dest, "run") == {
+        "units/u/rounds/round01/02-cross-sample/removed.csv": "units/u/rounds/round01/02-cross-sample/report.html",
+        "/scratch/pool/requests/r1/outputs/x.json": "units/u/rounds/round01/02-cross-sample/report.html"}
+
+
+def test_a_unit_page_links_from_its_unit(tmp_path):
+    """With two units the run page lists them instead of showing one inline, so a report reached only from a unit
+    page must be read from that unit: the files it links to were left out of the zone."""
+    root = gen2_run(tmp_path / "run")
+    shutil.copytree(root / "units" / "u", root / "units" / "v")
+    report = root / "units" / "v" / "rounds" / "round01" / "02-cross-sample" / "report.html"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text('<a href="table.csv">table</a>')
+    (report.parent / "table.csv").write_text("a,b\n")
+    assert Path("units/v/rounds/round01/02-cross-sample/table.csv") in display.closure(root, "run")
+
+
 def test_overlapping_syncs_of_one_zone_do_not_trip_over_each_other(tmp_path, monkeypatch):
     """2026-10-02: four syncs of test1002-shi began together and the final one failed."""
     root, dest = gen2_run(tmp_path / "run"), tmp_path / "display" / "c" / "d" / "r"
