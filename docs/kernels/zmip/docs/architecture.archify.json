@@ -1,0 +1,396 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ZMIP module structure: stages and data flow",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "main-path",
+        "label": "Main path",
+        "focus": [
+          "input",
+          "main",
+          "plan",
+          "foreign",
+          "lineage",
+          "annotate",
+          "merge",
+          "publication",
+          "outputs"
+        ],
+        "note": "The input H5AD is planned, zoomed per lineage, annotated, merged back and published atomically."
+      },
+      {
+        "id": "agents",
+        "label": "Two agent calls",
+        "focus": [
+          "plan",
+          "annotate",
+          "harness"
+        ],
+        "note": "harness_bridge hands tools and a submit function to the model and returns the host-validated submission."
+      },
+      {
+        "id": "guards",
+        "label": "Guards and dependencies",
+        "focus": [
+          "cache",
+          "msp",
+          "report",
+          "publication"
+        ],
+        "note": "Receipts and the output lock make resume recoverable; MSP provides re-embedding, plots and report machinery."
+      }
+    ],
+    "viewBox": [
+      1130,
+      560
+    ]
+  },
+  "components": [
+    {
+      "id": "input",
+      "type": "external",
+      "label": "annotated.h5ad",
+      "sublabel": "MSP annotation result",
+      "pos": [
+        40,
+        80
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "main",
+      "type": "backend",
+      "label": "zmip.__main__",
+      "sublabel": "stage orchestration",
+      "pos": [
+        265,
+        80
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "plan",
+      "type": "backend",
+      "label": "zmip.plan",
+      "sublabel": "lineage plan, islands",
+      "pos": [
+        490,
+        80
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "tag": "agent"
+    },
+    {
+      "id": "lineage",
+      "type": "backend",
+      "label": "zmip.lineage",
+      "sublabel": "lineage subprocess pool",
+      "pos": [
+        940,
+        80
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "annotate",
+      "type": "backend",
+      "label": "zmip.annotate",
+      "sublabel": "keep / remove / reassign",
+      "pos": [
+        715,
+        440
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "tag": "agent"
+    },
+    {
+      "id": "merge",
+      "type": "backend",
+      "label": "zmip.merge",
+      "sublabel": "fold back, checks",
+      "pos": [
+        490,
+        440
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "publication",
+      "type": "security",
+      "label": "zmip.publication",
+      "sublabel": "journal, rollback",
+      "pos": [
+        265,
+        440
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "outputs",
+      "type": "database",
+      "label": "annotated_zmip.h5ad",
+      "sublabel": "report, audit CSVs",
+      "pos": [
+        40,
+        440
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "cache",
+      "type": "security",
+      "label": "zmip.cache / runtime",
+      "sublabel": "receipts, lock, identity",
+      "pos": [
+        40,
+        260
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "foreign",
+      "type": "backend",
+      "label": "zmip.foreign",
+      "sublabel": "markers, foreign scores",
+      "pos": [
+        715,
+        80
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "msp",
+      "type": "external",
+      "label": "msp",
+      "sublabel": "integrate, plots, report",
+      "pos": [
+        940,
+        260
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "harness",
+      "type": "external",
+      "label": "harness_bridge",
+      "sublabel": "model API middleware",
+      "pos": [
+        602,
+        260
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "tag": "Doubao / DeepSeek / Claude"
+    },
+    {
+      "id": "report",
+      "type": "backend",
+      "label": "zmip.report",
+      "sublabel": "global HTML report",
+      "pos": [
+        265,
+        260
+      ],
+      "size": [
+        150,
+        64
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "read-input",
+      "from": "input",
+      "to": "main",
+      "label": "read",
+      "variant": "emphasis",
+      "labelDy": -34
+    },
+    {
+      "id": "receipts",
+      "from": "main",
+      "to": "cache",
+      "label": "prepare_run, lock_run"
+    },
+    {
+      "id": "plan-call",
+      "from": "main",
+      "to": "plan",
+      "label": "plan_lineages",
+      "variant": "emphasis",
+      "labelDy": -34
+    },
+    {
+      "id": "plan-agent",
+      "from": "plan",
+      "to": "harness",
+      "label": "run_agent + tools",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "markers",
+      "from": "plan",
+      "to": "foreign",
+      "label": "markers per lineage",
+      "variant": "emphasis",
+      "labelDy": -34
+    },
+    {
+      "id": "score",
+      "from": "foreign",
+      "to": "lineage",
+      "label": "plan + marker table",
+      "variant": "emphasis",
+      "labelDy": -34
+    },
+    {
+      "id": "reembed",
+      "from": "msp",
+      "to": "lineage",
+      "label": "integrate_adata re-embedding"
+    },
+    {
+      "id": "subset",
+      "from": "lineage",
+      "to": "annotate",
+      "label": "subset + foreign scores",
+      "variant": "emphasis",
+      "labelDy": -30
+    },
+    {
+      "id": "annotate-agent",
+      "from": "annotate",
+      "to": "harness",
+      "label": "run_agent + tools",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "lineage-result",
+      "from": "annotate",
+      "to": "merge",
+      "label": "annotated.h5ad + audit CSVs",
+      "variant": "emphasis",
+      "labelDy": 52
+    },
+    {
+      "id": "report-call",
+      "from": "merge",
+      "to": "report",
+      "label": "generate_report"
+    },
+    {
+      "id": "report-file",
+      "from": "report",
+      "to": "publication",
+      "label": "report.html",
+      "labelDy": 24
+    },
+    {
+      "id": "staging",
+      "from": "merge",
+      "to": "publication",
+      "label": "staged set",
+      "variant": "emphasis",
+      "labelDy": 34
+    },
+    {
+      "id": "publish",
+      "from": "publication",
+      "to": "outputs",
+      "label": "atomic replace",
+      "variant": "emphasis",
+      "labelDy": 34
+    },
+    {
+      "id": "plan-return",
+      "from": "harness",
+      "to": "plan",
+      "label": "validated plan",
+      "variant": "dashed",
+      "fromSide": "left",
+      "toSide": "left"
+    },
+    {
+      "id": "annotate-return",
+      "from": "harness",
+      "to": "annotate",
+      "label": "validated proposal",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "top"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Four stages",
+      "items": [
+        "plan: the agent groups coarse labels into lineages by UMAP island",
+        "zoom: each lineage is re-embedded, scored for foreign signal and annotated per cluster",
+        "merge: results fold back into the global object under coverage and consistency checks",
+        "publish: outputs are staged, then replaced atomically under a journal"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Host guards",
+      "items": [
+        "Every coarse label belongs to exactly one lineage; pooling separate islands is rejected",
+        "Survivors plus removals must partition each lineage's input exactly",
+        "Reassignment decisions in the audit CSV and the H5AD are compared cell by cell"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Recoverable resume",
+      "items": [
+        "Receipts record the input hash, options and dependency source hashes",
+        "Agent settings are recorded but not compared, so max-turns can change between runs",
+        "Only one parent process may write to an output directory at a time"
+      ]
+    }
+  ]
+}
