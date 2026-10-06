@@ -22,7 +22,9 @@ ecarsi/warm_pool/   execution pool: requests and receipts (state), HQ adapter, s
 ecarsi/stages/      programs the pool runs: organize, persample, crosssample, zoomin, release, display, contract, evidence,
                     execution; and their helpers: organize_execute, upstream (ECA-PP products), h5ad, inclusion,
                     osp_worker, osp_contract, ledger, release_state, archive
-ecarsi/ui/          Periscope (serve, index, umapdata, control, records): read-only, tests/test_monitor_isolation.py
+ecarsi/ui/          Periscope: serve (HTTP), registry (dataset list), fleet (dataset summaries), home (navigator,
+                    overview), index (run and unit pages; gen1, gen2, common), static/ (CSS, JS), umapdata, control,
+                    records: read-only, tests/test_monitor_isolation.py
 ecarsi/*.py         the vocabulary every part shares; imports no part: layout, files (durable JSON records),
                     contracts, degraded, run_state, review, round_policy, plan, sample_mapping, policies,
                     model_web, resources; display (zone sync) and observatory (operator reports) are the two

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from ecarsi import layout as L
-from ecarsi.ui import index, serve
+from ecarsi.ui import gen2, index, serve
 
 
 def save(path: Path, value):
@@ -271,7 +271,7 @@ def test_a_running_round_shows_the_stage_subtotal_and_the_trend_marks_it_unsettl
     save(unit / 'rounds' / 'round02' / '02-cross-sample' / 'publication.json',
          {'state': 'complete', 'n_input': 70, 'n_survived': 69, 'n_removed': 1})
 
-    rounds = index._gen2_rounds(unit)
+    rounds = gen2._gen2_rounds(unit)
     assert rounds[0]['stats']['frac'] == pytest.approx(0.22)      # round 1 finished
     assert rounds[1]['stats'] is None and rounds[1]['partial']['stage'] == 'cross-sample'
     assert rounds[1]['partial'] == {'stage': 'cross-sample', 'removed': 1, 'frac': pytest.approx(1 / 70)}
@@ -322,13 +322,13 @@ def test_a_round_knows_its_input_before_cross_sample_restates_it(tmp_path):
     # round 2 is open but nothing of it has published yet: no cross-sample, no zoom-in
     (unit / 'rounds' / 'round02' / '02-cross-sample' / 'publication.json').unlink()
     (unit / 'rounds' / 'round03').mkdir()
-    rounds = index._gen2_rounds(unit)
+    rounds = gen2._gen2_rounds(unit)
     assert [(r['n'], r.get('n_in')) for r in rounds] == [(1, None), (2, 70), (3, 70)]
     assert rounds[0]['stats']['n_in'] == 90 and rounds[0]['stats']['n_out'] == 70
     assert f'<td class="num">{index._n(70)}</td>' in index.render_unit(unit)
     # a first round reads it from per-sample, which is the only thing published before it
     (unit / 'rounds' / 'round01' / 'publication.json').unlink()
-    assert [(r['n'], r.get('n_in')) for r in index._gen2_rounds(unit)] == [(1, 90), (2, 90), (3, 90)]
+    assert [(r['n'], r.get('n_in')) for r in gen2._gen2_rounds(unit)] == [(1, 90), (2, 90), (3, 90)]
 
 
 def test_the_sparkline_is_washed_in_the_colours_of_its_own_rounds(tmp_path):

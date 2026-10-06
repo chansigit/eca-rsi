@@ -215,7 +215,7 @@ def test_organize_takes_library_and_batch_from_eca_pp(tmp_path):
     )
     manifest = read_json(L.input_manifest(L.unit_dir(out, "u")))
     decision = manifest["sample_mapping"]["decision"]
-    from ecarsi.ui.index import batch_source
+    from ecarsi.ui.gen2 import batch_source
 
     assert batch_source(manifest) == (
         "samples from eca_pp: eca_pp_library; batch eca_pp_batch; platform droplet"

@@ -3,7 +3,8 @@ carries no h5ad, and the page there has to say the same thing as at the run root
 import json
 
 from ecarsi import layout as L
-from ecarsi.ui.index import _round_step, rounds_state, unit_state
+from ecarsi.ui.gen1 import _round_step, rounds_state
+from ecarsi.ui.index import unit_state
 
 
 def _touch(d, *names):

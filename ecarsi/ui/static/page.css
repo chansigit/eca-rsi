@@ -1,0 +1,177 @@
+
+/* warm paper by day, dark by night (prefers-color-scheme); everything below reads these variables */
+:root{color-scheme:light;--bg:#f4efe4;--card:#fbf8f1;--ink:#3b3a33;--ink-soft:#4e4b42;--muted:#6f6a5e;--line:#e3dccb;--line-strong:#cbc2ad;
+ --accent:#2a7f8f;--accent-ink:#1f6472;--accent-bg:#e2eeee;
+ --ok:#3d7a4a;--ok-bg:#e3eedf;--run:#a1651a;--run-bg:#f6e9d3;--bad:#a63d3d;--bad-bg:#f5e0dc;--none:#6f6a5e;--none-bg:#ece6d8;
+ /* Two palettes, deliberately separate. --ok/--run/--bad above are a *judgement*: green is good,
+    amber is worth a look, red is bad -- confidence, inclusion, how well a round converged. The
+    four below are a run's *lifecycle*, where finished is not "good" and running is not "warning".
+    Sharing one set made a high-confidence badge and a released dataset the same green. */
+ --done:#38618c;--done-bg:#e0e8f2;--live:#3d7a4a;--live-bg:#e3eedf;
+ --fail:#a63d3d;--fail-bg:#f5e0dc;--wait:#8a6d1f;--wait-bg:#f4ecd4;
+ --row-alt:#f7f3ea;--row-hover:#ece9dd;--tip-bg:#2c2a25;--tip-ink:#f4efe4;--tip-muted:#b9b3a5;--plot:#fdfbf6;
+ /* --plot backs the kernels' PNGs, which carry their own white, so it stays light in both
+    themes; --canvas is our own UMAP surface and follows the page. Pure white read as a
+    lightbox cut into the paper. --umap-dim/--umap-blank recede against --canvas, so they
+    cannot be baked light: the JS reads them from here. */
+ --canvas:#fdfbf6;--umap-dim:#e3e6ea;--umap-blank:#bbbbbb;
+ --t1:.75rem;--t2:.8125rem;--t3:.875rem;--t4:1rem;--t5:1.125rem;--t6:1.25rem;--t7:1.5rem;--t8:1.875rem;
+ --s1:8px;--s2:16px;--s3:24px;--s4:32px;--s5:48px;--r:4px;
+ --paper-light:rgba(255,250,230,.48);--glint:rgba(255,255,255,.65);--shade:rgba(82,65,36,.055);
+ --surface:linear-gradient(145deg,var(--glint),transparent 55%),color-mix(in srgb,var(--card) 94%,transparent);
+ --paper-shadow:inset 0 1px 0 var(--glint),0 3px 14px var(--shade);
+ --serif:Georgia,"Iowan Old Style","Palatino Linotype",Palatino,serif;
+ --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+ --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
+@media (prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#1e2124;--card:#272b30;--ink:#d8d4c8;--ink-soft:#c5c0b4;--muted:#a09a8c;--line:#3a3f45;--line-strong:#4d535b;
+ --accent:#6fb3c9;--accent-ink:#8fc7d8;--accent-bg:#233740;
+ --ok:#7fc28b;--ok-bg:#243a2a;--run:#d9a441;--run-bg:#3d3320;--bad:#e07070;--bad-bg:#432727;--none:#a09a8c;--none-bg:#31363c;
+ --done:#7aa8d4;--done-bg:#22303f;--live:#7fc28b;--live-bg:#243a2a;
+ --fail:#e07070;--fail-bg:#432727;--wait:#d2b45e;--wait-bg:#38321f;
+ --row-alt:#2b3035;--row-hover:#333940;--tip-bg:#e9e4d8;--tip-ink:#1e2124;--tip-muted:#5b564c;--plot:#f2efe6;--canvas:#22262a;--umap-dim:#343a41;--umap-blank:#5d646d;--paper-light:rgba(187,155,102,.035);--glint:rgba(255,246,220,.035);--shade:rgba(0,0,0,.14)}}
+*{box-sizing:border-box}
+html{font-size:16px}
+body{margin:0;background:radial-gradient(ellipse at 12% 0,var(--paper-light),transparent 65%),var(--bg);color:var(--ink);font:var(--t4)/1.5 var(--sans)}
+a{color:var(--accent);text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--accent) 40%,transparent);text-underline-offset:2px}
+a:hover{text-decoration-color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+code,.path{font-family:var(--mono);font-size:.9em}
+code{background:var(--none-bg);padding:.1em .35em;border-radius:4px}
+.path{display:block;word-break:break-all;background:none;padding:0;color:var(--ink)}
+h1,h2,h3{margin:0;line-height:1.25;letter-spacing:-.01em;font-family:var(--serif);font-weight:500}
+h1{font-size:var(--t8)}h2{font-size:var(--t7)}h3{font-size:var(--t6)}
+p{margin:0 0 var(--s2)}
+main.page{max-width:1200px;margin:0 auto;padding:var(--s3) var(--s3) var(--s5)}
+.crumb{color:var(--muted);font-size:var(--t3);margin-bottom:var(--s1)}.crumb a{color:var(--muted)}
+.muted{color:var(--muted)}.num{font-variant-numeric:tabular-nums}
+/* status: one set of colours for pills, dots, table cells and review groups.
+   Lifecycle first -- finished is blue because it is an end state, not a grade. */
+.released{--st:var(--done);--st-bg:var(--done-bg)}
+.running{--st:var(--live);--st-bg:var(--live-bg)}
+.failed{--st:var(--fail);--st-bg:var(--fail-bg)}
+.queued,.paused{--st:var(--wait);--st-bg:var(--wait-bg)}
+/* then judgement, which keeps the older green/amber/red reading */
+.include,.band-good{--st:var(--ok);--st-bg:var(--ok-bg)}
+.tone-warn,.band-watch{--st:var(--run);--st-bg:var(--run-bg)}
+.exclude,.tone-bad,.band-high{--st:var(--bad);--st-bg:var(--bad-bg)}
+.neutral,.empty-sample,.tone-none{--st:var(--none);--st-bg:var(--none-bg)}
+.tone-info{--st:var(--accent);--st-bg:var(--accent-bg)}
+.pill{display:inline-flex;align-items:center;gap:.45em;padding:.1em .7em .1em .6em;border-radius:999px;font-size:var(--t3);font-weight:600;
+ line-height:1.6;white-space:nowrap;vertical-align:middle;color:var(--st,var(--none));background:var(--st-bg,var(--none-bg))}
+.pill::before,.dot{content:"";display:inline-block;width:.5rem;height:.5rem;border-radius:50%;background:var(--st,var(--none));flex:none}
+.st{color:var(--st,var(--none));font-weight:600}
+/* convergence sparkline: colour is absolute (see TREND_BANDS), a hollow point is still removing.
+   The plot sits in its own tinted frame so a row of them reads as a column of charts, not as ink
+   floating in the table; the tint is translucent so the row's own background still shows through. */
+.spark{display:block;background:color-mix(in srgb,var(--none-bg) 55%,transparent);
+ border:1px solid var(--line);border-radius:var(--r);padding:1px}
+.sp-line{fill:none;stroke:var(--line);stroke-width:1.5;stroke-linejoin:round}
+.sp-area{pointer-events:none}
+/* the reading for the point under the pointer. The chart is 84 px wide on the overview, far too
+   small to letter inside, and the browser's own <title> tooltip waits about a second and is lost
+   on the slightest movement -- at an 8 px spacing that means it effectively never appears. */
+.sp-tip{position:fixed;z-index:60;pointer-events:none;display:none;max-width:28ch;
+ padding:.25em .6em;border-radius:var(--r);font:var(--t2) var(--sans);line-height:1.5;
+ background:var(--tip-bg);color:var(--tip-ink);box-shadow:0 2px 10px var(--shade)}
+.sp-tip.on{display:block}.sp-tip .q{color:var(--tip-muted)}
+circle.sp{fill:var(--st,var(--none));stroke:none}
+circle.sp.open{fill:var(--card);stroke:var(--st,var(--none));stroke-width:1.6}
+/* the pointer target: transparent but hit-testable (fill:none would not be). No cursor change --
+   `help` draws a question mark over the number the reader is trying to read. The point under it
+   grows instead, so it is obvious which round the tooltip belongs to. */
+circle.sp-hit{fill:transparent;stroke:none}
+/* the dot is painted over its target, so it must not take the pointer itself: otherwise landing
+   exactly on a point hits the one element that carries no reading. */
+circle.sp{pointer-events:none;transition:r .08s}
+circle.sp-hit:hover+circle.sp{r:4}
+.sofar{margin-left:.4em;font-size:.85em;font-weight:400;color:var(--muted)}
+/* paper chapters: ink headings and neutral rules, no accent rails */
+.hero{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:var(--s3);margin-bottom:var(--s3)}
+.hero .title{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap}
+.hero .sub{color:var(--muted);font-size:var(--t3);margin-top:4px}
+dl.facts{display:flex;flex-wrap:wrap;gap:var(--s1) var(--s4);margin:var(--s2) 0 0}
+dl.facts dt{font-size:var(--t2);color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+dl.facts dd{margin:0;font-size:var(--t5);font-weight:600;font-variant-numeric:tabular-nums}
+.next{margin-top:var(--s2);padding:var(--s1) var(--s2);background:var(--accent-bg);color:var(--accent-ink);border-radius:var(--r);font-size:var(--t3)}
+.next a{color:inherit;font-weight:600}
+/* number cards */
+.glance{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:var(--s2);margin-bottom:var(--s3)}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:var(--s2)}
+.stat .v{display:block;font-size:var(--t7);font-weight:700;line-height:1.2;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.stat .k{display:block;color:var(--muted);font-size:var(--t3);margin-top:2px}
+.stat .sub{display:block;color:var(--muted);font-size:var(--t2)}
+.stat.tone-bad .v{color:var(--bad)}.stat.tone-warn .v{color:var(--run)}
+/* sections */
+section.block{scroll-margin-top:72px;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:var(--s3);margin-bottom:var(--s3)}
+section.block>h2{display:flex;align-items:baseline;gap:var(--s2);flex-wrap:wrap}
+section.block>h2 .count{font-size:var(--t3);font-weight:400;color:var(--muted)}
+p.lede{color:var(--muted);font-size:var(--t3);margin:4px 0 var(--s2);max-width:90ch}
+p.empty{color:var(--muted);margin:0}
+.callout{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:var(--s2);margin:0 0 var(--s2);font-size:var(--t3)}
+nav.jump{position:sticky;top:0;z-index:5;background:var(--bg);display:flex;gap:var(--s1);flex-wrap:wrap;padding:var(--s1) 0;margin:0 0 var(--s2);border-bottom:1px solid var(--line)}
+nav.jump a{padding:.25em .8em;border-radius:999px;font-size:var(--t3);font-weight:600;text-decoration:none;color:var(--ink)}
+nav.jump a:hover{background:var(--accent-bg);color:var(--accent-ink)}
+/* files */
+dl.files{display:grid;grid-template-columns:max-content 1fr;gap:var(--s1) var(--s3);margin:0;font-size:var(--t3)}
+dl.files dt{font-weight:600;white-space:nowrap}dl.files dd{margin:0;min-width:0}
+/* tables */
+.wrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:var(--t3)}
+th,td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
+th{color:var(--muted);font-weight:600;border-bottom:2px solid var(--line-strong);white-space:nowrap}
+th.r,td.r,td.num{text-align:right;font-variant-numeric:tabular-nums}
+tbody tr:nth-child(even){background:var(--row-alt)}tbody tr:hover{background:var(--row-hover)}
+td.reason,td.note{color:var(--ink-soft);min-width:24ch;max-width:60ch}
+th button{all:unset;cursor:pointer;color:inherit;font:inherit;padding-right:1.1em;position:relative}
+th button::after{content:"\21C5";position:absolute;right:0;opacity:.4}
+th[aria-sort=ascending] button::after{content:"\2191";opacity:1}th[aria-sort=descending] button::after{content:"\2193";opacity:1}
+.bar{display:inline-block;vertical-align:middle;width:64px;height:8px;background:var(--none-bg);border-radius:4px;margin-left:var(--s1);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--bad);opacity:.7}
+.badge{display:inline-block;padding:.05em .55em;border-radius:999px;font-size:var(--t2);font-weight:600}
+.conf-high{background:var(--ok-bg);color:var(--ok)}.conf-medium{background:var(--none-bg);color:var(--none)}.conf-low{background:var(--run-bg);color:var(--run)}
+.act-remove{color:var(--bad);font-weight:600}
+.toolbar{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap;margin-bottom:var(--s2)}
+.toolbar input[type=search]{font:inherit;font-size:var(--t3);padding:8px 12px;border:1px solid var(--line-strong);border-radius:var(--r);min-width:18rem;background:var(--card)}
+.toolbar label{font-size:var(--t3);color:var(--muted)}
+/* exclusion reason popover (CSS-only details) */
+td.why-cell{position:relative;white-space:nowrap}details.why{display:inline-block;margin-left:.35rem;vertical-align:middle}
+details.why summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:1.4rem;height:1.4rem;border-radius:999px;background:var(--bad);color:var(--card);font-size:var(--t2);font-weight:700;line-height:1}
+details.why summary::-webkit-details-marker{display:none}
+.why-body{position:absolute;left:0;top:100%;z-index:15;margin-top:4px;width:min(60ch,70vw);white-space:normal;background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:0 4px 14px rgba(0,0,0,.12);padding:var(--s1) var(--s2);font-size:var(--t3);text-align:left}
+/* figures */
+figure{margin:0}figure img{max-width:100%;border:1px solid var(--line);border-radius:var(--r);background:var(--plot)}
+figcaption{color:var(--muted);font-size:var(--t3);margin-top:var(--s1)}
+/* sankey */
+.sk-tip{position:absolute;z-index:20;background:var(--tip-bg);color:var(--tip-ink);font-size:var(--t2);line-height:1.4;padding:8px 10px;border-radius:6px;pointer-events:none;max-width:34ch;box-shadow:0 2px 8px rgba(0,0,0,.25)}
+.sk-tip .m{color:var(--tip-muted)}
+svg.sk{display:block;max-width:100%}svg.sk .sk-stage{font-size:13px;font-weight:600;fill:var(--ink)}
+svg.sk .sk-label{font-size:12px;fill:var(--ink)}svg.sk .sk-label.rm{fill:var(--bad)}
+svg.sk .sk-label.mid{font-weight:600;paint-order:stroke;stroke:var(--card);stroke-width:3px;stroke-linejoin:round}
+svg.sk .sk-flow{opacity:.45;transition:opacity .12s}svg.sk .sk-node{stroke:var(--card);stroke-width:.5;cursor:pointer}
+svg.sk.dim .sk-flow{opacity:.07}svg.sk.dim .sk-flow.hi{opacity:.85}
+/* umap */
+.umap-row{display:flex;gap:var(--s3);align-items:flex-start;flex-wrap:wrap}
+.umap-panel{flex:1 1 520px;min-width:0}.umap-panel h3{margin:0 0 var(--s1);display:flex;align-items:baseline;gap:var(--s1)}
+.umap-panel h3 .count{font-size:var(--t3);font-weight:400;color:var(--muted)}
+.umap-panel canvas{display:block;border:1px solid var(--line);border-radius:var(--r);cursor:crosshair;background:var(--canvas);max-width:100%}
+.umap-legend{margin-top:var(--s1);max-height:280px;overflow-y:auto;font-size:var(--t3);border:1px solid var(--line);border-radius:var(--r);padding:4px;columns:2;column-gap:4px}
+.umap-leg{display:flex;align-items:center;gap:8px;padding:3px 8px;cursor:pointer;border-radius:4px;break-inside:avoid}
+.umap-leg:hover{background:var(--none-bg)}.umap-leg.on{background:var(--accent-bg);font-weight:600}.umap-leg.off{opacity:.45}
+.umap-leg i{display:inline-block;width:12px;height:12px;border-radius:3px;flex:none}.umap-leg .lab{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.umap-leg .n{color:var(--muted);font-variant-numeric:tabular-nums}.umap-status{color:var(--muted);font-size:var(--t3);margin:0 0 var(--s2)}
+/* needs review */
+.rv-group{border:1px solid var(--line);border-radius:var(--r);padding:var(--s2);margin-top:var(--s2)}
+.rv-group h3{display:flex;align-items:baseline;gap:var(--s1);flex-wrap:wrap}
+.rv-group h3 .count{font-size:var(--t3);font-weight:600;color:var(--st,var(--none));background:var(--st-bg,var(--none-bg));border-radius:999px;padding:0 .6em}
+.rv-group h3 .cells{font-size:var(--t3);font-weight:400;color:var(--muted)}
+.rv-group p.desc{color:var(--muted);font-size:var(--t3);margin:4px 0 var(--s1);max-width:90ch}
+.rv-group table{font-size:var(--t3)}table.review td.c-cells{text-align:right;font-variant-numeric:tabular-nums}table.review td.c-label{max-width:34ch}
+footer{color:var(--muted);font-size:var(--t2);margin-top:var(--s4);border-top:1px solid var(--line);padding-top:var(--s2)}
+ul.warn{margin:4px 0 0 1.2rem;padding:0}
+/* A little reflected light on paper; blur only on surfaces that float over content. */
+.hero,.stat,section.block{background:var(--surface);box-shadow:var(--paper-shadow)}
+@supports ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
+ nav.jump,.why-body{background:color-mix(in srgb,var(--card) 88%,transparent);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);box-shadow:var(--paper-shadow)}
+}
+@media (prefers-reduced-transparency:reduce){nav.jump,.why-body{background:var(--card);-webkit-backdrop-filter:none;backdrop-filter:none}.hero,.stat,section.block{background:var(--card)}}
+@media (max-width:700px){main.page{padding:var(--s2)}section.block,.hero{padding:var(--s2)}dl.files{grid-template-columns:1fr}}

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from ecarsi.ui import serve
+from ecarsi.ui import fleet, serve
 
 
 class _Reg:
@@ -30,10 +30,10 @@ class _Reg:
 
 def test_state_cache_serves_from_refresh_and_forgets_unbound(tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr(serve, "_dataset_state", lambda root: calls.append(root) or {"stage": "x", "cls": "running"})
+    monkeypatch.setattr(fleet, "_dataset_state", lambda root: calls.append(root) or {"stage": "x", "cls": "running"})
     a, b = tmp_path / "a", tmp_path / "b"
     reg = _Reg({"a": a, "b": b})
-    cache = serve.StateCache(reg, ttl=60)
+    cache = fleet.StateCache(reg, ttl=60)
     assert cache.get(a)["stage"] == "Loading status" and calls == []
     cache.refresh()
     assert sorted(calls) == [a, b]
@@ -48,11 +48,11 @@ def test_state_cache_serves_from_refresh_and_forgets_unbound(tmp_path, monkeypat
 
 def test_fleet_http_never_scans_on_cold_or_stale_cache(tmp_path, monkeypatch):
     reg = _Reg({'sample': tmp_path/'sample'/'rsi'})
-    cache = serve.StateCache(reg)
+    cache = fleet.StateCache(reg)
     def forbidden(*args, **kwargs):
         raise AssertionError('request performed a synchronous dataset scan')
-    monkeypatch.setattr(serve, '_dataset_state', forbidden)
-    monkeypatch.setattr(serve.index, 'collection_of', forbidden)
+    monkeypatch.setattr(fleet, '_dataset_state', forbidden)
+    monkeypatch.setattr(fleet.index, 'collection_of', forbidden)
     httpd = http.server.ThreadingHTTPServer(('127.0.0.1', 0), partial(serve.Handler, registry=reg, states=cache))
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     try:
@@ -74,15 +74,15 @@ def test_cached_registry_and_saved_states_survive_slow_refresh(tmp_path, monkeyp
     registry = serve.Registry(path)
     registry.snapshot()
     cache_file = tmp_path/'cache.json'
-    monkeypatch.setattr(serve, '_dataset_state', lambda _: dict(stage='released', cls='released'))
-    cache = serve.StateCache(registry, cache_file=cache_file)
+    monkeypatch.setattr(fleet, '_dataset_state', lambda _: dict(stage='released', cls='released'))
+    cache = fleet.StateCache(registry, cache_file=cache_file)
     cache._put(root)
     def unavailable(*args, **kwargs):
         raise AssertionError('shared storage unavailable')
     monkeypatch.setattr(registry, '_load_if_changed', unavailable)
-    monkeypatch.setattr(serve, '_dataset_state', unavailable)
+    monkeypatch.setattr(fleet, '_dataset_state', unavailable)
     assert registry.cached_snapshot() == {'sample': root}
-    restored = serve.StateCache(registry, cache_file=cache_file)
+    restored = fleet.StateCache(registry, cache_file=cache_file)
     assert restored.get(root)['stage'] == 'released'
     assert restored.get(root)['cached_at'] is not None
 
@@ -110,10 +110,10 @@ def test_a_quick_sweep_rereads_the_running_datasets_and_leaves_the_finished_ones
     ones; a full sweep still comes round for the rest, so a reopened or newly bound run is not lost."""
     states = {"run": {"stage": "per-sample", "cls": "running"}, "done": {"stage": "released", "cls": "released"}}
     calls = []
-    monkeypatch.setattr(serve, "_dataset_state",
+    monkeypatch.setattr(fleet, "_dataset_state",
                         lambda root: calls.append(root) or dict(states[root.name]))
     run, done = tmp_path / "run", tmp_path / "done"
-    cache = serve.StateCache(_Reg({"run": run, "done": done}), ttl=60)
+    cache = fleet.StateCache(_Reg({"run": run, "done": done}), ttl=60)
     cache.refresh()                                   # first sweep is full: both read
     assert sorted(calls) == sorted([done, run])
     calls.clear()
@@ -126,12 +126,12 @@ def test_a_quick_sweep_rereads_the_running_datasets_and_leaves_the_finished_ones
 
 def test_a_quick_sweep_with_nothing_running_still_reads_something(tmp_path, monkeypatch):
     """Every dataset settled: skipping all of them would freeze the cache against a reopened run."""
-    monkeypatch.setattr(serve, "_dataset_state", lambda root: {"stage": "released", "cls": "released"})
+    monkeypatch.setattr(fleet, "_dataset_state", lambda root: {"stage": "released", "cls": "released"})
     done = tmp_path / "done"
-    cache = serve.StateCache(_Reg({"done": done}), ttl=60)
+    cache = fleet.StateCache(_Reg({"done": done}), ttl=60)
     cache.refresh()
     seen = []
-    monkeypatch.setattr(serve, "_dataset_state", lambda root: seen.append(root) or {"stage": "released", "cls": "released"})
+    monkeypatch.setattr(fleet, "_dataset_state", lambda root: seen.append(root) or {"stage": "released", "cls": "released"})
     cache.refresh(full=False)
     assert seen == [done]
 
@@ -140,7 +140,7 @@ def _published(tmp_path, workflows, age=0.0):
     import json, time
     p = tmp_path / "fleet-status.json"
     p.write_text(json.dumps({"generated_at": time.time() - age, "workflows": workflows}))
-    return serve.ControlVerdicts(p)
+    return fleet.ControlVerdicts(p)
 
 
 def test_the_control_plane_verdict_overrides_what_the_files_imply(tmp_path):
@@ -148,7 +148,7 @@ def test_the_control_plane_verdict_overrides_what_the_files_imply(tmp_path):
     knows the run died; the row must follow the control plane and keep the last seen stage as detail."""
     v = _published(tmp_path, {"dataset/run-a": {"status": "FAILED", "started": 1.0, "closed": 2.0}})
     row = dict(name="u", stage="per-sample running", cls="running")
-    out = serve.reconcile(row, v.of("run-a"))
+    out = fleet.reconcile(row, v.of("run-a"))
     assert out["cls"] == "failed" and out["live"] == "failed"
     assert out["stage"] == "failed · last seen per-sample running"
 
@@ -156,20 +156,20 @@ def test_the_control_plane_verdict_overrides_what_the_files_imply(tmp_path):
 def test_a_resumed_run_stops_reading_as_failed_before_it_publishes_again(tmp_path):
     """The other direction: the files still hold the old failure, the control plane has it running."""
     v = _published(tmp_path, {"dataset/run-a": {"status": "RUNNING", "started": 1.0, "closed": None}})
-    out = serve.reconcile(dict(name="u", stage="failed — round 1", cls="failed"), v.of("run-a"))
+    out = fleet.reconcile(dict(name="u", stage="failed — round 1", cls="failed"), v.of("run-a"))
     assert out["cls"] == "running" and out["live"] == "running"
 
 
 def test_a_stale_or_missing_publisher_leaves_the_row_alone_and_says_so(tmp_path):
     """A monitor that stopped writing must not keep answering for the fleet."""
     stale = _published(tmp_path, {"dataset/run-a": {"status": "FAILED", "started": 1.0, "closed": 2.0}},
-                       age=serve.ControlVerdicts.FRESH + 60)
-    assert stale.of("run-a") is None and not stale.live() and stale.age() > serve.ControlVerdicts.FRESH
+                       age=fleet.ControlVerdicts.FRESH + 60)
+    assert stale.of("run-a") is None and not stale.live() and stale.age() > fleet.ControlVerdicts.FRESH
     row = dict(name="u", stage="per-sample running", cls="running")
-    assert serve.reconcile(row, stale.of("run-a")) == row
-    absent = serve.ControlVerdicts(tmp_path / "nope.json")
+    assert fleet.reconcile(row, stale.of("run-a")) == row
+    absent = fleet.ControlVerdicts(tmp_path / "nope.json")
     assert absent.age() is None and absent.of("run-a") is None
-    assert serve.ControlVerdicts(None).of("run-a") is None
+    assert fleet.ControlVerdicts(None).of("run-a") is None
 
 
 def test_a_generation_one_run_has_no_run_id_and_is_never_reconciled(tmp_path):
@@ -178,18 +178,18 @@ def test_a_generation_one_run_has_no_run_id_and_is_never_reconciled(tmp_path):
 
 
 def test_the_page_names_the_clock_its_status_column_is_on(tmp_path, monkeypatch):
-    monkeypatch.setattr(serve, "_dataset_state", lambda root: dict(
+    monkeypatch.setattr(fleet, "_dataset_state", lambda root: dict(
         units=1, released=0, n_input=10, final_cells=None, rounds=1, species="mouse", finished=None,
         updated=1.0, events={"organize": [], "release": []}, stage="per-sample running", cls="running",
         collection="coll", trend=[], run_id="run-a",
         unit_rows=[dict(name="u", stage="per-sample running", cls="running", released=False, n_input=10,
                         final_cells=None, rounds=1, species="mouse", updated=1.0, trend=[])]))
     v = _published(tmp_path, {"dataset/run-a": {"status": "FAILED", "started": 1.0, "closed": 2.0}})
-    html = serve._home_html({"coll-Organ": tmp_path}, state=serve._dataset_state, verdicts=v)
+    html = serve._home_html({"coll-Organ": tmp_path}, state=fleet._dataset_state, verdicts=v)
     assert "status from the control plane" in html
     body = html.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
     assert "failed · last seen per-sample running" in body
-    plain = serve._home_html({"coll-Organ": tmp_path}, state=serve._dataset_state)
+    plain = serve._home_html({"coll-Organ": tmp_path}, state=fleet._dataset_state)
     assert "Run status:" not in plain and "per-sample running" in plain   # no control plane, no claim
 
 
@@ -202,13 +202,13 @@ def test_a_unit_gets_the_verdict_on_that_unit_not_on_its_run(tmp_path, monkeypat
     unit = lambda i, name, cls, stage: dict(  # noqa: E731
         name=name, index=i, stage=stage, cls=cls, released=False, n_input=1, final_cells=None,
         rounds=1, species="mouse", updated=1.0, trend=[])
-    monkeypatch.setattr(serve, "_dataset_state", lambda root: dict(
+    monkeypatch.setattr(fleet, "_dataset_state", lambda root: dict(
         units=2, released=0, n_input=2, final_cells=None, rounds=1, species="mouse", finished=None,
         updated=1.0, events={"organize": [], "release": []}, stage="2 units running", cls="running",
         collection="coll", trend=[], run_id="r",
         unit_rows=[unit(0, "alpha", "running", "per-sample running"),
                    unit(1, "beta", "running", "round 1 · cross-sample")]))
-    body = serve._home_html({"coll-Organ": tmp_path}, state=serve._dataset_state,
+    body = serve._home_html({"coll-Organ": tmp_path}, state=fleet._dataset_state,
                             verdicts=v).split("<tbody>", 1)[1].split("</tbody>", 1)[0]
     alpha, beta = body.split("<tr ")[1], body.split("<tr ")[2]
     assert 'class="pill running"' in alpha
@@ -220,9 +220,9 @@ def test_a_run_verdict_may_close_a_unit_row_but_never_reopen_one(tmp_path):
     still running, but a running run cannot vouch for a unit the files call failed."""
     v = _published(tmp_path, {"dataset/r": {"status": "RUNNING", "started": 1.0, "closed": None}})
     failed = dict(name="u", stage="failed — round 1", cls="failed")
-    assert serve.reconcile(failed, v.of("r"), precise=False) == failed
+    assert fleet.reconcile(failed, v.of("r"), precise=False) == failed
     done = _published(tmp_path, {"dataset/r": {"status": "COMPLETED", "started": 1.0, "closed": 2.0}})
-    out = serve.reconcile(dict(name="u", stage="per-sample running", cls="running"), done.of("r"), precise=False)
+    out = fleet.reconcile(dict(name="u", stage="per-sample running", cls="running"), done.of("r"), precise=False)
     assert out["cls"] == "released" and out["live"] == "completed"
 
 
@@ -292,10 +292,10 @@ def test_a_read_hung_in_storage_does_not_stall_the_sweep_and_quarantines_that_st
         if root.name.startswith("oak"):
             release.wait()          # a read stuck in the filesystem client: it returns when the storage does
         return {"stage": "x", "cls": "running"}
-    monkeypatch.setattr(serve, "_dataset_state", state)
-    monkeypatch.setattr(serve, "storage_of", lambda root: root.name[:3])
+    monkeypatch.setattr(fleet, "_dataset_state", state)
+    monkeypatch.setattr(fleet, "storage_of", lambda root: root.name[:3])
     oak, scr = tmp_path / "oak-a", tmp_path / "scr-b"
-    cache = serve.StateCache(_Reg({"a": oak, "b": scr}), ttl=60)
+    cache = fleet.StateCache(_Reg({"a": oak, "b": scr}), ttl=60)
     cache.HUNG_AFTER = 0.2
     cache.refresh()                 # returns although the oak read never does
     assert cache.get(scr)["stage"] == "x"

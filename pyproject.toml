@@ -44,6 +44,7 @@ packages = ["ecarsi", "ecarsi.warm_pool", "ecarsi.agent", "ecarsi.control", "eca
 
 [tool.setuptools.package-data]
 ecarsi = ["prompts/*.md", "*.html"]
+"ecarsi.ui" = ["static/*", "*.html"]
 "ecarsi.warm_pool" = ["numba_site/sitecustomize.py"]
 
 [tool.pytest.ini_options]

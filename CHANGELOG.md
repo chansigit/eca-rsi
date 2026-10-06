@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Periscope split by responsibility (#43).** `ecarsi/ui/serve.py` (2,055 lines) and `index.py` (1,576) become
+  `serve` (HTTP handler, command line), `registry` (dataset list, display zones, scan-add and the other subcommands),
+  `fleet` (dataset summaries, their cache, control-plane verdicts), `home` (navigator and overview), `index` (run and
+  unit pages), `gen1` and `gen2` (each generation's unit state and page; `gen1` goes when the old runs do) and `common`;
+  the CSS and JavaScript moved from Python strings to `ecarsi/ui/static/`. No module is above 600 lines. Code moved
+  unchanged: the pages of four real runs (gen 1 and gen 2), the overview and the navigator render byte-identical before
+  and after.
 - **The scripts and zmip are inside the layer test (#42).** `tests/test_layers.py` checks that every repository name
   the scripts in `ops/` and `container/` import, or name in their shell lines, still exists, so moving a module they
   use fails a test (the pruner broke silently on the 0.4.3 move). zmip now reaches msp only through `msp.api` (10 more
