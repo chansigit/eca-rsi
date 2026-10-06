@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Retiring a version (decision 0019).** `ops/retire-version.sh <name>` stops a version's coordinators and runners once
+  no execution runs on its queue (refused for the current version) and lists its datasets that ended unfinished;
+  `ops/count-wf.py` counts running executions per task queue.
 - **The kernels lose their standalone flows (#28).** osp, msp and zmip keep what their `api` modules reach: their
   command lines, agent flows (osp `propose_annotation`, msp `inspect_clusters` / `annotate_clusters`, zmip
   `annotate_lineage` / `plan_lineages` and the lineage runner), msp's dask endpoints, agent checkpoints and

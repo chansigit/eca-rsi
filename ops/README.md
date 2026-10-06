@@ -11,10 +11,11 @@ Logs of builds and switches go to `$BASE/control-logs/`.
 | `publish-version.sh [commit]` | a commit as a read-only version in `$CODE_HOME/versions/<commit12>/`, import-checked in both images (decision 0019) |
 | `start-version.sh <name> [n]` | that version's coordinators (on its own task queue) and runners, next to the running ones |
 | `set-current.sh <name>` | new datasets and `run.sh` use that version from now on; refused while no coordinator serves it |
+| `retire-version.sh <name>` | stops a version's coordinators and runners once its queue has no running execution; lists its datasets that ended unfinished; refused for the current version; the directory stays |
 | `worker-node.sh` | Slurm job script: the job itself becomes a pool worker (`sbatch … ops/worker-node.sh`) |
 | `start-periscope.sh`, `restart-periscope.sh` | Periscope from the science image, public through ngrok when `PERISCOPE_DOMAIN` is set |
 | `run.sh control\|compute [--dev] <python args>` | Python inside an image; `runpy.sh`, `runsci.sh` and their `-dev` forms are shorthands. `--dev` runs `$DEV_WORKTREE` instead of the image snapshot; `VERSION=<name>` a published version, by default the current one |
-| `count-wf.py` | running Temporal executions by type; switch images only at 0 |
+| `count-wf.py` | running Temporal executions by type and by task queue (one per version) |
 | `replay-check.py` | replays running workflow histories against the dev checkout; run before deploying a `control/` change |
 | `build-images-update.sh` | new image pair from the current one with a fresh eca-rsi snapshot (and optional wheels) |
 | `build-images.sh` | full rebuild from base images (Temporal, PostgreSQL, HQ added) |
