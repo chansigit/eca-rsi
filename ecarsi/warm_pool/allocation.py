@@ -83,7 +83,7 @@ def gpu_device(gpu_id):
                 utilization_percent=int(utilization), compute_mode=compute_mode)
 
 
-def launch(root, cpu_ids, memory_mb, work_dir, prefix, job_id=None, time_limit_seconds=None, gpu=False):
+def launch(root, cpu_ids, memory_mb, work_dir, prefix, job_id=None, time_limit_seconds=None, gpu=False, runtime_digest=None):
     from ecarsi.warm_pool.slurm import inventory
     profile = inventory(memory_mb * 2**20, gpu=gpu)
     if gpu and not profile["gpu_ids"]:
@@ -107,6 +107,8 @@ def launch(root, cpu_ids, memory_mb, work_dir, prefix, job_id=None, time_limit_s
                        "--work-dir", str(work_dir), "--allocation-profile", str(path)]
     if time_limit_seconds is not None:
         command += ["--time-limit-seconds", str(time_limit_seconds)]
+    if runtime_digest:
+        command += ["--runtime", runtime_digest]
     if gpu:
         for gpu_id in profile["gpu_ids"]:
             command += ["--gpu", gpu_id]

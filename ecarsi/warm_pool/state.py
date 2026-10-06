@@ -110,6 +110,18 @@ def versioned(runtime, version):
     return runtime
 
 
+def image_runtime(config, image=None):
+    """The pool runtime of a compute image (decision 0019): the current one, or one that configure-runtime registered
+    earlier. No image: the current runtime."""
+    current = config["runtime"]
+    if image is None or (current.get("image") or {}).get("path") == image:
+        return current
+    for runtime in (config.get("runtimes") or {}).values():
+        if (runtime.get("image") or {}).get("path") == image:
+            return runtime
+    raise ValueError(f"no runtime registered for the image {image}: run warm_pool configure-runtime --register-only in it")
+
+
 def submit(root, spec, version="own"):
     """version: the published version whose code the task runs ({"name", "root", ...}, ecarsi.version());
     by default the caller's own, so a version's coordinators and sessions submit for that version. The bridge,
@@ -141,10 +153,11 @@ def submit(root, spec, version="own"):
                                                        spec=spec, at=time.time()))
         else:
             config = read(root / "config.json")
-            runtime = versioned(config["runtime"], version)
+            image = image_runtime(config, (version or {}).get("science_image"))  # a version runs in its own image
+            runtime = versioned(image, version)
             existing = dict(spec=spec, digest=fingerprint, submitted_at=time.time(),
                             attempt_id=uuid.uuid4().hex, runtime=runtime, runtime_digest=digest(runtime),
-                            **(dict(version=version["name"], placement=digest(config["runtime"])) if version else {}))
+                            **(dict(version=version["name"], placement=digest(image)) if version else {}))
             attempt = folder / existing["attempt_id"]
             attempt.mkdir(mode=0o700)
             (attempt / "outputs").mkdir(mode=0o700)

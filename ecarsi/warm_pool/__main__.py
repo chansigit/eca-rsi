@@ -11,14 +11,17 @@ from ..files import digest, file_digest, lock, read, save, sync_directory
 from .state import archive, cancel, pool_root, retry, status, submit
 
 
-def configure_runtime(root, runtime):
-    """Validate from inside the target runtime; existing requests keep their pin."""
+def configure_runtime(root, runtime, register_only=False):
+    """Validate from inside the target runtime; existing requests keep their pin. Every runtime selected here, and
+    the one it replaces, stays registered (decision 0019): a version published with an older image still runs on
+    workers of that image (add-worker --image). register_only adds a new image's runtime without making it current."""
     root = pool_root(root)
     check_runtime(runtime, imports=True)
     with lock(root / "init.lock"):
         config = read(root / "config.json")
-        save(root / "config.json", {**config, "runtime": runtime})
-    return {"runtime_digest": digest(runtime)}
+        runtimes = {digest(r): r for r in (*(config.get("runtimes") or {}).values(), config.get("runtime"), runtime) if r}
+        save(root / "config.json", {**config, "runtimes": runtimes, **({} if register_only else {"runtime": runtime})})
+    return {"runtime_digest": digest(runtime), "current": not register_only}
 
 
 def initialize(root, hq, runtime):
@@ -51,6 +54,7 @@ def main(argv=None):
     init.add_argument("--runtime", default=sys.executable)
     runtime = commands.add_parser("configure-runtime", help="preflight and select the runtime for new requests")
     runtime.add_argument("spec", type=Path)
+    runtime.add_argument("--register-only", action="store_true", help="register a runtime without making it current")
     server = commands.add_parser("scheduler")
     server.add_argument("--host")
     hq = commands.add_parser("hq-server", help="run the HQ server apart from the scheduler, so scheduler restarts keep workers connected")
@@ -62,6 +66,7 @@ def main(argv=None):
     worker.add_argument("--allocation-profile", type=Path, help="fresh host probe; normally set by slurm-worker")
     worker.add_argument("--time-limit-seconds", type=int, help="optional shorter worker lifetime")
     worker.add_argument("--gpu", action="append", default=[], help="reserved NVIDIA GPU UUID; repeat for every granted GPU")
+    worker.add_argument("--runtime", help="digest of a registered runtime to declare; default the current one")
     slurm = commands.add_parser("slurm-worker", help="probe an existing Slurm grant on the host, then enter the runtime")
     slurm.add_argument("--cpus", required=True)
     slurm.add_argument("--memory-mb", type=int, required=True)
@@ -69,6 +74,7 @@ def main(argv=None):
     slurm.add_argument("--job-id", help="optional expected allocation ID")
     slurm.add_argument("--time-limit-seconds", type=int)
     slurm.add_argument("--gpu", action="store_true", help="use all GPUs granted to this Slurm step")
+    slurm.add_argument("--runtime", help="digest of a registered runtime to declare; default the current one")
     slurm.add_argument("runtime_command", nargs=argparse.REMAINDER, help="runtime Python command after --")
     addition = commands.add_parser("add-worker", help="join an existing Slurm node with automatic resource and runtime discovery")
     addition.add_argument("host", nargs="?", help="SSH host; omit when already inside the allocation")
@@ -80,6 +86,7 @@ def main(argv=None):
     addition.add_argument("--gpu", action=argparse.BooleanOptionalAction, default=None, help="defaults to the actual Slurm GPU grant")
     addition.add_argument("--bind", action="append", help="container bind mount; repeat to override default shared roots")
     addition.add_argument("--wait-seconds", type=int, default=120)
+    addition.add_argument("--image", help="a registered compute image other than the current one (decision 0019)")
     submission = commands.add_parser("submit")
     submission.add_argument("spec", type=Path)
     inspection = commands.add_parser("status")
@@ -107,24 +114,24 @@ def main(argv=None):
     if a.command == "init":
         result = initialize(a.root, a.hq, a.runtime)
     elif a.command == "configure-runtime":
-        result = configure_runtime(a.root, read(a.spec))
+        result = configure_runtime(a.root, read(a.spec), a.register_only)
     elif a.command == "scheduler":
         return serve(a.root, a.host)
     elif a.command == "hq-server":
         return hq_server(a.root, a.host)
     elif a.command == "worker":
         return join(a.root, [int(v) for v in a.cpus.split(",")], a.memory_mb, a.work_dir,
-                    a.allocation_profile, a.time_limit_seconds, a.gpu)
+                    a.allocation_profile, a.time_limit_seconds, a.gpu, a.runtime)
     elif a.command == "slurm-worker":
         from .allocation import launch
         return launch(a.root, [int(v) for v in a.cpus.split(",")], a.memory_mb, a.work_dir,
-                      a.runtime_command, a.job_id, a.time_limit_seconds, a.gpu)
+                      a.runtime_command, a.job_id, a.time_limit_seconds, a.gpu, a.runtime)
     elif a.command == "add-worker":
         from .provision import add_worker
         result = add_worker(a.root, a.host, host_python=a.host_python, job_id=a.job_id,
                             cpu_ids=[int(v) for v in a.cpus.split(",")] if a.cpus else None,
                             memory_mb=a.memory_mb, work_dir=a.work_dir, gpu=a.gpu,
-                            binds=a.bind, wait_seconds=a.wait_seconds)
+                            binds=a.bind, wait_seconds=a.wait_seconds, image=a.image)
         if result is None:
             return 0  # The remote command already printed its result.
     elif a.command == "submit":

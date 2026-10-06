@@ -3,9 +3,12 @@
 # with version.json, byte-compiled and import-checked in both images. Publishing starts nothing:
 # ops/start-version.sh starts its coordinators and runners, ops/set-current.sh makes new datasets use it.
 # usage: publish-version.sh [commit]      (default: main of $CODE_HOME/src/eca-rsi)
+#        VERSION_IMG=<control .sif> VERSION_SCIENCE_IMG=<compute .sif> publish-version.sh ...   a version with new
+#        images (INSTALL.md A.11); default the images of deployment.env
 # Settings: ~/.config/ecarsi/deployment.env (CODE_HOME, IMG, SCIENCE_IMG, BINDS).
 set -euo pipefail
 set -a; . "$HOME/.config/ecarsi/deployment.env"; set +a
+IMG=${VERSION_IMG:-$IMG}; SCIENCE_IMG=${VERSION_SCIENCE_IMG:-$SCIENCE_IMG}
 REPO=${REPO:-$CODE_HOME/src/eca-rsi}
 COMMIT=$(git -C "$REPO" rev-parse --verify "${1:-main}^{commit}")
 NAME=${COMMIT:0:12}

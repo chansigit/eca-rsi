@@ -207,7 +207,26 @@ does not wait for running executions, and executions already running finish on t
 
 `ops/control-plane.sh start|stop|restart|status` runs the current version's coordinators and runners beside the
 image's shared components. Changes to `ops/` take effect when `main` is fast-forwarded. A change to the images
-(third-party packages, HQ, Temporal) still needs A.9.
+that the shared components need (HQ, Temporal, PostgreSQL) still needs A.9; new Python packages for the stages can
+come with a version (A.11).
+
+### A.11 A version with new images
+
+A version records the two images it was published with (`version.json`). Its coordinators and runners run in its
+control image, and its pool requests go only to workers of its compute image, so it can bring new third-party
+packages while production keeps running on the old images.
+
+1. Put the new versions into `container/science-requirements.lock` (or the control lock) and build the pair (B.5).
+2. Register the new compute image without making it current: inside it, run
+   `python -m ecarsi.warm_pool --root $POOL configure-runtime --register-only <runtime.json>` (the runtime record
+   `ops/switch-images.sh` writes, for the new image).
+3. Add workers of it: `warm_pool add-worker <host> --job-id <id> --image <new compute .sif>`. Workers of the old image
+   keep declaring the old runtime. A request whose image has no live worker shows `infeasible` in `scheduler.json`.
+4. `VERSION_IMG=<new control .sif> VERSION_SCIENCE_IMG=<new compute .sif> bash ops/publish-version.sh`, then A.10
+   from step 2.
+
+The new image's snapshot must carry this registration code (images built after 2026-10-06's image registration
+change): its workers read the runtime they declare from `--runtime`, which older snapshots do not know.
 
 ## B. Development
 

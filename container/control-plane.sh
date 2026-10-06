@@ -20,6 +20,8 @@ if [ -n "$CODE" ]; then CODE_IN=$CODE; HOST_CD=$CODE; else CODE_IN=/opt/eca-rsi;
 # runners, on its own task queue; INFRA=<name> (deployment.env) is the version the shared components run from.
 VERSION=${VERSION:-}; INFRA=${INFRA:-}
 [ -n "$VERSION$INFRA" ] && VERSIONS=${CODE_HOME:?}/versions
+if [ -n "$VERSION" ]; then  # its coordinators and runners run in the control image it was published with
+  v_img=$(sed -n 's/.*"control_image": *"\([^"]*\)".*/\1/p' "$VERSIONS/$VERSION/version.json"); IMG=${v_img:-$IMG}; fi
 POSTGRES_BIN=${POSTGRES_BIN:-/opt/rsi-services/postgres/bin}
 TEMPORAL_DIR=${TEMPORAL_DIR:-/opt/rsi-services/temporal}
 SCHEMA_DIR=${SCHEMA_DIR:-/opt/rsi-services/temporal/schema/postgresql/v12}

@@ -244,3 +244,42 @@ def test_a_version_writes_only_shared_file_versions_the_shared_components_know()
     newer = dict(KINDS, **{"pool-request/2": {}, "stage/2": {}})
     assert unknown_to(list(KINDS), newer) == ["pool-request/2"]     # stage files are the version's own
     assert unknown_to([*KINDS, "pool-request/2"], newer) == []
+
+
+
+def test_a_version_runs_in_the_image_it_was_published_with(tmp_path, monkeypatch):
+    """Several compute images side by side (decision 0019): configure-runtime registers each image's runtime, a
+    version's requests go to the workers of the image in its version.json, and the scheduler holds a request back
+    while no live worker declares that image's runtime."""
+    import math
+    from ecarsi.warm_pool import __main__ as cli
+    from ecarsi.warm_pool.backend import infeasible
+    from ecarsi.warm_pool.provision import worker_command
+    from ecarsi.warm_pool.state import image_runtime
+    root = pool(tmp_path, ["/opt/eca-rsi"])
+    old = dict(read(root / "config.json")["runtime"], image=dict(path="/images/old.sif", sha256="0" * 64))
+    new = dict(old, image=dict(path="/images/new.sif", sha256="1" * 64))
+    save(root / "config.json", dict(runtime=old))
+    monkeypatch.setattr(cli, "check_runtime", lambda *a, **k: None)   # it runs inside the image in production
+    cli.configure_runtime(root, new, register_only=True)
+    config = read(root / "config.json")
+    assert config["runtime"] == old and image_runtime(config, "/images/new.sif") == new
+    version = lambda name, image: dict(name=name, root=str(tmp_path / "versions" / name), science_image=image)
+    submit(root, spec("on-new"), version=version("v2", "/images/new.sif"))
+    submit(root, spec("on-old"), version=version("v1", "/images/old.sif"))
+    assert request(root, "on-new")["placement"] == digest(new) and request(root, "on-old")["placement"] == digest(old)
+    assert request(root, "on-new")["runtime"]["image"] == new["image"]
+    with pytest.raises(ValueError, match="no runtime registered"):
+        submit(root, spec("lost"), version=version("v0", "/images/gone.sif"))
+    cli.configure_runtime(root, new)    # the new image becomes current; the old one stays registered
+    config = read(root / "config.json")
+    assert config["runtime"] == new and image_runtime(config, "/images/old.sif") == old
+
+    old_worker, any_worker = (8, 30000.0, 0, math.inf, {digest(old)}), (8, 30000.0, 0, math.inf, set())
+    task = dict(cpus=1, memory_mb=64)
+    assert infeasible(task, [old_worker], digest(new)) == "no live worker of the image runtime " + digest(new)[:12]
+    assert infeasible(task, [old_worker], digest(old)) is None and infeasible(task, [any_worker], digest(new)) is None
+    profile = dict(job_id="1", host="node", gpu_ids=[])
+    command = worker_command(root, profile, ["python"], tmp_path, [0], 100, False, digest(new))
+    assert command[command.index("--runtime") + 1] == digest(new)
+    assert "--runtime" not in worker_command(root, profile, ["python"], tmp_path, [0], 100, False)

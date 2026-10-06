@@ -10,8 +10,8 @@ import sys
 import time
 
 from ecarsi.warm_pool.slurm import inventory, process_identity
-from ..files import lock, read, save
-from .state import pool_root
+from ..files import digest, lock, read, save
+from .state import image_runtime, pool_root
 
 
 def runtime_prefix(runtime, binds=None):
@@ -35,13 +35,15 @@ def allocated_gpus(profile):
         int(value) for name, value in tres.items() if name.startswith("gres/gpu:"))
 
 
-def worker_command(root, profile, prefix, work_dir, cpu_ids, memory_mb, gpu):
+def worker_command(root, profile, prefix, work_dir, cpu_ids, memory_mb, gpu, runtime_digest=None):
     use_gpu = allocated_gpus(profile) > 0 if gpu is None else gpu
     if use_gpu and not allocated_gpus(profile):
         raise ValueError("this Slurm allocation has no GPU grant")
     command = [sys.executable, "-m", "ecarsi.warm_pool", "--root", str(root), "slurm-worker",
                "--cpus", ",".join(map(str, cpu_ids)), "--memory-mb", str(memory_mb),
                "--work-dir", str(work_dir), "--job-id", profile["job_id"]]
+    if runtime_digest:
+        command += ["--runtime", runtime_digest]
     if use_gpu:
         command += ["--gpu"]
         visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
@@ -67,7 +69,7 @@ def registered_workers(root, prefix):
 
 
 def add_worker(root, host=None, *, host_python=None, job_id=None, cpu_ids=None, memory_mb=None,
-               work_dir=None, gpu=None, binds=None, wait_seconds=120):
+               work_dir=None, gpu=None, binds=None, wait_seconds=120, image=None):
     root = pool_root(root)
     if wait_seconds <= 0:
         raise ValueError("wait_seconds must be positive")
@@ -81,7 +83,7 @@ def add_worker(root, host=None, *, host_python=None, job_id=None, cpu_ids=None, 
                    host_python or sys.executable, "-m", "ecarsi.warm_pool", "--root", str(root),
                    "add-worker", "--wait-seconds", str(wait_seconds)]
         for flag, value in (("--job-id", job_id), ("--cpus", ",".join(map(str, cpu_ids)) if cpu_ids is not None else None),
-                            ("--memory-mb", memory_mb), ("--work-dir", work_dir)):
+                            ("--memory-mb", memory_mb), ("--work-dir", work_dir), ("--image", image)):
             if value is not None:
                 command += [flag, str(value)]
         if gpu is not None:
@@ -113,11 +115,12 @@ def add_worker(root, host=None, *, host_python=None, job_id=None, cpu_ids=None, 
         raise ValueError("requested CPU IDs are outside the Slurm grant")
     if not 0 < memory_mb * 2**20 <= int(profile["process_memory"] * .9):
         raise ValueError("worker memory must fit within 90% of the Slurm/cgroup memory limit")
-    runtime = read(root / "config.json")["runtime"]
+    # A worker of another registered image (decision 0019) runs in it and declares its runtime
+    runtime = image_runtime(read(root / "config.json"), image)
     prefix = runtime_prefix(runtime, binds)
     explicit_work_dir = work_dir is not None
     work_dir = Path(work_dir).resolve() if work_dir else root / "worker-state" / (profile["host"] + "-" + profile["job_id"])
-    command = worker_command(root, profile, prefix, work_dir, cpu_ids, memory_mb, gpu)
+    command = worker_command(root, profile, prefix, work_dir, cpu_ids, memory_mb, gpu, digest(runtime) if image else None)
     work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     log_path = work_dir / "startup.log"
     with lock(work_dir / "start.lock"):

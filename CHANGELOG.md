@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **A version can bring its own images (decision 0019, step 5).** `warm_pool configure-runtime` registers every runtime
+  it selects and the one it replaces (`--register-only` adds one without making it current); a version's pool
+  requests take the runtime of the compute image in its `version.json`; `add-worker --image` starts a worker of a
+  registered image, which declares that image's runtime; the scheduler marks a request `infeasible` while no live
+  worker declares its image runtime; a version's coordinators and runners run in its control image.
+  `publish-version.sh` takes `VERSION_IMG` / `VERSION_SCIENCE_IMG`. INSTALL.md A.11.
 - **Contracts on the files versions share with the shared components (decision 0019).** `pool-request/1` (a pool
   request, written by any version, read by the shared workers) and `turn-plan/1` (written by the shared bridge, read
   by the version that runs the turn); writers check before they write, the workers and turn executors after they

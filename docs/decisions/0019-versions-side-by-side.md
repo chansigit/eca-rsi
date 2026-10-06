@@ -49,6 +49,6 @@ current version's coordinators and runners; `ops/retire-version.sh` retires a dr
 with the shared components have contracts (`pool-request/1`, `turn-plan/1`, `receipt/1`, `turn/1`; `contracts.SHARED`)
 and `publish-version.sh` refuses a version that writes a version of them the shared side (`INFRA` or the image) does
 not know: update `INFRA` first. Periscope's `/_control/` names each running dataset's version. The compute image's
-environment is locked (`container/science-requirements.lock`, reproduced file for file). Still to build: versions
-that bring their own images (registering several image runtimes in the pool); until then `switch-images.sh` stays
-for image changes.
+environment is locked (`container/science-requirements.lock`, reproduced file for file). Versions can bring their own images
+(INSTALL.md A.11): the pool registers several image runtimes and workers declare the one of their image. Not yet
+exercised with a real second image; until it is, `switch-images.sh` stays for image changes.

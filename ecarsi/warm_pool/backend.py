@@ -334,14 +334,15 @@ MEASURE_INTERVAL = 1800  # seconds between runs of the journal measurement
 
 
 def worker_capacity(workers, now=None):
-    """Live HQ workers as (cpus, memory_mb, gpu_slots, seconds_left) from `hq worker list` JSON;
-    seconds_left is inf for a worker without a time limit."""
+    """Live HQ workers as (cpus, memory_mb, gpu_slots, seconds_left, runtimes) from `hq worker list` JSON;
+    seconds_left is inf for a worker without a time limit; runtimes are the image runtimes it declares."""
     now = time.time() if now is None else now
     out = []
     for w in workers or []:
         if w.get("ended"):
             continue
         cpus = mem = gpus = 0
+        runtimes = set()
         for r in w["configuration"]["resources"]["resources"]:
             if r["name"] == "cpus":
                 cpus = len(r.get("values") or [])
@@ -349,13 +350,15 @@ def worker_capacity(workers, now=None):
                 mem = r.get("size", 0) / 10000
             elif r["name"].startswith("gpuSlot/"):
                 gpus += len(r.get("values") or []) or 1
+            elif r["name"].startswith("runtime/"):
+                runtimes.add(r["name"].removeprefix("runtime/"))
         limit = w["configuration"].get("time_limit")
         left = datetime.fromisoformat(w["started"]).timestamp() + limit - now if limit else math.inf
-        out.append((cpus, mem, gpus, left))
+        out.append((cpus, mem, gpus, left, runtimes))
     return out
 
 
-def infeasible(spec, capacity):
+def infeasible(spec, capacity, runtime=None):
     """Why no live worker could ever hold the request, or None. `capacity` is worker_capacity(). A task
     HQ can never place would wait in its queue for good (2,700 of the 352k requests of 2026-09-24 in the
     replay; a wide zoom-in.apply behind six-core test workers); marking it here keeps it out of HQ and
@@ -365,6 +368,10 @@ def infeasible(spec, capacity):
     reasons name only the request, so they stay the same from tick to tick."""
     if not capacity:
         return "no live worker"
+    # A request runs only on workers of its image runtime (decision 0019); a worker that names none takes any
+    capacity = [c for c in capacity if runtime is None or len(c) < 5 or not c[4] or runtime in c[4]]
+    if not capacity:
+        return f"no live worker of the image runtime {runtime[:12]}"
     gpu = (spec.get("gpu") or {}).get("mode") == "required"
     fits = [c for c in capacity if c[0] >= spec["cpus"] and c[1] >= spec["memory_mb"] and (c[2] or not gpu)]
     if any(c[3] >= spec.get("time_request_seconds", 0) for c in fits):
@@ -516,7 +523,7 @@ class HyperQueue:
                 if reason:
                     skipped[reason] = skipped.get(reason, 0) + 1
                     continue
-                why = infeasible(request["spec"], capacity)
+                why = infeasible(request["spec"], capacity, request.get("placement", request.get("runtime_digest")))
                 if why:
                     unplaceable[why] = unplaceable.get(why, 0) + 1
                     previous = observation(folder, current)
@@ -819,7 +826,7 @@ def serve(root, host=None):
                  observed_at=time.time(), state="stopped"))
 
 
-def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit_seconds=None, gpu_ids=()):
+def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit_seconds=None, gpu_ids=(), runtime_digest=None):
     """An independently supervised native HQ worker; local explicit budgets first."""
     from contextlib import ExitStack
     from .worker import reconcile_local
@@ -843,7 +850,8 @@ def join(root, cpu_ids, memory_mb, work_dir, allocation_profile=None, time_limit
     expires_at = profile["end_time"] - 60 if profile else None
     if time_limit_seconds is not None:
         expires_at = min(expires_at or float("inf"), time.time() + time_limit_seconds)
-    runtime = backend.config["runtime"]
+    # The runtime the worker declares: the current one, or the registered one add-worker --image chose (decision 0019)
+    runtime = (backend.config.get("runtimes") or {})[runtime_digest] if runtime_digest else backend.config["runtime"]
     check_runtime(runtime, imports=True)
     work_dir = Path(work_dir).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)

@@ -44,8 +44,9 @@ def test_worker_capacity_reads_hq_json():
     w = {"ended": None, "configuration": {"resources": {"resources": [
         {"kind": "list", "name": "cpus", "values": ["0", "1", "2", "3"]},
         {"kind": "sum", "name": "mem", "size": 294910000},
-        {"kind": "list", "name": "gpuSlot/0", "values": ["uuid#0"]}]}}}
-    assert worker_capacity([w, dict(w, ended="x")]) == [(4, 29491.0, 1, math.inf)]
+        {"kind": "list", "name": "gpuSlot/0", "values": ["uuid#0"]},
+        {"kind": "sum", "name": "runtime/7af7732", "size": 40000}]}}}
+    assert worker_capacity([w, dict(w, ended="x")]) == [(4, 29491.0, 1, math.inf, {"7af7732"})]
     timed = dict(w, started="2026-10-02T06:33:17.785409871Z", configuration=dict(w["configuration"], time_limit=7979.0))
     started = datetime(2026, 10, 2, 6, 33, 17, 785409, tzinfo=timezone.utc).timestamp()
     assert worker_capacity([timed], now=started + 1565)[0][3] == pytest.approx(6414)
