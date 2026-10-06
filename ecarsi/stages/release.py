@@ -159,6 +159,50 @@ def reassign_items(entry, quality):
     return items
 
 
+LOW_KEEP_MIN_CELLS = 20  # a zoom-in keep at low confidence over fewer cells is not worth a review line (#45)
+
+
+def flag_items(entry, quality):
+    """inspect_flag items. Cross-sample verdicts that were flagged, ambiguous or low get a line each; a zoom-in QC
+    cluster's keeps at low confidence share one line, without the type intersections of fewer than
+    LOW_KEEP_MIN_CELLS cells (#45: one decision per intersection made 30-123 lines of "single cell, keep")."""
+    from ..review import Item
+    link = entry['source'].get('link', entry['source']['path'])
+    cells = intersection_cells(entry['source']['path'])
+    items = []
+    for cluster in quality.get('clusters', []):
+        cid, unsure = str(cluster.get('cluster_id', cluster.get('cluster', ''))), []
+        for flag in cluster.get('decisions', [cluster]):
+            if 'decisions' in cluster and flag.get('action') == 'keep' and flag.get('confidence') == 'low':
+                n = None if cells is None else sum(cells.get((cid, t), 0) for t in flag.get('type_clusters', []))
+                if n is None or n >= LOW_KEEP_MIN_CELLS:
+                    unsure.append((flag, n))
+            elif flag.get('action') != 'remove' and (flag.get('action') == 'flag'
+                    or flag.get('verdict') == 'ambiguous' or flag.get('confidence') == 'low'):
+                items.append(Item('inspect_flag', entry['round'], entry['stage'], entry['scope'], cid,
+                    action=flag.get('action', ''), confidence=flag.get('confidence', ''),
+                    note=flag.get('rationale', ''), link=link))
+        if unsure:
+            sizes = [n for _, n in unsure if n is not None]
+            items.append(Item('inspect_flag', entry['round'], entry['stage'], entry['scope'], cid,
+                n_cells=sum(sizes) if sizes else None, action='keep', confidence='low', link=link,
+                note=' | '.join(f"types {','.join(f.get('type_clusters', []))}" + (f' ({n} cells)' if n is not None else '')
+                                + ': ' + f.get('rationale', '')[:200] for f, n in unsure)))
+    return items
+
+
+def intersection_cells(proposal_path):
+    """{(QC cluster, type cluster): cells} from the type_quality_intersections.csv a zoom-in lineage writes beside its
+    proposal; None without one."""
+    import csv
+    path = Path(proposal_path).parent / 'type_quality_intersections.csv'
+    if not path.is_file():
+        return None
+    with open(path, newline='') as f:
+        header, *rows = list(csv.reader(f))
+    return {(row[0], t): int(float(v)) for row in rows for t, v in zip(header[1:], row[1:]) if v}
+
+
 def type_proposal(prop):
     """The per-cluster type decisions of a stage's proposal. Zoom-in stores separate resolution-1 type
     and resolution-2 quality decisions under `types` / `quality`; a cross-sample inspection proposal is
@@ -275,14 +319,7 @@ def review_items(unit, exclusions, decisions, root=None, ledger=None):
                 typed, {}, {}, entry['source'].get('link', entry['source']['path'])) if item.kind != 'removed']
         quality = prop.get('quality', prop if 'inspection' in Path(entry['source']['path']).name else {})
         items += reassign_items(entry, quality)
-        for cluster in quality.get('clusters', []):
-            for flag in cluster.get('decisions', [cluster]):
-                if flag.get('action') != 'remove' and (flag.get('action') == 'flag'
-                        or flag.get('verdict') == 'ambiguous' or flag.get('confidence') == 'low'):
-                    items.append(Item('inspect_flag', entry['round'], entry['stage'], entry['scope'],
-                        str(cluster.get('cluster_id', cluster.get('cluster', ''))),
-                        action=flag.get('action', ''), confidence=flag.get('confidence', ''),
-                        note=flag.get('rationale', ''), link=entry['source'].get('link', entry['source']['path'])))
+        items += flag_items(entry, quality)
         for warning in prop.get('host_warnings', []):
             items.append(Item('plan_warning', entry['round'], entry['stage'], entry['scope'],
                 note=str(warning), link=entry['source'].get('link', entry['source']['path'])))

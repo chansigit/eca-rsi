@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Zoom-in low-confidence keeps no longer flood needs_review (#45).** A QC cluster's keeps at low confidence share
+  one `inspect_flag` line with their intersections and cell counts, and intersections under 20 cells
+  (`release.LOW_KEEP_MIN_CELLS`) are left out. On gate-20261006-0202 the 123 such lines (1-16 cells each) become none.
 - **Periscope's background scripts open no tunnel.** `ops/start-periscope.sh` and `PERISCOPE_DOMAIN` no longer pass
   `--ngrok` (Sherlock forbids unattended tunnels), and `ops/restart-periscope.sh` no longer waits 60 s for an ngrok
   session to end. `ecarsi serve --ngrok [--domain D]` stays for attended sessions in the foreground.

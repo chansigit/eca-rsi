@@ -17,7 +17,8 @@ Sections, most consequential first:
   sample_excluded whole samples the inclusion agent kept out of integration
   reassigned      clusters a zoom-in moved to another lineage (a cluster that
                   keeps moving every round is a labelling problem upstream)
-  inspect_flag    inspection verdicts that were flagged / ambiguous / low
+  inspect_flag    inspection verdicts that were flagged / ambiguous / low; a zoom-in QC cluster's low-confidence
+                  keeps share one line, intersections under 20 cells left out (#45)
                   confidence (advisory to annotate; nothing was removed here)
   lineage_skipped lineages the host refused to zoom (too few cells)
   plan_warning    zoom-in plans the host flagged (labels sharing one UMAP
