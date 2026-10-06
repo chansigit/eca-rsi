@@ -119,8 +119,7 @@ Global re-embedding occurs in the next round.
 Completion requires successful kernel execution and validated outputs.
 These validated outputs include readable H5ADs, required labels, and cell conservation against removal and reassignment ledgers.
 Empty placeholder files do not mark a stage complete.
-Stress-related expression remains evidence for review.
-This release has no blanket stress-population or mitochondrial top-DEG deletion switch.
+Stress, dissociation and dying removals follow the dataset's `stress_policy` ([decision 0017](docs/decisions/0017-stress-population-policy.md)): by default a removal of 10 or more cells stands only on evidence the code checks, and the cells of any other stay, labelled in `retained_state`.
 
 ### Stopping rules
 

@@ -40,6 +40,8 @@ Datasets advance independently. A model wait holds no compute grant. Failed oper
 
 Budgets are examples. Size them for the input and the workers. The output directory must be fresh. Species and sample key must match the accepted Organize mapping. For `compute_backend`, `auto` prefers a GPU above `gpu_min_cells` and allows CPU fallback. The setting `rapids` requires a GPU. The setting `cpu` uses Scanpy. `max_in_flight_deg` bounds the dispatched DEG requests of the dataset. Worker resources decide real concurrency.
 
+`config.stress_policy` (remove or keep) is set only when the dataset spec sets it ([decision 0017](../decisions/0017-stress-population-policy.md)). The type phase checks each stress removal of 10 or more cells against `stress_clusters.csv` and keeps the unsupported ones under the agent's labels; finalize marks retained cells in obs `retained_state`.
+
 CPU DEG requests with the mapped-buffer layout use a measured memory estimate. Calculate this estimate as four times the expression and metadata file bytes plus 2 GiB. Round the estimate up to 256 MiB. Cap the estimate at `deg_budget.memory_mb`. Unknown layouts and GPU requests keep their declared budgets. Existing requests never change.
 
 Change the DEG window of a running workflow without restarting it:

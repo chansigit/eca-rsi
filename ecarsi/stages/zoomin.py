@@ -10,6 +10,8 @@ from . import PROMPTS
 from .contract import (LOOKUP_NOTE, NO_ARGUMENTS, checklist, deg_lookup_schema, evidence_page, evidence_paths, json_hint,
                        lookup_arguments, proposal as parse_proposal, schema)
 from .common import artifact, assemble, check_bundle, deg, deg_batch, png_url, publish_bundle, sealed
+from .common import (RETAINED, STRESS_HOST_POLICY, comparison_cells, dying_evidence, fragment_table, guard_stress, mark_retained,
+                     soft_fragments, stress_flags, stress_policy)
 from ..files import digest, read, save
 
 
@@ -91,27 +93,37 @@ def compute(subset_ref, marker_ref, destination):
         tasks=tasks, n_input=len(data), backend=backend, foreign_columns=foreign)
 
 
+def lineage_policy(bundle):
+    return stress_policy(verified(bundle['planning'])['spec'])
+
+
 def numerical_reasons(bundle, data):
-    """Why the numerical pre-annotation removes each cell of a lineage. Cross-sample's list also has
-    osp_proposal: OSP's drop advice is applied there, in round 1, so no such cell reaches a lineage;
-    one that did would have no reason here and fail loudly rather than be recorded vaguely."""
+    """Why the numerical pre-annotation removes each cell of a lineage, and {cell: state} of the cells the
+    stress policy keep retains instead: those whose only reason is a fragment removed by its dissociation
+    or mitochondrial test (decision 0017). Cross-sample's list also has osp_proposal: OSP's drop advice is
+    applied there, in round 1, so no such cell reaches a lineage; one that did would have no reason here
+    and fail loudly rather than be recorded vaguely."""
     import pandas as pd
     from msp.api import load_removal_mask
     mask = load_removal_mask(artifact(bundle, 'preannotation_removal.csv').parent, data)
-    fragments = pd.read_csv(artifact(bundle, 'minor_sibling_qc.csv'), dtype=str, keep_default_na=False)
-    bad = set(fragments.loc[fragments.recommend_removal.str.lower().eq('true'), 'subcluster'])
+    fragments = fragment_table(bundle)
+    bad = set(fragments.loc[fragments.recommend_removal.str.lower().eq('true'), 'subcluster']) if 'recommend_removal' in fragments else set()
+    soft = soft_fragments(fragments) if lineage_policy(bundle) == 'keep' else {}
     outliers = pd.read_csv(artifact(bundle, 'cell_outliers.csv'), dtype=str, keep_default_na=False).set_index('cell') if 'cell_outliers.csv' in bundle['files'] else pd.DataFrame()
-    result = {}
+    result, retained = {}, {}
     for cell in data.obs_names[mask]:
-        reasons = []
-        if str(data.obs.loc[cell].get('standissect_product')) in bad:
+        reasons, product = [], str(data.obs.loc[cell].get('standissect_product'))
+        if product in bad and product not in soft:
             reasons.append(dict(code='fragment_qc', evidence=bundle['files']['minor_sibling_qc.csv']))
         if cell in outliers.index and str(outliers.loc[cell].get('recommend_removal')).lower() == 'true':
             reasons.append(dict(code='cell_outlier', detail=outliers.loc[cell].to_dict(), evidence=bundle['files']['cell_outliers.csv']))
-        if not reasons:
+        if reasons:
+            result[cell] = reasons
+        elif product in soft:
+            retained[cell] = soft[product]
+        else:
             raise ValueError('Numerical removal lacks a supported reason: ' + cell)
-        result[cell] = reasons
-    return result
+    return result, retained
 
 
 REASSIGN_OWN_MARKER_FRACTION = 0.5  # a reassigned population may keep at most half of the lineage's own-marker positivity
@@ -158,17 +170,51 @@ def reassign_problem(n_cells, share, core, target, previous):
     return text
 
 
+def quality_guard(bundle, data, proposal, t, q):
+    """Decision 0017 on the removals of a quality proposal, in place; what stayed, for the tool reply. The
+    stress-gene rule looks at the 2.0 cluster and the decision's 1.0 types; the dying check compares the
+    target with the rest of its 1.0 types that no decision removes."""
+    import numpy as np
+    from zmip.api import TYPE_KEY, QUALITY_KEY
+    policy, flags = lineage_policy(bundle), stress_flags(bundle)
+    targets = [(group['cluster_id'], entry, (q.eq(group['cluster_id']) & t.isin(entry['type_clusters'])).to_numpy())
+               for group in proposal['clusters'] for entry in group['decisions']]
+    removing = np.zeros(len(t), dtype=bool)
+    for _, entry, target in targets:
+        if entry['action'] == 'remove':
+            removing |= target
+    retained = []
+    for cid, entry, target in targets:
+        flagged = (QUALITY_KEY, cid) in flags or any((TYPE_KEY, c) in flags for c in entry['type_clusters'])
+        same = t.isin(entry['type_clusters']).to_numpy()
+        if guard_stress(entry, policy, int(target.sum()), flagged,
+                        lambda: dying_evidence(data.obs, target, comparison_cells(data.obs, same, removing))):
+            retained.append(dict(cluster=cid, type_clusters=entry['type_clusters'], **entry['host_adjustment']))
+    return retained
+
+
 def apply_lineage(evidence, decision, destination):
-    from zmip.api import apply_decisions
+    from zmip.api import TYPE_KEY, QUALITY_KEY, apply_decisions
     bundle, accepted = check_bundle(evidence), verified(decision)
     if accepted.get('accepted') is not True or accepted['evidence'] != evidence:
         raise ValueError('Lineage decision belongs to different evidence')
     data = data_from(bundle)
     own, other = lineage_labels(bundle)
+    pre, retained = numerical_reasons(bundle, data)
     obs, removed, reassigned, _ = apply_decisions(data.obs, accepted['types'], accepted['quality'], own, other,
-        bundle['lineage']['name'], numerical_reasons(bundle, data))
+        bundle['lineage']['name'], pre)
     data.obs = obs
+    t, q = data.obs[TYPE_KEY].astype(str), data.obs[QUALITY_KEY].astype(str)
+    for group in accepted['quality']['clusters']:
+        for entry in group['decisions']:
+            if entry.get('host_adjustment', {}).get('policy') == STRESS_HOST_POLICY:
+                ids = data.obs_names[q.eq(group['cluster_id']) & t.isin(entry['type_clusters'])]
+                retained.update({cell: entry['host_adjustment']['state'] for cell in ids})
     kept = data[data.obs.msp_ann_action.astype(str).eq('keep')].copy()
+    before = set(kept.obs_names[kept.obs[RETAINED].astype(str).ne('')]) if RETAINED in kept.obs else set()
+    mark_retained(kept.obs, retained)
+    new = kept.obs.loc[~kept.obs_names.isin(list(before)), RETAINED].astype(str)
+    new[new.ne('')].rename_axis('cell').rename('state').reset_index().to_csv(destination/'annotation_retained.csv', index=False)
     removed['reasons'] = removed.reasons.map(json.dumps)
     removed.to_csv(destination/'annotation_removed.csv', index=False)
     reassigned.to_csv(destination/'annotation_reassigned.csv', index=False)
@@ -250,7 +296,7 @@ def merge(prepared, decision, results, destination, skipped=()):
     plan = plan_without(accepted_plan(prepared, decision), skipped)
     source = verified(prepared)
     data = data_from(verified(source['input']), 'annotated.h5ad')
-    accepted, ledgers, degraded = {}, [], []
+    accepted, ledgers, degraded, retained = {}, [], [], {}
     for ref in results:
         result = check_bundle(ref)
         evidence = verified(result['evidence'])
@@ -262,6 +308,9 @@ def merge(prepared, decision, results, destination, skipped=()):
         accepted[name] = dict(dir=str(artifact(result, 'annotated.h5ad').parent),
             removed=pd.read_csv(artifact(result, 'annotation_removed.csv'), dtype=str, keep_default_na=False),
             reassigned=pd.read_csv(artifact(result, 'annotation_reassigned.csv'), dtype=str, keep_default_na=False))
+        if 'annotation_retained.csv' in result['files']:
+            table = pd.read_csv(artifact(result, 'annotation_retained.csv'), dtype=str, keep_default_na=False)
+            retained.update(zip(table.cell, table.state))
         ledgers.append(pd.read_csv(artifact(result, 'cell_exclusions.csv.gz'), dtype=str, keep_default_na=False))
         # The report looks a lineage up at <destination>/<slug>/ and links there: generation 1
         # computed each lineage in that subdirectory, generation 2 in a pool request of its own.
@@ -269,6 +318,7 @@ def merge(prepared, decision, results, destination, skipped=()):
         degraded += [{**d, 'scope': name} for d in result.get('degraded', [])]
         degraded += [{**d, 'scope': name} for d in copy_light(result['files'], destination/slug(name))]
     save(destination/'zmip_plan.json', plan)
+    mark_retained(data.obs, retained)  # merge_back writes the survivors of `data`
     # with_report: zmip's own global page for the round, as generation 1 always published.
     kept, removed, _ = merge_back(data, plan, accepted, str(destination), with_report=True)
     ledger = pd.concat(ledgers, ignore_index=True) if ledgers else pd.DataFrame(columns=['cell_uid','source_id','source_cell_id','reason','stage','operation','input_version'])
@@ -338,6 +388,8 @@ def agent_spec(spec, evidence, kind, parent):
             'submit_quality': (schema({'proposal_json':{'type':'string'}}), 'Save {"cluster_key":"msp_leiden_r2.0","clusters":[{"cluster_id":"QC id","decisions":[{"type_clusters":["type ids"],"action":"keep|remove|reassign","confidence":"high|medium|low","evidence":"specific evidence","rationale":"reason"}]}]}. Each QC group must cover its present 1.0 intersections exactly once. remove needs remove_reason (doublet|low-quality|ambient|stress|dissociation|dying|batch|other). reassign needs reassign_to and fine_label. After a budget warning add removal_review explaining evidence and scope. An accepted quality proposal completes the session.', False)})
         completion = 'submit_quality'
     prompt += '\nTissue/species and integration context: '+json.dumps(spec['config'])
+    if kind != 'plan':
+        prompt += '\nStress policy: ' + stress_policy(spec)
     prompt += '\nUse the registered tools; no local execution or direct file editing is available.'
     prompt += '\n\n' + inline_context(bundle, kind) + '\n\n' + checklist('zoomin-plan' if kind == 'plan' else 'zoomin-annotation')
     session = 'zoom-'+digest([spec['run_id'], kind, evidence])[:24]
@@ -561,20 +613,22 @@ def tool(name, state_path, args_path, destination):
                     problem = reassign_problem(len(ids), own_marker_positivity(data, own_markers, ids), core, entry['reassign_to'], previous)
                     if problem:
                         raise ValueError(problem)
-            pre = numerical_reasons(bundle,data)
+            retained = quality_guard(bundle, data, proposal, t, q)
+            pre, _ = numerical_reasons(bundle,data)
             _, removed, _, _ = apply_decisions(data.obs,state['types'],proposal,own,other,bundle['lineage']['name'],pre)
             from zmip.api import REMOVE_BUDGET
             fraction = len(set(removed.cell)-set(pre))/len(data)
             if fraction > REMOVE_BUDGET:
                 if not state.get('budget_warning'):
                     state['budget_warning'] = True
-                    raise ValueError(f'Removal review required: {fraction:.1%} beyond numerical exclusions. Review evidence and exact scope; confirmed dissociation/dying subclusters still default to removal. Resubmit with a specific removal_review explanation.')
+                    raise ValueError(f'Removal review required: {fraction:.1%} beyond numerical exclusions. Review evidence and exact scope under the stress policy in the prompt. Resubmit with a specific removal_review explanation.')
                 if not isinstance(proposal.get('removal_review'),str) or not proposal['removal_review'].strip():
                     raise ValueError('Explain the reviewed removal evidence and scope in removal_review')
             state['quality'] = proposal;state['removal_fraction'] = fraction
             # An accepted quality proposal completes the session (in 247 finished sessions no model revised after acceptance).
             response.update(accepted=True,evidence=state['evidence'],types=state['types'],quality=proposal,removal_fraction=fraction,
-                            content='Quality coverage accepted; the session is complete.')
+                            content='Quality coverage accepted; the session is complete.' + (
+                                ' Kept under the stress policy (decision 0017): ' + json.dumps(retained) if retained else ''))
         else:
             raise ValueError('Unknown zoom-in tool')
     except (ValueError,KeyError,TypeError,IndexError) as exc:

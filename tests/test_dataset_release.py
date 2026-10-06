@@ -18,7 +18,7 @@ def test_release_conservation_retry_and_corruption(tmp_path):
         save(path, value)
         return reference(path)
 
-    def matrix(name, cells):
+    def matrix(name, cells, retained=None):
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         obs = pd.DataFrame(index=cells)
@@ -27,6 +27,8 @@ def test_release_conservation_retry_and_corruption(tmp_path):
         for prefix in ('', 'msp', 'zmip'):
             obs[prefix + '_ann_coarse'] = 'T cell'
             obs[prefix + '_ann_fine'] = 'CD4 T cell'
+        if retained:
+            obs['retained_state'] = pd.Categorical(retained)
         data = ad.AnnData(np.ones((len(cells), 2)), obs=obs)
         data.obsm['X_umap'] = np.zeros((len(cells), 2))
         data.write_h5ad(path)
@@ -51,10 +53,10 @@ def test_release_conservation_retry_and_corruption(tmp_path):
         partition_exclusions=csv('partition.csv', dict(cell_id=['e'], excluded_reason=['confirmed policy'])),
         n_input=5, n_survived=3, n_removed=2))
     cross = record('cross.json', dict(state='complete', result=record('cross-final.json', {}), input=per, n_input=3, n_survived=2, n_removed=1,
-        files={'annotated.h5ad': matrix('cross.h5ad', ['001', 'NA']),
+        files={'annotated.h5ad': matrix('cross.h5ad', ['001', 'NA'], ['stress', 'dying']),
                'cell_exclusions.csv.gz': gone('cross-gone.csv', ['c'], '[{"code":"fragment_qc"}]')}))
     zoom = record('zoom.json', dict(state='complete', result=record('zoom-final.json', {}), input=cross, n_input=2, n_survived=1, n_removed=1,
-        files={'annotated_zmip.h5ad': matrix('zoom.h5ad', ['001']),
+        files={'annotated_zmip.h5ad': matrix('zoom.h5ad', ['001'], ['stress']),
                'cell_exclusions.csv.gz': gone('zoom-gone.csv', ['NA'], json.dumps([
                    {'code': 'low-quality', 'decision': {'confidence': 'medium'}}]))}))
     round_ref = record('round.json', dict(round=1, cross_sample=cross, zoom_in=zoom,
@@ -74,6 +76,10 @@ def test_release_conservation_retry_and_corruption(tmp_path):
     assert (tmp_path / 'release/final.h5ad').stat().st_ino != (tmp_path / 'zoom.h5ad').stat().st_ino
     review = json.loads((tmp_path / 'release/needs_review.json').read_text())
     assert [item['n_cells'] for item in review if item['kind'] == 'removed'] == [1]
+    # decision 0017: the released cell the stress policy kept, by the stage that first kept it ('NA' was removed later)
+    kept = [item for item in review if item['kind'] == 'stress_retained']
+    assert [(k['round'], k['step'], k['label'], k['n_cells'], k['note']) for k in kept] == [(1, 'cross-sample', 'T cell', 1, 'stress')]
+    assert ledger.loc['001', ['retained_state', 'retained_stage']].tolist() == ['stress', 'round01.cross-sample']
     (tmp_path / 'release/summary.json').write_text('{}')
     with pytest.raises(ValueError, match='Released artifact changed'):
         publish(unit)

@@ -135,5 +135,6 @@
     "cap": 10,
     "extra_rounds_after_convergence": 0,
     "max_removed": 1000
-  }
+  },
+  "stress_policy": "remove"
 }

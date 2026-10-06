@@ -118,6 +118,11 @@ def test_storage_is_optional_but_must_name_two_absolute_roots():
         validate_spec({**required, "storage": {"display_root": "rel", "archive_root": "/a"}})
     with pytest.raises(ValueError, match="explicit services"):
         validate_spec({**required, "storage": STORAGE, "extra": 1})
+    # the optional stress policy (decision 0017) passes the key check and must be remove or keep
+    with pytest.raises(ValueError, match="stress_policy is remove or keep"):
+        validate_spec({**required, "stress_policy": "drop"})
+    with pytest.raises(ValueError, match="storage needs"):
+        validate_spec({**required, "stress_policy": "keep", "storage": {"display_root": "rel", "archive_root": "/a"}})
 
 
 def test_a_display_sync_rides_the_tool_priority_class():

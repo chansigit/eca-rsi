@@ -43,8 +43,10 @@ def validate_spec(spec, *, resume=False):
             raise ValueError('Concurrency limits must be positive integers')
     cfg=spec['config']
     required={'batch_col','species','tissue','min_cells','n_top_genes','n_pcs','n_neighbors','compute_backend','gpu_min_cells','gpu_memory_mb','max_refinements'}
-    if not isinstance(cfg,dict) or set(cfg)!=required:
+    if not isinstance(cfg,dict) or set(cfg)-{'stress_policy'}!=required:
         raise ValueError('Explicit lineage, integration and backend settings required')
+    if cfg.get('stress_policy','remove') not in ('remove','keep'):
+        raise ValueError('stress_policy is remove or keep')
     if type(cfg['max_refinements']) is not int or cfg['max_refinements'] < 0:
         raise ValueError('max_refinements must be a nonnegative integer')
     for key in ('min_cells','n_top_genes','n_pcs','n_neighbors','gpu_min_cells','gpu_memory_mb'):

@@ -55,9 +55,11 @@ def validate_spec(spec, *, resume=False):
     if type(spec['max_refinements']) is not int or spec['max_refinements'] < 0:
         raise ValueError('max_refinements must be nonnegative')
     cfg = spec['config']
-    if set(cfg) != {'batch_col', 'species', 'tissue', 'n_top_genes', 'n_pcs', 'n_neighbors',
-                    'compute_backend', 'gpu_min_cells', 'gpu_memory_mb'}:
+    if set(cfg) - {'stress_policy'} != {'batch_col', 'species', 'tissue', 'n_top_genes', 'n_pcs', 'n_neighbors',
+                                        'compute_backend', 'gpu_min_cells', 'gpu_memory_mb'}:
         raise ValueError('Explicit integration, tissue and backend settings required')
+    if cfg.get('stress_policy', 'remove') not in ('remove', 'keep'):
+        raise ValueError('stress_policy is remove or keep')
     if any(type(cfg[k]) is not int or cfg[k] < 1 for k in ('n_top_genes', 'n_pcs', 'n_neighbors', 'gpu_min_cells', 'gpu_memory_mb')):
         raise ValueError('Numerical and GPU settings must be positive integers')
     if cfg['compute_backend'] not in {'cpu', 'rapids', 'auto'}:

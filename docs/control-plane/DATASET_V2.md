@@ -76,6 +76,10 @@ dataset/
 
 Stage publications keep their artifact references and exact exclusion ledgers. Unit publications link every round and the final zoom-in publication. The dataset publication links the units.
 
+### Stress policy (optional)
+
+`"stress_policy": "remove"` (the default) or `"keep"` at the top level of the spec ([decision 0017](../decisions/0017-stress-population-policy.md)). Under remove, an agent's removal of 10 or more cells as stress or dissociation stands only when `stress_clusters.csv` marks its cluster, as dying only when its cells have a clearly higher mitochondrial fraction or fewer genes than the same identity; the cells of any other removal stay. Under keep, every such removal stays, and so do fragments removed only by msp's dissociation or mitochondrial test and cells OSP advised dropping for dissociation stress. Retained cells keep their identity labels; obs `retained_state` in `final.h5ad`, the `retained_state`/`retained_stage` columns of `cell_ledger.csv.gz` and the needs_review kind `stress_retained` say which and where. A run started without the key keeps the default.
+
 ## Rounds
 
 Round 1 cross-sample uses the accepted per-sample results and the sample inclusion decision. Later rounds consume only the surviving cells from the previous zoom-in stage. They restore counts through the MSP integration kernel. They archive previous annotation columns under `r01_`, `r02_`, and so on. Cell ids and source identities never change. The workflow does not repeat Organize and per-sample.

@@ -17,8 +17,10 @@ def validate_spec(spec):
     from ..warm_pool.state import identifier
     required = {'run_id', 'dataset_id', 'input_root', 'output_root', 'pool_root', 'bridge_root',
                 'organize', 'per_sample', 'cross_sample', 'zoom_in', 'round_policy'}
-    if not isinstance(spec, dict) or set(spec) - {'storage'} != required:
+    if not isinstance(spec, dict) or set(spec) - {'storage', 'stress_policy'} != required:
         raise ValueError('Dataset needs explicit services, all four stage settings, and a round policy')
+    if spec.get('stress_policy', 'remove') not in ('remove', 'keep'):  # optional, decision 0017
+        raise ValueError('stress_policy is remove or keep')
     storage = spec.get('storage')  # optional: where the display zone and the work archive go (#25)
     if storage is not None and (not isinstance(storage, dict) or set(storage) != {'display_root', 'archive_root'}
                                 or not all(isinstance(v, str) and Path(v).is_absolute() for v in storage.values())):
@@ -397,6 +399,8 @@ def dataset_step(action, args):
         from ..sample_mapping import SAMPLE_KEY
         derived = dict(species=metadata['species'],
             batch_col=(metadata['sample_mapping']['decision'].get('batch_key') or {}).get('column', SAMPLE_KEY))
+        if 'stress_policy' in spec:  # only when set: a run without it keeps its stage specs on resume
+            derived['stress_policy'] = spec['stress_policy']
         for key, value in derived.items():
             if key in template['config'] and template['config'][key] != value:
                 raise ValueError('Stage settings disagree with Organize: ' + key)

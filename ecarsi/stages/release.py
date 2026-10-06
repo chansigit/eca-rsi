@@ -5,7 +5,7 @@ from pathlib import Path
 import shutil
 
 from ..files import reference, verified
-from .common import artifact, sealed
+from .common import RETAINED, STRESS_HOST_POLICY, artifact, sealed
 from ..files import lock, read, save
 from ..contracts import check
 
@@ -37,6 +37,7 @@ def collect(unit_ref, *, complete=True):
         if column not in ledger or ledger[column].isna().any():
             raise ValueError('Missing original cell identity: ' + column)
     alive = _cell_ids(original.index, 'Organize')
+    ledger['retained_state'], ledger['retained_stage'] = '', ''  # the stress policy's keeps (decision 0017)
     exclusions, stages, decisions = [], [], []
 
     def decision(bundle, name, number, stage, scope=''):
@@ -69,6 +70,10 @@ def collect(unit_ref, *, complete=True):
                 raise ValueError('Missing survivor annotation: ' + column)
             if column in current:
                 ledger.loc[current.index, name + '_' + suffix] = current[column].astype(str)
+        if RETAINED in current:  # the stage that first kept a cell under the stress policy
+            state = current[RETAINED].astype(object).fillna('').astype(str)
+            new = state.index[state.ne('').to_numpy() & ledger.loc[state.index, 'retained_stage'].eq('').to_numpy()]
+            ledger.loc[new, 'retained_state'], ledger.loc[new, 'retained_stage'] = state[new], name
         stages.append((name, name + '_coarse', status))
         removed = removed.copy()
         removed['release_stage'], removed['round'] = name, number
@@ -77,7 +82,7 @@ def collect(unit_ref, *, complete=True):
         alive = set(current.index)
 
     labels = ['source_unit', 'eca_source_cell_id', '_ann_coarse', '_ann_fine',
-              'msp_ann_coarse', 'msp_ann_fine', 'zmip_ann_coarse', 'zmip_ann_fine']
+              'msp_ann_coarse', 'msp_ann_fine', 'zmip_ann_coarse', 'zmip_ann_fine', RETAINED]
     per = check('per-sample', verified(unit['per_sample']))
     if per['state'] != 'complete' or per['failed_samples']:
         raise ValueError('Per-sample is incomplete')
@@ -181,7 +186,31 @@ def local_link(root, entry):
     return str(rel) if copy.is_file() and file_digest(copy) == entry['source']['sha256'] else entry['source']['path']
 
 
-def review_items(unit, exclusions, decisions, root=None):
+def stress_retained_items(ledger, decisions):
+    """needs_review 'stress_retained': released cells the stress policy kept, by the stage that kept them, their
+    state and their coarse label there, with the code's evidence notes of that round and stage."""
+    from ..review import Item
+    notes = {}
+    for entry in decisions:
+        value = entry['value']
+        for group in value.get('clusters', []) + value.get('quality', {}).get('clusters', []):
+            for decision in group.get('decisions', [group]):
+                adjustment = decision.get('host_adjustment', {})
+                if adjustment.get('policy') == STRESS_HOST_POLICY:
+                    where = (entry['scope'] + ' ' if entry['scope'] else '') + 'cluster ' + str(group.get('cluster_id', ''))
+                    notes.setdefault((entry['round'], entry['stage'], adjustment['state']), []).append(where + ': ' + adjustment['evidence'])
+    items = []
+    kept = ledger[ledger.final_status.eq('kept') & ledger.retained_stage.ne('')]
+    for (name, state), rows in kept.groupby(['retained_stage', 'retained_state']):
+        number, step = int(name[5:7]), name.split('.', 1)[1]
+        why = notes.get((number, step, state), [])
+        for label, n in rows[name + '_coarse'].value_counts().items():
+            items.append(Item('stress_retained', number, step, label=str(label), n_cells=int(n), action='keep',
+                              note=state + ('; ' + ' | '.join(why[:3]) if why else '')))
+    return items
+
+
+def review_items(unit, exclusions, decisions, root=None, ledger=None):
     """Reuse review records; count actual removed cells, not proposed cluster sizes. `root` is the unit
     directory, where decisions link to their local copies."""
     from .. import layout as L
@@ -261,6 +290,8 @@ def review_items(unit, exclusions, decisions, root=None):
             if not line['zoom']:
                 items.append(Item('lineage_skipped', entry['round'], entry['stage'], line['name'],
                     n_cells=line['n_cells'], note=line.get('reason', ''), link=entry['source'].get('link', entry['source']['path'])))
+    if ledger is not None:
+        items += stress_retained_items(ledger, decisions)
     _mark_recurring(items)
     return items
 
@@ -294,7 +325,7 @@ def publish(unit_ref):
             excluded.to_csv(destination / 'cell_exclusions.csv.gz', index=False, compression=compression)
             save(destination / 'sankey.json', sankey_data(ledger, stages))
             save(destination / 'decisions.json', decisions)
-            items = review_items(unit, excluded, decisions, root)
+            items = review_items(unit, excluded, decisions, root, ledger)
             (destination / 'needs_review.json').write_text(to_json(items))
             markdown = to_markdown(items, unit['unit']['name'], len(unit['rounds']))
             markdown = markdown.replace('Everything the agents were unsure about or the host overrode',

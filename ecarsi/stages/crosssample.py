@@ -10,6 +10,8 @@ from . import PROMPTS
 from .contract import (LOOKUP_NOTE, NO_ARGUMENTS, checklist, deg_lookup_schema, evidence_page, evidence_paths, json_hint,
                        lookup_arguments, proposal as parse_proposal, schema)
 from .common import BASE, artifact, assemble, check_bundle, deg, deg_batch, png_url, publish_bundle, sealed
+from .common import (STRESS_HOST_POLICY, comparison_cells, dying_evidence, fragment_table, guard_stress, mark_retained, soft_fragments,
+                     stress_flags, stress_policy)
 from ..files import digest, read, save
 
 INVENTORY_PAGE_BYTES = 64 * 1024  # sample_inventory pages by bytes, like evidence pages: a cohort of 62
@@ -165,6 +167,11 @@ def compute(inspected_ref, inclusion_ref, destination):
     pd.DataFrame(decision['samples']).to_csv(destination/'sample_decisions.csv',index=False)
     data=load_and_merge(inputs,inspected['spec']['config']['batch_col'])
     if len(data)+len(excluded)!=len(origin):raise ValueError('Sample selection lost cells')
+    if stress_policy(inspected['spec'])=='keep' and '_qc_action' in data.obs:
+        # OSP advice to drop dissociation-stressed cells becomes a flag: the cells are kept and labelled (0017)
+        soft=data.obs.index.intersection([c for c,r in osp_reasons.items() if all(x['action'].get('reason')=='dissociation-stress' for x in r)])
+        action=data.obs['_qc_action'].astype(str);action[soft]='flag'
+        data.obs['_qc_action']=pd.Categorical(action,categories=['keep','flag','drop'])
     integrate(data, inspected_ref, inclusion_ref, destination, inputs)
 
 
@@ -312,6 +319,7 @@ def agent_spec(spec, evidence_ref, phase, parent, types_ref=None):
           'check_qc_scores':(schema({}),'Per-cluster QC, composition and accepted type labels.',False),
           'type_context':(NO_ARGUMENTS,'Every accepted or preserved type entry in one call.',False)})
         prompt+='\nContext: '+json.dumps(spec['config'])+'\nEvidence version: '+evidence_ref['sha256']
+        prompt+='\nStress policy: '+stress_policy(spec)
         prompt+='\nAssigned type clusters: '+json.dumps(bundle['type_scope'])+'\nBase key: '+BASE
         if bundle.get('type_entries'):
             prompt+='\nUse type_context for preserved type entries outside your assignment; do not resubmit them.'
@@ -427,7 +435,7 @@ def tool(name,state_path,args_path,destination):
                 response['source']='computed' if cache.n_computed else 'precomputed'
                 state['additional_deg'][key]=immutable(destination/'additional_deg.json',response)
         elif name=='submit_decision':
-            proposal=parse_proposal(args)
+            proposal=parse_proposal(args);converted=[]
             if phase=='inclusion':
                 from .inclusion import validate_inclusion
                 validate_inclusion(proposal,[s['sample'] for s in bundle['samples']])
@@ -454,6 +462,14 @@ def tool(name,state_path,args_path,destination):
                     entries={**bundle['type_entries'],**proposed}
                     problems=validate_annotation(entries,clusters)
                     problems+=check_coarse_boundaries(entries,load_paga_neighbors(artifact(bundle,'deg.sqlite').parent,BASE),proposal.get('boundary_reviews',[]))
+                    if not problems:
+                        # After the boundary check: boundary reviews judge what the agent submitted.
+                        converted=_stress_guard(bundle,data,entries,proposed)
+                        relabel=validate_annotation(entries,clusters) if converted else []
+                        if relabel:
+                            raise ValueError('Clusters '+', '.join(converted)+' stay under the stress policy (decision 0017; see their host_adjustment) '
+                                             'and, kept, their labels conflict: '+'; '.join(relabel)+'. Give each its identity labels: a fine label of '
+                                             'its own, or merge_target to the population it belongs to; then resubmit.')
                     proposal['clusters']=[entries[c] for c in sorted(entries)]
                 else:
                     from msp.api import validate_inspection,guard_batch_actions
@@ -474,6 +490,8 @@ def tool(name,state_path,args_path,destination):
                         if not problems:guard_batch_actions(proposal)
                 if problems:raise ValueError('; '.join(problems))
             response.update(accepted=True,proposal=proposal,evidence=state['evidence'],types=state['types'])
+            if converted:
+                response['host_adjustments']=[{'cluster':c,**proposed[c]['host_adjustment']} for c in converted]
         else:raise ValueError('Unknown worker tool')
     except (ValueError,KeyError,TypeError,IndexError) as exc:
         content=str(exc)[:8000]
@@ -481,6 +499,26 @@ def tool(name,state_path,args_path,destination):
         except Exception:hint=''  # noqa: BLE001 - a hint must never turn a correctable error into a crash
         response={'is_error':True,'content':(content+'\n'+hint)[:16000] if hint else content}
     response['state']=immutable(destination/'state.json',state);save(destination/'result.json',response)
+
+
+def _stress_guard(bundle,data,entries,proposed):
+    """Decision 0017 on the type removals of this submission, in place; the clusters that stay. The dying check
+    compares a cluster with the clusters of its coarse label that no entry removes."""
+    policy=stress_policy(verified(bundle['inspected'])['spec']);flags=stress_flags(bundle)
+    base=data.obs[BASE].astype(str)
+    removing=base.isin([c for c,e in entries.items() if e['action']=='remove']).to_numpy()
+    converted=[]
+    for cid,e in proposed.items():
+        target=(base==cid).to_numpy()
+        same=base.isin([c for c,x in entries.items() if x['coarse_label'].strip()==e['coarse_label'].strip()]).to_numpy()
+        if guard_stress(e,policy,int(target.sum()),(BASE,cid) in flags,
+                        lambda:dying_evidence(data.obs,target,comparison_cells(data.obs,same,removing))):
+            converted.append(cid)
+    for cid in converted:  # a kept cluster cannot merge into a removed one
+        e=entries[cid]
+        if e['merge_target'] is not None and entries[str(e['merge_target'])]['action']=='remove':
+            e['requested_merge_target']=e['merge_target'];e['merge_target']=None
+    return converted
 
 
 def finalize(evidence_ref,types_ref,quality_ref,destination):
@@ -498,21 +536,32 @@ def finalize(evidence_ref,types_ref,quality_ref,destination):
     if problems:raise ValueError('; '.join(problems))
     apply_inspection(data,BASE,quality['proposal'])
     pre=load_removal_mask(artifact(bundle,'preannotation_removal.csv').parent,data)
+    # Preserve distinct numerical and inherited sources instead of a generic "filtered" reason.
+    fragments=fragment_table(bundle)
+    bad_frag=set(fragments.loc[fragments.recommend_removal.astype(str).str.lower().eq('true'),'subcluster']) if 'recommend_removal' in fragments else set()
+    outliers=(pd.read_csv(artifact(bundle,'cell_outliers.csv'),dtype={'cell':str},keep_default_na=False).set_index('cell')
+              if 'cell_outliers.csv' in bundle['files'] else pd.DataFrame())
+    osp_reasons=pd.read_csv(artifact(bundle,'osp_removal_proposals.csv.gz'),dtype=str,keep_default_na=False).set_index('cell')['reasons'].to_dict()
+    retained={}
+    if stress_policy(verified(bundle['inspected'])['spec'])=='keep':
+        # Fragments removed only by their dissociation or mitochondrial test stay, labelled (decision 0017);
+        # compute() already turned OSP's dissociation-stress drops into flags.
+        soft=soft_fragments(fragments);bad_frag-=set(soft)
+        product=data.obs['standissect_product'].astype(str) if 'standissect_product' in data.obs else pd.Series('',index=data.obs_names)
+        flagged=outliers.index[outliers.recommend_removal.astype(str).str.lower().eq('true')] if 'recommend_removal' in outliers else []
+        stay=(product.isin(list(soft))&~data.obs_names.isin(flagged)&~data.obs['_qc_action'].astype(str).eq('drop')).to_numpy()
+        pre=pre&~stay
+        retained.update(product[stay].map(soft).to_dict())
+        retained.update({c:'dissociation' for c in data.obs_names.intersection(list(osp_reasons)) if str(data.obs.at[c,'_qc_action'])!='drop'})
     inspect_drop=data.obs['_msp_action'].astype(str).eq('drop').to_numpy()
     archive=apply_annotation(data,typed['proposal'],pre|inspect_drop,{'preannotation':pre,'inspect_drop':inspect_drop})
     origin=pd.read_csv(artifact(bundle,'input_cells.csv.gz'),dtype=str,keep_default_na=False).set_index('cell_id')
     reasons={c:[] for c in archive.cell}
-    # Preserve distinct numerical and inherited sources instead of a generic "filtered" reason.
-    try:
-        fragments=pd.read_csv(artifact(bundle,'minor_sibling_qc.csv'),keep_default_na=False)
-    except pd.errors.EmptyDataError:  # msp writes a bare newline when no minor sibling fragment exists
-        fragments=pd.DataFrame(columns=['subcluster','recommend_removal'])
-    bad_frag=set(fragments.loc[fragments.recommend_removal.astype(str).str.lower().eq('true'),'subcluster']) if 'recommend_removal' in fragments else set()
-    outliers=(pd.read_csv(artifact(bundle,'cell_outliers.csv'),dtype={'cell':str},keep_default_na=False).set_index('cell')
-              if 'cell_outliers.csv' in bundle['files'] else pd.DataFrame())
     typed_entries={str(e['cluster_id']):e for e in typed['proposal']['clusters']}
     quality_entries={str(e['cluster']):e for e in quality['proposal']['clusters']}
-    osp_reasons=pd.read_csv(artifact(bundle,'osp_removal_proposals.csv.gz'),dtype=str,keep_default_na=False).set_index('cell')['reasons'].to_dict()
+    for cid,e in typed_entries.items():
+        if e.get('host_adjustment',{}).get('policy')==STRESS_HOST_POLICY:
+            retained.update({c:e['host_adjustment']['state'] for c in data.obs_names[data.obs[BASE].astype(str).eq(cid)]})
     for cid in reasons:
         row=data.obs.loc[cid];group=str(row[BASE]);r=reasons[cid]
         if str(row.get('standissect_product')) in bad_frag:r.append({'code':'fragment_qc','evidence':bundle['files']['minor_sibling_qc.csv']})
@@ -526,12 +575,14 @@ def finalize(evidence_ref,types_ref,quality_ref,destination):
                       and a['action']=='drop' and INSPECTION_OPS[a['op']](row[a['metric']],float(a['value']))]
             r.append({'code':'quality_decision','detail':quality_entries[group],
                       'cell_actions':matching,'evidence':quality_ref})
-        if typed_entries[group]['action']=='remove':r.append({'code':typed_entries[group]['remove_reason'],'detail':typed_entries[group]['rationale'],'evidence':types_ref})
+        if typed_entries[group]['action']=='remove':r.append({'code':typed_entries[group]['remove_reason'],'detail':typed_entries[group]['rationale'],
+                                                              'confidence':typed_entries[group]['confidence'],'evidence':types_ref})
         if not r:raise ValueError('An excluded cell has no reason: '+cid)
     excluded=pd.read_csv(artifact(bundle,'sample_exclusions.csv.gz'),dtype=str,keep_default_na=False)
     for row in excluded.to_dict('records'):
         reasons[row['cell_id']]=[{'code':'sample_excluded','detail':row['reason'],'evidence':bundle['inclusion']}]
     kept=data[data.obs.msp_ann_action.astype(str).eq('keep')].copy()
+    mark_retained(kept.obs,retained)
     if set(kept.obs_names)&set(reasons) or set(kept.obs_names)|set(reasons)!=set(origin.index):raise ValueError('Cross-sample cell conservation failed')
     ledger=origin.loc[list(reasons)].reset_index().rename(columns={'cell_id':'cell_uid'})
     ledger['reason']=ledger.cell_uid.map(lambda c:json.dumps(reasons[c],ensure_ascii=False));ledger['stage']='cross-sample';ledger['operation']='cross-sample.finalize'

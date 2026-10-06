@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Stress policy (decision 0017, issue #9).** Spec key `stress_policy`: `remove` (default) or `keep`. Under remove,
+  an agent's removal of 10 or more cells as stress or dissociation stands only when msp's `stress_clusters.csv` marks
+  its cluster, as dying only on a clearly higher mitochondrial fraction or fewer genes than the same identity
+  (Mann-Whitney AUC ≥ 0.7, p < 0.05); the code keeps the others, as it keeps batch-only removals, and records why in
+  the decision's `host_adjustment`. Under keep they always stay, and so do fragments removed only by the dissociation
+  or mitochondrial test and OSP dissociation-stress drops. Retained cells keep their labels and carry obs
+  `retained_state` into `final.h5ad`; `cell_ledger.csv.gz` adds `retained_state`/`retained_stage`; needs_review adds
+  `stress_retained`. The zoom-in prompt no longer says "default to remove". Cross-sample type removals now record
+  their confidence, so needs_review `removed` sees medium and low ones. A paused run resumed after the deploy applies
+  the rules from its next stage on.
 - **Release review links resolve (#26).** The needs_review rows `removed` and `policy_excluded` linked
   `cell_exclusions.csv.gz` beside the unit instead of `release/cell_exclusions.csv.gz`, and `agent_skipped` linked an
   absolute path; both are unit-relative now. Found by rendering a finished gate's display zone and following every link.

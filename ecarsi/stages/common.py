@@ -129,3 +129,117 @@ def assemble(prepared_ref, results, destination):
     with DegTables(destination,BASE) as tables:
         tables.write_database(destination/'deg.sqlite',provenance={'prepared':prepared_ref,'mask':bundle['files']['preannotation_removal.csv'],'coverage':'top 50 per cluster and view'})
     publish_bundle(destination,'evidence.json',prepared_ref,**{k:v for k,v in bundle.items() if k!='files'},prepared=prepared_ref,comparisons=results)
+
+
+# Stress, dissociation and dying cells (decision 0017). Under the default policy "remove" a removal of at
+# least CHECK_MIN_CELLS cells stands only on evidence the code checks; otherwise, and always under "keep",
+# its cells stay with their identity labels and obs['retained_state'] names the state.
+STRESS_STATES = ('stress', 'dissociation', 'dying')
+STRESS_POLICIES = ('remove', 'keep')
+CHECK_MIN_CELLS = 10  # below this an agent's removal stands on its reason (owner, 2026-10-05); msp has no DEG there
+DYING_AUC, DYING_P = 0.7, 0.05
+FRAGMENT_DROP_PCT = 50.0  # msp DROP_PCT_THRESH: a fragment more than half dropped upstream is not a state
+STRESS_HOST_POLICY = 'stress_policy_v1'
+RETAINED = 'retained_state'
+
+
+def stress_policy(spec):
+    return spec.get('config', {}).get('stress_policy', 'remove')
+
+
+def stress_flags(bundle):
+    """(key, cluster) pairs msp's stress-gene rule marks: more than 3 of the cluster's top 10 DEG genes are
+    heat-shock, immediate-early or MT- genes, in its global or its local view (stress_clusters.csv)."""
+    import pandas as pd
+    if 'stress_clusters.csv' not in bundle['files']:
+        return set()
+    table = pd.read_csv(artifact(bundle, 'stress_clusters.csv'), dtype=str, keep_default_na=False)
+    hit = table[table.stress.str.lower().eq('true')]
+    return set(zip(hit.key, hit.cluster))
+
+
+def dying_evidence(obs, target, comparison):
+    """(supported, note): the target cells have a clearly higher mitochondrial fraction or clearly fewer
+    genes than the comparison cells, one-sided Mann-Whitney with AUC >= 0.7 and p < 0.05."""
+    from scipy.stats import mannwhitneyu
+    notes = []
+    for column, sign in (('pct_counts_mt', 1), ('n_genes_by_counts', -1)):
+        if column not in obs:
+            notes.append(column + ' missing')
+            continue
+        a = sign * obs.loc[target, column].astype(float).dropna().to_numpy()
+        b = sign * obs.loc[comparison, column].astype(float).dropna().to_numpy()
+        if min(len(a), len(b)) < CHECK_MIN_CELLS:
+            notes.append(column + ': too few measured cells')
+            continue
+        u, p = mannwhitneyu(a, b, alternative='greater')
+        auc = u / (len(a) * len(b))
+        notes.append(f'{column} AUC {auc:.2f} p {p:.2g}')
+        if auc >= DYING_AUC and p < DYING_P:
+            return True, '; '.join(notes)
+    return False, '; '.join(notes)
+
+
+def comparison_cells(obs, same_identity, removing):
+    """Cells of the same identity that no decision removes; all cells no decision removes when fewer than 10."""
+    near = same_identity & ~removing
+    return near if near.sum() >= CHECK_MIN_CELLS else ~removing
+
+
+def guard_stress(entry, policy, n_cells, flagged, dying_check):
+    """Apply the stress policy to one removal in place; True when it became a keep. `flagged`: the stress-gene
+    rule marks the target's cluster; `dying_check()` -> (supported, note). The tool reply and needs_review
+    read host_adjustment; requested_* keep what the agent asked for."""
+    state = entry.get('remove_reason')
+    if entry.get('action') != 'remove' or state not in STRESS_STATES:
+        return False
+    if policy == 'remove' and n_cells < CHECK_MIN_CELLS:
+        return False
+    if policy == 'keep':
+        supported, note = False, 'stress policy keep'
+    elif state == 'dying':
+        supported, note = dying_check()
+    else:
+        supported, note = flagged, ('stress_clusters.csv marks the cluster' if flagged else
+                                    'stress_clusters.csv does not mark the cluster (more than 3 of its top 10 DEG genes are stress genes)')
+    if supported:
+        entry['host_evidence'] = note
+        return False
+    entry.update(requested_action='remove', requested_remove_reason=state, action='keep', remove_reason=None,
+                 review_required=True, host_adjustment=dict(policy=STRESS_HOST_POLICY, stress_policy=policy, state=state,
+                 n_cells=int(n_cells), evidence=note, reason=(f'Stress policy keep: {state} cells stay, labelled.' if policy == 'keep'
+                 else f'The {state} removal is not supported by the code check; its cells stay, labelled.')))
+    return True
+
+
+def soft_fragments(table):
+    """{fragment: state} of msp minor-sibling fragments removed only by their dissociation and/or mitochondrial
+    test: no decontX or doublet hit and not more than half dropped upstream. Kept under the policy keep."""
+    def hit(row, name):
+        return str(row.get(name + '_significant', '')).lower() == 'true'
+    soft = {}
+    for row in table.to_dict('records'):
+        if str(row.get('recommend_removal', '')).lower() != 'true' or hit(row, 'decontX') or hit(row, 'doublet'):
+            continue
+        dropped = str(row.get('pct_drop_upstream', '')).strip()
+        if dropped and float(dropped) > FRAGMENT_DROP_PCT:
+            continue
+        if hit(row, 'dissociation') or hit(row, 'mt'):
+            soft[str(row['subcluster'])] = 'dissociation' if hit(row, 'dissociation') else 'dying'
+    return soft
+
+
+def fragment_table(bundle):
+    import pandas as pd
+    try:
+        return pd.read_csv(artifact(bundle, 'minor_sibling_qc.csv'), dtype=str, keep_default_na=False)
+    except pd.errors.EmptyDataError:  # msp writes a bare newline when no minor sibling fragment exists
+        return pd.DataFrame(columns=['subcluster', 'recommend_removal'])
+
+
+def mark_retained(obs, cells):
+    """obs['retained_state'] from {cell: state}; a cell keeps the state it was first retained for."""
+    import pandas as pd
+    current = obs[RETAINED].astype(object).fillna('').astype(str) if RETAINED in obs else pd.Series('', index=obs.index)
+    new = pd.Series(cells, dtype=object).reindex(obs.index).fillna('')
+    obs[RETAINED] = pd.Categorical(current.where(current != '', new))

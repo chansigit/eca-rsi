@@ -12,6 +12,8 @@ Sections, most consequential first:
   removed         cells an agent deleted with less than high confidence
                   (irreversible — the one thing worth re-checking first),
                   plus zoom-ins whose removal exceeded the soft budget
+  stress_retained stress, dissociation or dying cells kept by the stress
+                  policy (decision 0017), labelled in obs retained_state
   sample_excluded whole samples the inclusion agent kept out of integration
   reassigned      clusters a zoom-in moved to another lineage (a cluster that
                   keeps moving every round is a labelling problem upstream)
@@ -56,6 +58,11 @@ KINDS: list[tuple[str, str, str]] = [
     ("removed", "Cells removed below high confidence",
      "Irreversible. Each row is a cluster an agent deleted with medium/low confidence, or a lineage whose "
      "zoom-in removal exceeded the soft budget after a forced second look."),
+    ("stress_retained", "Stress, dissociation or dying cells kept",
+     "An agent asked to remove them as stress, dissociation or dying; they stay, labelled in final.h5ad obs "
+     "retained_state, because a removal of at least 10 cells lacked the evidence the code checks or the dataset's "
+     "stress_policy is keep (decision 0017). Grouped by the stage that kept them and their coarse label there; "
+     "decisions.json holds each decision's host_adjustment."),
     ("sample_excluded", "Samples excluded from integration",
      "Whole samples the inclusion agent kept out, or that OSP QC emptied (step persample). "
      "They stay on disk untouched (persample/)."),
@@ -353,7 +360,7 @@ def to_markdown(items: list[Item], unit_name: str, n_rounds: int) -> str:
 
 
 # colour of a category's card: bad = irreversible, warn = changed the input set or labels, info = advisory
-KIND_TONE = {"degraded": "warn", "convergence": "bad", "removed": "bad", "sample_excluded": "warn", "reassigned": "warn",
+KIND_TONE = {"degraded": "warn", "convergence": "bad", "removed": "bad", "stress_retained": "warn", "sample_excluded": "warn", "reassigned": "warn",
              "policy_excluded": "warn", "upstream_review": "info", "inspect_flag": "info", "plan_warning": "info"}
 
 

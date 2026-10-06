@@ -116,6 +116,9 @@ def test_overlapping_removals_count_once_and_mismatched_decisions_fail(tmp_path,
     ledger=pd.read_csv(out/'cell_exclusions.csv.gz').set_index('cell_uid')
     assert len(json.loads(ledger.loc['c0','reason']))==2
     assert ledger.loc['c1','source_cell_id']=='orig1'
+    # a type removal records its confidence, which needs_review's 'removed' reads
+    assert {'code':'low-quality','confidence':'high'}.items()<=json.loads(ledger.loc['c3','reason'])[0].items()
+    assert set(stored.obs['retained_state'].astype(str))=={''}
     other=immutable(tmp_path/'bad.json',dict(accepted=True,evidence=input_ref,types=types,proposal=quality))
     with pytest.raises(ValueError,match='accepted evidence'):finalize(evidence,types,other,out)
 
@@ -252,3 +255,97 @@ def test_chunks_of_one_sample_skip_the_inclusion_agent(tmp_path, monkeypatch):
     decision=read(out/'decision.json')
     assert sorted(s['sample'] for s in decision['proposal']['samples'])==names
     assert all(s['include'] for s in decision['proposal']['samples']) and 'chunked' in decision['proposal']['notes']
+
+
+def finalize_fixture(tmp_path, monkeypatch, policy, base=None, entries=None, extra_obs=None):
+    """Eight cells in two clusters; fragment f1 was removed only by its dissociation test, f2 by its doublet
+    test, and OSP advised dropping c4 for dissociation stress. compute() turns that advice into a flag under
+    the policy keep, so the pre-annotation mask holds c4 only under remove."""
+    import msp.annotate,msp.report
+    monkeypatch.setattr(msp.annotate,'_plot',lambda *a:None)
+    monkeypatch.setattr(msp.report,'generate_report',lambda *a:None)
+    source=tmp_path/'source';source.mkdir()
+    cells=['c'+str(i) for i in range(8)]
+    obs=pd.DataFrame({BASE:pd.Categorical(base or ['0']*4+['1']*4),'doublet_score':[.1]*8,
+        'standissect_product':['f1','f1','f2']+['core']*5,'_qc_action':['keep']*4+['flag' if policy=='keep' else 'drop']+['keep']*3,
+        **(extra_obs or {})},index=cells)
+    an.AnnData(np.ones((8,2)),obs=obs).write_h5ad(source/'integrated.h5ad')
+    pd.DataFrame({'cell_id':cells,'source_id':['s']*8,'source_cell_id':['orig'+c for c in cells]}).to_csv(source/'input_cells.csv.gz',index=False)
+    pre=['c0','c1','c2']+(['c4'] if policy=='remove' else [])
+    pd.DataFrame({'cell':cells,'recommend_removal':[c in pre for c in cells]}).to_csv(source/'preannotation_removal.csv',index=False)
+    pd.DataFrame({'subcluster':['f1','f2'],'recommend_removal':[True,True],'dissociation_significant':[True,False],
+        'doublet_significant':[False,True],'decontX_significant':[False,False],'mt_significant':[False,False],
+        'pct_drop_upstream':[0.,0.]}).to_csv(source/'minor_sibling_qc.csv',index=False)
+    pd.DataFrame(columns=['cell_id','reason']).to_csv(source/'sample_exclusions.csv.gz',index=False)
+    pd.DataFrame({'cell':['c4'],'reasons':[json.dumps([{'action':{'reason':'dissociation-stress'},'evidence':{}}])]}).to_csv(source/'osp_removal_proposals.csv.gz',index=False)
+    spec={'run_id':'test','config':{'stress_policy':policy}}
+    inspected=immutable(tmp_path/'inspected.json',{'input':immutable(tmp_path/'input.json',{}),'spec':spec})
+    return source,sealed(source,source/'evidence.json',inspected=inspected,inclusion=immutable(tmp_path/'inclusion.json',{}))
+
+
+def keep_entry(c, **changes):
+    return {**dict(cluster_id=c,coarse_label='Type '+c,fine_label='Fine '+c,merge_target=None,action='keep',remove_reason=None,
+        confidence='high',evidence={k:'test evidence' for k in ('distinctness','markers','merge')},rationale='test evidence'),**changes}
+
+
+@pytest.mark.parametrize('policy',['remove','keep'])
+def test_the_stress_policy_keep_retains_dissociation_fragments_and_osp_stress_drops(tmp_path,monkeypatch,policy):
+    """Decision 0017: under keep, cells removed only by a fragment's dissociation test or by OSP's
+    dissociation-stress advice stay, labelled; a doublet fragment goes either way."""
+    source,evidence=finalize_fixture(tmp_path,monkeypatch,policy)
+    types=immutable(tmp_path/'types.json',dict(accepted=True,evidence=evidence,proposal={'clusters':[keep_entry('0'),keep_entry('1')]}))
+    quality=dict(clusters=[dict(cluster=c,verdict='real',action='keep',confidence='high',
+        tests={k:'test evidence' for k in ('markers','qc','composition','geometry','stability')},rationale='test evidence') for c in ('0','1')],cell_actions=[])
+    quality_ref=immutable(tmp_path/'quality.json',dict(accepted=True,evidence=evidence,types=types,proposal=quality))
+    out=tmp_path/'out';out.mkdir();finalize(evidence,types,quality_ref,out)
+    stored=an.read_h5ad(out/'annotated.h5ad').obs['retained_state'].astype(str)
+    ledger=pd.read_csv(out/'cell_exclusions.csv.gz').set_index('cell_uid')
+    codes={c:[r['code'] for r in json.loads(ledger.loc[c,'reason'])] for c in ledger.index}
+    assert codes['c2']==['fragment_qc']
+    if policy=='keep':
+        assert set(ledger.index)=={'c2'} and stored[['c0','c1','c4']].eq('dissociation').all() and stored.drop(['c0','c1','c4']).eq('').all()
+    else:
+        assert set(ledger.index)=={'c0','c1','c2','c4'} and codes['c4']==['osp_proposal'] and stored.eq('').all()
+
+
+def test_a_type_removal_the_code_cannot_support_stays_and_leaves_its_merge(tmp_path,monkeypatch):
+    """Decision 0017 in the type phase: a stress removal of a cluster stress_clusters.csv marks stands; one it
+    does not mark stays, and drops its merge into the cluster still removed; a removal under 10 cells stands."""
+    from ecarsi.stages.crosssample import _stress_guard
+    base=['0']*12+['1']*12+['2']*5
+    source,evidence=finalize_fixture(tmp_path,monkeypatch,'remove')
+    pd.DataFrame({'key':[BASE,BASE],'cluster':['0','1'],'view':['global']*2,'n_hits':[5,1],'hit_genes':['','']
+        ,'stress':[True,False],'recommend_removal':[True,False]}).to_csv(source/'stress_clusters.csv',index=False)
+    bundle=verified(sealed(source,source/'evidence2.json',inspected=verified(evidence)['inspected']))
+    data=an.AnnData(np.ones((29,2)),obs=pd.DataFrame({BASE:base},index=['x'+str(i) for i in range(29)]))
+    entries={'0':keep_entry('0',action='remove',remove_reason='stress'),
+             '1':keep_entry('1',action='remove',remove_reason='stress',merge_target='0',fine_label='Fine 0',coarse_label='Type 0'),
+             '2':keep_entry('2',action='remove',remove_reason='stress')}
+    converted=_stress_guard(bundle,data,entries,dict(entries))
+    assert converted==['1'] and entries['1']['action']=='keep' and entries['1']['merge_target'] is None
+    assert entries['1']['requested_merge_target']=='0' and entries['1']['host_adjustment']['n_cells']==12
+    assert entries['0']['action']=='remove' and 'host_evidence' in entries['0'] and entries['2']['action']=='remove'
+
+
+@pytest.mark.parametrize('policy',['remove','keep'])
+def test_compute_turns_osp_dissociation_stress_drops_into_flags_under_keep(tmp_path,monkeypatch,policy):
+    from ecarsi.stages import crosssample as module
+    folder=tmp_path/'a';folder.mkdir()
+    counts=np.ones((6,4),dtype='float32')
+    data=an.AnnData(counts,obs=pd.DataFrame({'sample_id':['a']*6,'leiden':['0','0','1','1','2','2'],
+        '_qc_action':['drop']*4+['keep']*2},index=['a'+str(i) for i in range(6)]))
+    data.layers['counts']=counts.copy();data.write_h5ad(folder/'clustered.h5ad')
+    pd.DataFrame({'cell_id':data.obs_names,'source_id':['src']*6,'source_cell_id':data.obs_names}).to_csv(folder/'input_cells.csv.gz',index=False)
+    save(folder/'annotation_proposal.json',{'cluster_key':'leiden','qc_actions':[
+        dict(cluster='0',scope='cluster',action='drop',reason='dissociation-stress',note='fixture'),
+        dict(cluster='1',scope='cluster',action='drop',reason='doublet',note='fixture')]})
+    sample=sealed(folder,folder/'final.json',sample='a',empty=False,validation={'n_survived':6,'qc_summary':{}})
+    publication=immutable(tmp_path/'publication.json',dict(state='complete',failed_samples=[],samples=[sample],n_survived=6))
+    inspected=tmp_path/'inspected';inspected.mkdir()
+    module.inspect_input(dict(input=publication,config={'batch_col':'sample_id','stress_policy':policy},run_id='test',max_refinements=2),inspected)
+    ref=reference(inspected/'inspected.json')
+    inclusion=immutable(tmp_path/'inclusion.json',dict(accepted=True,evidence=ref,proposal={'samples':[dict(sample='a',include=True,reason='fixture')],'notes':'fixture'}))
+    seen={}
+    monkeypatch.setattr(module,'integrate',lambda data,*a:seen.update(action=data.obs['_qc_action'].astype(str).to_dict()))
+    out=tmp_path/'out';out.mkdir();module.compute(ref,inclusion,out)
+    assert [seen['action']['a'+str(i)] for i in range(6)]==(['flag','flag'] if policy=='keep' else ['drop','drop'])+['drop','drop','keep','keep']

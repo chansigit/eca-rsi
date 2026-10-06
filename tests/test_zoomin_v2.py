@@ -12,7 +12,9 @@ from ecarsi.stages.zoomin import prepare, markers, subset, compute, deg, assembl
 from ecarsi.files import save
 
 
-def test_zoom_handoffs_and_exact_global_conservation(tmp_path):
+def lineage(tmp_path):
+    """One zoomed lineage (Epithelial) and one kept as is (Immune), assembled to lineage evidence; every
+    type and quality decision keep."""
     rng=np.random.default_rng(12);n=160
     counts=rng.poisson(1.,(n,60)).astype('float32')
     counts[:80,:15]+=6;counts[80:,15:30]+=6
@@ -52,6 +54,14 @@ def test_zoom_handoffs_and_exact_global_conservation(tmp_path):
         rationale='fixture identity') for c in groups])
     quality=dict(cluster_key=QUALITY_KEY,clusters=[dict(cluster_id=str(q),decisions=[dict(type_clusters=list(row.index[row.gt(0)]),
         action='keep',confidence='high',evidence='fixture QC',rationale='fixture retention')]) for q,row in partitions(ad.obs).iterrows()])
+    return dict(n=n,data=data,cfg=cfg,folder=folder,prepared=prepared,plan=plan,evidence=evidence,ad=ad,types=types,quality=quality)
+
+
+def test_zoom_handoffs_and_exact_global_conservation(tmp_path):
+    from zmip.scheduled import TYPE_KEY,QUALITY_KEY
+    built=lineage(tmp_path)
+    n,data,cfg,folder,prepared,plan,evidence,ad,types,quality=(built[k] for k in
+        ('n','data','cfg','folder','prepared','plan','evidence','ad','types','quality'))
     decision=immutable(tmp_path/'decision.json',dict(accepted=True,evidence=evidence,types=types,quality=quality))
     applied=folder('apply');apply_lineage(evidence,decision,applied)
     merged=folder('merge');merge(prepared,plan,[reference(applied/'final.json')],merged)
@@ -71,7 +81,7 @@ def test_zoom_handoffs_and_exact_global_conservation(tmp_path):
     import copy
     removal=copy.deepcopy(quality)
     for group in removal['clusters']:
-        for item in group['decisions']:item.update(action='remove',remove_reason='dying')
+        for item in group['decisions']:item.update(action='remove',remove_reason='low-quality')
     review_state=immutable(tmp_path/'review-state.json',dict(evidence=evidence,kind='lineage',types=types,
         types_complete=True,quality=None,read=['figures/test.png'],lookups=[{'key':QUALITY_KEY}],qc=True))
     save(args,{'proposal_json':json.dumps(removal)})
@@ -82,7 +92,7 @@ def test_zoom_handoffs_and_exact_global_conservation(tmp_path):
     assert verified(rejected['state'])['types_complete']
     first=folder('first-review');tool('submit_quality',review_state['path'],str(args),first)
     warning=json.loads((first/'result.json').read_text())
-    assert warning['is_error'] and 'confirmed dissociation/dying' in warning['content']
+    assert warning['is_error'] and 'under the stress policy' in warning['content']
     removal['removal_review']='Fixture second review: the exact QC intersections have decisive dying-cell evidence.'
     save(args,{'proposal_json':json.dumps(removal)})
     second=folder('second-review');tool('submit_quality',warning['state']['path'],str(args),second)
@@ -116,5 +126,48 @@ def test_zoom_handoffs_and_exact_global_conservation(tmp_path):
         assert all(t['parameters']==NO_ARGUMENTS for t in registered['tools'] if t['name']=='annotation_status')
         assert next(t['parameters'] for t in registered['tools'] if t['name']=='list_evidence')=={'type':'object','properties':{'offset':{'type':'integer','minimum':0}},'required':['offset'],'additionalProperties':False}
         assert ('Pending type clusters' in registered['prompt'])==(kind=='lineage')
+        assert ('Stress policy: remove' in registered['prompt'])==(kind=='lineage')
         reads={t['name'] for t in registered['tools'] if t.get('read_only')}
         assert {'read_evidence','list_evidence'}<=reads and ('annotation_status' in reads)==(kind=='lineage') and registered['completion_tool'] not in reads
+
+
+
+def test_an_unsupported_stress_removal_stays_labelled_through_merge(tmp_path, monkeypatch):
+    """Decision 0017: a stress removal of at least 10 cells whose cluster the stress-gene rule does not mark
+    (the fixture has no stress genes) stays; its cells carry retained_state into annotated_zmip.h5ad, and the
+    tool reply says so. A smaller one stands on the agent's reason. The fixture's clusters hold at most 8
+    cells, so the floor is 5 here."""
+    import copy
+    import ecarsi.stages.common as common
+    monkeypatch.setattr(common,'CHECK_MIN_CELLS',5)
+    from zmip.scheduled import QUALITY_KEY,TYPE_KEY,partitions
+    built=lineage(tmp_path);folder,evidence,ad,types=built['folder'],built['evidence'],built['ad'],built['types']
+    table=partitions(ad.obs);sizes=table.stack();sizes=sizes[sizes.gt(0)].sort_values()
+    big,small=sizes.index[-1],sizes.index[0]
+    assert sizes.iloc[-1]>=5 and sizes.iloc[0]<5
+    quality=copy.deepcopy(built['quality'])
+    for group in quality['clusters']:
+        row=table.loc[group['cluster_id']];present=list(row.index[row.gt(0)])
+        group['decisions']=[dict(type_clusters=[t],action='remove' if (group['cluster_id'],t) in (big,small) else 'keep',
+            **({'remove_reason':'stress'} if (group['cluster_id'],t) in (big,small) else {}),
+            confidence='high',evidence='fixture',rationale='fixture') for t in present]
+    state=immutable(tmp_path/'stress-state.json',dict(evidence=evidence,kind='lineage',types=types,types_complete=True,
+        quality=None,read=['figures/test.png'],lookups=[{'key':QUALITY_KEY}],qc=True))
+    args=tmp_path/'stress-args.json';save(args,{'proposal_json':json.dumps(quality)})
+    out=folder('stress-review');tool('submit_quality',state['path'],str(args),out)
+    reply=json.loads((out/'result.json').read_text());assert not reply.get('is_error'),reply
+    assert 'Kept under the stress policy' in reply['content']
+    accepted=verified(reply['state'])['quality']
+    decided={(g['cluster_id'],e['type_clusters'][0]):e for g in accepted['clusters'] for e in g['decisions']}
+    assert decided[big]['action']=='keep' and decided[big]['host_adjustment']['state']=='stress'
+    assert decided[small]['action']=='remove'
+    decision=immutable(tmp_path/'stress-decision.json',dict(accepted=True,evidence=evidence,types=types,quality=accepted))
+    applied=folder('stress-apply');apply_lineage(evidence,decision,applied)
+    target=set(ad.obs_names[ad.obs[QUALITY_KEY].astype(str).eq(big[0])&ad.obs[TYPE_KEY].astype(str).eq(big[1])])
+    retained=pd.read_csv(applied/'annotation_retained.csv',dtype=str)
+    assert set(retained.cell)<=target and set(retained.state)=={'stress'} and len(retained)
+    merged=folder('stress-merge');merge(built['prepared'],built['plan'],[reference(applied/'final.json')],merged)
+    kept=an.read_h5ad(merged/'annotated_zmip.h5ad',backed='r')
+    states=kept.obs['retained_state'].astype(str)
+    assert set(states[states.ne('')].index)==set(retained.cell)
+    kept.file.close()
