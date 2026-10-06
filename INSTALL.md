@@ -135,7 +135,7 @@ cd /tmp && APPTAINERENV_APPEND_PATH=$HOME/local/bin setsid nohup apptainer exec 
   > $STATE/control/control-logs/periscope.log 2>&1 < /dev/null &
 ```
 
-Periscope listens on `127.0.0.1` only: reach it through your own attended `ssh -L` forward (Sherlock forbids unattended tunnels). `--auth-file` keeps the password out of the process list.
+Periscope listens on `127.0.0.1`: reach it through your own attended `ssh -L` forward. `ecarsi serve --ngrok [--domain D]` opens a tunnel too, for an attended session in the foreground only; the background script above never does (Sherlock forbids unattended tunnels). `--auth-file` keeps the password out of the process list.
 
 Periscope serves the display zones under `display_root` and `more_display_roots` of `~/.config/ecarsi/results.json` (`--results` for another file), and the entries of `~/.config/ecarsi/periscope-datasets.json`:
 
