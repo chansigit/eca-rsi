@@ -1,7 +1,7 @@
 """eca-rsi -- the package's command line. The pipeline itself runs on the control plane
 (container/control-plane.sh; `python -m ecarsi.control ... start-dataset`); these commands show its results.
 
-    eca-rsi serve     [dir...] [--registry F] [--port] [--ngrok --domain D] [--auth U:P | --auth-file F]
+    eca-rsi serve     [dir...] [--registry F] [--port] [--auth U:P | --auth-file F]
     eca-rsi serve     scan-add|remove|list|dump|reload ...   (edit the dataset list)
     eca-rsi index     <root|unit>          re-render a run's pages
     eca-rsi umapdata  <h5ad> <out.json>    the plotting data of a release UMAP

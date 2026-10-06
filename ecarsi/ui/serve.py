@@ -4,7 +4,7 @@ Periscope is the name of the web UI (page titles, the sidebar brand, the
 startup line); the CLI verb stays `serve`.
 
     ecarsi serve [dir...] [--registry FILE] [--port 8899] [--bind 127.0.0.1]
-                 [--ngrok [--domain csj.example.app]] [--auth user:pass | --auth-file FILE]
+                 [--auth user:pass | --auth-file FILE]
                  [--control-plane RUN_DIR [--control-pool-root P] [--control-bridge-root B] [--control-temporal-root T]]
     ecarsi serve scan-add <dir-or-glob>... [--name N] [--dry-run] [--registry FILE]
     ecarsi serve remove   <name>... [--registry FILE]
@@ -12,7 +12,7 @@ startup line); the CLI verb stays `serve`.
     ecarsi serve dump     [path] [--registry FILE]
     ecarsi serve reload   <path> [--replace] [--registry FILE]
 
-The server runs in the foreground (Ctrl-C stops it and its ngrok tunnel);
+The server runs in the foreground (Ctrl-C stops it);
 put it in nohup / tmux / an sbatch yourself if you want it in the
 background — nothing here manages processes. Every dataset (an organize
 root or a single unit, see ecarsi.layout) is served under its own name,
@@ -41,17 +41,14 @@ results file each time, so a new display zone or root appears without a restart.
 another such file into it (`--replace` to swap the whole list) — handy for
 keeping several lists, e.g. one per project.
 
-Default: local only (http://127.0.0.1:PORT). --ngrok additionally opens ONE
-ngrok tunnel covering everything (ngrok binary + authtoken are the user's
-responsibility; so are account limits such as one agent session per free
-account). --domain uses a reserved domain instead of a random URL;
---auth USER:PASS (or --auth-file, a file holding USER:PASS, which keeps it out of
-the process list) puts a password on the whole site (HTTP basic auth,
-checked by this server on every request — local, LAN or tunnel; ngrok is
-not involved). Default: no password, so day-to-day debugging is prompt-free.
-The navigator's Bind / Unbind buttons (POST /_bind, /_unbind) are refused
-for requests arriving through the tunnel (ngrok stamps X-Forwarded-For)
-unless a password is set; local requests always may.
+Default: local only (http://127.0.0.1:PORT); reach it from elsewhere through your
+own attended `ssh -L` forward (Sherlock forbids unattended tunnels, so the
+--ngrok option was removed on 2026-10-06). --auth USER:PASS (or --auth-file, a file
+holding USER:PASS, which keeps it out of the process list) puts a password on the
+whole site (HTTP basic auth, checked by this server on every request). Default:
+no password, so day-to-day debugging is prompt-free. The navigator's Bind / Unbind
+buttons (POST /_bind, /_unbind) are refused for requests a proxy forwarded (they
+carry X-Forwarded-For) unless a password is set; local requests always may.
 """
 
 from __future__ import annotations
@@ -66,9 +63,7 @@ import html as _h
 import http.server
 import json
 import os
-import shutil
 import signal
-import subprocess
 import sys
 import threading
 import time
@@ -436,7 +431,7 @@ NAV_JS = r"""
   async function post(url, body){
     const r = await fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
     let j; try { j = await r.json(); } catch (e) { j = {ok: false, error: r.status + " " + r.statusText}; }
-    if (r.status === 403) j.error = j.error || "admin actions are refused through the public tunnel unless the server was started with --auth";
+    if (r.status === 403) j.error = j.error || "admin actions are refused for forwarded requests unless the server was started with --auth";
     return j; }
   const form = $("bind-form");
   $("bind-open").addEventListener("click", () => { form.style.display = form.style.display === "none" ? "" : "none"; if (form.style.display === "") $("bind-path").focus(); });
@@ -1352,8 +1347,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def _authorized(self) -> bool:
         """Web-level password (--auth). Checked by the server itself, so it
-        covers local, LAN and tunnel access alike and needs nothing from
-        ngrok. Off by default — debugging with a password prompt is a pain."""
+        covers local, LAN and forwarded access alike. Off by default —
+        debugging with a password prompt is a pain."""
         if not self._auth:
             return True
         hdr = self.headers.get("Authorization", "")
@@ -1374,9 +1369,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
 
     # -- admin over HTTP (the navigator's Bind / Unbind buttons) --
-    # ngrok forwards from 127.0.0.1 too, so the client address can't tell a
-    # local request from one arriving through the public tunnel — but ngrok
-    # stamps X-Forwarded-For on everything it forwards. Forwarded requests
+    # A proxy forwards from 127.0.0.1 too, so the client address can't tell a
+    # local request from a forwarded one — but a proxy stamps X-Forwarded-For
+    # on everything it forwards. Forwarded requests
     # may only administer if the server has a password (--auth; the request
     # has already passed it by the time we get here); local requests always may.
     def _admin_allowed(self) -> bool:
@@ -1388,7 +1383,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if urllib.parse.unquote(self.path).startswith("/_models"):
             self.send_header("Cache-Control", "no-store")
         if len(body) > 1024 and "gzip" in self.headers.get("Accept-Encoding", ""):
-            body = gzip.compress(body, 5)  # rendered pages are 80-450 KB of HTML and compress ~5x; matters through the tunnel
+            body = gzip.compress(body, 5)  # rendered pages are 80-450 KB of HTML and compress ~5x; matters over a slow link
             self.send_header("Content-Encoding", "gzip")
             self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
@@ -1441,7 +1436,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 403,
                 {
                     "ok": False,
-                    "error": "admin actions are refused through the public tunnel unless the server was started with --auth",
+                    "error": "admin actions are refused for forwarded requests unless the server was started with --auth",
                 },
             )
         try:
@@ -1567,55 +1562,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def log_message(self, format, *args):  # noqa: A002 - matches BaseHTTPRequestHandler's signature
         """Access log on stderr: time, visitor address, request line, user agent.
-        Through the ngrok tunnel every request arrives from 127.0.0.1; the
-        visitor's own address is the first hop of X-Forwarded-For."""
+        Behind a proxy every request arrives from 127.0.0.1; the visitor's
+        own address is the first hop of X-Forwarded-For."""
         headers = getattr(self, "headers", None) or {}
         who = (headers.get("X-Forwarded-For") or self.address_string()).split(",")[0].strip()
         ua = headers.get("User-Agent", "-")
         sys.stderr.write(
             f'[serve] {time.strftime("%Y-%m-%d %H:%M:%S")} {who} {format % args} "{ua}"\n'
         )
-
-
-# ---------------------------------------------------------------- ngrok
-
-
-def start_ngrok(port: int, domain: str | None) -> tuple[subprocess.Popen, str]:
-    exe = shutil.which("ngrok")
-    if not exe:
-        raise SystemExit(
-            "ngrok not found on PATH — install it and add your authtoken (ngrok config add-authtoken …)"
-        )
-    cmd = [exe, "http", str(port), "--log", "stdout", "--log-format", "json"]
-    if domain:
-        cmd += ["--domain", domain]
-    proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-    )
-    url, deadline = None, time.time() + 30
-    assert proc.stdout is not None
-    while time.time() < deadline:
-        line = proc.stdout.readline()
-        if not line:
-            break
-        try:
-            ev = json.loads(line)
-        except ValueError:
-            continue
-        if ev.get("msg") == "started tunnel" and ev.get("url"):
-            url = ev["url"]
-            break
-        if ev.get("lvl") in ("eror", "crit", "error"):
-            proc.terminate()
-            raise SystemExit(f"ngrok failed: {ev.get('err') or ev.get('msg')}")
-    if url is None:
-        proc.terminate()
-        raise SystemExit(
-            "ngrok did not report a tunnel within 30 s (see its output above)"
-        )
-    # keep draining so the pipe never fills
-    threading.Thread(target=lambda: [None for _ in proc.stdout], daemon=True).start()  # type: ignore[union-attr]
-    return proc, url
 
 
 # ---------------------------------------------------------------- serve (foreground)
@@ -1675,11 +1629,6 @@ def cmd_serve(args: argparse.Namespace) -> int:
     for name, p in sorted(items.items()):
         print(f"  /{name}/  {p}", flush=True)
 
-    tunnel = None
-    if args.ngrok or args.domain:
-        tunnel, url = start_ngrok(args.port, args.domain)
-        print(f"[serve] public: {url}/", flush=True)
-
     def shutdown(*_):
         threading.Thread(target=httpd.shutdown, daemon=True).start()
 
@@ -1689,12 +1638,6 @@ def cmd_serve(args: argparse.Namespace) -> int:
         httpd.serve_forever()
     finally:
         httpd.server_close()
-        if tunnel and tunnel.poll() is None:
-            tunnel.terminate()
-            try:
-                tunnel.wait(5)
-            except subprocess.TimeoutExpired:
-                tunnel.kill()
     print("[serve] stopped", flush=True)
     return 0
 
@@ -2025,12 +1968,6 @@ def main(argv: list[str]) -> int:
         help="default local only; 0.0.0.0 to expose on the LAN",
     )
     ap.add_argument(
-        "--ngrok", action="store_true", help="also open an ngrok tunnel to this port"
-    )
-    ap.add_argument(
-        "--domain", default=None, help="reserved ngrok domain (implies --ngrok)"
-    )
-    ap.add_argument(
         "--results",
         default=str(default_results()),
         metavar="FILE",
@@ -2041,7 +1978,7 @@ def main(argv: list[str]) -> int:
         "--auth",
         default=None,
         metavar="USER:PASS",
-        help="web-level password (HTTP basic auth, enforced by the server on every request, local or tunnel); default none",
+        help="web-level password (HTTP basic auth, enforced by the server on every request, local or forwarded); default none",
     )
     ap.add_argument("--auth-file", default=None, metavar="FILE", help="read USER:PASS for --auth from FILE")
     registry_arg(ap)

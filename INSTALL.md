@@ -66,7 +66,7 @@ Every setting you edit lives in `~/.config/ecarsi/`:
 
 | File | What it holds | Written by |
 |---|---|---|
-| `deployment.env` | This machine: the two images, the state directory, the host directories the containers see (`BINDS`), the host Python, ports, Periscope's port and domain | you; `ops/switch-images.sh` rewrites the two image lines |
+| `deployment.env` | This machine: the two images, the state directory, the host directories the containers see (`BINDS`), the host Python, ports, Periscope's port | you; `ops/switch-images.sh` rewrites the two image lines |
 | `results.json` | `display_root` and `archive_root` for new runs; `more_display_roots` that Periscope shows as well | you |
 | `models.json` | The model catalog: harness, model and URL, in calling order. No keys | you, or Periscope's model page |
 | `periscope-datasets.json` | Runs Periscope shows besides the display zones, `{name: run dir}` | Periscope (Bind / Unbind), or you |
@@ -135,7 +135,7 @@ cd /tmp && APPTAINERENV_APPEND_PATH=$HOME/local/bin setsid nohup apptainer exec 
   > $STATE/control/control-logs/periscope.log 2>&1 < /dev/null &
 ```
 
-Add `--ngrok --domain $PERISCOPE_DOMAIN` for a public tunnel. `APPTAINERENV_APPEND_PATH` makes your `ngrok` binary visible inside the image. `--auth-file` keeps the password out of the process list.
+Periscope listens on `127.0.0.1` only: reach it through your own attended `ssh -L` forward (Sherlock forbids unattended tunnels). `--auth-file` keeps the password out of the process list.
 
 Periscope serves the display zones under `display_root` and `more_display_roots` of `~/.config/ecarsi/results.json` (`--results` for another file), and the entries of `~/.config/ecarsi/periscope-datasets.json`:
 

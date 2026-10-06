@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Periscope has no tunnel option.** `ecarsi serve --ngrok/--domain` and `PERISCOPE_DOMAIN` are gone (Sherlock forbids
+  unattended tunnels; Periscope listens on 127.0.0.1 and is reached through the owner's own `ssh -L`), and
+  `ops/restart-periscope.sh` no longer waits 60 s for an ngrok session to end.
 - **A version can bring its own images (decision 0019, step 5).** `warm_pool configure-runtime` registers every runtime
   it selects and the one it replaces (`--register-only` adds one without making it current); a version's pool
   requests take the runtime of the compute image in its `version.json`; `add-worker --image` starts a worker of a

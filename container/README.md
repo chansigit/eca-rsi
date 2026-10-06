@@ -35,7 +35,7 @@ control-plane.sh host-code                            # unpack the snapshot to $
 - Set `TEMPORAL_PORT`, `DATABASE_PORT`, `UI_PORT`, and `TASK_QUEUE` if another control plane shares the host. The `TEMPORAL_DYNAMIC_CONFIG` variable names a hot-reloaded Temporal dynamic configuration YAML file. The `STAGE_LIMIT_FLOORS` variable raises `max_in_flight_deg` and `max_in_flight_lineages` for every dataset.
 - The `COORDINATORS` variable sets the number of coordinator processes (default: 4). Allocate 96 GB of memory to the control plane. Each coordinator process uses 6–7 GB.
 
-Start Periscope from the compute image using `ops/start-periscope.sh` from the deployment directory. Export `APPTAINERENV_APPEND_PATH=$HOME/local/bin` so the container image detects `ngrok`.
+Start Periscope from the compute image using `ops/start-periscope.sh` from the deployment directory. It listens on `127.0.0.1`; reach it through your own `ssh -L` forward.
 
 ## Pool runtime and workers
 

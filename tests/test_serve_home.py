@@ -106,7 +106,7 @@ def test_nav_js_is_syntactically_valid(tmp_path):
 
 
 def test_access_log_names_the_tunnel_visitor(capsys):
-    """Behind ngrok the socket peer is 127.0.0.1; the log must show X-Forwarded-For and the UA."""
+    """Behind a proxy the socket peer is 127.0.0.1; the log must show X-Forwarded-For and the UA."""
     from ecarsi.ui.serve import Handler
 
     class Fake:

@@ -178,7 +178,7 @@ Report labels and explanatory text default to English. This default does not dep
 
 The final UMAP includes its plotting data in the HTML. Zoom, hover, and legend filtering work offline when you enable JavaScript. To write a run's pages as static files, run `python -m ecarsi index /path/to/root-or-unit`. This command does not rerun any analysis.
 
-Periscope serves the display zones under `display_root` and `more_display_roots` of `~/.config/ecarsi/results.json`, plus the runs listed in `~/.config/ecarsi/periscope-datasets.json` (`eca-rsi serve scan-add <run dir>` adds one). It picks up changes to both without a restart. `--ngrok`, `--domain`, and `--auth-file` support remote access.
+Periscope serves the display zones under `display_root` and `more_display_roots` of `~/.config/ecarsi/results.json`, plus the runs listed in `~/.config/ecarsi/periscope-datasets.json` (`eca-rsi serve scan-add <run dir>` adds one). It picks up changes to both without a restart. It listens on `127.0.0.1` only; reach it through your own `ssh -L` forward, with `--auth-file` for a password.
 
 ## Resume and storage
 
