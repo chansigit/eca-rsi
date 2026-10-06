@@ -14,7 +14,8 @@ from temporalio.common import RetryPolicy, WorkflowIDReusePolicy
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import Worker
 
-QUEUE = "ecarsi-durable-v2"
+# The task queue is ecarsi.task_queue(), one per published version (decision 0019), read in main(): workflow modules
+# are re-imported in Temporal's sandbox, which forbids the file access at import time.
 # 120 s: a shared-filesystem hiccup of a minute (2026-09-17 saw ~90 s) must not time out a host step.
 SHORT = timedelta(seconds=120)
 RETRY = RetryPolicy(maximum_attempts=3)
@@ -526,7 +527,9 @@ async def main():
     connection = parser.add_mutually_exclusive_group(required=True)
     connection.add_argument("--temporal", help="explicit Temporal Service host:port")
     connection.add_argument("--service-root", type=Path, help="shared Temporal service discovery directory")
-    parser.add_argument("--task-queue", help="default %s; resume commands default to the queue of the run they resume" % QUEUE)
+    from .. import task_queue, version
+    queue = task_queue()  # an execution stays on its version: this code serves and starts only its own queue
+    parser.add_argument("--task-queue", help="default %s; resume commands default to the queue of the run they resume" % queue)
     commands = parser.add_subparsers(dest="command", required=True)
     p = commands.add_parser("worker")
     p.add_argument("--workflow-slots", type=int, help="concurrent workflow activations; default 2 to keep polling responsive and bound Python history replay; activities and Pool tasks remain concurrent")
@@ -560,7 +563,9 @@ async def main():
         p.add_argument("run_id")
     args = parser.parse_args()
     if args.task_queue is None and not args.command.startswith("resume-"):
-        args.task_queue = QUEUE
+        args.task_queue = queue
+    if args.command == "worker" and version() and args.task_queue != queue:
+        parser.error(f"version {version()['name']} serves only its own queue {queue}, not {args.task_queue}")
     if args.command == 'worker' and args.service_root:
         await follow_service(args.service_root, args.task_queue, args.workflow_slots, args.activity_slots)
         return

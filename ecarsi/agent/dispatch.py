@@ -33,6 +33,11 @@ def model_key(model):
     return digest(model)[:24]
 
 
+def runner_key(model, version=None):
+    """A runner serves one model on one code: a published version's runners are its own (decision 0019)."""
+    return (version["name"] + "." if version else "") + model_key(model)
+
+
 def routes(config, request):
     from ..model_web import normalized_models
     from ..files import verified
@@ -116,19 +121,21 @@ def _dispatch(root, folder, config, model):
     # 34 archived model replies because the pool replays saved ids).
     identity = digest([str(root), folder.name, request["digest"], number])[:32]
     plan_path = folder / f"dispatch-{number}.json"
+    # A published version's turn runs on that version's code (decision 0019): its own adapter, never upgraded.
+    versioned = bool(request.get("version"))
     plan = read(plan_path) or dict(request=request, model=model, timeout_seconds=settings["response_timeout_seconds"],
                 cpus=settings["worker_cpus"], memory_mb=settings["worker_memory_mb"],
-                adapter_sha256=archive_adapter(root)["sha256"])
+                adapter_sha256=request["adapter_sha256"] if versioned else archive_adapter(root)["sha256"])
     portable = False
     if request['spec']['operation_id'] == 'agent.turn':
         session = verified(request['spec']['session'])
         portable = session.get('protocol', 1) >= 2
-        if not plan_path.exists() and portable and session['adapter_sha256'] != plan['adapter_sha256']:
+        if not plan_path.exists() and portable and not versioned and session['adapter_sha256'] != plan['adapter_sha256']:
             # Upgrade only the portable transport; original session/tool contracts
             # remain immutable and are validated by their original adapter.
             plan['portable_adapter'] = archive_adapter(root)
     plan_ref = immutable(plan_path, plan)
-    key = model_key(plan["model"])
+    key = runner_key(plan["model"], request.get("version"))
     if portable and runner_ready(root, config, key):
         attempt = dict(execution="service", turn_id="turn-" + identity, runner=key, model=plan["model"],
                        plan=plan_ref, submitted_at=time.time())
@@ -155,7 +162,7 @@ def runner_ready(root, config, key, now=None):
     and for legacy sessions, the turn is a pool task as before. Online: read every dispatch."""
     service = config.get("service") or {}
     wanted = service.get("models", [])
-    if not (wanted == "all" or key in wanted):
+    if not (wanted == "all" or key.rpartition(".")[2] in wanted):
         return False
     beat = runner_state(root, key)
     now = time.time() if now is None else now
@@ -172,7 +179,8 @@ def enqueue(folder, config, attempt):
            args=["-m", "ecarsi.agent.dispatch", "execute", attempt["plan"]["path"]],
            cpus=plan["cpus"], memory_mb=plan["memory_mb"],
            timeout_seconds=plan["timeout_seconds"] + 60,
-           inputs=[attempt["plan"]], outputs=["result.json"], **({"trace": trace} if trace else {})))
+           inputs=[attempt["plan"]], outputs=["result.json"], **({"trace": trace} if trace else {})),
+           version=request.get("version"))  # the session's version, not this bridge's (decision 0019)
 
 
 def enqueue_service(folder, attempt):

@@ -13,3 +13,4 @@ job-*/
 __pycache__/
 dist/
 build/
+/version.json

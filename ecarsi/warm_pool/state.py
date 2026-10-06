@@ -101,8 +101,29 @@ def operator_ceiling(spec, ceilings):
     return spec if memory == spec["memory_mb"] else dict(spec, memory_mb=memory)
 
 
-def submit(root, spec):
+def versioned(runtime, version):
+    """A published version's code goes first on the image's Python path (decision 0019). Workers declare the
+    image runtime, not the code: `placement` (backend, worker) is its digest, so every version on one image
+    shares the workers; runtime_digest stays the digest of what actually runs."""
+    if version:
+        runtime = dict(runtime, pythonpath=[version["root"], *runtime.get("pythonpath", [])])
+    return runtime
+
+
+def submit(root, spec, version="own"):
+    """version: the published version whose code the task runs ({"name", "root", ...}, ecarsi.version());
+    by default the caller's own, so a version's coordinators and sessions submit for that version. The bridge,
+    which submits for sessions of every version, passes the session's (None: the image snapshot)."""
+    if version == "own":
+        from .. import version as own
+        version = own()
     root, requested = pool_root(root), validate(spec)
+    if version:
+        versions = Path(version["root"]).parent
+        for item in requested["inputs"]:  # a pinned file of another version would run that version's code
+            path = Path(item["path"])
+            if path.is_relative_to(versions) and not path.is_relative_to(version["root"]):
+                raise ValueError(f"input {path} belongs to another version than {version['name']}")
     spec = operator_ceiling(requested, read(root / "config.json", {}).get("ceilings"))
     folder = root / "requests" / spec["request_id"]
     folder.mkdir(mode=0o700, exist_ok=True)
@@ -120,9 +141,10 @@ def submit(root, spec):
                                                        spec=spec, at=time.time()))
         else:
             config = read(root / "config.json")
+            runtime = versioned(config["runtime"], version)
             existing = dict(spec=spec, digest=fingerprint, submitted_at=time.time(),
-                            attempt_id=uuid.uuid4().hex, runtime=config["runtime"],
-                            runtime_digest=digest(config["runtime"]))
+                            attempt_id=uuid.uuid4().hex, runtime=runtime, runtime_digest=digest(runtime),
+                            **(dict(version=version["name"], placement=digest(config["runtime"])) if version else {}))
             attempt = folder / existing["attempt_id"]
             attempt.mkdir(mode=0o700)
             (attempt / "outputs").mkdir(mode=0o700)
@@ -216,7 +238,13 @@ def retry(root, request_id, *, reason, use_current_runtime=False, memory_mb=None
         for item in request["spec"]["inputs"]:
             if file_digest(item["path"]) != item["sha256"]:
                 raise ValueError("Retry input changed: " + item["path"])
-        runtime = read(root / "config.json")["runtime"] if use_current_runtime else request["runtime"]
+        placement = request.get("placement")
+        if use_current_runtime:
+            current = read(root / "config.json")["runtime"]
+            runtime = versioned(current, {"root": request["runtime"]["pythonpath"][0]} if placement else None)
+            placement = placement and digest(current)
+        else:
+            runtime = request["runtime"]
         spec = request["spec"]
         if memory_mb is not None:
             if type(memory_mb) is not int or memory_mb <= spec["memory_mb"]:
@@ -240,7 +268,7 @@ def retry(root, request_id, *, reason, use_current_runtime=False, memory_mb=None
         replacement = dict(request, spec=spec, digest=digest(spec), backend=dict(state="queued", attempt_id=attempt_id),
             original_digest=request.get("original_digest", request["digest"]),
             attempt_id=attempt_id, submitted_at=time.time(),
-            runtime=runtime, runtime_digest=digest(runtime),
+            runtime=runtime, runtime_digest=digest(runtime), **({"placement": placement} if placement else {}),
             retry_count=request.get("retry_count", 0) + 1,
             retry=dict(previous_attempt_id=request["attempt_id"], reason=reason,
                        use_current_runtime=use_current_runtime, memory_mb=memory_mb,

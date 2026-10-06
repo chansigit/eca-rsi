@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Code versions side by side, step 1 (decision 0019).** The machinery is on main and inert until a version is
+  published: `ecarsi.version()` / `ecarsi.task_queue()` (a queue per version, read in the coordinator's `main`
+  because Temporal's sandbox forbids file access while it imports workflow modules; a new test loads every workflow
+  in the sandbox from a checkout and from a version); pool requests of a version carry its directory first on the
+  Python path and a `placement` (the image runtime's digest) that HQ and the node-local numba cache key on;
+  bridge requests record the version, whose turns keep their own adapter and go to that version's runners
+  (`<version>.<model key>`) or to a pool task on its code; `container/control-plane.sh` takes `VERSION` (coordinators
+  and runners of one version, matched by queue so versions never stop each other's) and `INFRA`;
+  `ops/publish-version.sh`, `ops/start-version.sh`, `ops/set-current.sh`; `ops/run.sh` and `gate.py` take `VERSION`;
+  the resume helpers resume on each run's own queue.
 - **One repository (decision 0018), 0.4.5.** osp, msp, zmip, standissect-lite and agent-harness-bridge now live at
   the top of this repository with their histories (`git log msp/` reaches msp's first commit); their tests are in
   `tests/<package>/` and run with the suite, their READMEs and changelogs in `docs/kernels/<package>/`. Import names

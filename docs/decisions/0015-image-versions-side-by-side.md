@@ -1,6 +1,7 @@
 # 0015 Two image versions side by side (proposed, not built)
 
-Proposed, 2026-10-02. Needs the owner's go-ahead before any of it is built.
+Proposed, 2026-10-02. **Replaced by [0019](0019-versions-side-by-side.md)** (2026-10-06): one task queue per code
+version instead of Temporal's worker versioning.
 
 **Context.** A new image pair can only be switched to at zero running executions (0005, 0010): every request
 pins its program files by content, every agent turn pins `session.py` / `plan.py`, and workflow code must

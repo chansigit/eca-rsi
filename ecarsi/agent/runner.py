@@ -7,7 +7,8 @@ when the chosen model's runner is alive it drops a marker in bridge/runner-queue
 submitting to the pool, and the runner performs the turn in bridge/turns/<turn id>/ with the same
 started.json / result.json contract the pool executor writes, so the bridge settles both alike.
 Provider settings are process environment (session.py and the SDK read them), hence one model per
-runner; `runners` supervises one runner per catalog model and restarts any that exits.
+runner; `runners` supervises one runner per catalog model and restarts any that exits. A published version
+(decision 0019) has runners of its own, keyed <version>.<model key>: they take only that version's turns.
 """
 import asyncio
 import json
@@ -18,15 +19,16 @@ import sys
 import time
 from pathlib import Path
 
+from .. import version
 from ..contracts import check
 from ..files import digest, read, save
-from .dispatch import configure, model_key, perform, policy
+from .dispatch import configure, perform, policy, runner_key
 
 MAX_CALLS = 2000  # a runner drains and exits after this many turns; the supervisor starts a fresh one
 
 
 async def serve_runner(root, model, *, once=False, max_calls=MAX_CALLS):
-    root, key = Path(root), model_key(model)
+    root, key = Path(root), runner_key(model, version())
     settings = policy(read(root / "config.json"))
     configure(model, settings["response_timeout_seconds"])
     queue, beat = root / "runner-queue" / key, root / "runners" / (key + ".json")
@@ -111,7 +113,7 @@ def supervise(root, interval=5):
     try:
         while not stopping:
             config = read(root / "config.json")
-            wanted = {model_key(m): m for m in normalized_models(read(config["catalog"]))}
+            wanted = {runner_key(m, version()): m for m in normalized_models(read(config["catalog"]))}
             for key, model in wanted.items():
                 proc = children.get(key)
                 if proc is not None and proc.poll() is None:

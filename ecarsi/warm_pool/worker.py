@@ -368,12 +368,12 @@ def run(folder, request, ownership):
                    RSI_COMPUTE_BACKEND="rapids" if gpu_id else "cpu", PYTHONUNBUFFERED="1")
         for key in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS"):
             env[key] = str(spec["cpus"])
-        from .backend import runtime_environment
+        from .backend import placement, runtime_environment
         env = runtime_environment(runtime, env)
         if runtime.get("image"):
-            # Node-local, per runtime: the shared Lustre cache corrupted its index
+            # Node-local, per image (placement): the shared Lustre cache corrupted its index
             # under concurrent writers from several nodes. Costs one recompile per node.
-            cache = numba_cache(Path(os.environ.get("L_SCRATCH") or tempfile.gettempdir()) / "rsi-numba" / request["runtime_digest"])
+            cache = numba_cache(Path(os.environ.get("L_SCRATCH") or tempfile.gettempdir()) / "rsi-numba" / placement(request))
             env["NUMBA_CACHE_DIR"] = str(cache)
             # sitecustomize that makes fast-array-utils' sparse types cacheable (see its docstring)
             env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(Path(__file__).with_name("numba_site")), env.get("PYTHONPATH")]))

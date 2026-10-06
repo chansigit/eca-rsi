@@ -140,8 +140,11 @@ def submit(root, spec):
             if previous["digest"] != fingerprint:
                 save(folder / "resubmitted.json", dict(digest=fingerprint, spec=spec, at=time.time()))
         else:
+            from .. import version
             save(folder / "request.json", {
                 "spec": spec, "digest": fingerprint, "submitted_at": time.time(),
+                # decision 0019: the bridge runs this turn on the submitting version's code, never another
+                **({"version": version()} if version() else {}),
                 "brief": "" if is_turn else (PROMPTS / "plan.md").read_text() + "\n\n" +
                          (PROMPTS / "organize_v2.md").read_text(),
                 "adapter_sha256": file_digest(adapter_path(is_turn)),
@@ -349,6 +352,7 @@ def main():
     p.add_argument('--model', required=True, help='catalog entry as JSON: harness, model, url')
     p = commands.add_parser('runners', help='supervise one resident runner per catalog model')
     p.add_argument('root')
+    p.add_argument('--version', help="the published version this code is (decision 0019); names the process for control-plane.sh")
     p = commands.add_parser('retry-turn', help='audit and retry a failed tool-free model request')
     p.add_argument('root')
     p.add_argument('request_id')
@@ -371,6 +375,9 @@ def main():
         from .runner import serve_runner
         sys.exit(asyncio.run(serve_runner(args.root, json.loads(args.model))))
     elif args.command == "runners":
+        from .. import version
+        if args.version != (version() or {}).get("name"):
+            raise SystemExit(f"--version {args.version} does not match this code's version {(version() or {}).get('name')}")
         from .runner import supervise
         sys.exit(supervise(args.root))
     elif args.command == 'confirm-stopped':

@@ -140,6 +140,11 @@ def hq_priority(spec, release):
     return PRIORITY_BASE[request_class(spec)] + 10 * spec["cpus"]
 
 
+def placement(request):
+    """The image runtime a worker must declare (state.versioned); a request without a version runs it as is."""
+    return request.get("placement", request["runtime_digest"])
+
+
 def gpu_jobfile(request, attempt, name, executor, pythonpath, priority=None):
     """Native HQ alternatives: GPU first; CPU fallback only when declared."""
     spec = request["spec"]
@@ -152,7 +157,7 @@ def gpu_jobfile(request, attempt, name, executor, pythonpath, priority=None):
     text = "name = " + json.dumps(name) + "\n[[task]]\n"
     text += "\n".join(k + " = " + json.dumps(v) for k, v in fields.items())
     text += "\nenv = { PYTHONPATH = " + json.dumps(pythonpath) + ', ECA_POOL_GPU_LAYOUT = "slots-v2" }\n'
-    resources = {"cpus": spec["cpus"], "mem": spec["memory_mb"], "runtime/" + request["runtime_digest"]: 1}
+    resources = {"cpus": spec["cpus"], "mem": spec["memory_mb"], "runtime/" + placement(request): 1}
     gpu_side = {k: v for k, v in resources.items() if k != "mem"}
     variants = [{**gpu_side, f"gpuSlot/{slot}": 1, f"gpuMemoryMB/{slot}": spec["gpu"]["memory_mb"],
                  "gpuHostMB": spec["memory_mb"]} for slot in range(GPU_SLOT_LIMIT)]
@@ -298,7 +303,7 @@ def hq_resources(spec, request, release, capable=True):
     `release.model_call_resource` is the online kill switch."""
     cpu_share, runtime_share = hq_shares(spec)
     args = ["--cpus", cpu_share, "--resource", "mem=" + str(spec["memory_mb"]),
-            "--resource", "runtime/" + request["runtime_digest"] + "=" + runtime_share]
+            "--resource", "runtime/" + placement(request) + "=" + runtime_share]
     if spec["operation_id"] == "agent.call" and release["model_call_resource"] and capable:
         args += ["--resource", "modelcall=1"]
     return args

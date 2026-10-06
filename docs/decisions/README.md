@@ -20,7 +20,8 @@ decision that is replaced keeps its page and says so at the top.
 | [0012](0012-one-execution-path.md) | One execution path: the local path was removed |
 | [0013](0013-degraded-results-are-recorded.md) | A step that fails without failing the run leaves a record |
 | [0014](0014-boundaries-are-tested.md) | Subsystem boundaries are written down and tested |
-| [0015](0015-image-versions-side-by-side.md) | Two image versions side by side (proposed, not built) |
+| [0015](0015-image-versions-side-by-side.md) | Two image versions side by side (proposed; replaced by 0019) |
 | [0016](0016-samples-and-batches-from-eca-pp.md) | Samples and batches come from ECA-PP; big samples run as chunks |
 | [0017](0017-stress-population-policy.md) | Stress, dissociation and dying removals follow a policy the code checks |
 | [0018](0018-one-repository.md) | One repository: the kernels and the agent harness live in eca-rsi |
+| [0019](0019-versions-side-by-side.md) | Code versions run side by side, each execution on the version that started it |

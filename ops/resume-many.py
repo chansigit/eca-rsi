@@ -5,7 +5,6 @@ from pathlib import Path
 from temporalio.client import Client
 from ecarsi.control.temporal import endpoint
 from ecarsi.control.dataset import resume_dataset
-from ecarsi.control.coordinator import QUEUE
 from ecarsi.files import read
 from ecarsi.warm_pool.state import retry
 CONTROL, POOL = os.environ["CONTROL"], os.environ["POOL"]  # ops/run.sh passes them
@@ -18,7 +17,7 @@ async def one(client, wid):
         return say("skip", wid, "RUNNING")
     for _ in range(6):
         try:
-            h = await resume_dataset(client, wid, QUEUE, reason)
+            h = await resume_dataset(client, wid, None, reason)  # None: the queue the run was started on
             return say("resumed", wid, "was", d.status.name, "run", h.result_run_id)
         except ValueError as exc:
             m = RECONCILE.search(str(exc))
