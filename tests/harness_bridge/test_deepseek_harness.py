@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import shutil
 import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
@@ -88,6 +89,7 @@ def test_patch_fails_closed_on_unknown_capability_or_missing_model():
         H._render_patch("http://127.0.0.1:1/mcp", (), "doubao", None, "file:///tmp/raw.mjs")
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node; the images carry none")
 def test_raw_attachment_plugin_is_valid_javascript(tmp_path: Path):
     dsh_root = tmp_path / "dsh"
     dsh_bin = dsh_root / "apps" / "cli" / "lib" / "bin.js"

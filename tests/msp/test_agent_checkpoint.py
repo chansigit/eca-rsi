@@ -7,7 +7,7 @@ import harness_bridge
 import numpy as np
 import pandas as pd
 import pytest
-from test_annotation_status import entry, payload
+from .test_annotation_status import entry, payload
 
 from msp import annotate, checkpoint
 

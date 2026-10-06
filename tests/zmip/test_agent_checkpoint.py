@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from anndata import AnnData
-from test_annotation_status import body, entry
+from .test_annotation_status import body, entry
 
 from zmip import annotate as A
 

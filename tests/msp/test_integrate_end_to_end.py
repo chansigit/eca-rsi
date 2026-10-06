@@ -8,7 +8,7 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 import pytest
-from synthetic_data import CELLS_PER_POPULATION, N_POPULATIONS, SAMPLES, write_samples
+from .synthetic_data import CELLS_PER_POPULATION, N_POPULATIONS, SAMPLES, write_samples
 
 from msp import generate_report, run_multi_sample_pipeline
 from msp.evidence import DegTables, load_paga_neighbors, load_removal_mask

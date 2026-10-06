@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from synthetic_data import write_samples
+from .synthetic_data import write_samples
 from msp.integrate import integrate_adata, load_and_merge
 from msp.integrate.deg import compute_deg_task, load_deg_input, write_deg_results
 from msp.evidence import DegTables

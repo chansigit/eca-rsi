@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import harness_bridge
 import numpy as np
 import pytest
-from test_evidence_contracts import annotation_entry, data_with_clusters
+from .test_evidence_contracts import annotation_entry, data_with_clusters
 
 import msp.annotate as A
 from msp.report import _section_annotation
