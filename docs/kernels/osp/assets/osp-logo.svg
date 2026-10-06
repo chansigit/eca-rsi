@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title description">
+  <title id="title">OSP: One-Sample Pipeline</title>
+  <desc id="description">A circular sample boundary surrounds a group of cells, with one cell in focus. A geometric OSP wordmark sits below.</desc>
+
+  <!-- A quiet, opaque surface keeps the mark legible on light and dark pages. -->
+  <rect x="8" y="8" width="496" height="496" rx="104" fill="#F4FAF8"/>
+  <rect x="9" y="9" width="494" height="494" rx="103" fill="none" stroke="#D5E6E1" stroke-width="2"/>
+
+  <!-- One bounded sample, with a distinct cell selected for closer review. -->
+  <circle cx="256" cy="204" r="130" fill="none" stroke="#173B49" stroke-width="20"/>
+  <path d="M256 74 A130 130 0 0 1 386 204" fill="none" stroke="#258B81" stroke-width="20" stroke-linecap="round"/>
+
+  <g fill="#C6E3DA">
+    <circle cx="194" cy="137" r="22"/>
+    <circle cx="315" cy="154" r="25"/>
+    <circle cx="333" cy="236" r="19"/>
+    <circle cx="246" cy="288" r="19"/>
+    <circle cx="164" cy="226" r="16"/>
+  </g>
+  <g fill="#559B8D">
+    <circle cx="193" cy="135" r="7"/>
+    <circle cx="318" cy="152" r="8"/>
+    <circle cx="335" cy="235" r="6"/>
+    <circle cx="244" cy="287" r="6"/>
+    <circle cx="163" cy="225" r="5"/>
+  </g>
+
+  <circle cx="247" cy="210" r="40" fill="#258B81"/>
+  <circle cx="247" cy="210" r="28" fill="#F4FAF8"/>
+  <circle cx="247" cy="210" r="12" fill="#173B49"/>
+
+  <!-- Path-based lettering is independent of installed fonts. -->
+  <g fill="none" stroke="#173B49" stroke-width="14" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M175 374 C158 374 147 386 147 407 C147 428 158 440 175 440 C192 440 203 428 203 407 C203 386 192 374 175 374 Z"/>
+    <path d="M282 381 C274 375 266 373 258 374 C244 375 234 382 235 393 C236 404 247 406 260 408 C273 410 284 414 283 425 C282 436 272 441 258 440 C248 440 239 436 232 431"/>
+    <path d="M314 440 V375 H338 C354 375 364 383 364 397 C364 411 354 419 338 419 H314"/>
+  </g>
+</svg>
