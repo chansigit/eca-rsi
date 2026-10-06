@@ -155,7 +155,20 @@ set -a; . ~/.config/ecarsi/deployment.env; set +a     # sbatch passes POOL, SCIE
 sbatch --time=8:00:00 --cpus-per-task=16 --mem=32G $E/control/image-code/container/worker-node.sh
 ```
 
-The job takes every granted core and 90 % of the memory. It joins the HQ server and leaves when the job ends.
+The job takes every granted core and 90 % of the memory. It joins the HQ server and leaves when the job ends: no
+`add-worker` by hand. `ops/worker-node.sh` wraps it with deployment.env, for example a large node for cross-sample of
+a few hundred thousand cells:
+
+```bash
+sbatch --job-name=warmpool-bigmem --time=24:00:00 --partition=bigmem --cpus-per-task=64 --mem=256G ops/worker-node.sh
+```
+
+These recipes are this deployment's: Slurm on Stanford's Sherlock, with its partitions. They are not a mechanism of
+the package. Another cluster starts `ecarsi.warm_pool slurm-worker` (or runs `add-worker` for an allocation) in
+whatever its scheduler runs. Request only the workers a run needs: an idle node still costs.
+
+`ops/switch-images.sh` stops every worker supervisor, which ends such a job; it re-adds only allocations that are
+still running. A version with its own images needs no switch: add workers of its image beside the others (A.11).
 
 **An allocation that already exists.** Run `add-worker` from the plane node with the host Python:
 

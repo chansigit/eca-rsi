@@ -9,9 +9,10 @@ Decide, sample by sample, whether it enters harmony integration.
 
 ## How to judge
 
-- **Read the figures — do not decide from numbers alone.** For every
-  sample, Read at least its cluster-UMAP figure; read QC violins when the
-  numbers look off. The inventory summary only screens: before excluding
+- **Read the figures — do not decide from numbers alone.** Read the
+  cluster-UMAP figure of every sample whose numbers stand out (of every
+  sample when the unit has a few dozen), and always of a sample you would
+  exclude; read QC violins when the numbers look off. The inventory summary only screens: before excluding
   a sample, read its full annotation proposal (`<sample>/annotation_proposal.json`)
   so the per-cluster doubts, not the numbers, make the call. A sample whose UMAP is shattered into many small
   clusters that its annotation cannot explain, or whose clusters are

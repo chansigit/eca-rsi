@@ -10,8 +10,8 @@ from . import PROMPTS
 from .contract import (LOOKUP_NOTE, NO_ARGUMENTS, checklist, deg_lookup_schema, evidence_page, evidence_paths, json_hint,
                        lookup_arguments, proposal as parse_proposal, schema)
 from .common import artifact, assemble, check_bundle, deg, deg_batch, png_url, publish_bundle, sealed
-from .common import (RETAINED, STRESS_HOST_POLICY, comparison_cells, dying_evidence, fragment_table, guard_stress, mark_retained,
-                     soft_fragments, stress_flags, stress_policy)
+from .common import (RETAINED, STRESS_HOST_POLICY, comparison_cells, dying_evidence, fragment_reasons, fragment_table, guard_stress,
+                     mark_retained, soft_fragments, stress_flags, stress_policy)
 from ..files import digest, read, save
 
 
@@ -109,12 +109,13 @@ def numerical_reasons(bundle, data):
     fragments = fragment_table(bundle)
     bad = set(fragments.loc[fragments.recommend_removal.str.lower().eq('true'), 'subcluster']) if 'recommend_removal' in fragments else set()
     soft = soft_fragments(fragments) if lineage_policy(bundle) == 'keep' else {}
+    tests = fragment_reasons(fragments)
     outliers = pd.read_csv(artifact(bundle, 'cell_outliers.csv'), dtype=str, keep_default_na=False).set_index('cell') if 'cell_outliers.csv' in bundle['files'] else pd.DataFrame()
     result, retained = {}, {}
     for cell in data.obs_names[mask]:
         reasons, product = [], str(data.obs.loc[cell].get('standissect_product'))
         if product in bad and product not in soft:
-            reasons.append(dict(code='fragment_qc', evidence=bundle['files']['minor_sibling_qc.csv']))
+            reasons.append(dict(code='fragment_qc', detail=tests.get(product, {}), evidence=bundle['files']['minor_sibling_qc.csv']))
         if cell in outliers.index and str(outliers.loc[cell].get('recommend_removal')).lower() == 'true':
             reasons.append(dict(code='cell_outlier', detail=outliers.loc[cell].to_dict(), evidence=bundle['files']['cell_outliers.csv']))
         if reasons:

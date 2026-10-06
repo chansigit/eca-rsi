@@ -10,8 +10,8 @@ from . import PROMPTS
 from .contract import (LOOKUP_NOTE, NO_ARGUMENTS, checklist, deg_lookup_schema, evidence_page, evidence_paths, json_hint,
                        lookup_arguments, proposal as parse_proposal, schema)
 from .common import BASE, artifact, assemble, check_bundle, deg, deg_batch, png_url, publish_bundle, sealed
-from .common import (STRESS_HOST_POLICY, comparison_cells, dying_evidence, fragment_table, guard_stress, mark_retained, soft_fragments,
-                     stress_flags, stress_policy)
+from .common import (STRESS_HOST_POLICY, comparison_cells, dying_evidence, fragment_reasons, fragment_table, guard_retained_drops,
+                     guard_stress, mark_retained, soft_fragments, stress_flags, stress_policy)
 from ..files import digest, read, save
 
 INVENTORY_PAGE_BYTES = 64 * 1024  # sample_inventory pages by bytes, like evidence pages: a cohort of 62
@@ -435,13 +435,14 @@ def tool(name,state_path,args_path,destination):
                 response['source']='computed' if cache.n_computed else 'precomputed'
                 state['additional_deg'][key]=immutable(destination/'additional_deg.json',response)
         elif name=='submit_decision':
-            proposal=parse_proposal(args);converted=[]
+            proposal=parse_proposal(args);converted=[];held=[]
             if phase=='inclusion':
                 from .inclusion import validate_inclusion
                 validate_inclusion(proposal,[s['sample'] for s in bundle['samples']])
                 if set(state.get('inventories',[]))!={s['sample'] for s in bundle['samples']}:raise ValueError('Read every sample inventory before inclusion')
-                missing=[s['sample'] for s in bundle['samples'] if not any(p.startswith(s['sample']+'/figures/') and 'umap_clusters' in p for p in state['read'])]
-                if missing:raise ValueError('Read each sample cluster UMAP before inclusion: '+str(missing))
+                # #33: the UMAPs of the samples it excludes; every inventory, but not 196 figures, fits one session
+                missing=[s['sample'] for s in proposal['samples'] if not s['include'] and not any(p.startswith(s['sample']+'/figures/') and 'umap_clusters' in p for p in state['read'])]
+                if missing:raise ValueError('Read the cluster UMAP of each sample you exclude before inclusion: '+str(missing))
                 proposals={s['sample'] for s in bundle['samples'] if s.get('annotation')}
                 unread=[s['sample'] for s in proposal['samples'] if not s['include'] and s['sample'] in proposals and s['sample']+'/annotation_proposal.json' not in state['read']]
                 if unread:raise ValueError('Read the full annotation proposal (read_evidence on <sample>/annotation_proposal.json) of each sample you exclude before inclusion: '+str(unread))
@@ -487,11 +488,17 @@ def tool(name,state_path,args_path,destination):
                         response['refinement']=request;problems=[]
                     else:
                         problems=validate_inspection(proposal,clusters,data.obs)
-                        if not problems:guard_batch_actions(proposal)
+                        if not problems:
+                            guard_batch_actions(proposal)
+                            held=guard_retained_drops(proposal,{str(e['cluster_id']) for e in accepted['proposal']['clusters']
+                                                                if e.get('host_adjustment',{}).get('policy')==STRESS_HOST_POLICY})
                 if problems:raise ValueError('; '.join(problems))
             response.update(accepted=True,proposal=proposal,evidence=state['evidence'],types=state['types'])
             if converted:
                 response['host_adjustments']=[{'cluster':c,**proposed[c]['host_adjustment']} for c in converted]
+            if held:
+                response['host_adjustments']=[{'cluster':c,'action':'flag','policy':STRESS_HOST_POLICY,
+                                               'reason':'kept by the type phase under the stress policy: dropped cells are flagged'} for c in held]
         else:raise ValueError('Unknown worker tool')
     except (ValueError,KeyError,TypeError,IndexError) as exc:
         content=str(exc)[:8000]
@@ -539,6 +546,7 @@ def finalize(evidence_ref,types_ref,quality_ref,destination):
     # Preserve distinct numerical and inherited sources instead of a generic "filtered" reason.
     fragments=fragment_table(bundle)
     bad_frag=set(fragments.loc[fragments.recommend_removal.astype(str).str.lower().eq('true'),'subcluster']) if 'recommend_removal' in fragments else set()
+    frag_tests=fragment_reasons(fragments)
     outliers=(pd.read_csv(artifact(bundle,'cell_outliers.csv'),dtype={'cell':str},keep_default_na=False).set_index('cell')
               if 'cell_outliers.csv' in bundle['files'] else pd.DataFrame())
     osp_reasons=pd.read_csv(artifact(bundle,'osp_removal_proposals.csv.gz'),dtype=str,keep_default_na=False).set_index('cell')['reasons'].to_dict()
@@ -564,7 +572,8 @@ def finalize(evidence_ref,types_ref,quality_ref,destination):
             retained.update({c:e['host_adjustment']['state'] for c in data.obs_names[data.obs[BASE].astype(str).eq(cid)]})
     for cid in reasons:
         row=data.obs.loc[cid];group=str(row[BASE]);r=reasons[cid]
-        if str(row.get('standissect_product')) in bad_frag:r.append({'code':'fragment_qc','evidence':bundle['files']['minor_sibling_qc.csv']})
+        if str(row.get('standissect_product')) in bad_frag:r.append({'code':'fragment_qc','detail':frag_tests.get(str(row.get('standissect_product')),{}),
+                                                                    'evidence':bundle['files']['minor_sibling_qc.csv']})
         if cid in outliers.index and str(outliers.loc[cid].get('recommend_removal')).lower()=='true':r.append({'code':'cell_outlier','detail':outliers.loc[cid].astype(str).to_dict(),'evidence':bundle['files']['cell_outliers.csv']})
         if str(row.get('_qc_action'))=='drop':
             if cid not in osp_reasons:raise ValueError('OSP drop lacks its original decision: '+cid)

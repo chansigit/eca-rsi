@@ -61,7 +61,7 @@ def inclusion_state(tmp_path, count=3):
         types=None, read=[], lookups=[], qc=False))
 
 
-def test_inclusion_batches_inventories_and_figures_but_requires_every_sample(tmp_path, monkeypatch):
+def test_inclusion_batches_inventories_and_figures_and_requires_the_umap_of_an_excluded_sample(tmp_path, monkeypatch):
     import ecarsi.stages.crosssample as cross
     monkeypatch.setattr(cross, 'INVENTORY_PAGE_BYTES', 1)   # one sample per page: the batch mechanics under test
     state = inclusion_state(tmp_path)
@@ -82,9 +82,14 @@ def test_inclusion_batches_inventories_and_figures_but_requires_every_sample(tmp
     from ecarsi.stages.crosssample import tool
     args = immutable(tmp_path / 'decision.json', dict(proposal_json=json.dumps({'notes': 'Reviewed all samples', 'samples': [
         dict(sample=f's{i}', include=True, reason='Reviewed evidence') for i in range(3)]})))
+    exclude = immutable(tmp_path / 'exclude.json', dict(proposal_json=json.dumps({'notes': 'One sample is broken', 'samples': [
+        dict(sample=f's{i}', include=i != 1, reason='Reviewed evidence') for i in range(3)]})))
     reject = tmp_path / 'reject'; reject.mkdir()
-    tool('submit_decision', figure['state']['path'], args['path'], reject)
-    assert 'Read each sample cluster UMAP' in read(reject / 'result.json')['content']
+    tool('submit_decision', figure['state']['path'], exclude['path'], reject)
+    assert "Read the cluster UMAP of each sample you exclude before inclusion: ['s1']" in read(reject / 'result.json')['content']
+    early = tmp_path / 'early'; early.mkdir()  # #33: including every sample needs every inventory, not every figure
+    tool('submit_decision', figure['state']['path'], args['path'], early)
+    assert read(early / 'result.json')['accepted'] is True
     monkeypatch.setattr(batch, 'IMAGE_BYTES', 12 * 2**20)
     rest = run_batch(tmp_path / 'rest', monkeypatch, 'ecarsi.stages.crosssample', figure['state'],
         pending['tool'], pending['arguments'], allowed)

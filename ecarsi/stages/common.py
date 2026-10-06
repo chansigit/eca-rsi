@@ -218,6 +218,37 @@ def guard_stress(entry, policy, n_cells, flagged, dying_check, mito=False):
     return True
 
 
+def guard_retained_drops(proposal, retained):
+    """#30: cross-sample inspect may not drop a cluster the type phase kept under the stress policy: its drops
+    become flags, which needs_review lists. In place, like msp's batch guard; the clusters adjusted."""
+    adjusted = set()
+    for entry in [*proposal['clusters'], *proposal.get('cell_actions', [])]:
+        if str(entry['cluster']) in retained and entry.get('action') == 'drop':
+            entry.update(requested_action='drop', action='flag', review_required=True, host_adjustment=dict(
+                policy=STRESS_HOST_POLICY, reason='The type phase kept this cluster under the stress policy (decision 0017); '
+                                                 'quality flags it for review instead of dropping it.'))
+            adjusted.add(str(entry['cluster']))
+    return sorted(adjusted)
+
+
+FRAGMENT_TESTS = ('decontX', 'dissociation', 'doublet', 'mt')  # msp minor-sibling QC, columns <test>_significant
+
+
+def fragment_reasons(table):
+    """{fragment: {'tests': [...]}} for msp's removed minor-sibling fragments: the tests that hit, and 'dropped
+    upstream' when more than half its cells were (#27: needs_review lists fragment removals by test)."""
+    out = {}
+    for row in table.to_dict('records'):
+        if str(row.get('recommend_removal', '')).lower() != 'true':
+            continue
+        tests = [t for t in FRAGMENT_TESTS if str(row.get(t + '_significant', '')).lower() == 'true']
+        dropped = str(row.get('pct_drop_upstream', '')).strip()
+        if dropped and dropped != 'nan' and float(dropped) > FRAGMENT_DROP_PCT:
+            tests.append('dropped upstream')
+        out[str(row['subcluster'])] = dict(tests=tests)
+    return out
+
+
 def soft_fragments(table):
     """{fragment: state} of msp minor-sibling fragments removed only by their dissociation and/or mitochondrial
     test: no decontX or doublet hit and not more than half dropped upstream. Kept under the policy keep."""

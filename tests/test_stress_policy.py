@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 
 from ecarsi.stages import common
-from ecarsi.stages.common import dying_evidence, guard_stress, mark_retained, soft_fragments
+from ecarsi.stages.common import dying_evidence, guard_retained_drops, guard_stress, mark_retained, soft_fragments
 
 
 def removal(reason, **changes):
@@ -48,6 +48,18 @@ def test_a_removal_stands_on_the_stress_gene_rule_or_the_dying_check_and_stays_o
     assert not guard_stress(removal('stress'), 'remove', 9, False, None)  # below 10 cells the agent's reason stands
     for other in (removal('doublet'), {**removal('stress'), 'action': 'keep'}):
         assert not guard_stress(other, 'remove', 50, False, None) and 'host_adjustment' not in other
+
+
+def test_quality_flags_instead_of_dropping_a_cluster_the_type_phase_kept():
+    """#30: the type phase kept cluster 3 under the stress policy; cross-sample inspect may not drop it."""
+    proposal = {'clusters': [{'cluster': '3', 'action': 'drop'}, {'cluster': '4', 'action': 'drop'}, {'cluster': '5', 'action': 'keep'}],
+                'cell_actions': [{'cluster': '3', 'action': 'drop', 'metric': 'pct_counts_mt', 'op': '>', 'value': 20},
+                                 {'cluster': '5', 'action': 'drop', 'metric': 'pct_counts_mt', 'op': '>', 'value': 20}]}
+    assert guard_retained_drops(proposal, {'3'}) == ['3']
+    three, four = proposal['clusters'][0], proposal['clusters'][1]
+    assert three['action'] == 'flag' and three['requested_action'] == 'drop' and three['host_adjustment']['policy'] == 'stress_policy_v1'
+    assert four['action'] == 'drop' and proposal['cell_actions'][0]['action'] == 'flag' and proposal['cell_actions'][1]['action'] == 'drop'
+    assert guard_retained_drops(proposal, set()) == []
 
 
 def test_keep_retains_every_stress_dissociation_or_dying_removal():

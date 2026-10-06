@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Worker nodes join by themselves (#44).** INSTALL.md A.7 documents `ops/worker-node.sh` as the way to submit
+  workers on this deployment (Slurm on Sherlock, not a mechanism of the package), with a bigmem example, and what
+  `switch-images.sh` does to such jobs.
+- **Fragment QC needs an effect size (#27).** A test of msp's minor-sibling fragment QC hits only on p < 0.05 and
+  AUC >= 0.7 (`MIN_AUC`, the rule decision 0017 uses for dying cells); `minor_sibling_qc.csv` gains `<test>_auc`. Each
+  `fragment_qc` exclusion records the tests that hit, and needs_review lists fragment removals per round, stage and
+  tests (`fragment_removed`).
+- **Inspect cannot drop what the stress policy kept (#30).** A cross-sample quality drop of a cluster the type phase
+  kept under the stress policy becomes a flag with a `host_adjustment` (`guard_retained_drops`), listed in
+  needs_review.
+- **Inclusion reads the UMAPs of the samples it excludes (#33).** Every sample inventory is still required; a cluster
+  UMAP only for each excluded sample, so a unit of 196 samples fits one session.
 - **Mitochondrial genes are their own axis (decision 0017, amended).** msp's stress-gene rule no longer counts MT-
   genes. `stress_clusters.csv` gains `n_mito_hits`, `mito_genes` and `mito`: a cluster under a quarter of its local
   siblings' pooled cells with more than 3 MT- genes among its top 10 against them is `mito`, `recommend_removal`,

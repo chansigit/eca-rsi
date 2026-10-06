@@ -35,12 +35,20 @@ BIG_SIBLING_N = 800  # sibling >= this many cells (absolute) is skipped too, reg
 DOUBLET_MEDIAN_THRESH = 0.2  # scrublet score, 0-1 scale
 MT_MEDIAN_THRESH = 20.0  # pct_counts_mt is already on a 0-100 scale
 DROP_PCT_THRESH = 50.0  # % of a sibling's cells already _qc_action=drop upstream (osp)
+MIN_AUC = 0.7  # a test also needs this effect size (owner, 2026-10-06, #27; decision 0017 judges dying cells the same way)
 
 
 def _mwu_greater(sib_vals, core_vals):
-    """One-sided Mann-Whitney U: is `sib_vals` stochastically greater than
-    `core_vals`? Rank-based — doesn't assume normality, works for the small,
-    skewed samples minor siblings usually are."""
+    """One-sided Mann-Whitney U: is `sib_vals` clearly greater than `core_vals`: p < 0.05 and AUC >= MIN_AUC?
+    None when either side has too few measured values."""
+    test = _mwu_test(sib_vals, core_vals)
+    return None if test is None else bool(test[0] < 0.05 and test[1] >= MIN_AUC)
+
+
+def _mwu_test(sib_vals, core_vals):
+    """(p, AUC) of a one-sided Mann-Whitney U, sibling greater than cores. Rank-based — doesn't assume
+    normality, works for the small, skewed samples minor siblings usually are. AUC = U / (n1 n2): 0.5 is
+    no shift; at a few hundred core cells a negligible shift is already significant, hence the AUC floor."""
     from scipy.stats import mannwhitneyu
 
     # Partial sample metadata must not turn an otherwise valid comparison into
@@ -51,8 +59,8 @@ def _mwu_greater(sib_vals, core_vals):
     core_vals = core_vals[np.isfinite(core_vals)]
     if min(len(sib_vals), len(core_vals)) < MIN_N_FOR_TEST:
         return None
-    _, p = mannwhitneyu(sib_vals, core_vals, alternative="greater")
-    return bool(p < 0.05)
+    u, p = mannwhitneyu(sib_vals, core_vals, alternative="greater")
+    return float(p), float(u / (len(sib_vals) * len(core_vals)))
 
 
 def _minor_sibling_qc(ad, res, outdir):
@@ -75,12 +83,12 @@ def _minor_sibling_qc(ad, res, outdir):
 
     Siblings with >=5 cells are additionally tested one-sided (sibling >
     pooled cores) via Mann-Whitney U on: decontX_contamination,
-    dissociation_score, doublet_score, pct_counts_mt. doublet/mt tests
-    additionally require the sibling's own median to clear an absolute
-    floor (0.2 and 20% respectively). No multiple-testing correction — this
-    half is candidate detection, downstream inspection re-verifies. A
-    sibling is recommend_removal if the upstream-drop rule fires OR any one
-    of the four stats tests comes back significant."""
+    dissociation_score, doublet_score, pct_counts_mt. A test hits on p < 0.05
+    AND AUC >= MIN_AUC (0.7; #27: p alone flagged ordinary fragments, and eca-rsi
+    removes what is marked here); doublet/mt tests additionally require the
+    sibling's own median to clear an absolute floor (0.2 and 20% respectively).
+    No multiple-testing correction. A sibling is recommend_removal if the
+    upstream-drop rule fires OR any one of the four tests hits."""
     frag = res.fragments
     core_n = frag.loc[frag["rank"] == 0].set_index("parent")["n_cells"]
     core_subclusters = set(frag.loc[frag["rank"] == 0, "subcluster"])
@@ -125,10 +133,12 @@ def _minor_sibling_qc(ad, res, outdir):
             n_hits = 0
             for col, name, thr in metric_tests:
                 sib_vals, core_vals = ad.obs.loc[sib_mask, col], ad.obs.loc[core_mask, col]
-                sig = _mwu_greater(sib_vals, core_vals)
+                test = _mwu_test(sib_vals, core_vals)
+                sig = None if test is None else bool(test[0] < 0.05 and test[1] >= MIN_AUC)
                 if thr is not None and sig:
                     sig = bool(sib_vals.median() > thr)
                 row[f"{name}_median"] = round(float(sib_vals.median()), 4)
+                row[f"{name}_auc"] = None if test is None else round(test[1], 3)
                 row[f"{name}_significant"] = sig
                 n_hits += bool(sig)
             row["n_hits"] = n_hits

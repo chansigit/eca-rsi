@@ -288,13 +288,17 @@ def review_items(unit, exclusions, decisions, root=None, ledger=None):
             note='annotation agent failed twice; survivors kept unannotated: ' + str(entry.get('error', ''))[:300],
             link=f"{L.GEN2_PERSAMPLE}/{entry['sample']}/report.html"))
     for (number, stage), rows in exclusions.groupby(['round', 'release_stage'], sort=False):
-        uncertain = []
+        uncertain, fragments = [], {}
         for row in rows.itertuples():
             # OSP rule reasons are plain strings; later reasons contain decision evidence.
             try:
                 reason = json.loads(row.reason)
             except json.JSONDecodeError:
                 continue
+            for r in reason if isinstance(reason, list) else []:
+                if isinstance(r, dict) and r.get('code') == 'fragment_qc':  # #27: removed without an agent, by test
+                    tests = ', '.join((r.get('detail') or {}).get('tests', [])) or 'tests not recorded'
+                    fragments[tests] = fragments.get(tests, 0) + 1
             def low(value):
                 if isinstance(value, dict):
                     return value.get('confidence') in {'low', 'medium'} or any(low(v) for v in value.values())
@@ -305,6 +309,9 @@ def review_items(unit, exclusions, decisions, root=None, ledger=None):
             items.append(Item('removed', int(number), stage, n_cells=len(uncertain), action='remove',
                 note='Removal evidence includes medium or low confidence; see cell_exclusions.csv.gz.',
                 link=exclusions_link))
+        for tests, n in sorted(fragments.items()):
+            items.append(Item('fragment_removed', int(number), stage, n_cells=n, action='remove',
+                note=f'msp minor-sibling fragment QC: {tests}', link=exclusions_link))
     for entry in decisions:
         if root is not None:
             entry = {**entry, 'source': {**entry['source'], 'link': local_link(root, entry)}}

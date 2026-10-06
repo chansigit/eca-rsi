@@ -12,6 +12,8 @@ Sections, most consequential first:
   removed         cells an agent deleted with less than high confidence
                   (irreversible — the one thing worth re-checking first),
                   plus zoom-ins whose removal exceeded the soft budget
+  fragment_removed cells msp's minor-sibling fragment QC removed without an agent,
+                  by the tests that hit (#27)
   stress_retained stress, dissociation or dying cells kept by the stress
                   policy (decision 0017), labelled in obs retained_state
   sample_excluded whole samples the inclusion agent kept out of integration
@@ -59,6 +61,10 @@ KINDS: list[tuple[str, str, str]] = [
     ("removed", "Cells removed below high confidence",
      "Irreversible. Each row is a cluster an agent deleted with medium/low confidence, or a lineage whose "
      "zoom-in removal exceeded the soft budget after a forced second look."),
+    ("fragment_removed", "Cells removed by fragment QC",
+     "Small standissect fragments msp removed without an agent decision: one of four one-sided tests against their "
+     "parent cores (decontX, dissociation, doublet, mitochondrial) at p < 0.05 with AUC >= 0.7, or more than half "
+     "their cells dropped upstream. One line per round, stage and tests that hit (#27)."),
     ("stress_retained", "Stress, dissociation or dying cells kept",
      "An agent asked to remove them as stress, dissociation or dying; they stay, labelled in final.h5ad obs "
      "retained_state, because a removal of at least 10 cells lacked the evidence the code checks or the dataset's "

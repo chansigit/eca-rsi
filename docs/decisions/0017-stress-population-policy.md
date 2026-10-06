@@ -55,3 +55,7 @@ use) and more than 3 of its top 10 genes against them are MT- genes. Local view 
 cell type with a naturally high mitochondrial fraction would qualify. A `mito` cluster is `recommend_removal`, as a
 stress cluster is, and supports a `dying` removal; a `stress` or `dissociation` removal still needs the stress mark.
 The per-cell `pct_counts_mt` test is unchanged. Which genes count as stress genes is #29.
+
+**Amended 2026-10-06 (owner, #27 and #30).** A test of msp's minor-sibling fragment QC hits only on p < 0.05 and
+AUC >= 0.7, the floor the dying check uses; needs_review lists fragment removals by the tests that hit. Cross-sample
+inspect may no longer drop a cluster the type phase kept under this policy: the drop becomes a flag.
