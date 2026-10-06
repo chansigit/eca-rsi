@@ -27,7 +27,7 @@ import scanpy as sc
 from msp.plots import UMAP_DPI, save_single_umap, umap_axes
 
 from . import publication
-from .msp_compat import palette
+from msp.evidence import palette
 
 log = logging.getLogger(__name__)
 

@@ -1,3 +1,7 @@
+> **Inside eca-rsi (decision 0018); standalone use removed 2026-10-06 (#28).** `msp/` is used only through
+> `msp.api` by eca-rsi's stages, which run its agents in their own sessions. The command line, the agent flows
+> and the other entry points this README and `docs/` describe are gone; the text is kept as the package's history.
+
 <p align="center">
   <img src="assets/msp-logo.svg" alt="MSP logo: distinct cell populations sharing sample colors" width="176" height="176">
 </p>

@@ -3,39 +3,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from osp.cluster import (
-    _invalidate_stale_derived_outputs,
-    _leiden_key,
-    _remove_stale_primary_tables,
-    cluster_and_deg,
-    deg_two_groups,
-)
-
-
-def test_deg_group_named_rest_does_not_collide_with_internal_reference():
-    matrix = np.log1p(
-        np.array(
-            [
-                [8, 1, 0],
-                [7, 1, 0],
-                [9, 0, 1],
-                [1, 8, 0],
-                [1, 7, 1],
-                [0, 9, 1],
-            ],
-            dtype=float,
-        )
-    )
-    data = ad.AnnData(matrix, obs=pd.DataFrame({"group": ["rest"] * 3 + ["A"] * 3}))
-    result = deg_two_groups(data, "group", "rest", hvg_only=False)
-    assert np.isfinite(result["logfc"]).any()
-    assert set(result["high_in"]) | set(result["low_in"]) == {"rest", "all other cells"}
-
-
-def test_deg_rejects_partially_unknown_requested_groups():
-    data = ad.AnnData(np.ones((4, 3)), obs=pd.DataFrame({"group": ["A", "A", "B", "B"]}))
-    with pytest.raises(ValueError, match="UNKNOWN"):
-        deg_two_groups(data, "group", ["A", "UNKNOWN"], hvg_only=False)
+from osp.cluster import _invalidate_stale_derived_outputs, _leiden_key, _remove_stale_primary_tables, cluster_and_deg
 
 
 def test_reclustering_removes_only_stale_derived_outputs(tmp_path):

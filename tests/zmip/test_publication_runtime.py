@@ -1,13 +1,12 @@
 """Fault-injection tests for complete output sets and runtime-aware resume."""
 
-import json
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from zmip import cache, publication, runtime
+from zmip import publication
 
 
 def publish_example(root, text):
@@ -98,29 +97,3 @@ def test_real_report_rebuild_refreshes_receipt_without_changing_data(tmp_path):
     assert all((tmp_path / name).read_bytes() == data for name, data in before.items())
 
 
-def test_runtime_change_invalidates_resume_even_with_identical_input(tmp_path, monkeypatch):
-    source = tmp_path / "input.h5ad"
-    source.write_bytes(b"input")
-    monkeypatch.setattr(cache, "runtime_identity", lambda: {"versions": {"msp-sc": "0.2.0"}, "source": "first"})
-    generation = cache.prepare_run(tmp_path / "out", source, {})
-    monkeypatch.setattr(cache, "runtime_identity", lambda: {"versions": {"msp-sc": "0.2.0"}, "source": "changed"})
-    with pytest.raises(ValueError, match="runtime/code changed"):
-        cache.prepare_run(tmp_path / "out", source, {})
-    assert cache.prepare_run(tmp_path / "out", source, {}, force=True) != generation
-
-
-def test_source_identity_is_path_independent_and_not_only_a_version(tmp_path):
-    left, right = tmp_path / "left", tmp_path / "right"
-    for root in (left, right):
-        root.mkdir()
-        (root / "module.py").write_text("x = 1\n")
-    assert runtime.source_digest(left) == runtime.source_digest(right)
-    (right / "module.py").write_text("x = 2\n")
-    assert runtime.source_digest(left) != runtime.source_digest(right)
-
-
-def test_current_runtime_passes_behavioral_compatibility_check():
-    runtime.check_runtime()
-    identity = runtime.runtime_identity()
-    assert all(name in identity["source_sha256"] for name in runtime.SOURCE_MODULES)
-    json.dumps(identity)

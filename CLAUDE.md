@@ -32,7 +32,7 @@ ops/                the deployment scripts ($BASE/ops links here; ops/README.md)
 
 Boundaries (0014, `tests/test_layers.py`): only `ecarsi/stages/` uses the kernels, and only through `osp.api`, `msp.api`, `zmip.api`; a name the stages need goes into that kernel's `api` module first. The pool, agents, stages and Periscope never import orchestration; the shared modules import no part; see the test for the full table.
 
-The kernels are osp, msp, and zmip, top-level packages of this repository (0018). The osp kernel performs per-sample QC, clustering, and annotation. The msp kernel performs cross-sample integration, inspection, and annotation. The zmip kernel performs lineage zoom-in. The zmip kernel reuses the DEG, evidence, and report code from the msp kernel; msp uses `standissect_lite` for fragments. `harness_bridge` is the agent runtime. Their tests are in `tests/<package>/`; `test_layers` says what each may import (none imports `ecarsi`).
+The kernels are osp, msp, and zmip, top-level packages of this repository (0018). The osp kernel performs per-sample QC, clustering, and annotation. The msp kernel performs cross-sample integration, inspection, and annotation. The zmip kernel performs lineage zoom-in. The zmip kernel reuses the DEG, evidence, and report code from the msp kernel; msp uses `standissect_lite` for fragments. `harness_bridge` is the agent runtime. Their tests are in `tests/<package>/`; `test_layers` says what each may import (none imports `ecarsi`; since #28 none runs agents or imports `harness_bridge`).
 
 Run directory layout (one run = one dataset):
 

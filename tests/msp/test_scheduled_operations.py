@@ -1,6 +1,5 @@
 """Split execution preserves legacy evidence and publishes an immutable SQL view."""
 import json
-from pathlib import Path
 import sqlite3
 
 import numpy as np

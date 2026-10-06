@@ -130,24 +130,6 @@ def qc_table(ad, cluster_key, batch_col):
     )
 
 
-def stability_table(ad, cluster, cluster_key, other_keys):
-    """How one cluster decomposes across the other clustering resolutions —
-    test (e). A cluster that dissolves at neighboring resolutions is a
-    one-resolution splinter."""
-    m = (ad.obs[cluster_key].astype(str) == cluster).values
-    if not m.any():
-        return f"unknown cluster {cluster!r}"
-    lines = [f"cluster {cluster} (n={int(m.sum())}) across resolutions:"]
-    for k in other_keys:
-        vc = ad.obs.loc[m, k].astype(str).value_counts()
-        top = ", ".join(f"{i}:{v}" for i, v in vc.head(6).items())
-        lines.append(f"  {k}: {top}")
-        main = vc.index[0]
-        rev = int((ad.obs[k].astype(str) == main).sum())
-        lines.append(f"    (its main {k} group {main!r} has {rev} cells in total)")
-    return "\n".join(lines)
-
-
 def load_paga_neighbors(outdir, key):
     """{cluster: [top-3 PAGA neighbours]} as integrate wrote them (paga_neighbors_<key>.csv);
     {} when absent or empty (including headerless files from older outputs)."""
@@ -162,15 +144,6 @@ def load_paga_neighbors(outdir, key):
     for c, g in df.groupby("cluster", sort=False):
         nb[str(c)] = list(g.sort_values("rank", key=lambda s: s.astype(int))["neighbor"].astype(str))
     return nb
-
-
-def file_inventory(outdir):
-    """Relative paths of every CSV and figure, for the system prompts."""
-    patterns = ["*.csv", "figures/*.png"]
-    paths = []
-    for pat in patterns:
-        paths += sorted(os.path.relpath(p, outdir) for p in glob.glob(os.path.join(outdir, pat)))
-    return "\n".join(f"- {p}" for p in paths)
 
 
 # ---------------------------------------------------------------- live DEG
@@ -268,16 +241,6 @@ def parse_reference(reference, clusters=None):
             'unknown reference cluster(s); use current IDs and CSV-quote IDs containing commas, e.g. \'"5,0","5,1"\''
         )
     return groups
-
-
-def deg_table(ad, cluster_key, cluster, reference, top_n, remove_mask):
-    """One-shot check_deg text (no cache) — kept for callers outside the
-    agent loops; the agents go through DegCache."""
-    ref = parse_reference(reference, ad.obs[cluster_key].astype(str).unique())
-    df = deg_frame(ad, cluster_key, cluster, ref, remove_mask)
-    if df is None:
-        return f"cluster {cluster!r} has no cells left once recommend_removal cells are excluded"
-    return format_deg(cluster, "rest" if ref == "rest" else ",".join(ref), df.head(top_n), len(df))
 
 
 # ---------------------------------------------------------------- precomputed tables
@@ -656,8 +619,7 @@ class DegCache:
         return self._csv_rows(key, "local", cluster)
 
     def _compute(self, key, cluster, ref):
-        from .agent_data import apply
-        return apply(deg_frame, self.ad, key, cluster, ref, self.mask)
+        return deg_frame(self.ad, key, cluster, ref, self.mask)
 
     def table(self, key, cluster, reference, top_n, min_logfc=None, max_padj=None, min_pct1=None, max_pct2=None):
         ref = parse_reference(reference, self.ad.obs[key].astype(str).unique())
@@ -701,15 +663,6 @@ class DegCache:
         return text if complete else text + "\n(cached ranked prefix; more genes may pass)"
 
 
-# Lazy imports keep the evidence module usable during annotate/inspect import.
-# These stable public entry points retain the existing 0.3 call signatures.
-def prior_label_columns(ad, batch_col):
-    """Return candidate prior label columns, excluding sample identities."""
-    from .annotate import _prior_label_columns
-
-    return _prior_label_columns(ad, batch_col)
-
-
 def components(entries):
     """Return connected annotation merge components from cluster entries."""
     from .annotate import _components
@@ -729,10 +682,3 @@ def plot_annotation(ad_full, ad_kept, figdir):
     from .annotate import _plot
 
     return _plot(ad_full, ad_kept, figdir)
-
-
-def subcluster_once(ad, key, cluster, resolution, new_key, remove_mask):
-    """Split one cluster and report sibling markers excluding removed cells."""
-    from .inspect import _subcluster_once
-
-    return _subcluster_once(ad, key, cluster, resolution, new_key, remove_mask)

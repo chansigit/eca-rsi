@@ -1,24 +1,20 @@
 """Progress output for msp goes through ``logging`` (the ``msp`` logger family).
 
-CLI entry points call :func:`configure` once; library callers get the same
-stdout handler from :func:`ensure` when nothing else is configured. Both
-also cover the ``harness_bridge`` family, so agent traces and pipeline lines
-share one stream and one format.
+Library entry points call :func:`ensure`: it attaches a stdout handler, one wall-clock-stamped line per record,
+only when no handler is reachable, so a caller that configured logging keeps its own.
 """
 
 from __future__ import annotations
 
 import logging
-
-import harness_bridge
-
-
-def configure(level: int | str = logging.INFO, stream=None) -> logging.Handler:
-    """Route ``msp`` and ``harness_bridge`` records to ``stream`` (default:
-    stdout), one flushed, wall-clock-stamped line per record (bridge format)."""
-    return harness_bridge.configure_logging("msp", level=level, stream=stream)
+import sys
 
 
 def ensure() -> None:
     """Attach the default stdout handler unless one is already reachable."""
-    harness_bridge.ensure_logging("msp")
+    logger = logging.getLogger("msp")
+    if not logger.hasHandlers():
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%m-%d %H:%M:%S"))
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)

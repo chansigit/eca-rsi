@@ -5,7 +5,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .annotate import _guard_batch_action, _validate_cluster, _validate_final, components
+from msp.annotate import REMOVE_REASONS, _guard_batch_annotation
+
+from .annotate import _validate_cluster, _validate_final, components
 
 TYPE_KEY = 'msp_leiden_r1.0'
 QUALITY_KEY = 'msp_leiden_r2.0'
@@ -73,10 +75,9 @@ def validate_quality(proposal, obs, other_labels):
                 if not isinstance(entry.get(field), str) or not entry[field].strip():
                     raise ValueError('Quality decisions need specific rationale and evidence')
             if entry['action'] == 'remove':
-                from msp.annotate import REMOVE_REASONS
-                if entry.get('remove_reason') not in {*REMOVE_REASONS, 'dissociation', 'dying'}:
+                if entry.get('remove_reason') not in REMOVE_REASONS:
                     raise ValueError('Removal needs an explicit supported reason')
-                entry = _guard_batch_action(entry)
+                entry = _guard_batch_annotation(entry)
             if entry['action'] == 'reassign':
                 if entry.get('reassign_to') not in other_labels:
                     raise ValueError('Reassignment must target another planned lineage label')

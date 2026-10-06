@@ -1,12 +1,7 @@
 """Pipeline boundaries: complete merges, fresh clusterings and tiny lineages."""
 
-import copy
 import importlib
-import json
 import logging
-import runpy
-import sys
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -15,7 +10,6 @@ import scanpy as sc
 from anndata import AnnData
 
 from zmip.foreign import MARKER_COLUMNS, lineage_markers
-from zmip.lineage import load_result, validate_resolutions
 
 merge = importlib.import_module("zmip.merge")
 lineage = importlib.import_module("zmip.lineage")
@@ -74,7 +68,9 @@ def write_result(root, survivors, removed, reassigned):
     AnnData(np.ones((len(survivors), 2), dtype="float32"), obs=survivors).write_h5ad(root / "annotated.h5ad")
     removed.to_csv(root / "annotation_removed.csv", index=False)
     reassigned.to_csv(root / "annotation_reassigned.csv", index=False)
-    return load_result(root)
+    text = dict.fromkeys(("cell", "lineage", "cluster", "reassign_to", "fine_label"), str)  # keep leading zeros
+    return {"dir": str(root), "removed": pd.read_csv(root / "annotation_removed.csv", converters=text),
+            "reassigned": pd.read_csv(root / "annotation_reassigned.csv", converters=text)}
 
 
 def test_merge_preserves_counts_audit_and_reassignment(merge_case, tmp_path):
@@ -123,46 +119,6 @@ def test_merge_rejects_inconsistent_reassignment_decisions(merge_case, tmp_path,
     with pytest.raises(ValueError, match="inconsistent annotation decisions"):
         merge.merge_back(ad, plan, {"A": result}, tmp_path)
     assert not (tmp_path / "annotated_zmip.h5ad").exists()
-
-
-def test_apply_output_survives_h5ad_round_trip_validation(tmp_path):
-    """Kept and reassigned clusters give msp_ann_coarse and zmip_reassigned_to different
-    category sets on disk; validation must compare them as text, not as categoricals."""
-    from zmip.annotate import _apply
-
-    ad = AnnData(
-        np.ones((4, 2), dtype="float32"),
-        obs=pd.DataFrame({"cl": pd.Categorical(["0", "0", "1", "1"])}, index=["c1", "c2", "c3", "c4"]),
-    )
-    proposal = {
-        "clusters": [
-            dict(cluster_id="0", coarse_label="A", fine_label="A fine", merge_target=None, action="keep"),
-            dict(
-                cluster_id="1",
-                coarse_label="B",
-                fine_label="B fine",
-                merge_target=None,
-                action="reassign",
-                reassign_to="B",
-            ),
-        ]
-    }
-    removed, reassigned = _apply(ad, "cl", proposal, np.array([False, True, False, False]), "L")
-    kept = ad[(ad.obs["msp_ann_action"] == "keep").values].copy()
-    kept.write_h5ad(tmp_path / "annotated.h5ad")
-    removed.to_csv(tmp_path / "annotation_removed.csv", index=False)
-    reassigned.to_csv(tmp_path / "annotation_reassigned.csv", index=False)
-    result = load_result(tmp_path)
-    survivors = sc.read_h5ad(tmp_path / "annotated.h5ad").obs
-    assert survivors["msp_ann_coarse"].dtype == "category" and survivors["zmip_reassigned_to"].dtype == "category"
-    assert set(survivors["msp_ann_coarse"].cat.categories) != set(survivors["zmip_reassigned_to"].cat.categories)
-    labels = {"A": "L", "B": "M"}
-    merge._validate_partition("L", ad.obs_names, survivors, result["removed"], result["reassigned"])
-    merge._validate_annotation("L", survivors, result["reassigned"], ["A"], labels)
-    assert result["removed"]["cell"].tolist() == ["c2"] and result["reassigned"]["cell"].tolist() == ["c3", "c4"]
-    result["reassigned"].loc[0, "reassign_to"] = "C"
-    with pytest.raises(ValueError, match="inconsistent annotation decisions"):
-        merge._validate_annotation("L", survivors, result["reassigned"], ["A"], labels)
 
 
 def test_merge_accepts_original_audit_cluster_in_merged_component(merge_case, tmp_path):
@@ -278,60 +234,6 @@ def test_merge_rejects_invalid_global_coverage_before_reading(merge_case, tmp_pa
     assert not (tmp_path / "annotated_zmip.h5ad").exists()
 
 
-@pytest.mark.parametrize(
-    "values",
-    [
-        [],
-        [1.0],
-        [2.0],
-        [0.3],
-        [1.0, 2.0, 2.0],
-        [1.0, 2.0, 0.0],
-        [1.0, 2.0, -1.0],
-        [1.0, 2.0, float("nan")],
-        [1.0, 2.0, float("inf")],
-    ],
-)
-def test_resolution_preflight_rejects_missing_or_invalid_values(values):
-    with pytest.raises(ValueError, match="--resolutions"):
-        validate_resolutions(values)
-
-
-def test_resolution_preflight_preserves_valid_custom_order():
-    assert validate_resolutions([2, 0.7, 1]) == (2.0, 0.7, 1.0)
-
-
-@pytest.mark.parametrize("module", ["zmip", "zmip.lineage"])
-def test_cli_rejects_missing_resolution_before_opening_input(module, tmp_path, monkeypatch, capsys):
-    outdir = str(tmp_path / "not-created")
-    if module == "zmip":
-        argv = [module, "missing.h5ad", "--outdir", outdir, "--resolutions", "1.0"]
-    else:
-        argv = [
-            module,
-            outdir,
-            "A",
-            "--subset",
-            "missing.h5ad",
-            "--h5ad",
-            "missing.h5ad",
-            "--batch-col",
-            "sample",
-            "--resolutions",
-            "1.0",
-        ]
-    monkeypatch.setattr(sys, "argv", argv)
-    monkeypatch.setattr(sc, "read_h5ad", lambda *a, **k: pytest.fail("must reject before reading input"))
-    with pytest.raises(SystemExit) as exc:
-        if module == "zmip":
-            runpy.run_module("zmip", run_name="__main__")
-        else:
-            lineage.main(argv[1:])
-    assert exc.value.code == 2
-    assert "missing [2.0]" in capsys.readouterr().err
-    assert not (tmp_path / "not-created").exists()
-
-
 def marker_input(groups):
     n = len(groups)
     x = np.zeros((n, 3), dtype="float32")
@@ -385,39 +287,3 @@ def test_no_eligible_markers_writes_header_without_running_scanpy(tmp_path, monk
     assert markers == {group: [] for group in groups}
     table = pd.read_csv(tmp_path / "lineage_markers.csv")
     assert table.empty and list(table) == MARKER_COLUMNS
-
-
-def test_no_zoom_cli_skips_markers_and_preserves_output_contract(merge_case, tmp_path, monkeypatch):
-    ad, plan, *_ = merge_case
-    ad.uns["msp"] = {"batch_col": "sample"}
-    ad.obs["sample"] = "s"
-    for entry in plan["lineages"]:
-        entry.update(zoom=False, n_cells=1)
-    input_path = tmp_path / "input.h5ad"
-    ad.write_h5ad(input_path)
-    outdir = tmp_path / "out"
-    original = ad.copy()
-
-    def fake_plan(*args, **kwargs):
-        (outdir / "zmip_plan.json").write_text(json.dumps(plan))
-        return copy.deepcopy(plan)
-
-    monkeypatch.setattr(plan_module, "plan_lineages", fake_plan)
-    monkeypatch.setattr(foreign, "lineage_markers", lambda *a, **k: pytest.fail("markers are unnecessary"))
-    monkeypatch.setattr(
-        importlib.import_module("zmip.report"),
-        "generate_report",
-        lambda *a, out_html=None, **k: Path(out_html).write_text("<html>test report</html>"),
-    )
-    monkeypatch.setattr(sys, "argv", ["zmip", str(input_path), "--outdir", str(outdir)])
-    runpy.run_module("zmip", run_name="__main__")
-    output = sc.read_h5ad(outdir / "annotated_zmip.h5ad")
-    assert "_zmip_lineage" not in output.obs
-    assert output.obs_names.tolist() == original.obs_names.tolist()
-    assert output.obs.zmip_ann_coarse.tolist() == original.obs.msp_ann_coarse.tolist()
-    assert output.obs.zmip_ann_fine.tolist() == original.obs.msp_ann_fine.tolist()
-    np.testing.assert_array_equal(output.layers["counts"], original.layers["counts"])
-    table = pd.read_csv(outdir / "lineage_markers.csv")
-    assert table.empty and list(table) == MARKER_COLUMNS
-    for filename in ("zmip_removed.csv", "zmip_reassigned.csv"):
-        assert pd.read_csv(outdir / filename).empty

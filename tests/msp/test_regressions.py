@@ -1,7 +1,5 @@
 """Regression checks for resume metadata and small-data output contracts."""
 
-import runpy
-import sys
 
 import anndata as ad
 import numpy as np
@@ -13,54 +11,6 @@ from scipy import sparse
 import msp.integrate as integrate
 import msp.resources as resources
 from msp.evidence import DegTables, cluster_order, load_paga_neighbors, load_removal_mask
-
-
-@pytest.mark.parametrize("harmony", [{}, {"theta": [1, 2]}])
-@pytest.mark.parametrize("metadata_change", [None, "different", "missing"])
-def test_cli_resume_after_h5ad_roundtrip(tmp_path, monkeypatch, harmony, metadata_change):
-    """Identical metadata resumes; changed or incomplete metadata recomputes."""
-    data = ad.AnnData(np.ones((3, 2)))
-    data.uns["msp"] = {
-        "batch_col": "batch",
-        "species": "",
-        "resolutions": [0.3, 1.0, 2.0],
-        "n_top_genes": 2000,
-        "n_pcs_requested": 50,
-        "n_neighbors": 15,
-        "harmony": harmony,
-        "inputs": ["a.h5ad", "b.h5ad"],
-        "n_batches": 2,
-    }
-    if metadata_change == "different":
-        data.uns["msp"]["n_pcs_requested"] = 25
-    elif metadata_change == "missing":
-        del data.uns["msp"]["n_pcs_requested"]
-    data.write_h5ad(tmp_path / "integrated.h5ad")
-    (tmp_path / "report.html").write_text("complete report")
-
-    calls, opened = [], []
-
-    def recompute(*args, **kwargs):
-        calls.append(kwargs)
-        return None, {"n_cells": 3}
-
-    read_h5ad = sc.read_h5ad
-
-    def tracked_read(*args, **kwargs):
-        result = read_h5ad(*args, **kwargs)
-        opened.append(result)
-        return result
-
-    monkeypatch.setattr(integrate, "run_multi_sample_pipeline", recompute)
-    monkeypatch.setattr(sc, "read_h5ad", tracked_read)
-    argv = ["msp", "a.h5ad", "b.h5ad", "--batch-col", "batch", "--outdir", str(tmp_path)]
-    if harmony:
-        argv += ["--harmony", "theta=1,2"]
-    monkeypatch.setattr(sys, "argv", argv)
-    runpy.run_module("msp.__main__", run_name="__main__")
-
-    assert len(calls) == (0 if metadata_change is None else 1)
-    assert opened and all(not item.file.is_open for item in opened)
 
 
 def test_removal_mask_preserves_cell_ids_and_alignment(tmp_path):

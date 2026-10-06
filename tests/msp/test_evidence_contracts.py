@@ -1,12 +1,9 @@
 """Regressions for inherited metadata, evidence retrieval, and host validation."""
 
-import asyncio
-import copy
 import json
 from types import SimpleNamespace
 
 import anndata as ad
-import harness_bridge
 import numpy as np
 import pandas as pd
 import pytest
@@ -16,7 +13,6 @@ import msp.evidence as evidence
 import msp.inspect as inspect
 from msp.integrate import _mwu_greater, _qc_outputs, load_and_merge
 from msp.report import generate_report
-from msp.steps import step_pending
 
 
 def data_with_clusters(labels=("0", "1")):
@@ -259,78 +255,6 @@ def test_merge_and_drop_defenses_remain_enforced():
     assert data.obs["_msp_action"].tolist() == ["drop", "keep"]
 
 
-def test_inspection_tool_allows_correction_and_subcluster_reference(tmp_path, monkeypatch):
-    data = data_with_clusters(("5,0", "5,1"))
-    proposal = {"clusters": [inspection_entry(c) for c in ("5,0", "5,1")]}
-    refs = []
-    frame = pd.DataFrame({"names": ["G"], "logfoldchanges": [2.0], "pvals_adj": [0.01], "pct1": [0.9], "pct2": [0.1]})
-
-    def compute(data, key, cluster, reference, mask):
-        refs.append(reference)
-        return frame
-
-    async def run_agent(**kwargs):
-        tools = {t.name: t.handler for t in kwargs["tools"]}
-        malformed = copy.deepcopy(proposal)
-        malformed["clusters"][0]["tests"] = None
-        error = await tools["submit_inspection"]({"proposal_json": json.dumps(malformed)})
-        assert error["is_error"] and not (tmp_path / "inspection_proposal.json").exists()
-        assert (await tools["submit_inspection"]({"proposal_json": None}))["is_error"]
-        result = await tools["check_deg"]({"cluster": "5,0", "reference": "5,1"})
-        assert not result.get("is_error")
-        result = await tools["submit_inspection"]({"proposal_json": json.dumps(proposal)})
-        return SimpleNamespace(submitted=result["_submitted"], transcript_text="Inspection notes")
-
-    monkeypatch.setattr(evidence, "deg_frame", compute)
-    monkeypatch.setattr(harness_bridge, "run_agent", run_agent)
-    result = asyncio.run(
-        inspect._run_agent(
-            data,
-            tmp_path,
-            annotate.BASE_KEY,
-            [],
-            "batch",
-            None,
-            "English",
-            "test-model",
-            None,
-            10,
-            np.zeros(2, dtype=bool),
-        )
-    )
-    assert len(result["clusters"]) == 2
-    assert refs == [("5,1",)]
-
-
-def test_all_removed_annotation_delivers_empty_h5ad_and_real_plots(tmp_path, monkeypatch):
-    data = data_with_clusters()
-    data.write_h5ad(tmp_path / "integrated.h5ad")
-
-    async def run_agent(**kwargs):
-        tools = {t.name: t.handler for t in kwargs["tools"]}
-        assert (await tools["finalize_annotation"]({"overall": "Too early"}))["is_error"]
-        for c in ("0", "1"):
-            entry = annotation_entry(c, action="remove", remove_reason="doublet")
-            bad = {**entry, "rationale": None}
-            assert (await tools["submit_cluster"]({"cluster_json": json.dumps(bad)}))["is_error"]
-            assert not (await tools["submit_cluster"]({"cluster_json": json.dumps(entry)})).get("is_error")
-        result = await tools["finalize_annotation"]({"overall": "All cells removed in synthetic test."})
-        return SimpleNamespace(submitted=result["_submitted"], transcript_text="All removal sources retained.")
-
-    monkeypatch.setattr(harness_bridge, "run_agent", run_agent)
-    annotate.annotate_clusters(tmp_path, model="test-model")
-    kept = ad.read_h5ad(tmp_path / "annotated.h5ad")
-    assert kept.shape == (0, 2) and "msp_ann_action" in kept.obs
-    archive = pd.read_csv(tmp_path / "annotation_removed.csv")
-    assert archive["cell"].tolist() == data.obs_names.tolist()
-    assert archive["annotate_remove"].all()
-    assert not step_pending(tmp_path, "annotate")
-    assert ad.read_h5ad(tmp_path / "integrated.h5ad").n_obs == 2
-    for suffix in ("coarse", "fine", "removed"):
-        assert (tmp_path / "figures" / f"annotation_umap_{suffix}.png").read_bytes().startswith(b"\x89PNG")
-    assert "2 cells removed" in (tmp_path / "report.html").read_text()
-
-
 def test_report_renders_inspection_evidence_and_escapes_model_text(tmp_path):
     entry = inspection_entry()
     entry["tests"]["markers"] = "<script>not executable</script>"
@@ -421,32 +345,3 @@ def test_coarse_boundaries_require_explicit_review_without_forcing_merges():
     assert not annotate._check_coarse_boundaries(entries, paga, [])
 
 
-def test_boundary_review_finalize_recovers_and_persists_without_relabeling(tmp_path, monkeypatch):
-    data = data_with_clusters()
-    data.write_h5ad(tmp_path / "integrated.h5ad")
-    review = {
-        "coarse_labels": ["Stromal", "Mesenchymal"],
-        "evidence": "Shared DCN/LUM; lineage distinction remains unresolved.",
-        "uncertain": True,
-    }
-    monkeypatch.setattr(annotate, "load_paga_neighbors", lambda *args: {"0": ["1"], "1": ["0"]})
-
-    async def run_agent(**kwargs):
-        tools = {t.name: t.handler for t in kwargs["tools"]}
-        for cluster, label in [("0", "Stromal"), ("1", "Mesenchymal")]:
-            entry = annotation_entry(cluster, coarse_label=label)
-            assert not (await tools["submit_cluster"]({"cluster_json": json.dumps(entry)})).get("is_error")
-        assert (await tools["finalize_annotation"]({"overall": "Review needed"}))["is_error"]
-        assert not (tmp_path / "annotation_proposal.json").exists()
-        result = await tools["finalize_annotation"](
-            {"overall": "Retained for review", "boundary_reviews_json": json.dumps([review])}
-        )
-        return SimpleNamespace(submitted=result["_submitted"], transcript_text="Boundary review saved.")
-
-    monkeypatch.setattr(harness_bridge, "run_agent", run_agent)
-    annotate.annotate_clusters(tmp_path, model="test-model")
-    proposal = json.loads((tmp_path / "annotation_proposal.json").read_text())
-    assert proposal["boundary_reviews"] == [review]
-    kept = ad.read_h5ad(tmp_path / "annotated.h5ad")
-    assert kept.obs["msp_ann_coarse"].tolist() == ["Stromal", "Mesenchymal"]
-    assert kept.obs_names.tolist() == data.obs_names.tolist()

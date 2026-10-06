@@ -8,7 +8,7 @@ import pytest
 from anndata import AnnData
 
 from zmip.annotate import _validate_cluster, _validate_final
-from zmip.lineage import lineage_dir, load_result
+from zmip.lineage import lineage_dir
 from zmip.plan import validate_plan
 
 
@@ -119,20 +119,6 @@ def test_finalization_names_stale_merge_reference():
     entries["0"]["merge_target"] = "1"
     problems = _validate_final(entries, list(entries))
     assert any("cluster 0" in p and "merge_target '1'" in p and "resubmit" in p for p in problems)
-
-
-def test_disk_results_preserve_identifiers_and_removal_flags(tmp_path):
-    ids = ["002", "NA", "null"]
-    removed = pd.DataFrame(
-        dict(cell=ids, lineage="NA", cluster="01", preannotation=False, annotate_remove=True, remove_reason="doublet")
-    )
-    reassigned = pd.DataFrame(dict(cell=ids, lineage="NA", cluster="01", reassign_to="NA", fine_label="null"))
-    removed.to_csv(tmp_path / "annotation_removed.csv", index=False)
-    reassigned.to_csv(tmp_path / "annotation_reassigned.csv", index=False)
-    loaded = load_result(tmp_path)
-    pd.testing.assert_frame_equal(loaded["removed"], removed)
-    pd.testing.assert_frame_equal(loaded["reassigned"], reassigned)
-    assert pd.Index(ids).isin(loaded["removed"]["cell"]).all()
 
 
 def test_fine_figure_uses_coarse_and_fine_pair(tmp_path, monkeypatch):

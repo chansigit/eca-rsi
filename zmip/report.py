@@ -10,13 +10,11 @@ Sections (omitted when their artifacts are absent):
                           embedding, fine-label counts per coarse label
   4. Removed & reassigned — UMAPs + per-lineage counts from the archives
 
-Usage:
-    python -m zmip.report <zmip_outdir> [--out report.html]
+Usage: generate_report(zmip_outdir), through zmip.api.
 """
 
 from __future__ import annotations
 
-import argparse
 import csv
 import html
 import json
@@ -26,8 +24,8 @@ import re
 from msp.plots import slug
 from msp.report import CSS, TOC_PIN_SCRIPT
 
-from . import cache, publication
-from .msp_compat import csv_table, img
+from . import publication
+from msp.report import csv_table, img
 
 _LABELS = {
     "plan": "Lineage plan",
@@ -323,16 +321,3 @@ def generate_report(outdir, out_html=None, title=None, *, result_dir=None):
     if result_dir is None:
         publication.refresh_report_receipt(outdir, out_html)
     return out_html
-
-
-if __name__ == "__main__":
-    ap = argparse.ArgumentParser(prog="zmip.report", description=__doc__)
-    ap.add_argument("outdir")
-    ap.add_argument("--out", default=None)
-    a = ap.parse_args()
-    from harness_bridge import configure_logging
-
-    configure_logging("zmip", "msp")
-    with cache.lock_run(a.outdir):
-        publication.recover(a.outdir)
-        print(f"wrote {generate_report(a.outdir, out_html=a.out)}")

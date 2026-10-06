@@ -1,7 +1,6 @@
 """Exercise invalidation, interrupted reruns, and report-only recovery."""
 
 import json
-import runpy
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,14 +10,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import msp.annotate as annotate
-import msp.inspect as inspect
 import msp.integrate as integrate
 import msp.integrate.pipeline as pipeline
 import msp.steps as steps
-from msp import report
 from msp.report import generate_report
-from msp.steps import begin_step, complete_step, step_pending
+from msp.steps import begin_step, step_pending
 
 
 def integrated_data():
@@ -102,219 +98,6 @@ def completed_run(tmp_path):
         (figures / name).write_bytes(b"test image bytes")
     generate_report(tmp_path)
     return tmp_path
-
-
-def install_agents(monkeypatch, calls):
-    """Replace model work and plotting, keeping the public data-writing paths."""
-
-    async def inspect_agent(data, outdir, *args):
-        calls.append("inspect")
-        assert "_msp_action" not in data.obs and "_msp_verdict" not in data.obs
-        proposal = inspection_proposal()
-        write_json(Path(outdir) / "inspection_proposal.json", proposal)
-        return proposal
-
-    async def annotate_agent(data, outdir, *args):
-        calls.append("annotate")
-        proposal = annotation_proposal("NEW_LABEL")
-        write_json(Path(outdir) / "annotation_proposal.json", proposal)
-        return proposal
-
-    def plot_inspection(data, figdir):
-        path = Path(figdir)
-        path.mkdir(exist_ok=True)
-        (path / "inspect_umap_action.png").write_bytes(b"new inspection")
-
-    def plot_annotation(full, kept, figdir):
-        path = Path(figdir)
-        path.mkdir(exist_ok=True)
-        for suffix in ("coarse", "fine", "removed"):
-            (path / f"annotation_umap_{suffix}.png").write_bytes(b"new annotation")
-
-    monkeypatch.setattr(inspect, "_run_agent", inspect_agent)
-    monkeypatch.setattr(annotate, "_run_agent", annotate_agent)
-    monkeypatch.setattr(inspect, "_plot_verdicts", plot_inspection)
-    monkeypatch.setattr(annotate, "_plot", plot_annotation)
-
-
-def run_cli(outdir, monkeypatch, *extra):
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "msp",
-            "input.h5ad",
-            "--batch-col",
-            "batch",
-            "--outdir",
-            str(outdir),
-            "--annotate",
-            "--model",
-            "test-model",
-            *extra,
-        ],
-    )
-    runpy.run_module("msp.__main__", run_name="__main__")
-
-
-def forbid_integration(*args, **kwargs):
-    pytest.fail("completed integration was unexpectedly repeated")
-
-
-def test_integration_rerun_invalidates_all_outputs(completed_run, monkeypatch):
-    root = completed_run
-    (root / "figures" / "umap_msp_leiden_r9.0.png").write_bytes(b"stale resolution")
-    (root / "deg_local_msp_leiden_r9.0.csv").write_text("stale DE")
-    data = integrated_data()
-
-    # Fail immediately after invalidation, before any new numerical work.
-    def fail_normalize(*args, **kwargs):
-        raise RuntimeError("interrupted integration")
-
-    monkeypatch.setattr(pipeline.sc.pp, "normalize_total", fail_normalize)
-    with pytest.raises(RuntimeError, match="interrupted integration"):
-        integrate.integrate_adata(data, "batch", root)
-    assert step_pending(root, "integrate")
-    for name in (
-        "integrated.h5ad",
-        "annotated.h5ad",
-        "inspection_proposal.json",
-        "annotation_proposal.json",
-        "deg_local_msp_leiden_r9.0.csv",
-    ):
-        assert not (root / name).exists()
-        assert len(list((root / ".msp-history").glob(f"*/{name}"))) == 1
-    assert not (root / "figures" / "umap_msp_leiden_r9.0.png").exists()
-    assert not any(c.startswith("msp_leiden_r") for c in data.obs)
-    assert "_msp_action" not in data.obs
-    for name in ("sample_decisions.csv", "report_context.txt", "caller-input.txt"):
-        assert (root / name).is_file()
-    # Interrupted computations may have left invalid CSVs: report must not read them.
-    (root / "deg_global_broken.csv").write_text("invalid partial table")
-    report = Path(generate_report(root)).read_text()
-    assert "Incomplete steps: integrate, inspect, annotate" in report
-    assert "OLD_LABEL" not in report
-    with pytest.raises(RuntimeError, match="integrate is incomplete"):
-        inspect.inspect_clusters(root)
-    with pytest.raises(RuntimeError, match="integrate is incomplete"):
-        annotate.annotate_clusters(root)
-
-
-def test_failed_inspection_blocks_annotation_and_recovers_via_cli(completed_run, monkeypatch):
-    root = completed_run
-    old_integrated = (root / "integrated.h5ad").read_bytes()
-    calls = []
-    install_agents(monkeypatch, calls)
-
-    async def fail_after_submission(data, outdir, *args):
-        write_json(Path(outdir) / "inspection_proposal.json", inspection_proposal())
-        raise RuntimeError("interrupted inspection")
-
-    monkeypatch.setattr(inspect, "_run_agent", fail_after_submission)
-    with pytest.raises(RuntimeError, match="interrupted inspection"):
-        inspect.inspect_clusters(root, model="test-model")
-    assert step_pending(root, "inspect") and not step_pending(root, "integrate")
-    assert (root / "integrated.h5ad").read_bytes() == old_integrated
-    assert not (root / "annotated.h5ad").exists()
-    snapshot = next((root / ".msp-history").glob("inspect-*/integrated.h5ad"))
-    assert snapshot.read_bytes() == old_integrated
-    with pytest.raises(RuntimeError, match="inspect is incomplete"):
-        annotate.annotate_clusters(root, model="test-model")
-    report = Path(generate_report(root)).read_text()
-    assert "Sample Summary" in report and "OLD_LABEL" not in report
-    assert "Incomplete steps: inspect, annotate" in report
-
-    install_agents(monkeypatch, calls)
-    monkeypatch.setattr(integrate, "run_multi_sample_pipeline", forbid_integration)
-    run_cli(root, monkeypatch)
-    assert calls == ["inspect", "annotate"]
-    assert not step_pending(root, "annotate")
-    assert "NEW_LABEL" in (root / "report.html").read_text()
-    assert set(ad.read_h5ad(root / "annotated.h5ad").obs["msp_ann_coarse"]) == {"NEW_LABEL"}
-    assert snapshot.read_bytes() == old_integrated
-    assert (root / "integrated.h5ad").read_bytes() != old_integrated
-
-
-def test_failed_annotation_files_do_not_satisfy_resume(completed_run, monkeypatch):
-    calls = []
-    install_agents(monkeypatch, calls)
-
-    async def fail_after_writing_files(data, outdir, *args):
-        write_json(Path(outdir) / "annotation_proposal.json", annotation_proposal("PARTIAL_LABEL"))
-        data.write_h5ad(Path(outdir) / "annotated.h5ad")
-        raise RuntimeError("interrupted annotation")
-
-    monkeypatch.setattr(annotate, "_run_agent", fail_after_writing_files)
-    with pytest.raises(RuntimeError, match="interrupted annotation"):
-        annotate.annotate_clusters(completed_run, model="test-model")
-    assert step_pending(completed_run, "annotate")
-    report = Path(generate_report(completed_run)).read_text()
-    assert "PARTIAL_LABEL" not in report and "OLD_LABEL" not in report
-    install_agents(monkeypatch, calls)
-    monkeypatch.setattr(integrate, "run_multi_sample_pipeline", forbid_integration)
-    run_cli(completed_run, monkeypatch)
-    assert calls == ["annotate"]
-    assert not step_pending(completed_run, "annotate")
-
-
-def test_report_failure_does_not_repeat_completed_agent(completed_run, monkeypatch):
-    calls = []
-    install_agents(monkeypatch, calls)
-
-    def fail_report(*args, **kwargs):
-        raise OSError("report storage unavailable")
-
-    monkeypatch.setattr(annotate, "generate_report", fail_report)
-    with pytest.raises(OSError, match="report storage unavailable"):
-        annotate.annotate_clusters(completed_run, model="test-model")
-    assert not step_pending(completed_run, "annotate")
-    assert not (completed_run / "report.html").exists()
-    monkeypatch.setattr(integrate, "run_multi_sample_pipeline", forbid_integration)
-    run_cli(completed_run, monkeypatch)
-    assert calls == ["annotate"]
-    assert "NEW_LABEL" in (completed_run / "report.html").read_text()
-
-
-def test_successful_inspection_alone_invalidates_annotation(completed_run, monkeypatch):
-    calls = []
-    install_agents(monkeypatch, calls)
-    inspect.inspect_clusters(completed_run, model="test-model")
-    assert calls == ["inspect"]
-    assert not (completed_run / "annotated.h5ad").exists()
-    assert not (completed_run / "annotation_proposal.json").exists()
-    assert "OLD_LABEL" not in (completed_run / "report.html").read_text()
-    assert not step_pending(completed_run, "inspect")
-
-
-def test_cli_changed_integration_recomputes_both_agents(completed_run, monkeypatch):
-    calls = []
-    install_agents(monkeypatch, calls)
-
-    def recompute(inputs, batch_col, outdir, **kwargs):
-        calls.append("integrate")
-        begin_step(outdir, "integrate")
-        data = integrated_data()
-        data.obs_names = [f"NEW_{name}" for name in data.obs_names]
-        data.write_h5ad(Path(outdir) / "integrated.h5ad")
-        (Path(outdir) / "deg_global_msp_leiden_r1.0.csv").write_text("group,names,logfoldchanges\n")
-        complete_step(outdir, "integrate")
-        return data, {"n_cells": data.n_obs}
-
-    monkeypatch.setattr(integrate, "run_multi_sample_pipeline", recompute)
-    run_cli(completed_run, monkeypatch, "--n-pcs", "25")
-    assert calls == ["integrate", "inspect", "annotate"]
-    result = ad.read_h5ad(completed_run / "annotated.h5ad")
-    assert all(name.startswith("NEW_") for name in result.obs_names)
-    assert not step_pending(completed_run, "annotate")
-
-
-def test_report_only_never_clears_pending(completed_run, monkeypatch):
-    begin_step(completed_run, "annotate")
-    marker = completed_run / ".msp-state" / "annotate.pending"
-    before = marker.stat().st_mtime_ns
-    report.main([str(completed_run)])
-    assert marker.stat().st_mtime_ns == before
-    assert "Incomplete steps: annotate" in (completed_run / "report.html").read_text()
 
 
 def test_interrupted_archive_preserves_files_and_blocks_resume(completed_run, monkeypatch):

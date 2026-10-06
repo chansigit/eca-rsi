@@ -1,9 +1,7 @@
-import json
 
 import anndata as ad
 import numpy as np
 import pandas as pd
-import pytest
 
 from osp import annotate
 
@@ -110,54 +108,6 @@ def test_prompt_requires_decontx_figure_only_when_present(tmp_path):
     (figures / "decontx_heatmap_by_cluster.png").touch()
     prompt = annotate._system_prompt(tmp_path, "leiden_r1.0", ["0"], None, None, "English")
     assert "every qc_violin_*, and the decontx heatmap" in prompt
-
-
-def test_proposal_completion_marker_is_published_last(tmp_path, monkeypatch):
-    data = ad.AnnData(
-        np.ones((2, 2)),
-        obs=pd.DataFrame({"leiden_r1.0": pd.Categorical(["0", "1"])}),
-    )
-    data.uns["paga"] = {"groups": "leiden_r1.0"}
-    proposal_path = tmp_path / "annotation_proposal.json"
-    proposal_path.write_text(json.dumps({"old": True}), encoding="utf-8")
-    events = []
-
-    async def fake_run_agent(*args, **kwargs):
-        return _proposal() | {"cluster_key": "leiden_r1.0"}
-
-    monkeypatch.setattr(annotate.sc, "read_h5ad", lambda path: data)
-    monkeypatch.setattr(annotate, "_run_agent", fake_run_agent)
-
-    def fake_plot(*args, **kwargs):
-        assert not proposal_path.exists()
-        events.append("plot")
-
-    monkeypatch.setattr(annotate, "_plot_annotation", fake_plot)
-    monkeypatch.setattr(annotate, "atomic_write_h5ad", lambda *args: events.append("h5ad"))
-    monkeypatch.setattr(annotate, "generate_report", lambda *args, **kwargs: events.append("report") or "report.html")
-    monkeypatch.setattr(annotate, "atomic_write_json", lambda *args: events.append("proposal"))
-
-    annotate.propose_annotation(tmp_path, model="test-model")
-    assert events == ["plot", "h5ad", "report", "proposal"]
-
-
-def test_failed_agent_rerun_does_not_leave_old_completion_marker(tmp_path, monkeypatch):
-    data = ad.AnnData(
-        np.ones((2, 2)),
-        obs=pd.DataFrame({"leiden_r1.0": pd.Categorical(["0", "1"])}),
-    )
-    data.uns["paga"] = {"groups": "leiden_r1.0"}
-    proposal_path = tmp_path / "annotation_proposal.json"
-    proposal_path.write_text(json.dumps({"old": True}), encoding="utf-8")
-
-    async def failed_agent(*args, **kwargs):
-        raise RuntimeError("provider failed")
-
-    monkeypatch.setattr(annotate.sc, "read_h5ad", lambda path: data)
-    monkeypatch.setattr(annotate, "_run_agent", failed_agent)
-    with pytest.raises(RuntimeError, match="provider failed"):
-        annotate.propose_annotation(tmp_path, model="test-model")
-    assert not proposal_path.exists()
 
 
 def test_apply_proposal_cells_scope_under_copy_on_write():

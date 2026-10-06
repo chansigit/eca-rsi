@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 from .synthetic_data import CELLS_PER_POPULATION, N_POPULATIONS, SAMPLES, write_samples
 
-from msp import generate_report, run_multi_sample_pipeline
+from msp import generate_report, integrate_adata, load_and_merge
 from msp.evidence import DegTables, load_paga_neighbors, load_removal_mask
 from msp.steps import begin_step, step_pending
 
@@ -31,15 +31,16 @@ def integrated(tmp_path_factory):
     previous_level = logger.level
     logger.setLevel(logging.INFO)  # a bare interpreter leaves the family at WARNING
     try:
-        data, summary = run_multi_sample_pipeline(
-            inputs,
-            batch_col="sample_id",
-            outdir=out,
+        data, summary = integrate_adata(
+            load_and_merge(inputs, "sample_id"),
+            "sample_id",
+            out,
             species="human",
             resolutions=(0.3, 1.0, 2.0),
             n_top_genes=30,
             n_pcs=10,
             n_neighbors=10,
+            inputs=inputs,
         )
     finally:
         logger.removeHandler(handler)

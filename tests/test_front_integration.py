@@ -1,7 +1,6 @@
 """Front-pipeline regressions; no MSP/ZMIP imports and no live model calls."""
 from __future__ import annotations
 
-from tests.bridge_contract import BRIDGE_LEGACY_API
 
 
 import anndata as ad
@@ -220,13 +219,6 @@ def test_writer_lock_rejects_concurrent_writer(tmp_path):
         with pytest.raises(RuntimeError, match="another writer"):
             with writer_lock(tmp_path / "lock"):
                 pass
-
-
-def test_front_bridge_identity():
-    import harness_bridge
-    from osp import harness as osp
-    for key in BRIDGE_LEGACY_API:
-        assert getattr(osp, key) is getattr(harness_bridge, key)
 
 
 def test_unit_page_renders_before_and_after_front_review(tmp_path):

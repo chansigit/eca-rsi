@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **The kernels lose their standalone flows (#28).** osp, msp and zmip keep what their `api` modules reach: their
+  command lines, agent flows (osp `propose_annotation`, msp `inspect_clusters` / `annotate_clusters`, zmip
+  `annotate_lineage` / `plan_lineages` and the lineage runner), msp's dask endpoints, agent checkpoints and
+  `run_multi_sample_pipeline`, zmip's `runtime` identity and `msp_compat` re-exports are deleted (about 4,800 lines and
+  2,700 lines of tests), and so is the generation-1 `eval/` replay (its notes are in `docs/history/eval/`). No kernel
+  imports `harness_bridge` (test_layers). One list of removal reasons, `msp.annotate.REMOVE_REASONS`, now including
+  `dissociation` and `dying`: cross-sample accepts them as zoom-in did, and decision 0017's guard checks them in both;
+  one batch guard, msp's, for cross-sample and zoom-in.
 - **The first version is current (decision 0019, step 3).** Version `ded8588df51d` passed the gate beside
   production (all 23 workflows on its queue) and is current; its 4 coordinators and its runners serve every new
   dataset, and the image's coordinators on `ecarsi-durable-v2` are stopped. `ops/control-plane.sh

@@ -32,10 +32,10 @@ KERNELS = {"msp", "osp", "zmip"}
 # module, the kernel's contract with eca-rsi.
 KERNEL_USERS = {"ecarsi.stages"}
 # The repository's other packages (decision 0018): which of its own packages each may import. None imports ecarsi.
-MAY_IMPORT = {
-    "osp": {"harness_bridge"},
-    "msp": {"standissect_lite", "harness_bridge"},
-    "zmip": {"msp", "harness_bridge"},  # reaches into msp's modules, not only msp.api: tighten when they are cleaned up
+MAY_IMPORT = {  # the kernels run no agents since #28: eca-rsi's sessions do, so none imports harness_bridge
+    "osp": set(),
+    "msp": {"standissect_lite"},
+    "zmip": {"msp"},  # reaches into msp's modules, not only msp.api: tighten when they are cleaned up
     "standissect_lite": set(),
     "harness_bridge": set(),
 }

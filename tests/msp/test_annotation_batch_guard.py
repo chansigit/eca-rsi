@@ -1,68 +1,14 @@
 """Batch-only requests remain auditable and cannot delete cells."""
 
-import asyncio
 import copy
 import json
-from types import SimpleNamespace
 
-import harness_bridge
 import numpy as np
 import pytest
 from .test_evidence_contracts import annotation_entry, data_with_clusters
 
 import msp.annotate as A
 from msp.report import _section_annotation
-
-
-@pytest.mark.parametrize("reason", ["batch", "other"])
-def test_submission_normalizes_before_merge_validation_and_persists(tmp_path, monkeypatch, reason):
-    data = data_with_clusters()
-    original = annotation_entry(
-        "0", action="remove", remove_reason=reason, merge_target="1", rationale="batch artifact with ambient RNA"
-    )
-
-    async def run_agent(**kwargs):
-        tools = {tool.name: tool.handler for tool in kwargs["tools"]}
-        response = await tools["submit_cluster"]({"cluster_json": json.dumps(original)})
-        assert "host retained" in response["content"][0]["text"]
-        await tools["submit_cluster"]({"cluster_json": json.dumps(annotation_entry("1"))})
-        # As a retained member, cluster 0 must now agree with the merge target.
-        response = await tools["finalize_annotation"]({"overall": "review"})
-        assert response["is_error"] and "disagrees on fine_label" in response["content"][0]["text"]
-        corrected = {**original, "fine_label": "Type 1"}
-        await tools["submit_cluster"]({"cluster_json": json.dumps(corrected)})
-        response = await tools["finalize_annotation"]({"overall": "review"})
-        return SimpleNamespace(submitted=response["_submitted"], transcript_text="")
-
-    monkeypatch.setattr(harness_bridge, "run_agent", run_agent)
-    proposal = asyncio.run(
-        A._run_agent(
-            data,
-            str(tmp_path),
-            ["0", "1"],
-            "batch",
-            "mouse",
-            [],
-            {},
-            np.zeros(2, bool),
-            "English",
-            "test-model",
-            "low",
-            20,
-        )
-    )
-    saved = json.loads((tmp_path / "annotation_proposal.json").read_text())
-    assert saved == proposal
-    entry = saved["clusters"][0]
-    assert entry["action"] == "keep" and entry["remove_reason"] is None
-    assert entry["requested_action"] == "remove" and entry["requested_remove_reason"] == reason
-    assert entry["review_required"] is True
-    assert entry["rationale"] == original["rationale"] and entry["evidence"] == original["evidence"]
-    assert entry["coarse_label"] == original["coarse_label"]
-    assert saved["merged_groups"] == ["0+1"]
-    report = _section_annotation(str(tmp_path), [])
-    assert "Host policy adjustments" in report and f"requested remove ({reason}); applied keep" in report
-    assert "review required" in report and original["rationale"] in report
 
 
 @pytest.mark.parametrize("reason", ["doublet", "low-quality", "ambient", "stress", "other"])

@@ -1,7 +1,7 @@
 """
 zmip.plan — decide which coarse lineages to zoom into, and how to pool them.
 
-Evidence (all deterministic, written to outdir before the agent runs):
+Evidence (all deterministic, written to outdir by lineage_evidence before the agent runs):
   - lineage_counts.csv      cells / samples per coarse label
   - lineage_knn.csv         kNN cross-connectivity between coarse labels
                             (row-normalised share of each label's graph
@@ -13,7 +13,7 @@ Evidence (all deterministic, written to outdir before the agent runs):
                             as % of each coarse label's cells per island
   - figures/umap_<coarse>.png  the coarse-label UMAP the agent MUST look at
 
-The agent (via harness_bridge) pools coarse labels that form ONE connected
+The planning agent (an eca-rsi session, ecarsi/stages/zoomin.py) pools coarse labels that form ONE connected
 island on the UMAP into a lineage and keeps separate islands separate —
 even when they are related lineages — because zoom-in re-embeds each
 lineage on its own and a disconnected island dragged in becomes a
@@ -26,12 +26,9 @@ prompt states, checked against lineage_islands.csv — a weak model once
 pooled every label into one lineage); labels sharing one island but split
 across lineages require confirmation and a written shared_island_reviews
 explanation. Mixing alone is not proof of identical biological identity.
-The plan is archived to zmip_plan.json and reused on resume.
 """
 
-import asyncio
 import copy
-import json
 import logging
 import os
 
@@ -42,7 +39,6 @@ import scipy.sparse as sp
 from anndata import AnnData
 from msp.plots import save_single_umap, slug
 
-from .cache import write_json
 
 log = logging.getLogger(__name__)
 
@@ -363,140 +359,3 @@ _PLAN_SCHEMA_DOC = """{
   "confirm_shared_islands": false,  // true after explicitly reviewing a shared-island split
   "shared_island_reviews": {}       // island name -> expression/graph evidence, including uncertainty
 }"""
-
-
-def _islands_text(islands):
-    if islands is None:
-        return ""
-    sizes = islands.attrs.get("island_sizes", {})
-    return (
-        "\nUMAP islands computed by the host (connected components of the 2-D UMAP kNN graph; % of each label's "
-        "cells per island; island sizes "
-        + ", ".join(f"{k}={v}" for k, v in sizes.items())
-        + "):\n"
-        + islands.to_string()
-        + "\nThe host rejects a lineage that pools labels sitting on different islands, "
-        "and requires a written shared_island_reviews explanation when labels sharing an island are split "
-        "across lineages. Graph mixing alone does not prove identical cell types.\n"
-    )
-
-
-def _prompt(coarse_col, labels, counts, knn, paga, islands, min_cells, fig_rel, species):
-    ctx = f"Species: {species}. " if species else ""
-    return f"""You are planning the zoom-in stage of a single-cell analysis. {ctx}The dataset has been \
-integrated (harmony) and annotated at coarse level (obs column {coarse_col!r}: {labels}). Zoom-in will \
-take each LINEAGE you define, re-embed it on its own (HVG/PCA/harmony/leiden/UMAP on that subset) and \
-refine its annotation. Decide how to group the coarse labels into lineages and which lineages to zoom.
-
-The one rule that matters: a lineage must be ONE connected island on the current UMAP. Read the figure \
-{fig_rel} FIRST and describe what you see. Labels that sit in the same island or form a continuum \
-(no gap between them) belong together, even if they are different cell types — e.g. when data quality \
-is modest, T, B and myeloid cells may fuse into one immune island and must be zoomed together; with clean \
-data they form separate islands and become separate lineages. Related labels sitting on DIFFERENT islands \
-stay separate: a disconnected island dragged into a re-embedding just becomes a permanent foreign cluster. \
-States (Proliferating, stressed, cycling) go with the island they sit in — do NOT make a state its own \
-lineage; likewise a small label (below the zoom threshold) that sits inside or on the edge of a bigger island \
-is pooled into that island rather than left out (it would otherwise never be re-examined). Use the kNN cross-connectivity \
-table (share of each label's graph edges landing on other labels) and PAGA as quantitative corroboration \
-of what the picture shows — the picture decides ties.
-
-Zoom only lineages with at least {min_cells} cells (below that leiden cannot resolve stable substates); \
-smaller ones still get a lineage entry with zoom=false. Every coarse label must appear exactly once.
-
-Cells and samples per coarse label:
-{counts.to_string()}
-
-kNN cross-connectivity (% of each row label's edges that land on the column label; diagonal = within):
-{knn.to_string()}
-{("PAGA connectivity:" + chr(10) + paga.to_string()) if paga is not None else ""}
-{_islands_text(islands)}
-Finish by calling submit_plan with JSON of this schema:
-{_PLAN_SCHEMA_DOC}
-If validation fails, fix the named problems and call it again."""
-
-
-async def _run(coarse_col, labels, counts, knn, paga, islands, outdir, min_cells, species, model, effort):
-    from harness_bridge import ToolSpec, run_agent
-
-    async def submit_plan(args):
-        try:
-            plan = json.loads(args["plan_json"])
-        except json.JSONDecodeError as e:
-            return {"content": [{"type": "text", "text": f"JSON parse error: {e}"}], "is_error": True}
-        problems, norm = validate_plan(plan, labels, counts, min_cells, islands, knn)
-        if problems:
-            return {
-                "content": [{"type": "text", "text": "fix and resubmit:\n- " + "\n- ".join(problems)}],
-                "is_error": True,
-            }
-        return {
-            "content": [
-                {
-                    "type": "text",
-                    "text": "plan accepted: "
-                    + ", ".join(
-                        f"{ln['name']}={ln['coarse_labels']} ({ln['n_cells']} cells, zoom={ln['zoom']})"
-                        for ln in norm["lineages"]
-                    ),
-                }
-            ],
-            "_submitted": norm,
-        }
-
-    tool = ToolSpec(
-        name="submit_plan",
-        description="Submit the lineage plan (JSON string, schema in the task).",
-        input_schema={"plan_json": str},
-        handler=submit_plan,
-    )
-    fig_rel = os.path.join("figures", f"umap_{slug(coarse_col)}.png")
-    result = await run_agent(
-        tools=[tool],
-        submit_tool="submit_plan",
-        prompt=f"Read {fig_rel}, then plan the lineages and call submit_plan.",
-        system_prompt=_prompt(coarse_col, labels, counts, knn, paga, islands, min_cells, fig_rel, species),
-        cwd=os.path.abspath(outdir),
-        model=model,
-        effort=effort,
-        max_turns=30,
-        allowed_builtin=("read",),
-        max_buffer_size=50_000_000,
-        label="zmip plan",
-    )
-    result.submitted["agent_notes"] = result.transcript_text or ""
-    return result.submitted
-
-
-def plan_lineages(
-    ad, coarse_col, batch_col, outdir, min_cells=DEFAULT_MIN_CELLS, species=None, model=None, effort=None, force=False
-):
-    """Evidence → agent → validated plan, archived to outdir/zmip_plan.json
-    (reused when present)."""
-    from harness_bridge import default_model
-
-    path = os.path.join(outdir, "zmip_plan.json")
-    from msp.agent_data import materialize
-    with materialize(ad) as full:
-        counts, knn, paga, islands = lineage_evidence(full, coarse_col, batch_col, outdir)
-    if os.path.exists(path) and not force:
-        with open(path) as f:
-            plan = json.load(f)
-        # Recheck current evidence, including the archived explicit island review.
-        candidate = dict(plan)
-        candidate["confirm_shared_islands"] = bool(plan.get("host_warnings"))
-        problems, normalized = validate_plan(candidate, list(counts.index), counts, min_cells, islands, knn)
-        if problems or plan.get("min_cells") != min_cells or plan.get("coarse_col") != coarse_col:
-            raise ValueError(f"recorded plan does not match current input/options: {problems}; use --force")
-        if normalized["lineages"] != plan["lineages"]:
-            raise ValueError("recorded lineage counts or zoom decisions changed; use --force")
-        log.info(f"== reusing recorded plan {path}")
-        return plan
-    labels = list(counts.index)
-    plan = asyncio.run(
-        _run(
-            coarse_col, labels, counts, knn, paga, islands, outdir, min_cells, species, model or default_model(), effort
-        )
-    )
-    plan["coarse_col"] = coarse_col
-    write_json(path, plan)
-    return plan

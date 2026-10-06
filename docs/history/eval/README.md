@@ -1,4 +1,8 @@
-# ECA-RSI agent evaluation
+# ECA-RSI agent evaluation (retired)
+
+> **Retired 2026-10-06 (#28).** The scripts (`eval/extract.py`, `baseline.py`, `replay.py`) read generation-1
+> round directories and replayed zmip's standalone agent flow, which production never ran and which is now
+> deleted; they are in git history before that change. Hard-case replay from production sessions is #14.
 
 Is model X good enough to drive this pipeline? Today the only way to answer that is to run a
 dataset for a day and look at what came out. This directory turns the runs we have already

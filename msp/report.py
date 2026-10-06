@@ -19,13 +19,11 @@ artifacts are absent — so the same generator renders every stage):
   6. Cell Type Annotation  — msp.annotate: coarse/fine UMAPs, removed cells,
                              per-cluster decisions, merged groups
 
-Usage:
-    python -m msp.report /path/to/msp_out [--out report.html]
+Usage: generate_report(msp_outdir), through msp.api.
 """
 
 from __future__ import annotations
 
-import argparse
 import base64
 import csv
 import glob
@@ -36,7 +34,6 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
-from .log import configure
 from .steps import STEPS, step_pending
 
 CSS = """
@@ -897,46 +894,12 @@ def _caller_text(outdir: str, name: str) -> str:
     return ""
 
 
-def _write_caller_text(outdir: str, name: str, text: str | None) -> None:
-    if text:
-        os.makedirs(outdir, exist_ok=True)
-        with open(os.path.join(outdir, name), "w") as f:
-            f.write(text.strip() + "\n")
-
-
 def report_context(outdir: str) -> str:
     """Where this run sits (e.g. 'round 2 · fu2022-meniscus'), written by the
     driver via --report-context into outdir (or its parent, for per-lineage
     sub-reports); '' when absent. Titles are composed from it so every
     report page says what it is AND where it belongs."""
     return _caller_text(outdir, CONTEXT_FILE)
-
-
-def write_report_context(outdir: str, text: str | None) -> None:
-    _write_caller_text(outdir, CONTEXT_FILE, text)
-
-
-def design_context(outdir: str) -> str:
-    """Caller's description of how the samples were produced (--design-context),
-    e.g. one FACS plate = one mouse x one sort gate; '' when absent."""
-    return _caller_text(outdir, DESIGN_FILE)
-
-
-def write_design_context(outdir: str, text: str | None) -> None:
-    _write_caller_text(outdir, DESIGN_FILE, text)
-
-
-def design_block(outdir: str) -> str:
-    """Prompt block for the agents; empty string when no design was given."""
-    text = design_context(outdir)
-    if not text:
-        return ""
-    return (
-        "\nStudy design (from the caller — treat as ground truth about how samples were produced):\n"
-        f"<<<\n{text}\n>>>\n"
-        "Where this design says a sample alone carries a cell population (e.g. a sort gate, a "
-        "tissue compartment), a cluster confined to that sample is expected, not a batch artefact.\n"
-    )
 
 
 def compose_title(what: str, outdir: str, subject: str | None = None) -> str:
@@ -1012,17 +975,6 @@ def generate_report(outdir: str, out_html: str | None = None, title: str | None 
     return out_html
 
 
-def main(argv=None):
-    configure()
-    parser = argparse.ArgumentParser(prog="msp.report", description=__doc__)
-    parser.add_argument("outdir")
-    parser.add_argument("--out", default=None)
-    args = parser.parse_args(argv)
-    print(f"wrote {generate_report(args.outdir, out_html=args.out)}")
-
-
-if __name__ == "__main__":
-    main()
 
 
 # Public rendering helpers; old names remain compatible with 0.3 callers.

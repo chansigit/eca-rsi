@@ -82,40 +82,6 @@ def load_and_merge(inputs, batch_col, counts_layer="counts"):
     return merged
 
 
-def run_multi_sample_pipeline(
-    inputs,
-    batch_col,
-    outdir,
-    species=None,
-    resolutions=(0.3, 1.0, 2.0),
-    n_top_genes=2000,
-    n_pcs=50,
-    n_neighbors=15,
-    counts_layer="counts",
-    top_n_de=50,
-    harmony_kwargs=None,
-):
-    """Load osp per-sample outputs, merge, and run integrate_adata on the
-    result — see there for the parameters. Returns (ad, summary)."""
-    ensure()
-    os.makedirs(outdir, exist_ok=True)
-    ad = load_and_merge(inputs, batch_col, counts_layer=counts_layer)
-    return integrate_adata(
-        ad,
-        batch_col,
-        outdir,
-        species=species,
-        resolutions=resolutions,
-        n_top_genes=n_top_genes,
-        n_pcs=n_pcs,
-        n_neighbors=n_neighbors,
-        counts_layer=counts_layer,
-        top_n_de=top_n_de,
-        harmony_kwargs=harmony_kwargs,
-        inputs=inputs,
-    )
-
-
 # ---------------------------------------------------------------- stages
 
 

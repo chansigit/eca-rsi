@@ -1,3 +1,7 @@
+> **Inside eca-rsi (decision 0018); standalone use removed 2026-10-06 (#28).** `osp/` is used only through
+> `osp.api` by eca-rsi's stages, which run its agents in their own sessions. The command line, the agent flows
+> and the other entry points this README and `docs/` describe are gone; the text is kept as the package's history.
+
 <p align="center">
   <img src="https://raw.githubusercontent.com/chansigit/osp/main/assets/osp-logo.svg" alt="OSP logo: a group of cells within one sample, with one cell in focus" width="176" height="176">
 </p>

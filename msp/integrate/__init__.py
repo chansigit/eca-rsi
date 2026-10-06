@@ -52,7 +52,7 @@ from .outliers import (
     _leiden_cluster_qc_violins,
     _preannotation_removal_umap,
 )
-from .pipeline import integrate_adata, load_and_merge, run_multi_sample_pipeline
+from .pipeline import integrate_adata, load_and_merge
 from .qc import QC_ACTION_PALETTE, QC_UMAP_METRICS, _qc_outputs
 
 __all__ = [
@@ -75,7 +75,6 @@ __all__ = [
     "STRESS_HIT_THRESHOLD",
     "integrate_adata",
     "load_and_merge",
-    "run_multi_sample_pipeline",
     "_build_removal_mask",
     "_cell_level_outliers",
     "_cluster_annotations",

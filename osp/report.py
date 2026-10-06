@@ -30,15 +30,11 @@ Section order:
   5. Cluster Identities — marker scores on UMAP + top DE genes per cluster,
                            i.e. what each cluster actually *is*
 
-Usage:
-    python -m osp.report /path/to/osp_out [--out report.html]
-
-    # or from Python, right after run_one_sample_pipeline(..., outdir="osp_out/MN"):
+Usage, right after run_one_sample_pipeline(..., outdir="osp_out/MN"):
     from osp import generate_report
     generate_report("osp_out/MN")
 """
 
-import argparse
 import base64
 import glob
 import html
@@ -695,14 +691,3 @@ def generate_report(
     atomic_write_text(out_html, html_doc)
 
     return out_html
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("outdir")
-    parser.add_argument("--out", default=None)
-    parser.add_argument("--top-n-de", type=int, default=10)
-    args = parser.parse_args()
-
-    path = generate_report(args.outdir, out_html=args.out, top_n_de_display=args.top_n_de)
-    log.info(f"wrote {path}")

@@ -196,7 +196,7 @@ The test suite contains 463 tests. It runs inside the compute image. See [INSTAL
 
 The latest end-to-end regression ran on 2026-10-02. The run used dataset 11_Shietal on the `20261002-1` image pair: two fixed rounds, 9,163 to 4,941 cells, with the display zone synced after every stage and the work tree archived at completion.
 
-Older validation records are in [docs/history/](docs/history/). These records include release checks, pause and recovery, the Clayton and 19Liu runs, and the fixed-task model comparison in [eval/RESULTS.md](eval/RESULTS.md).
+Older validation records are in [docs/history/](docs/history/). These records include release checks, pause and recovery, the Clayton and 19Liu runs, and the fixed-task model comparison in [docs/history/eval/RESULTS.md](docs/history/eval/RESULTS.md).
 
 These checks establish engineering behavior. They do not establish independently validated biological accuracy.
 

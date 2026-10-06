@@ -937,38 +937,3 @@ def _plot_decontx_top_genes(ad, sample_label, figdir, top_n_plot=15):
             os.path.join(figdir, f"{sample_label}_decontx_top_genes_by_decontx_cluster.csv"),
             index=False,
         )
-
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Run per-sample QC on one sample — quick trial runs / threshold tuning only"
-    )
-    parser.add_argument("h5ad_path")
-    parser.add_argument("--sample-col", default="sample")
-    parser.add_argument("--sample", required=True, help="sample name to run on its own")
-    parser.add_argument("--figdir", default="qc_figs")
-    parser.add_argument("--no-scrublet", action="store_true")
-    parser.add_argument("--no-decontx", action="store_true")
-    args = parser.parse_args()
-
-    adata = sc.read_h5ad(args.h5ad_path, backed="r")
-    try:
-        if args.sample_col not in adata.obs:
-            raise ValueError(f"sample column {args.sample_col!r} is not present in the input obs")
-        mask = adata.obs[args.sample_col].astype(str) == args.sample
-        if not mask.any():
-            raise ValueError(f"sample {args.sample!r} matches no cells in obs[{args.sample_col!r}]")
-        sub = adata[mask].to_memory()
-    finally:
-        adata.file.close()
-    _, summary = qc_one_sample(
-        sub,
-        sample_label=args.sample,
-        sample_col=args.sample_col,
-        run_scrublet=not args.no_scrublet,
-        run_decontx=not args.no_decontx,
-        figdir=args.figdir,
-    )
-    log.info(pd.Series(summary))
