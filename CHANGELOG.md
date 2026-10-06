@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Contracts on the files versions share with the shared components (decision 0019).** `pool-request/1` (a pool
+  request, written by any version, read by the shared workers) and `turn-plan/1` (written by the shared bridge, read
+  by the version that runs the turn); writers check before they write, the workers and turn executors after they
+  read. `ops/publish-version.sh` refuses a version that would write a version of a shared file (`contracts.SHARED`)
+  the shared components do not know.
 - **The compute image's Python environment is locked (decision 0019, step 5).** `container/science-requirements.lock`
   pins the 118 distributions of `/opt/rsi-python` with their hashes; installed from it into the base image, they
   reproduce the image's environment file for file. INSTALL.md B.5 has the command.

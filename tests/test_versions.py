@@ -236,3 +236,11 @@ def test_the_control_page_names_the_version_of_each_running_dataset():
         "unit/a": dict(kind="AnalysisUnitWorkflow", status="RUNNING", task_queue="ecarsi-0123456789ab")}}
     assert running(fleet) == (["A", "dataset/b"], {"A": "0123456789ab"})
     assert running({}) == ([], {})
+
+
+def test_a_version_writes_only_shared_file_versions_the_shared_components_know():
+    from ecarsi.contracts import KINDS, unknown_to
+    assert unknown_to(list(KINDS)) == [] and unknown_to([]) == []   # version 1 needs nothing from the reader
+    newer = dict(KINDS, **{"pool-request/2": {}, "stage/2": {}})
+    assert unknown_to(list(KINDS), newer) == ["pool-request/2"]     # stage files are the version's own
+    assert unknown_to([*KINDS, "pool-request/2"], newer) == []

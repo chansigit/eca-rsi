@@ -149,7 +149,7 @@ def submit(root, spec, version="own"):
             attempt.mkdir(mode=0o700)
             (attempt / "outputs").mkdir(mode=0o700)
             sync_directory(attempt)
-            save(folder / "request.json", existing)
+            save(folder / "request.json", check("pool-request", existing))
             journal_request(root, spec)
     return status(root, spec["request_id"])
 
@@ -274,7 +274,7 @@ def retry(root, request_id, *, reason, use_current_runtime=False, memory_mb=None
                        use_current_runtime=use_current_runtime, memory_mb=memory_mb,
                        timeout_seconds=timeout_seconds, without_gpu=without_gpu))
         # The old receipt remains authoritative until request.json switches atomically.
-        save(folder / "request.json", replacement)
+        save(folder / "request.json", check("pool-request", replacement))
         (folder / "backend.json").unlink(missing_ok=True)
     return status(root, request_id)
 

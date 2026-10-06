@@ -245,7 +245,7 @@ def execute(root, request_id, attempt_id):
     root = pool_root(root)
     folder = root / "requests" / identifier(request_id)
     request = read(folder / "request.json")
-    if request is None or request["attempt_id"] != identifier(attempt_id):
+    if request is None or check("pool-request", request)["attempt_id"] != identifier(attempt_id):
         raise ValueError("unknown or superseded attempt")
     attempt = folder / attempt_id
     try:

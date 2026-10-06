@@ -134,7 +134,7 @@ def _dispatch(root, folder, config, model):
             # Upgrade only the portable transport; original session/tool contracts
             # remain immutable and are validated by their original adapter.
             plan['portable_adapter'] = archive_adapter(root)
-    plan_ref = immutable(plan_path, plan)
+    plan_ref = immutable(plan_path, check("turn-plan", plan))
     key = runner_key(plan["model"], request.get("version"))
     if portable and runner_ready(root, config, key):
         attempt = dict(execution="service", turn_id="turn-" + identity, runner=key, model=plan["model"],
@@ -536,7 +536,7 @@ def load_worker_key(model):
 
 def execute(plan_path):
     """Pool-task entry: one process per model turn. The runner (runner.py) calls perform() directly."""
-    asyncio.run(perform(read(plan_path), Path.cwd(), setup=configure))
+    asyncio.run(perform(check("turn-plan", read(plan_path)), Path.cwd(), setup=configure))
 
 
 def configure(model, timeout_seconds):

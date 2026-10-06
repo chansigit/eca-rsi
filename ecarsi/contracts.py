@@ -7,6 +7,8 @@ existed. Publications are immutable and resumed runs rewrite them byte for byte,
 version 1 until a version 2 is needed. To change a file's fields, add the next version here, make the
 readers accept both, then make the writer stamp it.
 """
+from numbers import Real as NUMBER
+
 REF = dict  # {"path": ..., "sha256": ...}
 COUNTS = {"n_input": int, "n_survived": int, "n_removed": int}
 STATE = ("complete", "incomplete")
@@ -32,6 +34,13 @@ KINDS = {
     # <bridge>/turns/<turn>/result.json, or a pool turn attempt's result.json: ecarsi.agent.dispatch.perform and
     # ecarsi.agent.runner, read by ecarsi.agent.dispatch when it settles the attempt
     "turn/1": {"outcome": TURN_OUTCOMES, "worker": dict},
+    # <pool>/requests/<id>/request.json: warm_pool.state.submit and retry, in whichever version submits; read by the
+    # shared workers (decision 0019)
+    "pool-request/1": {"spec": dict, "digest": str, "attempt_id": str, "runtime": dict, "runtime_digest": str,
+                       "submitted_at": NUMBER},
+    # <bridge>/requests/<id>/dispatch-<n>.json: the shared bridge (ecarsi.agent.dispatch); read by the runner or pool
+    # task that runs the turn on the request's version
+    "turn-plan/1": {"request": dict, "model": dict, "adapter_sha256": str, "timeout_seconds": NUMBER},
     # <run>/degraded/*.json: ecarsi.degraded, read by release and Periscope
     "degraded/1": {"what": str, "error": str, "at": int, "id": str},
     # <ECA-PP output>/identify_columns/result.json: eca-pp identify-columns (another repository), read by
@@ -59,3 +68,14 @@ def check(kind: str, record) -> dict:
     if problems:
         raise ValueError(f"{version}: " + "; ".join(problems))
     return record
+
+# The files the shared components and the versions both write or read (decision 0019). Update the shared side
+# first: a version may write a version above 1 of these only once the shared components know it.
+SHARED = ("pool-request", "receipt", "turn", "turn-plan")
+
+
+def unknown_to(shared_kinds, kinds=KINDS) -> list:
+    """The versions of the shared files these contracts know that `shared_kinds` (the shared components' KINDS) do
+    not. Version 1 always passes: a file without `schema` is version 1, and a reader older than its contract reads it
+    as before."""
+    return sorted(k for k in kinds if k.split("/")[0] in SHARED and not k.endswith("/1") and k not in shared_kinds)

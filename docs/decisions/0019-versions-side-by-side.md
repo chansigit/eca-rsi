@@ -45,6 +45,10 @@ being deployment steps (0003), and `switch-images.sh` retires.
 second (the kernels without their standalone flows, #28) at 11:05 after its gate ran beside the first one's, every
 workflow on its own queue and no turn planned with another version's adapter. `ops/control-plane.sh` starts the
 current version's coordinators and runners; `ops/retire-version.sh` retires a drained version; the
-`deprecate_patch` lines are gone and the replay check is no longer a deployment step. Still to build: versions that
-bring new images, the contracts, and the version on Periscope; until the first, `switch-images.sh` stays for image
-changes.
+`deprecate_patch` lines are gone and the replay check is no longer a deployment step. The files a version shares
+with the shared components have contracts (`pool-request/1`, `turn-plan/1`, `receipt/1`, `turn/1`; `contracts.SHARED`)
+and `publish-version.sh` refuses a version that writes a version of them the shared side (`INFRA` or the image) does
+not know: update `INFRA` first. Periscope's `/_control/` names each running dataset's version. The compute image's
+environment is locked (`container/science-requirements.lock`, reproduced file for file). Still to build: versions
+that bring their own images (registering several image runtimes in the pool); until then `switch-images.sh` stays
+for image changes.

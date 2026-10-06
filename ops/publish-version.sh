@@ -32,6 +32,15 @@ for k in ('ecarsi.stages.persample', 'ecarsi.stages.crosssample', 'ecarsi.stages
 for k in ('osp', 'msp', 'zmip'):
     api = importlib.import_module(k + '.api'); [getattr(api, n) for n in api.__all__]
 print('science: stages and kernel api modules import')"
+# The files it shares with the shared components (decision 0019): no version of them the shared side does not know.
+SHARED_CODE=${INFRA:+$CODE_HOME/versions/$INFRA}
+known=$(apptainer exec --cleanenv --bind "$BINDS" --env PYTHONSAFEPATH=1 --env "PYTHONPATH=${SHARED_CODE:-/opt/eca-rsi}:/opt/rsi-control" \
+  "$IMG" /usr/local/bin/python3 -c "from ecarsi.contracts import KINDS; print(' '.join(KINDS))")
+in_image "$IMG" -c "
+from ecarsi.contracts import unknown_to
+unknown = unknown_to('$known'.split())
+assert not unknown, 'the shared components (${SHARED_CODE:-image}) do not know %s: update INFRA first' % unknown
+print('contracts: the shared components know every shared file version this one writes')"
 chmod -R a-w "$TMP"
 mv -T "$TMP" "$DEST"
 echo "published $NAME ($COMMIT) in $DEST"

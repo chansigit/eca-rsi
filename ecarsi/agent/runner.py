@@ -76,7 +76,7 @@ async def run_one(marker, item):
             if not (turn_dir / "result.json").exists():
                 unfinished(turn_dir, item, "worker_lost")
             return
-        plan = read(item["plan"])
+        plan = check("turn-plan", read(item["plan"]))
         if plan is None:
             raise FileNotFoundError(item["plan"])
         await perform(plan, turn_dir)
