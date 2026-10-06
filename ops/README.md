@@ -7,7 +7,7 @@ Logs of builds and switches go to `$BASE/control-logs/`.
 
 | Script | Does |
 |---|---|
-| `control-plane.sh start\|stop\|restart\|status\|report [component…]` | the plane's components; the launcher itself comes from the control image (`container/control-plane.sh`), or from the published version named by `VERSION` / `INFRA` |
+| `control-plane.sh start\|stop\|restart\|status\|report [component…]` | the plane's components; the launcher itself comes from the control image (`container/control-plane.sh`), or from the published version named by `VERSION` / `INFRA`; once a version is current, `start\|stop\|restart\|status` take its coordinators and runners from it and the shared components from the image |
 | `publish-version.sh [commit]` | a commit as a read-only version in `$CODE_HOME/versions/<commit12>/`, import-checked in both images (decision 0019) |
 | `start-version.sh <name> [n]` | that version's coordinators (on its own task queue) and runners, next to the running ones |
 | `set-current.sh <name>` | new datasets and `run.sh` use that version from now on; refused while no coordinator serves it |

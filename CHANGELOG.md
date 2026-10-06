@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **The first version is current (decision 0019, step 3).** Version `ded8588df51d` passed the gate beside
+  production (all 23 workflows on its queue) and is current; its 4 coordinators and its runners serve every new
+  dataset, and the image's coordinators on `ecarsi-durable-v2` are stopped. `ops/control-plane.sh
+  start|stop|restart|status` without `VERSION` now runs the current version's coordinators and runners beside the
+  image's shared components, so a plane restart no longer brings back coordinators on the old queue.
 - **Code versions side by side, step 1 (decision 0019).** The machinery is on main and inert until a version is
   published: `ecarsi.version()` / `ecarsi.task_queue()` (a queue per version, read in the coordinator's `main`
   because Temporal's sandbox forbids file access while it imports workflow modules; a new test loads every workflow
