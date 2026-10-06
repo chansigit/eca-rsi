@@ -1,0 +1,56 @@
+# TODO
+
+Open items from the 2026-09-04 code review, after the passes that closed the
+evidence/tool split, the statistics tests, the report and resources tests,
+the dependency cleanup, the logging switch and the harmonypy 2.0 upgrade
+(see `CHANGELOG.md`). Items below are what remains, in the recommended order.
+
+## Phase 3 leftovers
+
+- [x] Keep `test_step_recovery.py::test_completed_integration_allows_external_annotation_report`
+      as a fast recovery regression; the separate end-to-end integration test
+      exercises the real numerical path. These cover different failure modes.
+- [x] The configured total coverage floor is already 80 percent. Add direct
+      `_cluster_context` / `_prior_label_columns` tests and real-graph
+      `_subcluster_once` tests, including removed and singleton siblings.
+      Remaining agent-session branch coverage can grow with concrete bugs.
+
+## Smaller items
+
+- [ ] Figures are not byte-reproducible: two runs of the same code on the
+      synthetic dataset differ in `figures/umap_msp_leiden_r2.0.png`
+      (adjustText's label repulsion is randomized and time-limited). The
+      installed adjustText API has no dedicated seed argument: reproducible
+      rendering needs controlled RNG state plus a fixed iteration budget,
+      with concurrency and label-quality checks. Defer until byte-level
+      figure reproducibility is required; this is not a scientific-output
+      correctness fix.
+- [ ] `DegTables` still loads every remaining CSV under 64 MB into SQLite on
+      each agent session. Defer optimization until representative session
+      start-up time and peak memory are measured. If warranted, implement
+      on-demand CSV import, checking that query results, available-table
+      descriptions and read-only SQL protections remain unchanged; record
+      before/after start-up time and peak memory. CSV files cannot be loaded
+      directly through SQLite `ATTACH`.
+- [ ] `report.py` section functions read their CSVs with the `csv` module and
+      hand-build tables; a shared `_table(rows, columns, style=...)` helper
+      would remove most of the repetition. Defer this maintenance refactor
+      because it does not resolve a current output defect. Acceptance:
+      preserve each section's rendered content and layout, escaping,
+      missing/empty-table behavior and existing report regression tests.
+
+## Integration maintenance (2026-09-05)
+
+- [x] Summarize Scanpy's repeated log2 numerical warnings in every MSP DEG
+      path without replacing non-finite results or suppressing other errors.
+- [x] Quiet Harmony iteration logs by default, with explicit verbose override.
+- [x] Expose all seven helpers ZMIP used privately; keep old names for 0.3.
+- [x] Complete the full-size 19Liu inspect/annotate/report engineering audit
+      (2026-09-05): 81,079 input cells; inspect/annotation and six ZMIP lineages
+      completed, with 75,394 final cells. Checked expression/counts, cell and
+      gene order, removal ledgers, reassignment records and report contents.
+      The final report, parallel-DE and ZMIP status patches have separate
+      validation; the full chain was not rerun with all three final files.
+      This establishes engineering and data-contract acceptance, not
+      independent biological accuracy. Sample and condition are confounded;
+      uncertain removal decisions and labels still need independent review.

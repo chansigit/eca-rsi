@@ -1,0 +1,398 @@
+"""Cluster Annotations: PAGA neighbours, global and local DEG tables at the
+r1.0 / r2.0 resolutions, and the dissociation-stress signature check."""
+
+from __future__ import annotations
+
+import logging
+import os
+from copy import deepcopy
+
+import anndata as an
+import numpy as np
+import pandas as pd
+import scanpy as sc
+
+from ..compute import gpu_requested, resolve_endpoint
+from ..deg_logging import rank_genes_groups
+
+log = logging.getLogger(__name__)
+
+# Conservative "dissociation stress" core panel (not osp's full ~130-gene
+# DISSOCIATION_GENES_HS — that one includes ECM/lineage genes like DCN,
+# LMNA, SERPINE1 that are real cell-identity markers in plenty of tissues).
+# Two independent, mechanistically distinct, well-established acute-
+# dissociation-stress axes: heat-shock/chaperone response, and AP-1/
+# immediate-early transcription — both firing together is far more specific
+# than one broad gene list. Human symbols; matched case-insensitively
+# (dataset gene names uppercased before lookup) so mouse data works too.
+STRESS_GENES_CORE = [
+    "HSPA1A",
+    "HSPA1B",
+    "HSPA8",
+    "HSPB1",
+    "HSP90AA1",
+    "HSP90AB1",
+    "HSPH1",
+    "HSPE1",
+    "DNAJA1",
+    "DNAJB1",
+    "DNAJB4",
+    "FOS",
+    "FOSB",
+    "JUN",
+    "JUNB",
+    "JUND",
+    "EGR1",
+    "EGR2",
+    "ATF3",
+    "NR4A1",
+    "PPP1R15A",
+    "ZFP36",
+    "IER2",
+    "IER3",
+    "DUSP1",
+]
+STRESS_GENE_SET = set(STRESS_GENES_CORE)
+STRESS_HIT_THRESHOLD = 3  # a cluster is "stress" if MORE than this many top genes hit
+STRESS_CHECK_TOP_N = 10  # matches what the report displays, independent of top_n_de
+MIN_DE_GROUP_SIZE = 10  # clusters smaller than this are excluded from DE comparisons
+# (both global one-vs-rest and local vs-PAGA-neighbors views)
+
+
+def _is_stress_gene(symbol) -> bool:
+    su = str(symbol).upper()
+    return su in STRESS_GENE_SET or su.startswith("MT-")
+
+
+def _stress_hits(names) -> list[str]:
+    return [n for n in names if _is_stress_gene(n)]
+
+
+def _global_deg_workspace(ad, genes=None):
+    """Private mutable metadata and a safe numerical workspace, on the `genes` mask if given.
+
+    Scanpy eliminates explicit zeros in sparse X in place, even when no
+    zeros are present. Copy sparse buffers so concurrent globals cannot
+    mutate shared input or fail on read-only mapped files (a column subset
+    is a new matrix already). Dense X remains shared when all genes are
+    kept; counts layers and graphs are never copied.
+    """
+    from scipy import sparse
+    X, var = ad.X, ad.var
+    if genes is not None and not genes.all():
+        X, var = X[:, genes], var.iloc[genes]
+    elif sparse.issparse(X):
+        X = X.copy()
+    return an.AnnData(X=X, obs=ad.obs.copy(), var=var.copy(), uns=deepcopy(ad.uns))
+
+
+def save_deg_input(data, directory):
+    """Shared read-only expression buffers; comparisons need no counts or graphs."""
+    from pathlib import Path
+    from scipy import sparse
+    directory = Path(directory)
+    directory.mkdir()
+    if sparse.issparse(data.X):
+        matrix = data.X.tocsr()
+        for name in ("data", "indices", "indptr"):
+            np.save(directory / (name + ".npy"), getattr(matrix, name))
+    else:
+        np.save(directory / "matrix.npy", data.X)
+    an.AnnData(obs=data.obs.copy(), var=data.var.copy(),
+               uns={"log1p": dict(data.uns.get("log1p", {}))}).write_h5ad(directory / "metadata.h5ad")
+
+
+def load_deg_input(directory):
+    from pathlib import Path
+    from scipy import sparse
+    directory = Path(directory)
+    meta = an.read_h5ad(directory / "metadata.h5ad")
+    if (directory / "matrix.npy").exists():
+        matrix = np.load(directory / "matrix.npy", mmap_mode="r")
+    else:
+        matrix = sparse.csr_matrix(tuple(np.load(directory / (n + ".npy"), mmap_mode="r")
+                                         for n in ("data", "indices", "indptr")), shape=meta.shape, copy=False)
+    return an.AnnData(X=matrix, obs=meta.obs, var=meta.var, uns=meta.uns)
+
+
+def prepare_deg(X, var_names, labels, log1p, rep, keys, gpu=False):
+    """Freeze the eligible population, rebuild its graph and define comparisons."""
+    neighbors = sc.pp.neighbors
+    if gpu:
+        import rapids_singlecell as rsc
+        neighbors = rsc.pp.neighbors
+    obs = pd.DataFrame(
+        {k: pd.Categorical.from_codes(*labels[k]) for k in keys}, index=pd.RangeIndex(X.shape[0]).astype(str)
+    )
+    ad_excl = an.AnnData(X=X, obs=obs, var=pd.DataFrame(index=pd.Index(var_names)), uns={"log1p": dict(log1p)})
+    if rep is not None:
+        ad_excl.obsm["X_pca_harmony"] = rep
+    log.info("== cluster annotations: neighbors on the excluded subset" + (" [gpu]" if gpu else ""))
+    if ad_excl.n_obs > 2:
+        neighbors(ad_excl, use_rep="X_pca_harmony")
+
+    # phase 1 (sequential, cheap): PAGA + neighbour tables + the task list
+    plan, paga, skipped = [], {}, {}  # per key: dict(key, cats, valid_groups, top3)
+    for key in keys:
+        log.info(f"== cluster annotations on {key}")
+        cats = list(ad_excl.obs[key].cat.categories)
+        if ad_excl.n_obs > 2 and len(cats) > 1:
+            sc.tl.paga(ad_excl, groups=key)
+            conn = ad_excl.uns["paga"]["connectivities"].toarray()
+        else:
+            conn = np.zeros((len(cats), len(cats)))
+
+        top3, neighbor_rows = {}, []
+        for i, c in enumerate(cats):
+            order = np.argsort(conn[i])[::-1]
+            picked = [cats[j] for j in order if j != i and conn[i, j] > 0][:3]
+            top3[c] = picked
+            for rank, nb in enumerate(picked, start=1):
+                neighbor_rows.append(
+                    {
+                        "cluster": c,
+                        "neighbor": nb,
+                        "rank": rank,
+                        "connectivity": round(float(conn[i, cats.index(nb)]), 4),
+                    }
+                )
+        paga[key] = neighbor_rows
+
+        # wilcoxon needs >=2 cells per group to run at all, but a cluster that
+        # tiny (can survive this far when it's PAGA-connected enough not to get
+        # merged) doesn't give trustworthy DE either; require MIN_DE_GROUP_SIZE
+        sizes = ad_excl.obs[key].value_counts()
+        valid_groups = [c for c in cats if sizes.get(c, 0) >= MIN_DE_GROUP_SIZE
+                        and ad_excl.n_obs - sizes.get(c, 0) >= 2]
+        skipped[key] = [c for c in cats if c not in valid_groups]
+        if not valid_groups:
+            continue
+        plan.append({"key": key, "cats": cats, "valid": valid_groups, "top3": top3})
+
+    return ad_excl, {"paga": paga, "skipped": skipped, "plan": plan}
+
+
+def _expressed(ad):
+    """Genes that some cell of `ad` expresses: a stored value in sparse X (an explicit zero keeps its
+    gene, which is only tested for nothing), a nonzero in dense X. Read in blocks: the mapped indices of
+    a 400k-cell input hold about a billion entries."""
+    from scipy import sparse
+    X = ad.X
+    keep = np.zeros(ad.n_vars, bool)
+    if sparse.issparse(X):
+        indices = X.tocsr().indices
+        for start in range(0, len(indices), 1 << 26):
+            keep[indices[start:start + (1 << 26)]] = True
+        return keep
+    for start in range(0, ad.n_obs, 10000):
+        keep |= (np.asarray(X[start:start + 10000]) != 0).any(axis=0)
+    return keep
+
+
+def _adjust_over_all_genes(df, n_genes):
+    """Benjamini-Hochberg over all n_genes genes of the data, as Scanpy computes it: the genes left out
+    have p = 1 and only count toward the number of tests."""
+    from statsmodels.stats.multitest import multipletests
+    df = df.copy()
+    for _, rows in (df.groupby("group", observed=True, sort=False) if "group" in df else [(None, df)]):
+        p = rows["pvals"].fillna(1).to_numpy(float)
+        padded = np.concatenate([p, np.ones(n_genes - len(p))])
+        df.loc[rows.index, "pvals_adj"] = multipletests(padded, alpha=0.05, method="fdr_bh")[1][: len(p)]
+    return df
+
+
+def compute_deg_task(ad_excl, item, cluster=None, gpu=False):
+    """One global resolution or one local target; input metadata is never mutated.
+
+    Genes no cell of the comparison expresses are left out of the test. Such a gene ties every cell at
+    zero: score 0, p 1, in both groups. A gene expressed in only one of the two groups is kept, of course.
+    Scores, p-values, log fold changes and percentages of the tested genes do not depend on the other
+    genes, and pvals_adj is corrected over all genes, so the tables match the full test. In the
+    2026-10-05 scale test (392k cells, 56k genes) no cell expressed 20 % of the genes, and a cluster
+    alone left out 49 % (median): the Wilcoxon cost is per gene, whatever its zeros."""
+    rgg = rank_genes_groups
+    if gpu:
+        import rapids_singlecell as rsc
+        def rgg(a, key, **kw):
+            rsc.get.anndata_to_GPU(a)
+            return rsc.tl.rank_genes_groups(a, key, **{k: v for k, v in kw.items() if k != "use_raw"})
+    if cluster is None:
+        key = item["key"]
+        slot = f"_rgg_{key}"
+        work = _global_deg_workspace(ad_excl, _expressed(ad_excl))
+        rgg(work, key, groups=item["valid"], method="wilcoxon", use_raw=False, pts=True, key_added=slot)
+        gdf = sc.get.rank_genes_groups_df(work, group=None, key=slot)
+        # Scanpy omits group when only one group qualifies for testing.
+        if "group" not in gdf and len(item["valid"]) == 1:
+            gdf.insert(0, "group", item["valid"][0])
+        gdf = _adjust_over_all_genes(gdf, ad_excl.n_vars)
+        return gdf.rename(columns={"pct_nz_group": "pct1", "pct_nz_reference": "pct2"})
+
+    else:
+        c = cluster
+        key = item["key"]
+        neighbors = item["top3"].get(c, [])
+        if not neighbors:
+            return None
+        sub = ad_excl[ad_excl.obs[key].isin([c, *neighbors])]
+        if int((sub.obs[key] == c).sum()) < MIN_DE_GROUP_SIZE:
+            return None
+        sub = sub[:, _expressed(sub)].copy()
+        rgg(sub, key, groups=[c], reference="rest", method="wilcoxon", use_raw=False, pts=True)
+        ldf = _adjust_over_all_genes(sc.get.rank_genes_groups_df(sub, group=c), ad_excl.n_vars)
+        ldf = ldf.rename(columns={"pct_nz_group": "pct1", "pct_nz_reference": "pct2"})
+        # rank_genes_groups_df drops the "group" column when `group` is a scalar
+        # (only keeps it for group=None/list) — put it back for schema parity
+        # with the global-view CSV and so the report can key off it
+        ldf.insert(0, "group", c)
+        ldf["neighbors"] = "|".join(neighbors)
+        return ldf
+
+
+
+def _compute_de(X, var_names, labels, log1p, rep, keys, gpu=False):
+    """Legacy combined endpoint, using the same independently schedulable kernels."""
+    from concurrent.futures import ThreadPoolExecutor
+    from ..resources import available_cpus
+    ad_excl, out = prepare_deg(X, var_names, labels, log1p, rep, keys, gpu=gpu)
+    n_workers = 1 if gpu else max(1, min(available_cpus(), 8))
+    with ThreadPoolExecutor(max_workers=n_workers) as pool:
+        futures = []
+        for item in out["plan"]:
+            futures.append((item["key"], "global", None, pool.submit(compute_deg_task, ad_excl, item, gpu=gpu)))
+            for c in item["cats"]:
+                futures.append((item["key"], "local", c, pool.submit(compute_deg_task, ad_excl, item, c, gpu=gpu)))
+        out["results"] = [(key, view, c, f.result()) for key, view, c, f in futures]
+    return out
+
+
+def _cluster_annotations(ad, remove_mask, leiden_keys, resolutions, outdir, top_n_de=50):
+    """Cluster Annotations: for the r1.0 and r2.0 leiden clusterings, two DE
+    views per cluster — global (one-vs-rest, as before) and local (one-vs-
+    its-top-3-PAGA-neighbors, pooled). remove_mask (see
+    _preannotation_removal, the union of minor_sibling_qc fragments and
+    cell-level doublet/ambient outliers) is excluded from BOTH views (and
+    from the PAGA graph itself) — this is a computation-only exclusion, msp
+    never drops cells from ad or the written h5ad.
+
+    Each (key, cluster) is also checked for a dissociation-stress signature
+    (STRESS_GENES_CORE / mitochondrial genes) among its top
+    STRESS_CHECK_TOP_N genes, in each view separately — but if EITHER view
+    hits the threshold, the whole (key, cluster) is recommend_removal,
+    written to stress_clusters.csv. Same rule as everywhere else in msp:
+    propose, never remove cells directly.
+
+    The wilcoxon runs (2 global + one local per cluster per key, all
+    independent of each other) go through a thread pool sized to the CPUs
+    this process may actually use (msp.resources): on a 59k-cell object the
+    stage dropped from ~5 min to ~2.3 min. Outputs are assembled in the
+    same key/cluster order as the old sequential loop, so the CSVs are
+    byte-identical; every run owns its mutable metadata, so global result
+    writes cannot race with local subset copying."""
+    keep_mask = ~remove_mask
+    n_excluded = int((~keep_mask).sum())
+    ad_excl = ad[keep_mask].copy()
+    log.info(
+        f"== cluster annotations: excluding {n_excluded} recommend_removal cells ({ad_excl.n_obs}/{ad.n_obs} remain)",
+    )
+
+    res_to_key = dict(zip(resolutions, leiden_keys, strict=True))
+    target = [(r, res_to_key[r]) for r in (1.0, 2.0) if r in res_to_key]
+    if not target:
+        log.warning("== cluster annotations: neither r1.0 nor r2.0 in resolutions — skipping")
+        return
+
+    # phases 1+2 run as one ComputeEndpoint task on arrays only (see
+    # pipeline._run_harmony); categoricals travel as (codes, categories).
+    # ponytail: ships the whole log-normalized X of the survivors through the
+    # endpoint (~1 GB at 60k cells); stage a file path instead if a remote pool
+    # ever makes that transfer the bottleneck.
+    keys = [key for _, key in target]
+    labels = {k: (ad_excl.obs[k].cat.codes.to_numpy(), list(ad_excl.obs[k].cat.categories)) for k in keys}
+    rep = ad_excl.obsm.get("X_pca_harmony", None)
+    gpu = gpu_requested()
+    with resolve_endpoint() as ep:
+        out = ep.submit(
+            _compute_de,
+            ad_excl.X,
+            list(ad_excl.var_names),
+            labels,
+            dict(ad_excl.uns.get("log1p", {})),
+            rep,
+            keys,
+            gpu=gpu,
+            tier="gpu" if gpu else "cpu",
+        ).result()
+    write_deg_results(out, keys, outdir, top_n_de)
+
+
+def write_deg_results(out, keys, outdir, top_n_de=50):
+    """Single writer for legacy and scheduled comparison outputs."""
+    plan, results = out["plan"], out["results"]
+    for key in keys:
+        # Keep the existing columns even when this graph has no positive edges.
+        pd.DataFrame(out["paga"][key], columns=["cluster", "neighbor", "rank", "connectivity"]).to_csv(
+            os.path.join(outdir, f"paga_neighbors_{key}.csv"), index=False
+        )
+        if out["skipped"][key]:
+            log.info(
+                f"== cluster annotations: skipping global DE for undersized "
+                f"(<{MIN_DE_GROUP_SIZE} cells) cluster(s) {out['skipped'][key]} in {key}",
+            )
+
+    # phase 3 (sequential): write tables + stress rows in the old loop's order
+    stress_rows = []
+    for item in plan:
+        key = item["key"]
+        gdf = next(res for k, view, c, res in results if k == key and view == "global")
+        gdf.groupby("group", observed=True).head(top_n_de).reset_index(drop=True).to_csv(
+            os.path.join(outdir, f"deg_global_{key}.csv"), index=False
+        )
+        for c, sub in gdf.groupby("group", observed=True).head(STRESS_CHECK_TOP_N).groupby("group", observed=True):
+            hits = _stress_hits(sub["names"].tolist())
+            stress_rows.append(
+                {
+                    "key": key,
+                    "cluster": c,
+                    "view": "global",
+                    "n_hits": len(hits),
+                    "hit_genes": "|".join(hits),
+                    "stress": len(hits) > STRESS_HIT_THRESHOLD,
+                }
+            )
+        local_rows = []
+        for k, view, c, ldf in results:
+            if k != key or view != "local" or ldf is None:
+                continue
+            hits = _stress_hits(ldf.head(STRESS_CHECK_TOP_N)["names"].tolist())
+            stress_rows.append(
+                {
+                    "key": key,
+                    "cluster": c,
+                    "view": "local",
+                    "n_hits": len(hits),
+                    "hit_genes": "|".join(hits),
+                    "stress": len(hits) > STRESS_HIT_THRESHOLD,
+                }
+            )
+            local_rows.append(ldf.head(top_n_de))
+        if local_rows:
+            pd.concat(local_rows, ignore_index=True).to_csv(os.path.join(outdir, f"deg_local_{key}.csv"), index=False)
+
+    if stress_rows:
+        stress_df = pd.DataFrame(stress_rows)
+        # a cluster is recommend_removal overall if EITHER its global or its
+        # local view hit the stress threshold — not judged per-view
+        overall = (
+            stress_df.groupby(["key", "cluster"])["stress"]
+            .any()
+            .reset_index()
+            .rename(columns={"stress": "recommend_removal"})
+        )
+        stress_df = stress_df.merge(overall, on=["key", "cluster"])
+        stress_df.to_csv(os.path.join(outdir, "stress_clusters.csv"), index=False)
+        n_removal = int(overall["recommend_removal"].sum())
+        log.info(
+            f"== cluster annotations: {n_removal}/{len(overall)} (key, cluster) pairs "
+            f"recommend_removal (stress signature)",
+        )

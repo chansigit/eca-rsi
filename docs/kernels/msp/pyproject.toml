@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "msp-sc"   # PyPI distribution name (plain "msp" is taken); the import name stays `msp`
+version = "0.5.4"
+description = "Multi-sample-pipeline: harmony integration of osp per-sample outputs, cluster QC inspection and cell-type annotation agents, self-contained HTML report"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "chansigit", email = "chansigit@gmail.com" }]
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+# Lower bounds name the oldest release with the APIs msp calls:
+#   scanpy 1.10   leiden(flavor="igraph"), rank_genes_groups(pts=True) df schema
+#   anndata 0.10  concat(join="outer", merge="same"), nullable obs round-trips
+#   pandas 2.0    groupby(observed=True) everywhere, nullable "boolean" dtype
+#   adjustText 1.0 adjust_text(expand=..., max_move=...)
+dependencies = [
+    "agent-harness-bridge>=0.2.14,<0.3",   # cooperative pause and provider-aware agent configuration
+    "scanpy>=1.10",
+    "anndata>=0.10",
+    "igraph>=0.10",
+    # 2.0 is the C++ (Armadillo) rewrite: numpy-only, ~11x faster than the
+    # torch-based 0.2.0 on 81k cells (17 s vs 199 s, 8 threads); per-PC
+    # correlation with 0.2.0 >= 0.99 on that run. See docs/developer-guide.md.
+    "harmonypy>=2.0.0,<3",
+    "standissect-lite>=0.2.0",
+    "stanhue>=1.1.0",   # hierarchical cell-type palette for the annotation UMAPs
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "scipy>=1.9",
+    "scikit-learn>=1.2",
+    "matplotlib>=3.7",
+    "seaborn>=0.12",
+    "adjustText>=1.0",
+]
+
+[project.optional-dependencies]
+agent = ["agent-harness-bridge[all]>=0.2.14,<0.3"]
+dask = ["dask[distributed]>=2024.1"]
+
+[project.urls]
+Homepage = "https://github.com/chansigit/msp"
+
+[tool.setuptools]
+packages = ["msp", "msp.integrate"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = ["build", ".msp-history"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "C4", "RUF100"]
+ignore = [
+    "E501",  # long prompt/doc strings; the formatter handles code lines
+    "C408",  # dict(k=v) keyword style is intentional for kwargs bundles
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q -p no:cacheprovider"
+filterwarnings = [
+    "error::FutureWarning:msp",
+]
+
+[tool.coverage.run]
+source = ["msp"]
+omit = ["msp/harness.py"]
+
+[tool.coverage.report]
+fail_under = 80

@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"
+     role="img" aria-labelledby="msp-logo-title msp-logo-desc">
+  <title id="msp-logo-title">MSP — a shared cell atlas</title>
+  <desc id="msp-logo-desc">Three distinct organic populations share intertwined blue,
+    jade, and amber bands. Shape represents biological identity; the recurring
+    colors represent samples integrated into each population. An open, oblique
+    channel between the islands lightly suggests an M. A fine circular frame
+    holds the atlas together. An abstract mark, not a data plot.</desc>
+
+  <defs>
+    <!-- Unequal, curved populations keep the atlas asymmetric. Their concave
+         edges suggest a loose M in the oblique channel between them. -->
+    <path id="population-a" d="M221 87C173 76 121 105 97 150C72 197 80 251 101 288
+      C115 312 135 326 147 314C158 302 148 279 149 254C150 228 154 205 165 190
+      C176 175 187 186 202 203C218 221 228 235 239 234C255 233 251 210 250 191
+      C249 166 259 138 247 115C241 102 232 91 221 87Z"/>
+    <path id="population-b" d="M361 111C403 109 435 146 438 185C441 220 427 254 404 272
+      C384 288 363 286 352 268C341 250 351 229 342 214C331 198 321 202 307 216
+      C294 230 280 244 273 237C265 229 278 208 286 193C303 163 308 138 330 122
+      C339 115 350 112 361 111Z"/>
+    <path id="population-c" d="M175 281C180 262 197 270 212 285C230 305 241 316 259 310
+      C284 301 303 269 325 271C352 272 369 302 366 329C363 357 340 369 315 389
+      C287 411 254 431 218 420C185 410 167 383 164 353C160 323 167 310 175 281Z"/>
+    <clipPath id="clip-a"><use href="#population-a"/></clipPath>
+    <clipPath id="clip-b"><use href="#population-b"/></clipPath>
+    <clipPath id="clip-c"><use href="#population-c"/></clipPath>
+  </defs>
+
+  <!-- Each population contains the same three sample colors. The bands bend
+       together within a population, rather than converging into one central hub. -->
+  <circle cx="256" cy="256" r="226" fill="none" stroke="#2855BD" stroke-width="4.5"/>
+  <g transform="translate(256 256) scale(.97) translate(-256 -256) rotate(-24 256 256)">
+    <g clip-path="url(#clip-a)">
+      <use href="#population-a" fill="#2855BD"/>
+      <path d="M78 92C96 130 125 141 155 147C193 155 213 176 224 205C235 235 222 265 218 285"
+            fill="none" stroke="#FFFFFF" stroke-width="79"/>
+      <path d="M78 92C96 130 125 141 155 147C193 155 213 176 224 205C235 235 222 265 218 285"
+            fill="none" stroke="#20AD98" stroke-width="68"/>
+      <path d="M60 154C94 184 119 187 144 196C171 206 185 239 179 282"
+            fill="none" stroke="#FFFFFF" stroke-width="40"/>
+      <path d="M60 154C94 184 119 187 144 196C171 206 185 239 179 282"
+            fill="none" stroke="#F0B54D" stroke-width="29"/>
+    </g>
+
+    <g clip-path="url(#clip-b)">
+      <use href="#population-b" fill="#2855BD"/>
+      <path d="M339 100C391 119 411 141 408 175C405 210 379 234 397 294"
+            fill="none" stroke="#FFFFFF" stroke-width="65"/>
+      <path d="M339 100C391 119 411 141 408 175C405 210 379 234 397 294"
+            fill="none" stroke="#20AD98" stroke-width="54"/>
+      <path d="M321 126C353 149 365 165 365 187C365 216 352 240 365 288"
+            fill="none" stroke="#FFFFFF" stroke-width="33"/>
+      <path d="M321 126C353 149 365 165 365 187C365 216 352 240 365 288"
+            fill="none" stroke="#F0B54D" stroke-width="22"/>
+    </g>
+
+    <g clip-path="url(#clip-c)">
+      <use href="#population-c" fill="#2855BD"/>
+      <path d="M106 365C149 386 173 365 204 357C248 345 275 352 302 375C327 397 364 411 411 392"
+            fill="none" stroke="#FFFFFF" stroke-width="69"/>
+      <path d="M106 365C149 386 173 365 204 357C248 345 275 352 302 375C327 397 364 411 411 392"
+            fill="none" stroke="#20AD98" stroke-width="58"/>
+      <path d="M118 320C151 340 174 333 199 322C233 306 263 310 288 329C322 356 346 365 405 357"
+            fill="none" stroke="#FFFFFF" stroke-width="34"/>
+      <path d="M118 320C151 340 174 333 199 322C233 306 263 310 288 329C322 356 346 365 405 357"
+            fill="none" stroke="#F0B54D" stroke-width="23"/>
+    </g>
+  </g>
+</svg>
