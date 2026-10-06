@@ -1,7 +1,9 @@
 """The release gate for a new image pair: run one fixed small dataset end to end and check what a good run has.
 
 usage (control image; ops/run.sh passes BASE and CONTROL):
-  bash ops/runpy.sh ops/gate.py start [label]      start the gate dataset from ~/.config/ecarsi/gate-dataset.json
+  bash ops/runpy.sh ops/gate.py start [--stress-policy=keep] [label]
+                                                   start the gate dataset from ~/.config/ecarsi/gate-dataset.json,
+                                                   optionally under a stress policy (decision 0017; run id ends -keep)
   bash ops/runpy.sh ops/gate.py wait <run_id>      wait for it (one long Temporal call: run it in the background), then check
   bash ops/runpy.sh ops/gate.py check <run root>   the checks alone, on any finished run
 
@@ -29,10 +31,14 @@ BASE, CONTROL = Path(os.environ["BASE"]), os.environ["CONTROL"]  # ops/run.sh pa
 RUNS = BASE.parent / "runs" / "gate"
 
 
-def start(label=None):
+def start(*args):
+    policy = args[0].split("=", 1)[1] if args and args[0].startswith("--stress-policy=") else None
+    label = (args[1:] if policy else args)[0] if len(args) > bool(policy) else None
     template = json.loads((Path.home() / ".config/ecarsi/gate-dataset.json").read_text())
-    run_id = "gate-" + time.strftime("%Y%m%d-%H%M")
+    run_id = "gate-" + time.strftime("%Y%m%d-%H%M") + (f"-{policy}" if policy else "")
     spec = dict(template, run_id=run_id, output_root=str(RUNS / run_id), dataset_id=f"Gate {label or run_id}")
+    if policy:
+        spec["stress_policy"] = policy
     (RUNS / "specs").mkdir(mode=0o700, parents=True, exist_ok=True)
     path = RUNS / "specs" / f"{run_id}.json"
     path.write_text(json.dumps(spec, indent=1) + "\n")
