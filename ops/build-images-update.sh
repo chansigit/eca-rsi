@@ -17,7 +17,7 @@ WORK=$BUILD_DIR/images-$STAMP
 git -C "$REPO" diff --quiet && git -C "$REPO" diff --cached --quiet || { echo "eca-rsi checkout is dirty"; exit 2; }
 COMMIT=$(git -C "$REPO" rev-parse --short HEAD)
 mkdir -p "$WORK/replaced"; cd "$WORK"
-PACKAGES="ecarsi osp msp zmip standissect_lite harness_bridge"   # decision 0018: one repository
+PACKAGES="ecarsi osp msp zmip standissect_lite harness_bridge genesets"   # decision 0018: one repository
 git -C "$REPO" archive HEAD $PACKAGES container pyproject.toml README.md > eca-rsi.tar
 # A distribution's own files by its RECORD (a hand-installed one has only top_level.txt) and its dist-info, moved
 # aside; never "..", "bin" (shared console scripts) or hidden names. Prints each site it was in.

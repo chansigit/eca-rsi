@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **One stress panel and one mitochondrial rule for every species (decision 0020, #29).** A package `genesets/`
+  shared by osp and msp. `is_mito`: an MT- prefix or the bare names of rhesus, cynomolgus and mouse lemur (ND1, COX1,
+  CYTB, ...), the rule of stangene.mito; OSP's `pct_counts_mt` and msp's `mito` mark use it, OSP's summary records
+  `n_mito_genes`, and a sample with none is listed in needs_review. `is_stress`: 35 genes chosen from eight published
+  signatures by their coherence with the core in 34 human and mouse atlases, matched by symbol or Ensembl ID in eight
+  species; it replaces both OSP's 140-gene `DISSOCIATION_GENES_HS` (dissociation_score, fragment QC's dissociation
+  test) and msp's 25-gene `STRESS_GENES_CORE` (stress_clusters.csv). `genesets/stress_panel.tsv` records every gene
+  considered with its evidence and reason. OSP's `mt_prefix` argument is gone.
 - **Worker nodes join by themselves (#44).** INSTALL.md A.7 documents `ops/worker-node.sh` as the way to submit
   workers on this deployment (Slurm on Sherlock, not a mechanism of the package), with a bigmem example, and what
   `switch-images.sh` does to such jobs.

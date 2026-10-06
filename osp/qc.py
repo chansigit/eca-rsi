@@ -4,15 +4,16 @@ Per-sample QC for a single scRNA-seq sample.
 Three-layer QC logic (hard thresholds + MAD outliers + Scrublet) plus DecontX
 ambient-RNA monitoring. Call it on one sample's AnnData (or a view) at a time
 — convenient for per-sample review and for iterating on thresholds in a
-notebook. No species/tissue assumption: mt/ribo/hb gene detection is
-case-insensitive by default, so both mouse (mt-, Rps6, Hba-a1) and human
-(MT-, RPS6, HBA1) naming work; a species preset or custom prefix/regex can
-also be passed. Malat1 (a nuclear-retention / cell-integrity indicator — low
+notebook. No species/tissue assumption: mitochondrial genes follow genesets.is_mito
+(MT- prefix, or the bare names of rhesus, cynomolgus and mouse lemur; decision
+0020), and ribo/hb detection is case-insensitive, so both mouse (Rps6, Hba-a1)
+and human (RPS6, HBA1) naming work; a species preset or custom regex can also
+be passed. Malat1 (a nuclear-retention / cell-integrity indicator — low
 expression often means a damaged cell or ambient-dominated droplet) is matched
 case-insensitively too, producing obs["pct_counts_malat1"]; if the gene is
 absent from the panel it is silently skipped. A "dissociation stress" score
 obs["dissociation_score"] is computed with sc.tl.score_genes over
-DISSOCIATION_GENES_HS (case-insensitive match, replaceable via
+the panel of genesets.is_stress (any species, decision 0020; replaceable via
 dissociation_genes=) — high scores suggest the cell/sample is dominated by
 the stress response induced by tissue dissociation itself.
 
@@ -54,6 +55,8 @@ import scipy.sparse as sp
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+from genesets import is_mito, is_stress
 
 from ._io import atomic_write_dataframe_csv, atomic_write_json
 import logging
@@ -254,47 +257,15 @@ def _coarse_clusters_for_decontx(ad, n_top_genes=2000, n_pcs=30, resolution=1.0)
     return z
 
 
-# mt/ribo/hb gene names differ only in case between species (mouse
-# mt-/Rps6/Hba-a1, human MT-/RPS6/HBA1); the matches below all use case=False
-# so both work without this table. The species parameter is an entry point for
-# callers who want to be explicit or align with another convention — an
-# unknown species name raises instead of silently applying the wrong regex.
+# ribo/hb gene names differ only in case between species (mouse Rps6/Hba-a1,
+# human RPS6/HBA1); the matches below all use case=False so both work without
+# this table. The species parameter is an entry point for callers who want to
+# be explicit -- an unknown species name raises instead of silently applying
+# the wrong regex. Mitochondrial genes need no species (genesets.is_mito).
 SPECIES_GENE_PATTERNS = {
-    "mouse": {"mt_prefix": "mt-", "ribo_regex": r"^Rp[sl]\d", "hb_regex": r"^Hb[ab]"},
-    "human": {"mt_prefix": "MT-", "ribo_regex": r"^RP[SL]\d", "hb_regex": r"^HB[AB]"},
+    "mouse": {"ribo_regex": r"^Rp[sl]\d", "hb_regex": r"^Hb[ab]"},
+    "human": {"ribo_regex": r"^RP[SL]\d", "hb_regex": r"^HB[AB]"},
 }
-
-
-# "Dissociation stress" gene panel — early-response/stress genes induced by
-# the tissue dissociation protocol itself (heat shock, immediate-early genes,
-# AP-1 family, ...), not by the biology under study. High expression flags
-# cells/samples where dissociation artifact may be dominating the signal,
-# independent of the mt%/doublet/ambient-RNA axes already covered above.
-# Human gene symbols; matched case-insensitively against var_names so mouse
-# data (same symbols, different case convention) works too — genes not
-# present in a given panel are simply skipped, no guessing/expanding.
-# fmt: off
-DISSOCIATION_GENES_HS = [
-    "ACTG1", "ANKRD1", "ARID5A", "ATF3", "ATF4", "BAG3", "BHLHE40",
-    "CCNL1", "CCRN4L", "CEBPB", "CEBPD", "CEBPG", "CSRNP1", "CXCL1", "CYR61",
-    "DCN", "DDX3X", "DDX5", "DES", "DNAJA1", "DNAJB1", "DNAJB4", "DUSP1", "DUSP8",
-    "EGR1", "EGR2", "EIF1", "EIF5", "ERF", "ERRFI1", "FAM132B", "FOS", "FOSB",
-    "FOSL2", "GADD45A", "GADD45G", "BRD2", "BTG1", "BTG2", "GCC1", "GEM",
-    "H3F3B", "HIPK3", "HSP90AA1", "HSP90AB1", "HSPA1A", "HSPA1B", "HSPA5",
-    "HSPA8", "HSPB1", "HSPE1", "HSPH1", "ID3", "IDI1", "IER2", "IER3", "IER5",
-    "IFRD1", "IL6", "IRF1", "IRF8", "ITPKC", "JUN", "JUNB", "JUND", "KCNE4",
-    "KLF2", "KLF4", "KLF6", "KLF9", "LITAF", "LMNA", "MAFF", "MAFK", "MCL1",
-    "MIDN", "MIR22HG", "MT1", "MT2", "MYADM", "MYC", "MYD88", "NCKAP5L",
-    "NCOA7", "NFKBIA", "NFKBIZ", "NOP58", "NPPC", "NR4A1", "ODC1", "OSGIN1",
-    "OXNAD1", "PCF11", "PDE4B", "PER1", "PHLDA1", "PNP", "PNRC1", "PPP1CC",
-    "PPP1R15A", "PXDC1", "RAP1B", "RASSF1", "RHOB", "RHOH", "RIPK1", "SAT1",
-    "SBNO2", "SDC4", "SERPINE1", "SKIL", "SLC10A6", "SLC38A2", "SLC41A1",
-    "SOCS3", "SQSTM1", "SRF", "SRSF5", "SRSF7", "STAT3", "TAGLN2", "TIPARP",
-    "TNFAIP3", "TNFAIP6", "TPM3", "TPPP3", "TRA2A", "TRA2B", "TRIB1", "TUBB4B",
-    "TUBB6", "UBC", "USP2", "WAC", "ZC3H12A", "ZFAND5", "ZFP36", "ZFP36L1",
-    "ZFP36L2", "ZYX",
-]
-# fmt: on
 
 
 def assert_single_sample(adata, sample_col="sample"):
@@ -324,7 +295,6 @@ def qc_one_sample(
     sample_col="sample",
     counts_layer="counts",
     species=None,
-    mt_prefix="mt-",
     ribo_regex=r"^Rp[sl]\d",
     hb_regex=r"^Hb[ab]",
     nmads=5,
@@ -390,15 +360,16 @@ def qc_one_sample(
     ranking) and ad.uns["decontx_top_genes_by_cluster"] (ranked within
     DecontX's own rough clusters), with companion CSVs + a bar chart.
 
-    mt_prefix/ribo_regex/hb_regex match case-insensitively, so the defaults
-    fit both mouse and human naming; for other species or custom panels pass
-    your own prefix/regex, or species=... to use a SPECIES_GENE_PATTERNS
-    preset (unknown names raise).
+    ribo_regex/hb_regex match case-insensitively, so the defaults fit both
+    mouse and human naming; for other species or custom panels pass your own
+    regex, or species=... to use a SPECIES_GENE_PATTERNS preset (unknown names
+    raise). summary["n_mito_genes"] counts the genes genesets.is_mito
+    recognises: 0 means pct_counts_mt and the mitochondrial filters saw nothing.
 
     With run_dissociation_score=True, obs["dissociation_score"] is computed —
     a stress/immediate-early gene panel induced by tissue dissociation itself
-    (DISSOCIATION_GENES_HS, human symbols, case-insensitive match; replace
-    via dissociation_genes=). Scoring uses sc.tl.score_genes (control-gene
+    (genesets.is_stress: symbols or Ensembl IDs of any species in its table;
+    replace via dissociation_genes=, matched case-insensitively). Scoring uses sc.tl.score_genes (control-gene
     binning, robust to sequencing depth) on a throwaway normalize+log1p copy,
     leaving the raw counts in ad.X untouched (Scrublet/DecontX below need
     them). High scores suggest the cell/sample is dominated by the
@@ -427,11 +398,7 @@ def qc_one_sample(
             raise ValueError(
                 f"unknown species {species!r}, known: {list(SPECIES_GENE_PATTERNS)}. pass mt_prefix/ribo_regex/hb_regex directly instead."
             )
-        mt_prefix, ribo_regex, hb_regex = (
-            SPECIES_GENE_PATTERNS[species]["mt_prefix"],
-            SPECIES_GENE_PATTERNS[species]["ribo_regex"],
-            SPECIES_GENE_PATTERNS[species]["hb_regex"],
-        )
+        ribo_regex, hb_regex = SPECIES_GENE_PATTERNS[species]["ribo_regex"], SPECIES_GENE_PATTERNS[species]["hb_regex"]
 
     ad = adata.copy()
     if ad.n_vars == 0:
@@ -450,7 +417,7 @@ def qc_one_sample(
         sample_label = "sample"
 
     ad.var_names_make_unique()
-    ad.var["mt"] = ad.var_names.str.match(f"^{re.escape(mt_prefix)}", case=False)
+    ad.var["mt"] = [is_mito(name) for name in ad.var_names]
     ad.var["ribo"] = ad.var_names.str.match(ribo_regex, case=False)
     ad.var["hb"] = ad.var_names.str.match(hb_regex, case=False)
     qc_vars = ["mt", "ribo", "hb"]
@@ -473,9 +440,10 @@ def qc_one_sample(
         )
 
     if run_dissociation_score:
-        diss_genes = dissociation_genes if dissociation_genes is not None else DISSOCIATION_GENES_HS
-        diss_set = {g.upper() for g in diss_genes}
-        diss_found = ad.var_names[ad.var_names.str.upper().isin(diss_set)].tolist()
+        if dissociation_genes is None:
+            diss_found = [name for name in ad.var_names if is_stress(name)]
+        else:
+            diss_found = ad.var_names[ad.var_names.str.upper().isin({g.upper() for g in dissociation_genes})].tolist()
         if diss_found:
             # score_genes needs log-normalized expression; run it on a throwaway
             # X-only copy (not ad.copy() — that would duplicate layers too) so
@@ -596,6 +564,7 @@ def qc_one_sample(
         "median_counts": float(np.median(obs["total_counts"])),
         "median_genes": float(np.median(obs["n_genes_by_counts"])),
         "median_pct_mt": float(np.median(obs["pct_counts_mt"])),
+        "n_mito_genes": int(ad.var["mt"].sum()),
         "median_pct_top20": float(np.median(obs["pct_counts_in_top_20_genes"])),
     }
     if run_scrublet:
@@ -612,6 +581,7 @@ def qc_one_sample(
         summary["median_pct_counts_malat1"] = float(obs["pct_counts_malat1"].median())
     if "dissociation_score" in obs:
         summary["median_dissociation_score"] = float(obs["dissociation_score"].median())
+        summary["n_dissociation_genes"] = len(diss_found)
 
     resolved_figdir = figdir or ("qc_figs" if make_plots else None)
     if resolved_figdir is not None:

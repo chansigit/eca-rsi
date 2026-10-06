@@ -16,7 +16,7 @@ VERSIONS=$CODE_HOME/versions; DEST=$VERSIONS/$NAME
 [ -e "$DEST" ] && { echo "already published: $DEST"; exit 0; }
 mkdir -p "$VERSIONS"; chmod 700 "$VERSIONS"
 TMP=$(mktemp -d "$VERSIONS/.$NAME.XXXX")
-git -C "$REPO" archive "$COMMIT" ecarsi osp msp zmip standissect_lite harness_bridge container | tar -x -C "$TMP"
+git -C "$REPO" archive "$COMMIT" ecarsi osp msp zmip standissect_lite harness_bridge genesets container | tar -x -C "$TMP"
 printf '{"name": "%s", "commit": "%s", "published": "%s", "control_image": "%s", "science_image": "%s"}\n' \
   "$NAME" "$COMMIT" "$(date -Iseconds)" "$IMG" "$SCIENCE_IMG" > "$TMP/version.json"
 # Both images run Python 3.12: one byte-compile serves both, and a read-only tree cannot write one later.

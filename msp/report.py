@@ -564,8 +564,8 @@ def _section_deg(outdir: str, top_n: int = 10, preannotation_figs: list[str] | N
         "are transcriptionally close and get washed out by the global one-vs-rest. A (key, "
         'cluster) is marked <b style="color:#c0392b">[recommend_removal]</b> when EITHER its '
         "global or local view has more than 3 of its displayed top genes in the conservative "
-        "heat-shock/AP-1 dissociation-stress core panel (STRESS_GENES_CORE) or mitochondrial "
-        "(MT-*) — the verdict is merged, so both the global and local rows for that cluster show "
+        "dissociation-stress panel (heat-shock and immediate-early genes; decision 0020) or, for a small "
+        "cluster against its local siblings, mitochondrially encoded — the verdict is merged, so both the global and local rows for that cluster show "
         "it even if only one of the two actually crossed the threshold. Flagged only, nothing is "
         "removed from the data (see stress_clusters.csv for per-view hit genes).</p>"
     ]

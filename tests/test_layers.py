@@ -34,11 +34,12 @@ KERNEL_USERS = {"ecarsi.stages"}
 # The repository's other packages (decision 0018): which of its own modules each may import (a name and what is
 # under it). None imports ecarsi.
 MAY_IMPORT = {  # the kernels run no agents since #28: eca-rsi's sessions do, so none imports harness_bridge
-    "osp": set(),
-    "msp": {"standissect_lite"},
+    "osp": {"genesets"},
+    "msp": {"standissect_lite", "genesets"},
     "zmip": {"msp.api"},  # like eca-rsi, through msp's contract module
     "standissect_lite": set(),
     "harness_bridge": set(),
+    "genesets": set(),  # gene sets the kernels share (decision 0020)
 }
 
 

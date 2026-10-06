@@ -23,8 +23,6 @@ ZMIP use the underscore ones.
 from .deg import (
     MIN_DE_GROUP_SIZE,
     STRESS_CHECK_TOP_N,
-    STRESS_GENE_SET,
-    STRESS_GENES_CORE,
     STRESS_HIT_THRESHOLD,
     _cluster_annotations,
     _is_stress_gene,
@@ -70,8 +68,6 @@ __all__ = [
     "QC_UMAP_METRICS",
     "SEURAT_HEATMAP_CMAP",
     "STRESS_CHECK_TOP_N",
-    "STRESS_GENES_CORE",
-    "STRESS_GENE_SET",
     "STRESS_HIT_THRESHOLD",
     "integrate_adata",
     "load_and_merge",

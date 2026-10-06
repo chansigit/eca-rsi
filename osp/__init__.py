@@ -12,7 +12,6 @@ from .cluster import (
     run_one_sample_pipeline,
 )
 from .qc import (
-    DISSOCIATION_GENES_HS,
     DOUBLET_SCORE_REFERENCE,
     SPECIES_GENE_PATTERNS,
     assert_single_sample,
@@ -24,7 +23,6 @@ from .report import generate_report
 
 __all__ = [
     "DEFAULT_QC_PCA_COVARIATES",
-    "DISSOCIATION_GENES_HS",
     "DOUBLET_SCORE_REFERENCE",
     "QC_OVERLAY_COLS",
     "SPECIES_GENE_PATTERNS",

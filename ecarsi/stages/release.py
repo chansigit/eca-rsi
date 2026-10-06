@@ -283,10 +283,17 @@ def review_items(unit, exclusions, decisions, root=None, ledger=None):
         for reason, rows in exclusions[exclusions.operation.eq('persample.partition')].groupby('reason', sort=True):
             items.append(Item('policy_excluded', 0, 'per-sample', str(reason), n_cells=len(rows), action='remove',
                 note='excluded before OSP by the sample map (spec organize.sample_map)', link=exclusions_link))
-    for entry in verified(unit['per_sample']).get('skipped_samples', []):
+    per_sample = verified(unit['per_sample'])
+    for entry in per_sample.get('skipped_samples', []):
         items.append(Item('agent_skipped', 0, 'per-sample', entry['sample'], n_cells=entry['n_cells'],
             note='annotation agent failed twice; survivors kept unannotated: ' + str(entry.get('error', ''))[:300],
             link=f"{L.GEN2_PERSAMPLE}/{entry['sample']}/report.html"))
+    for ref in per_sample.get('samples', []):  # gene names genesets.is_mito does not know (decision 0020)
+        bundle = verified(ref)
+        if str(bundle.get('validation', {}).get('qc_summary', {}).get('n_mito_genes')) == '0':
+            items.append(Item('upstream_review', 0, 'per-sample', bundle['sample'],
+                note='no mitochondrial gene recognised: pct_counts_mt is 0 and the mitochondrial QC filters saw nothing',
+                link=f"{L.GEN2_PERSAMPLE}/{bundle['sample']}/report.html"))
     for (number, stage), rows in exclusions.groupby(['round', 'release_stage'], sort=False):
         uncertain, fragments = [], {}
         for row in rows.itertuples():

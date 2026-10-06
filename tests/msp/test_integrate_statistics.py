@@ -203,6 +203,8 @@ def test_stress_and_mitochondrial_genes_are_separate_axes():
     assert not _is_stress_gene("ACTB") and not _is_stress_gene("MTOR") and not _is_stress_gene("mt-Co1")
     assert _stress_hits(["Fos", "ACTB", "mt-co1"]) == ["Fos"]
     assert _mito_hits(["Fos", "MT-ND1", "mt-co1", "MTOR", "MT2A"]) == ["MT-ND1", "mt-co1"]
+    assert _mito_hits(["ND1", "COX1", "CYTB", "PTGS1"]) == ["ND1", "COX1", "CYTB"]  # rhesus, cynomolgus, mouse lemur
+    assert _stress_hits(["fosab", "JUNB", "ENSMFAG00000052456", "DCN"]) == ["fosab", "JUNB", "ENSMFAG00000052456"]
 
 
 def test_a_small_cluster_with_mitochondrial_genes_on_top_against_its_siblings_is_marked_mito(tmp_path):
@@ -234,7 +236,7 @@ def two_cluster_graph(monkeypatch):
 @pytest.mark.parametrize("stress_names", [True, False])
 def test_stress_clusters_flag_either_view_and_merge_the_verdict(tmp_path, monkeypatch, stress_names):
     rng = np.random.default_rng(1)
-    genes = ["HSPA1A", "hspb1", "FOS", "mt-Co1", "JUN", "EGR1", "ATF3", "IER2"] if stress_names else list("ABCDEFGH")
+    genes = ["HSPA1A", "dnajb1", "FOS", "mt-Co1", "JUN", "EGR1", "ATF3", "IER2"] if stress_names else list("ABCDEFGH")
     data = ad.AnnData(
         np.log1p(rng.poisson(2, (24, 8))).astype(float),
         obs=pd.DataFrame({"k": pd.Categorical(["0"] * 12 + ["1"] * 12)}, index=[f"c{i}" for i in range(24)]),

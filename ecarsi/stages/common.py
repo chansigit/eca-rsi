@@ -150,7 +150,7 @@ def stress_policy(spec):
 def stress_flags(bundle, column='stress'):
     """(key, cluster) pairs msp marks in stress_clusters.csv. 'stress': more than 3 of the cluster's top 10 DEG
     genes are heat-shock or immediate-early genes, in its global or its local view. 'mito': a small cluster (under a
-    quarter of its local siblings' cells) has more than 3 MT- genes among its top 10 against them (owner,
+    quarter of its local siblings' cells) has more than 3 mitochondrial genes among its top 10 against them (owner,
     2026-10-06); a table from before has no such column."""
     import pandas as pd
     if 'stress_clusters.csv' not in bundle['files']:
@@ -204,7 +204,7 @@ def guard_stress(entry, policy, n_cells, flagged, dying_check, mito=False):
         supported, note = False, 'stress policy keep'
     elif state == 'dying':
         supported, note = ((True, 'stress_clusters.csv marks the cluster mito (more than 3 of its top 10 genes against '
-                            'its local siblings are MT- genes)') if mito else dying_check())
+                            'its local siblings are mitochondrial genes)') if mito else dying_check())
     else:
         supported, note = flagged, ('stress_clusters.csv marks the cluster' if flagged else
                                     'stress_clusters.csv does not mark the cluster (more than 3 of its top 10 DEG genes are stress genes)')

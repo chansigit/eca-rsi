@@ -11,52 +11,19 @@ import anndata as an
 import numpy as np
 import pandas as pd
 import scanpy as sc
+from genesets import is_mito, is_stress
 
 from ..compute import gpu_requested, resolve_endpoint
 from ..deg_logging import rank_genes_groups
 
 log = logging.getLogger(__name__)
 
-# Conservative "dissociation stress" core panel (not osp's full ~130-gene
-# DISSOCIATION_GENES_HS — that one includes ECM/lineage genes like DCN,
-# LMNA, SERPINE1 that are real cell-identity markers in plenty of tissues).
-# Two independent, mechanistically distinct, well-established acute-
-# dissociation-stress axes: heat-shock/chaperone response, and AP-1/
-# immediate-early transcription — both firing together is far more specific
-# than one broad gene list. Human symbols; matched case-insensitively
-# (dataset gene names uppercased before lookup) so mouse data works too.
-STRESS_GENES_CORE = [
-    "HSPA1A",
-    "HSPA1B",
-    "HSPA8",
-    "HSPB1",
-    "HSP90AA1",
-    "HSP90AB1",
-    "HSPH1",
-    "HSPE1",
-    "DNAJA1",
-    "DNAJB1",
-    "DNAJB4",
-    "FOS",
-    "FOSB",
-    "JUN",
-    "JUNB",
-    "JUND",
-    "EGR1",
-    "EGR2",
-    "ATF3",
-    "NR4A1",
-    "PPP1R15A",
-    "ZFP36",
-    "IER2",
-    "IER3",
-    "DUSP1",
-]
-STRESS_GENE_SET = set(STRESS_GENES_CORE)
+# The dissociation-stress panel and the mitochondrial genes come from genesets (decision 0020): one panel with osp's
+# dissociation_score, matched in any species of its table without knowing the dataset's.
 STRESS_HIT_THRESHOLD = 3  # a cluster is "stress" if MORE than this many top genes hit
 STRESS_CHECK_TOP_N = 10  # matches what the report displays, independent of top_n_de
 # Mitochondrial genes are their own axis (owner, 2026-10-06): a SMALL cluster whose top genes against its local
-# siblings include more than STRESS_HIT_THRESHOLD MT- genes is "mito", as a stress cluster is. Local view only:
+# siblings include more than STRESS_HIT_THRESHOLD mitochondrial genes is "mito", as a stress cluster is. Local view only:
 # against the whole dataset a cell type with a naturally high mitochondrial fraction would qualify. Small = under
 # MITO_SMALL_FRAC of its siblings' pooled cells, the share msp's minor-sibling fragments use (BIG_SIBLING_FRAC).
 MITO_SMALL_FRAC = 0.25
@@ -65,7 +32,7 @@ MIN_DE_GROUP_SIZE = 10  # clusters smaller than this are excluded from DE compar
 
 
 def _is_stress_gene(symbol) -> bool:
-    return str(symbol).upper() in STRESS_GENE_SET
+    return is_stress(symbol)
 
 
 def _stress_hits(names) -> list[str]:
@@ -73,11 +40,11 @@ def _stress_hits(names) -> list[str]:
 
 
 def _mito_hits(names) -> list[str]:
-    return [n for n in names if str(n).upper().startswith("MT-")]
+    return [n for n in names if is_mito(n)]
 
 
 def _stress_row(key, cluster, view, names, small=False) -> dict:
-    """One stress_clusters.csv row: the stress-gene and the MT- gene hits among a view's top genes."""
+    """One stress_clusters.csv row: the stress-gene and the mitochondrial gene hits among a view's top genes."""
     hits, mito = _stress_hits(names), _mito_hits(names)
     return {"key": key, "cluster": cluster, "view": view, "n_hits": len(hits), "hit_genes": "|".join(hits),
             "stress": len(hits) > STRESS_HIT_THRESHOLD, "n_mito_hits": len(mito), "mito_genes": "|".join(mito),
@@ -293,9 +260,9 @@ def _cluster_annotations(ad, remove_mask, leiden_keys, resolutions, outdir, top_
     never drops cells from ad or the written h5ad.
 
     Each (key, cluster) is also checked for a dissociation-stress signature
-    (STRESS_GENES_CORE) among its top STRESS_CHECK_TOP_N genes, in each view
+    (genesets.is_stress) among its top STRESS_CHECK_TOP_N genes, in each view
     separately, and in its local view, if it is small next to its siblings,
-    for a mitochondrial one (MT- genes) — if EITHER hits the threshold, the
+    for a mitochondrial one (genesets.is_mito) — if EITHER hits the threshold, the
     whole (key, cluster) is recommend_removal, written to stress_clusters.csv. Same rule as everywhere else in msp:
     propose, never remove cells directly.
 

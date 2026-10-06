@@ -40,12 +40,13 @@ coordinator = ["temporalio==1.32.0", "openai-agents==0.22.3", "jsonschema>=4,<5"
 
 [tool.setuptools]
 packages = ["ecarsi", "ecarsi.warm_pool", "ecarsi.agent", "ecarsi.control", "ecarsi.stages", "ecarsi.ui",
-            "osp", "osp._decontx", "msp", "msp.integrate", "zmip", "standissect_lite", "harness_bridge"]
+            "osp", "osp._decontx", "msp", "msp.integrate", "zmip", "standissect_lite", "harness_bridge", "genesets"]
 
 [tool.setuptools.package-data]
 ecarsi = ["prompts/*.md", "*.html"]
 "ecarsi.ui" = ["static/*", "*.html"]
 "ecarsi.warm_pool" = ["numba_site/sitecustomize.py"]
+genesets = ["*.tsv"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
