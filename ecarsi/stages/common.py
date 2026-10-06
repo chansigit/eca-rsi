@@ -147,14 +147,18 @@ def stress_policy(spec):
     return spec.get('config', {}).get('stress_policy', 'remove')
 
 
-def stress_flags(bundle):
-    """(key, cluster) pairs msp's stress-gene rule marks: more than 3 of the cluster's top 10 DEG genes are
-    heat-shock, immediate-early or MT- genes, in its global or its local view (stress_clusters.csv)."""
+def stress_flags(bundle, column='stress'):
+    """(key, cluster) pairs msp marks in stress_clusters.csv. 'stress': more than 3 of the cluster's top 10 DEG
+    genes are heat-shock or immediate-early genes, in its global or its local view. 'mito': a small cluster (under a
+    quarter of its local siblings' cells) has more than 3 MT- genes among its top 10 against them (owner,
+    2026-10-06); a table from before has no such column."""
     import pandas as pd
     if 'stress_clusters.csv' not in bundle['files']:
         return set()
     table = pd.read_csv(artifact(bundle, 'stress_clusters.csv'), dtype=str, keep_default_na=False)
-    hit = table[table.stress.str.lower().eq('true')]
+    if column not in table:
+        return set()
+    hit = table[table[column].str.lower().eq('true')]
     return set(zip(hit.key, hit.cluster))
 
 
@@ -186,10 +190,11 @@ def comparison_cells(obs, same_identity, removing):
     return near if near.sum() >= CHECK_MIN_CELLS else ~removing
 
 
-def guard_stress(entry, policy, n_cells, flagged, dying_check):
+def guard_stress(entry, policy, n_cells, flagged, dying_check, mito=False):
     """Apply the stress policy to one removal in place; True when it became a keep. `flagged`: the stress-gene
-    rule marks the target's cluster; `dying_check()` -> (supported, note). The tool reply and needs_review
-    read host_adjustment; requested_* keep what the agent asked for."""
+    rule marks the target's cluster; `mito`: the mitochondrial rule does, which supports a dying removal as
+    `dying_check()` -> (supported, note) does. The tool reply and needs_review read host_adjustment;
+    requested_* keep what the agent asked for."""
     state = entry.get('remove_reason')
     if entry.get('action') != 'remove' or state not in STRESS_STATES:
         return False
@@ -198,7 +203,8 @@ def guard_stress(entry, policy, n_cells, flagged, dying_check):
     if policy == 'keep':
         supported, note = False, 'stress policy keep'
     elif state == 'dying':
-        supported, note = dying_check()
+        supported, note = ((True, 'stress_clusters.csv marks the cluster mito (more than 3 of its top 10 genes against '
+                            'its local siblings are MT- genes)') if mito else dying_check())
     else:
         supported, note = flagged, ('stress_clusters.csv marks the cluster' if flagged else
                                     'stress_clusters.csv does not mark the cluster (more than 3 of its top 10 DEG genes are stress genes)')

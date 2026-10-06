@@ -55,17 +55,33 @@ STRESS_GENES_CORE = [
 STRESS_GENE_SET = set(STRESS_GENES_CORE)
 STRESS_HIT_THRESHOLD = 3  # a cluster is "stress" if MORE than this many top genes hit
 STRESS_CHECK_TOP_N = 10  # matches what the report displays, independent of top_n_de
+# Mitochondrial genes are their own axis (owner, 2026-10-06): a SMALL cluster whose top genes against its local
+# siblings include more than STRESS_HIT_THRESHOLD MT- genes is "mito", as a stress cluster is. Local view only:
+# against the whole dataset a cell type with a naturally high mitochondrial fraction would qualify. Small = under
+# MITO_SMALL_FRAC of its siblings' pooled cells, the share msp's minor-sibling fragments use (BIG_SIBLING_FRAC).
+MITO_SMALL_FRAC = 0.25
 MIN_DE_GROUP_SIZE = 10  # clusters smaller than this are excluded from DE comparisons
 # (both global one-vs-rest and local vs-PAGA-neighbors views)
 
 
 def _is_stress_gene(symbol) -> bool:
-    su = str(symbol).upper()
-    return su in STRESS_GENE_SET or su.startswith("MT-")
+    return str(symbol).upper() in STRESS_GENE_SET
 
 
 def _stress_hits(names) -> list[str]:
     return [n for n in names if _is_stress_gene(n)]
+
+
+def _mito_hits(names) -> list[str]:
+    return [n for n in names if str(n).upper().startswith("MT-")]
+
+
+def _stress_row(key, cluster, view, names, small=False) -> dict:
+    """One stress_clusters.csv row: the stress-gene and the MT- gene hits among a view's top genes."""
+    hits, mito = _stress_hits(names), _mito_hits(names)
+    return {"key": key, "cluster": cluster, "view": view, "n_hits": len(hits), "hit_genes": "|".join(hits),
+            "stress": len(hits) > STRESS_HIT_THRESHOLD, "n_mito_hits": len(mito), "mito_genes": "|".join(mito),
+            "mito": view == "local" and small and len(mito) > STRESS_HIT_THRESHOLD}
 
 
 def _global_deg_workspace(ad, genes=None):
@@ -167,7 +183,8 @@ def prepare_deg(X, var_names, labels, log1p, rep, keys, gpu=False):
         skipped[key] = [c for c in cats if c not in valid_groups]
         if not valid_groups:
             continue
-        plan.append({"key": key, "cats": cats, "valid": valid_groups, "top3": top3})
+        plan.append({"key": key, "cats": cats, "valid": valid_groups, "top3": top3,
+                     "sizes": {c: int(sizes.get(c, 0)) for c in cats}})
 
     return ad_excl, {"paga": paga, "skipped": skipped, "plan": plan}
 
@@ -276,10 +293,10 @@ def _cluster_annotations(ad, remove_mask, leiden_keys, resolutions, outdir, top_
     never drops cells from ad or the written h5ad.
 
     Each (key, cluster) is also checked for a dissociation-stress signature
-    (STRESS_GENES_CORE / mitochondrial genes) among its top
-    STRESS_CHECK_TOP_N genes, in each view separately — but if EITHER view
-    hits the threshold, the whole (key, cluster) is recommend_removal,
-    written to stress_clusters.csv. Same rule as everywhere else in msp:
+    (STRESS_GENES_CORE) among its top STRESS_CHECK_TOP_N genes, in each view
+    separately, and in its local view, if it is small next to its siblings,
+    for a mitochondrial one (MT- genes) — if EITHER hits the threshold, the
+    whole (key, cluster) is recommend_removal, written to stress_clusters.csv. Same rule as everywhere else in msp:
     propose, never remove cells directly.
 
     The wilcoxon runs (2 global + one local per cluster per key, all
@@ -349,32 +366,15 @@ def write_deg_results(out, keys, outdir, top_n_de=50):
             os.path.join(outdir, f"deg_global_{key}.csv"), index=False
         )
         for c, sub in gdf.groupby("group", observed=True).head(STRESS_CHECK_TOP_N).groupby("group", observed=True):
-            hits = _stress_hits(sub["names"].tolist())
-            stress_rows.append(
-                {
-                    "key": key,
-                    "cluster": c,
-                    "view": "global",
-                    "n_hits": len(hits),
-                    "hit_genes": "|".join(hits),
-                    "stress": len(hits) > STRESS_HIT_THRESHOLD,
-                }
-            )
+            stress_rows.append(_stress_row(key, c, "global", sub["names"].tolist()))
+        sizes = item.get("sizes", {})  # a plan made before the mito axis has none: no cluster counts as small
         local_rows = []
         for k, view, c, ldf in results:
             if k != key or view != "local" or ldf is None:
                 continue
-            hits = _stress_hits(ldf.head(STRESS_CHECK_TOP_N)["names"].tolist())
-            stress_rows.append(
-                {
-                    "key": key,
-                    "cluster": c,
-                    "view": "local",
-                    "n_hits": len(hits),
-                    "hit_genes": "|".join(hits),
-                    "stress": len(hits) > STRESS_HIT_THRESHOLD,
-                }
-            )
+            siblings = sum(sizes.get(n, 0) for n in item["top3"].get(c, []))
+            small = c in sizes and sizes[c] < MITO_SMALL_FRAC * siblings
+            stress_rows.append(_stress_row(key, c, "local", ldf.head(STRESS_CHECK_TOP_N)["names"].tolist(), small))
             local_rows.append(ldf.head(top_n_de))
         if local_rows:
             pd.concat(local_rows, ignore_index=True).to_csv(os.path.join(outdir, f"deg_local_{key}.csv"), index=False)
@@ -382,17 +382,17 @@ def write_deg_results(out, keys, outdir, top_n_de=50):
     if stress_rows:
         stress_df = pd.DataFrame(stress_rows)
         # a cluster is recommend_removal overall if EITHER its global or its
-        # local view hit the stress threshold — not judged per-view
+        # local view hit the stress threshold, or its local view the mito one — not judged per-view
         overall = (
-            stress_df.groupby(["key", "cluster"])["stress"]
+            (stress_df["stress"] | stress_df["mito"]).groupby([stress_df["key"], stress_df["cluster"]])
             .any()
+            .rename("recommend_removal")
             .reset_index()
-            .rename(columns={"stress": "recommend_removal"})
         )
         stress_df = stress_df.merge(overall, on=["key", "cluster"])
         stress_df.to_csv(os.path.join(outdir, "stress_clusters.csv"), index=False)
         n_removal = int(overall["recommend_removal"].sum())
         log.info(
             f"== cluster annotations: {n_removal}/{len(overall)} (key, cluster) pairs "
-            f"recommend_removal (stress signature)",
+            f"recommend_removal (stress or mitochondrial signature)",
         )

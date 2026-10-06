@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Mitochondrial genes are their own axis (decision 0017, amended).** msp's stress-gene rule no longer counts MT-
+  genes. `stress_clusters.csv` gains `n_mito_hits`, `mito_genes` and `mito`: a cluster under a quarter of its local
+  siblings' pooled cells with more than 3 MT- genes among its top 10 against them is `mito`, `recommend_removal`,
+  and supports a `dying` removal of 10 or more cells (`guard_stress`); a stress or dissociation removal still needs
+  the stress mark. The prompts say so, and cross-sample's type checklist lists `dying`.
 - **The gate checks the display zone's links (#41).** `gate.py check` renders the zone with Periscope's renderer,
   follows every link of its pages and reports, and fails on a target the zone lacks or one outside it
   (`display.broken_links`). The walk it shares with the display sync now reads a unit page's links from the unit: in

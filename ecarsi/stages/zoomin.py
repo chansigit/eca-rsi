@@ -176,7 +176,7 @@ def quality_guard(bundle, data, proposal, t, q):
     target with the rest of its 1.0 types that no decision removes."""
     import numpy as np
     from zmip.api import TYPE_KEY, QUALITY_KEY
-    policy, flags = lineage_policy(bundle), stress_flags(bundle)
+    policy, flags, mito = lineage_policy(bundle), stress_flags(bundle), stress_flags(bundle, 'mito')
     targets = [(group['cluster_id'], entry, (q.eq(group['cluster_id']) & t.isin(entry['type_clusters'])).to_numpy())
                for group in proposal['clusters'] for entry in group['decisions']]
     removing = np.zeros(len(t), dtype=bool)
@@ -186,9 +186,10 @@ def quality_guard(bundle, data, proposal, t, q):
     retained = []
     for cid, entry, target in targets:
         flagged = (QUALITY_KEY, cid) in flags or any((TYPE_KEY, c) in flags for c in entry['type_clusters'])
+        marked = (QUALITY_KEY, cid) in mito or any((TYPE_KEY, c) in mito for c in entry['type_clusters'])
         same = t.isin(entry['type_clusters']).to_numpy()
         if guard_stress(entry, policy, int(target.sum()), flagged,
-                        lambda: dying_evidence(data.obs, target, comparison_cells(data.obs, same, removing))):
+                        lambda: dying_evidence(data.obs, target, comparison_cells(data.obs, same, removing)), marked):
             retained.append(dict(cluster=cid, type_clusters=entry['type_clusters'], **entry['host_adjustment']))
     return retained
 

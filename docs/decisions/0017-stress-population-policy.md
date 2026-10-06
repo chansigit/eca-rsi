@@ -17,10 +17,12 @@ applied in cross-sample round 1.
   zoom-in stage configs only when the spec sets it, so runs started before keep their stage specs on resume.
 - **Under `remove`, a removal of at least 10 cells stands only on evidence the code checks**
   (`stages/common.py`):
-  - `stress`, `dissociation`: msp's stress-gene rule marks the cluster (`stress_clusters.csv`: more than 3 of its
-    top 10 DEG genes are heat-shock, immediate-early or MT- genes, in the global or the local view). Cross-sample
+  - `stress`, `dissociation`: msp's stress-gene rule marks the cluster (`stress_clusters.csv` column `stress`:
+    more than 3 of its top 10 DEG genes are heat-shock or immediate-early genes, in the global or the local view;
+    MT- genes counted too until the amendment below). Cross-sample
     looks at the base cluster; zoom-in at the 2.0 cluster or any of the decision's 1.0 types.
-  - `dying`: the cells have a clearly higher `pct_counts_mt` or clearly fewer `n_genes_by_counts` than the cells
+  - `dying`: msp's mitochondrial rule marks the cluster (column `mito`, amendment below), or the cells have a
+    clearly higher `pct_counts_mt` or clearly fewer `n_genes_by_counts` than the cells
     of the same identity that no decision removes (same coarse label; same 1.0 type), falling back to every cell
     no decision removes when fewer than 10: one-sided Mann-Whitney, AUC ≥ 0.7 and p < 0.05.
   - Removals of fewer than 10 cells stand on the agent's reason (owner: 29 % of the decisions, 0.4 % of the cells;
@@ -44,3 +46,12 @@ applied in cross-sample round 1.
   figure: the mask is msp's. An msp option to leave such fragments out of the mask is the upgrade.
 - The fallback comparison is not identity-matched: a cell type with a naturally high mitochondrial fraction can pass
   as dying when its stressed cluster has a coarse label of its own.
+
+**Amended 2026-10-06 (owner): mitochondrial genes are their own axis.** A high mitochondrial share marks damaged or
+dying cells, not the transcriptional stress response, so MT- genes no longer count toward the stress-gene rule.
+They get a rule of their own in `stress_clusters.csv`: a cluster is `mito` when it is small next to its local
+siblings (fewer cells than a quarter of its top-3 PAGA neighbours pooled, the share msp's minor-sibling fragments
+use) and more than 3 of its top 10 genes against them are MT- genes. Local view only: against the whole dataset a
+cell type with a naturally high mitochondrial fraction would qualify. A `mito` cluster is `recommend_removal`, as a
+stress cluster is, and supports a `dying` removal; a `stress` or `dissociation` removal still needs the stress mark.
+The per-cell `pct_counts_mt` test is unchanged. Which genes count as stress genes is #29.

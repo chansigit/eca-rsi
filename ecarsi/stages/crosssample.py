@@ -504,7 +504,7 @@ def tool(name,state_path,args_path,destination):
 def _stress_guard(bundle,data,entries,proposed):
     """Decision 0017 on the type removals of this submission, in place; the clusters that stay. The dying check
     compares a cluster with the clusters of its coarse label that no entry removes."""
-    policy=stress_policy(verified(bundle['inspected'])['spec']);flags=stress_flags(bundle)
+    policy=stress_policy(verified(bundle['inspected'])['spec']);flags,mito=stress_flags(bundle),stress_flags(bundle,'mito')
     base=data.obs[BASE].astype(str)
     removing=base.isin([c for c,e in entries.items() if e['action']=='remove']).to_numpy()
     converted=[]
@@ -512,7 +512,7 @@ def _stress_guard(bundle,data,entries,proposed):
         target=(base==cid).to_numpy()
         same=base.isin([c for c,x in entries.items() if x['coarse_label'].strip()==e['coarse_label'].strip()]).to_numpy()
         if guard_stress(e,policy,int(target.sum()),(BASE,cid) in flags,
-                        lambda:dying_evidence(data.obs,target,comparison_cells(data.obs,same,removing))):
+                        lambda:dying_evidence(data.obs,target,comparison_cells(data.obs,same,removing)),(BASE,cid) in mito):
             converted.append(cid)
     for cid in converted:  # a kept cluster cannot merge into a removed one
         e=entries[cid]

@@ -475,7 +475,7 @@ def _load_stress_lookup(outdir: str) -> dict[tuple[str, str, str], dict]:
     with open(path) as f:
         for r in csv.DictReader(f):
             lookup[(r["key"], r["cluster"], r["view"])] = {
-                "hit_genes": set(r["hit_genes"].split("|")) if r["hit_genes"] else set(),
+                "hit_genes": {g for g in (r["hit_genes"] + "|" + r.get("mito_genes", "")).split("|") if g},
                 "recommend_removal": r["recommend_removal"] == "True",
             }
     return lookup
@@ -488,7 +488,7 @@ def _deg_row(cluster: str, genes: list[tuple[str, float]], stress_info: dict | N
     cluster_cell = html.escape(cluster)
     if recommend_removal:
         cluster_cell += (
-            ' <span style="color:#c0392b;font-weight:bold" title="stress signature '
+            ' <span style="color:#c0392b;font-weight:bold" title="stress or mitochondrial signature '
             'in this view or its global/local pair — see Cluster Annotations hint">'
             "[recommend_removal]</span>"
         )

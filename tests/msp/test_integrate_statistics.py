@@ -25,6 +25,7 @@ from msp.integrate import (
     _select_fractal_markers,
     _stress_hits,
 )
+from msp.integrate.deg import _mito_hits, write_deg_results
 
 # ---------------------------------------------------------------- minor-sibling QC
 
@@ -197,12 +198,28 @@ def test_removal_mask_with_no_tables_keeps_only_inherited_drops(tmp_path):
 # ---------------------------------------------------------------- stress signature
 
 
-def test_stress_gene_matching_is_case_insensitive_and_covers_mitochondrial_prefix():
-    assert (
-        _is_stress_gene("hspa1a") and _is_stress_gene("FOS") and _is_stress_gene("mt-Co1") and _is_stress_gene("MT-ND1")
-    )
-    assert not _is_stress_gene("ACTB") and not _is_stress_gene("MTOR")
-    assert _stress_hits(["Fos", "ACTB", "mt-co1"]) == ["Fos", "mt-co1"]
+def test_stress_and_mitochondrial_genes_are_separate_axes():
+    assert _is_stress_gene("hspa1a") and _is_stress_gene("FOS")
+    assert not _is_stress_gene("ACTB") and not _is_stress_gene("MTOR") and not _is_stress_gene("mt-Co1")
+    assert _stress_hits(["Fos", "ACTB", "mt-co1"]) == ["Fos"]
+    assert _mito_hits(["Fos", "MT-ND1", "mt-co1", "MTOR", "MT2A"]) == ["MT-ND1", "mt-co1"]
+
+
+def test_a_small_cluster_with_mitochondrial_genes_on_top_against_its_siblings_is_marked_mito(tmp_path):
+    """Owner, 2026-10-06: more than 3 MT- genes among a small cluster's top 10 against its local siblings mark
+    it, as stress genes do; not against the whole dataset, and not a cluster as large as its siblings."""
+    top = ["MT-CO1", "MT-ND1", "MT-ND2", "MT-CYB", "A", "B", "C", "D", "E", "F"]
+    frame = lambda group: pd.DataFrame({"group": group, "names": top, "logfoldchanges": 1.0, "pvals_adj": 0.01})
+    sizes = {"small": 20, "big": 300, "core": 100}
+    plan = [{"key": "k", "cats": list(sizes), "valid": list(sizes), "sizes": sizes,
+             "top3": {"small": ["core"], "big": ["core"], "core": ["small", "big"]}}]
+    results = [("k", "global", None, pd.concat([frame(c) for c in sizes]))] + [("k", "local", c, frame(c)) for c in sizes]
+    write_deg_results({"plan": plan, "results": results, "paga": {"k": []}, "skipped": {"k": []}}, ["k"], str(tmp_path))
+    table = pd.read_csv(tmp_path / "stress_clusters.csv", dtype={"cluster": str}).set_index(["cluster", "view"])
+    assert table["n_mito_hits"].eq(4).all() and not table["stress"].any()
+    assert table["mito"].to_dict() == {("small", "global"): False, ("big", "global"): False, ("core", "global"): False,
+                                       ("small", "local"): True, ("big", "local"): False, ("core", "local"): False}
+    assert table.loc["small", "recommend_removal"].all() and not table.loc["big", "recommend_removal"].any()
 
 
 def two_cluster_graph(monkeypatch):
@@ -229,10 +246,10 @@ def test_stress_clusters_flag_either_view_and_merge_the_verdict(tmp_path, monkey
     stress = pd.read_csv(tmp_path / "stress_clusters.csv", dtype={"cluster": str})
     assert set(stress["view"]) == {"global", "local"} and set(stress["cluster"]) == {"0", "1"}
     if stress_names:
-        # every displayed top gene is a stress gene, so both views trip the threshold
-        assert (stress["n_hits"] == 8).all() and (stress["n_hits"] > STRESS_HIT_THRESHOLD).all()
+        # every displayed top gene but mt-Co1 is a stress gene, so both views trip the threshold
+        assert (stress["n_hits"] == 7).all() and (stress["n_hits"] > STRESS_HIT_THRESHOLD).all()
         assert stress["stress"].all() and stress["recommend_removal"].all()
-        assert all("mt-Co1" in h.split("|") for h in stress["hit_genes"])
+        assert (stress["mito_genes"] == "mt-Co1").all() and not stress["mito"].any()
     else:
         assert (stress["n_hits"] == 0).all() and not stress["stress"].any()
         assert not stress["recommend_removal"].any()

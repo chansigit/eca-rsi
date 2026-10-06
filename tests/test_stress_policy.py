@@ -42,6 +42,9 @@ def test_a_removal_stands_on_the_stress_gene_rule_or_the_dying_check_and_stays_o
     dying = removal('dying')
     assert not guard_stress(dying, 'remove', 50, False, lambda: (True, 'pct_counts_mt AUC 0.90'))
     assert guard_stress(removal('dying'), 'remove', 50, True, lambda: (False, 'no'))  # the gene rule is not the dying check
+    marked = removal('dying')  # the mitochondrial mark is (owner, 2026-10-06)
+    assert not guard_stress(marked, 'remove', 50, False, lambda: (False, 'no'), mito=True) and 'mito' in marked['host_evidence']
+    assert guard_stress(removal('stress'), 'remove', 50, False, None, mito=True)  # it does not support a stress removal
     assert not guard_stress(removal('stress'), 'remove', 9, False, None)  # below 10 cells the agent's reason stands
     for other in (removal('doublet'), {**removal('stress'), 'action': 'keep'}):
         assert not guard_stress(other, 'remove', 50, False, None) and 'host_adjustment' not in other
