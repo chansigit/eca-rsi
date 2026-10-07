@@ -501,8 +501,8 @@ def dataset_step(action, args):
         (Path(spec['output_root']) / L.GEN2_DISPLAY_SYNC).mkdir(exist_ok=True)
         packet = immutable(Path(spec['output_root']) / L.GEN2_DISPLAY_SYNC / (key + '.json'),
                            dict(zone(spec), root=spec['output_root'], final=bool(final), label=label))
-        programs = [stages.program('display'), stages.PACKAGE / 'display.py', stages.program('archive')]
-        budget = DISPLAY_FINAL_BUDGET if final else DISPLAY_BUDGET
+        programs = [stages.program('display'), stages.PACKAGE / 'display.py', stages.program('archive'), stages.program('cases')]
+        budget = DISPLAY_FINAL_BUDGET if final or label == 'published' else DISPLAY_BUDGET  # 'published' freezes hard cases
         request_id = spec['run_id'] + '.display-' + key
         submit(spec['pool_root'], dict(request_id=request_id, operation_id='dataset.display',
             args=['-m', 'ecarsi.stages.display', packet['path']], **budget,
@@ -586,7 +586,7 @@ async def pause_if_asked(spec, unit, stage):
 
 
 DISPLAY_BUDGET = dict(cpus=1, memory_mb=4096, timeout_seconds=1800)  # render the pages, copy what changed
-DISPLAY_FINAL_BUDGET = dict(cpus=1, memory_mb=8192, timeout_seconds=4 * 3600)  # ... and archive the work tree
+DISPLAY_FINAL_BUDGET = dict(cpus=1, memory_mb=8192, timeout_seconds=4 * 3600)  # ... archive the work tree, freeze hard cases
 
 
 async def show(spec, stage, unit=None, final=False):

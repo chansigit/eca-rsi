@@ -26,3 +26,4 @@ decision that is replaced keeps its page and says so at the top.
 | [0018](0018-one-repository.md) | One repository: the kernels and the agent harness live in eca-rsi |
 | [0019](0019-versions-side-by-side.md) | Code versions run side by side, each execution on the version that started it |
 | [0020](0020-shared-gene-sets.md) | One stress panel and one mitochondrial rule, for every species |
+| [0021](0021-hard-case-freezing.md) | Hard agent steps are frozen before their evidence is pruned |

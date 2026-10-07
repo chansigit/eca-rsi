@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Hard agent steps are frozen before their evidence is pruned (decision 0021, #51, #14 step 1).** The run's
+  `published` display sync, which the dataset workflow awaits before it completes, copies every hard session
+  (restarted, context reset, or at least 2 rejected submissions) with the files its records reach within three
+  references into `<archive_root>/_cases/<collection>/<dataset>/<run>/`, each file once per run and checked
+  against its sha256; 24 GiB per case and 96 GiB per run, skipped cases listed with the reason. No shared
+  component changes.
 - **needs_review lists the samples the inclusion agent excluded (#46).** The gen2 release never produced the
   documented `sample_excluded` category: one item per excluded sample, with its cell count and the agent's reason,
   built from the `sample_excluded` rows of `cell_exclusions.csv.gz`. Found on Li2019_skin's first batch-1 release
