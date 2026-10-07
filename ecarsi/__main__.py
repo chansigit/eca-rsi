@@ -5,7 +5,7 @@
     eca-rsi serve     scan-add|remove|list|dump|reload ...   (edit the dataset list)
     eca-rsi index     <root|unit>          re-render a run's pages
     eca-rsi umapdata  <h5ad> <out.json>    the plotting data of a release UMAP
-    eca-rsi top       --root <run dir>     the control-plane monitor in the terminal (ops/top.sh)
+    eca-rsi top       --root <run dir>     the control-plane monitor in the terminal (ops/rtop)
 
 `python -m ecarsi ...` is the same thing.
 """

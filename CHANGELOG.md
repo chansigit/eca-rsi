@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **The control page in a terminal (`eca-rsi top`, `ops/top.sh`).** Periscope's `/_control/` records in a colour
+- **The control page in a terminal (`eca-rsi top`, `ops/rtop`).** Periscope's `/_control/` records in a colour
   terminal, refreshed every 2 s (`--interval`, `--once`; `q` quits, `r` refreshes): workers with CPU and memory
   meters, a ten-minute CPU sparkline, slots, tasks and time left, then the tasks they run; models; the pool's
   running operations, waiting requests and infeasible reasons; the datasets at work and what each computes; node

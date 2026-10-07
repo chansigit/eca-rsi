@@ -3,7 +3,7 @@
 It renders the snapshot the page renders (ui/control.py), from the same published records, in colour,
 every --interval seconds (q quits, r refreshes now). Like the page it only reads files: no connection,
 no writes (tests/test_monitor_isolation.py), and a record too old to believe shows as silent, never as
-its last status. A refresh costs about 0.1 s of CPU on the node it runs on; ops/top.sh runs it.
+its last status. A refresh costs about 0.1 s of CPU on the node it runs on; ops/rtop runs it.
 """
 from __future__ import annotations
 
