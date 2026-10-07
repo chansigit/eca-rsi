@@ -1,0 +1,9 @@
+#!/bin/bash
+# The control-plane monitor in the terminal (eca-rsi top): the records Periscope's /_control/ shows, in colour,
+# refreshed every 2 s (--interval N; --once prints one frame). q quits. Read-only; run it on the plane node.
+# Runs this checkout's code in the compute image. Settings: ~/.config/ecarsi/deployment.env.
+set -a; . "$HOME/.config/ecarsi/deployment.env"; set +a
+repo=$(dirname "$(dirname "$(readlink -f "$0")")")
+exec apptainer exec --cleanenv --bind "$BINDS" --env "TERM=${TERM:-xterm-256color}" --env "COLORTERM=${COLORTERM:-truecolor}" \
+  --env PYTHONSAFEPATH=1 --env "PYTHONPATH=$repo:/opt/rsi-control:/opt/rsi-python" \
+  "$SCIENCE_IMG" /usr/local/bin/python3.12 -m ecarsi top --root "$BASE" --pool-root "$POOL" --bridge-root "$BRIDGE" "$@"

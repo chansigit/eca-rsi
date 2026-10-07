@@ -5,6 +5,7 @@
     eca-rsi serve     scan-add|remove|list|dump|reload ...   (edit the dataset list)
     eca-rsi index     <root|unit>          re-render a run's pages
     eca-rsi umapdata  <h5ad> <out.json>    the plotting data of a release UMAP
+    eca-rsi top       --root <run dir>     the control-plane monitor in the terminal (ops/top.sh)
 
 `python -m ecarsi ...` is the same thing.
 """
@@ -14,7 +15,8 @@ from __future__ import annotations
 import importlib
 import sys
 
-COMMANDS = {"serve": "ecarsi.ui.serve", "index": "ecarsi.ui.index", "umapdata": "ecarsi.ui.umapdata"}
+COMMANDS = {"serve": "ecarsi.ui.serve", "index": "ecarsi.ui.index", "umapdata": "ecarsi.ui.umapdata",
+            "top": "ecarsi.ui.top"}
 
 
 def main(argv: list[str] | None = None) -> int:

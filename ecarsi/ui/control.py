@@ -418,20 +418,25 @@ class ControlPlane:
                 result = task_timeline(data["pool_requests"], data["bridge_requests"], since, until, dataset, limit, dataset_page)
                 result["indexed_since"] = cache.get("indexed_since")
                 return result
-            data = dict(data)
-            rows = data["pool_requests"] + data["bridge_requests"]
-            data["pool_total"] = len(data["pool_requests"])
-            data["pool_succeeded"] = sum(r["state"] == "succeeded" for r in data["pool_requests"])
-            data["indexed_since"] = cache.get("indexed_since")
-            data["earliest_activity"] = min((r["submitted_at"] for r in rows), default=None)
-            # The failures the published records cover, which is the snapshot window and not a day:
-            # saying "last 24 hours" over four hours of records is the quiet kind of lie this whole
-            # surface exists to stop. Older failures are in the journals, by day.
-            day = cache.get("indexed_since") or 0
-            failed = [dict(id=r["id"], at=r.get("finished_at") or r["submitted_at"], operation=r.get("operation"),
-                           dataset=(r.get("trace") or {}).get("dataset_id"), workflow_id=(r.get("trace") or {}).get("workflow_id"))
-                      for r in rows if "fail" in str(r.get("state")) and (r.get("finished_at") or r["submitted_at"]) >= day]
-            data["recent_failures"] = sorted(failed, key=lambda f: -f["at"])[:50]
-            data["pool_requests"] = data["pool_requests"][:20]
-            data["bridge_requests"] = data["bridge_requests"][:20]
-            return data
+            return status(data, cache.get("indexed_since"))
+
+
+def status(data: dict, indexed_since: float | None) -> dict:
+    """The status answer (/_control/api/status, eca-rsi top) from a snapshot: window totals, recent failures."""
+    data = dict(data)
+    rows = data["pool_requests"] + data["bridge_requests"]
+    data["pool_total"] = len(data["pool_requests"])
+    data["pool_succeeded"] = sum(r["state"] == "succeeded" for r in data["pool_requests"])
+    data["indexed_since"] = indexed_since
+    data["earliest_activity"] = min((r["submitted_at"] for r in rows), default=None)
+    # The failures the published records cover, which is the snapshot window and not a day:
+    # saying "last 24 hours" over four hours of records is the quiet kind of lie this whole
+    # surface exists to stop. Older failures are in the journals, by day.
+    day = indexed_since or 0
+    failed = [dict(id=r["id"], at=r.get("finished_at") or r["submitted_at"], operation=r.get("operation"),
+                   dataset=(r.get("trace") or {}).get("dataset_id"), workflow_id=(r.get("trace") or {}).get("workflow_id"))
+              for r in rows if "fail" in str(r.get("state")) and (r.get("finished_at") or r["submitted_at"]) >= day]
+    data["recent_failures"] = sorted(failed, key=lambda f: -f["at"])[:50]
+    data["pool_requests"] = data["pool_requests"][:20]
+    data["bridge_requests"] = data["bridge_requests"][:20]
+    return data

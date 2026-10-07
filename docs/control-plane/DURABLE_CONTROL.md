@@ -55,6 +55,8 @@ python -m ecarsi serve --control-plane <run dir> --control-temporal-root <run di
 
 The control-plane page is at `/_control/`. Forward the Periscope port and the Temporal UI port separately.
 
+`ops/top.sh` (`python -m ecarsi top --root <run dir> --pool-root ... --bridge-root ...`) shows the same records in a terminal, in colour, every two seconds: workers with CPU and memory meters and a ten-minute CPU sparkline, the tasks they run, the models, the pool, the datasets at work, node productivity and the failed attempts. It reads the files itself, as the page does, so it needs no Periscope and no password; each refresh costs about 0.1 s of CPU on its node and nothing on the workers.
+
 ## Recovery behavior
 
 `service.json` publishes the serving address and generation every five seconds. A coordinator started with `--service-root` stops polling an unavailable generation. The coordinator then connects to the replacement generation. It does not cancel accepted pool or bridge requests. A restarted coordinator reconstructs its workflow from Temporal history. Callers do not resubmit datasets after an ordinary process or service interruption.
