@@ -8,6 +8,8 @@ usage (control image; ops/run.sh passes BASE and CONTROL):
                                                    the gate on a published version, beside production (decision 0019)
   bash ops/runpy.sh ops/gate.py wait <run_id>      wait for it (one long Temporal call: run it in the background), then check
   bash ops/runpy.sh ops/gate.py check <run root>   the checks alone, on any finished run
+  For a gate on a published version, give wait and check the same VERSION=<name> as start: the checks import that
+  version's code, and another version's gate.py may lack what they need (2026-10-06: ImportError on broken_links).
 
 gate-dataset.json is a dataset spec (examples/dataset-v2.json) without run_id, output_root and dataset_id; give it
 `storage` roots apart from the production ones so gate runs stay off the main Periscope list. The checks: the
