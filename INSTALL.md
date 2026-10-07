@@ -219,6 +219,13 @@ does not wait for running executions, and executions already running finish on t
 5. When `bash ops/runpy.sh ops/count-wf.py` shows no running execution on the old version's queue,
    `bash ops/retire-version.sh <old name>` stops its coordinators and runners. Its directory stays.
 
+**A release** (#50) is a version whose commit bumps the patch number: `version` in `pyproject.toml` goes to 0.4.x
+(only x moves) and the changelog's "Unreleased" entries move under `## 0.4.x (<date>)`. Ship that commit with steps
+1-4; `version.json` records its `package_version` next to the commit. Once its gate has passed, tag the commit and
+publish the changelog section: `git tag -a v0.4.x <commit> -m 'eca-rsi 0.4.x' && git push origin v0.4.x`, then
+`gh release create v0.4.x --title 'eca-rsi 0.4.x' --notes-file <that section>`. Versions between releases keep the
+last release's number with their commit as the name.
+
 `ops/control-plane.sh start|stop|restart|status` runs the current version's coordinators and runners beside the
 image's shared components. Changes to `ops/` take effect when `main` is fast-forwarded. A change to the images
 that the shared components need (HQ, Temporal, PostgreSQL) still needs A.9; new Python packages for the stages can
