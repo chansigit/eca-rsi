@@ -311,7 +311,7 @@ async def run_turn(request, folder, *, model=None, portable_upgrade=False):
     provider = next(k for k, v in PROVIDERS.items() if v["harness"] == chosen["harness"])
     if chosen["url"]:
         os.environ[PROVIDERS[provider]["base_env"]] = chosen["url"]
-    client = _client(provider)
+    client = _client(provider, chosen.get("key_env"))
     if hasattr(client, '_client'):
         record_calls(client._client, folder)
     try:

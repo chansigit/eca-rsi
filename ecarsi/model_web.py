@@ -4,6 +4,7 @@ from __future__ import annotations
 import html
 import json
 import os
+import re
 from pathlib import Path
 
 
@@ -39,8 +40,12 @@ def normalized_models(catalog):
     for entry in entries:
         if not isinstance(entry, dict) or not isinstance(entry.get('harness'), str) or not isinstance(entry.get('model'), str):
             raise ValueError('Each entry needs a backend and model name.')
-        if set(entry) - {'harness', 'model', 'url'}:
-            raise ValueError('Only backend, model and URL belong in the catalog. Put keys in bashrc.')
+        if set(entry) - {'harness', 'model', 'url', 'key_env'}:
+            raise ValueError('Only backend, model, URL and key variable belong in the catalog. Put keys in keys.env.')
+        # key_env: the variable holding this entry's API key (#54), for a second key or endpoint of a backend
+        key_env = entry.get('key_env')
+        if key_env is not None and not (isinstance(key_env, str) and re.fullmatch(r'[A-Z_][A-Z0-9_]{0,63}', key_env)):
+            raise ValueError('key_env names an environment variable, e.g. ARK_PLAN_API_KEY.')
         configs = parse_model_pool(entry['harness'] + ':' + entry['model'])
         if len(configs) != 1 or any(c.isspace() for c in entry['model']) or len(entry['model']) > 200:
             raise ValueError('Enter one model identifier per row, without whitespace.')
@@ -63,10 +68,13 @@ def normalized_models(catalog):
                 raise ValueError('Use an HTTP(S) API base URL without credentials, query or fragment.')
             if cfg.backend not in PROVIDERS:
                 raise ValueError('This backend manages its connection through its own CLI, not a model URL.')
-        if cfg.backend in urls and urls[cfg.backend] != url:
-            raise ValueError('Models using the same backend must share its API base URL.')
-        urls[cfg.backend] = url
-        result.append({**cfg.as_manifest(), 'url': url})
+        if key_env is not None and not url:
+            raise ValueError('An entry with its own key variable needs its own API base URL.')
+        if key_env is None:  # entries with their own key and URL are set per process (runner, pool turn)
+            if cfg.backend in urls and urls[cfg.backend] != url:
+                raise ValueError('Models using the same backend must share its API base URL.')
+            urls[cfg.backend] = url
+        result.append({**cfg.as_manifest(), 'url': url, **({'key_env': key_env} if key_env else {})})
     return result
 
 

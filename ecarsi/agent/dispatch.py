@@ -516,12 +516,37 @@ def serve(root, *, once=False, finished=None):
             time.sleep(.5)  # a turn waits half a tick on average before dispatch; the scan itself is ~1 s
 
 
+def keys_file():
+    return Path(os.environ.get("ECA_KEYS_FILE") or Path.home() / ".config/ecarsi/keys.env")
+
+
+def read_keys_file(path=None):
+    """NAME=value lines of the private keys file (#54); {} when it is absent. Refused when others can read it.
+    Values never leave this process: not logged, not in task arguments, not in records."""
+    import stat
+    path = Path(path or keys_file())
+    if not path.is_file():
+        return {}
+    if stat.S_IMODE(path.stat().st_mode) & 0o077:
+        raise ValueError(f"{path} must be private (chmod 600)")
+    keys = {}
+    for line in path.read_text().splitlines():
+        name, sep, value = line.removeprefix("export ").partition("=")
+        name, value = name.strip(), value.strip().strip("\"'")
+        if sep and value and name.isidentifier() and not line.lstrip().startswith("#"):
+            keys[name] = value
+    return keys
+
+
 def load_worker_key(model):
-    """Read the user's shell configuration in the worker, never in task arguments/logs."""
+    """The selected model's key: the process environment, else the keys file, else the user's shell
+    configuration; read in the worker, never in task arguments/logs."""
     from ..model_web import PROVIDERS
     if model["harness"] not in PROVIDERS:
         return
-    key = PROVIDERS[model["harness"]][0]
+    key = model.get("key_env") or PROVIDERS[model["harness"]][0]
+    if not os.environ.get(key) and (value := read_keys_file().get(key)):
+        os.environ[key] = value
     if not os.environ.get(key):
         # bashrc is trusted user configuration. Capture only the selected key in
         # a private pipe; silence shell startup output and never persist the value.

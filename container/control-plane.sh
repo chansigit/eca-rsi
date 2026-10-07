@@ -27,6 +27,7 @@ TEMPORAL_DIR=${TEMPORAL_DIR:-/opt/rsi-services/temporal}
 SCHEMA_DIR=${SCHEMA_DIR:-/opt/rsi-services/temporal/schema/postgresql/v12}
 CONTROL=${CONTROL:-$BASE/durable-control}; POOL=${POOL:-$BASE/pool}; BRIDGE=${BRIDGE:-$BASE/bridge}
 LOGS=$BASE/control-logs; mkdir -p "$LOGS"
+BRIDGE_TAG=; [ "$(basename "$BRIDGE")" = bridge ] || BRIDGE_TAG=-$(basename "$BRIDGE")   # a second bridge logs apart (#54)
 COORDINATORS=${COORDINATORS:-4}; TASK_QUEUE=${TASK_QUEUE:-ecarsi-durable-v2}
 [ -n "$VERSION" ] && TASK_QUEUE=ecarsi-$VERSION
 STAGE_LIMIT_FLOORS=${STAGE_LIMIT_FLOORS:-}                # e.g. '{"max_in_flight_deg": 12, "max_in_flight_lineages": 6}'
@@ -48,7 +49,7 @@ python_for "$CODE_IN"
 # Patterns name this run directory's roots, so two control planes on one host never count or kill each other.
 pattern() { case $1 in temporal) echo "ecarsi.control.temporal --root $CONTROL";; scheduler) echo "ecarsi.warm_pool --root $POOL scheduler";;
     hq) echo "ecarsi.warm_pool --root $POOL hq-server";;
-    bridge) echo "ecarsi.agent serve $BRIDGE";; coordinators) echo "ecarsi.control --service-root $CONTROL --task-queue $TASK_QUEUE worker";;
+    bridge) echo "ecarsi.agent serve $BRIDGE\$";; coordinators) echo "ecarsi.control --service-root $CONTROL --task-queue $TASK_QUEUE worker";;
     runners) echo "ecarsi.agent runners $BRIDGE${VERSION:+ --version $VERSION}\$";;   # anchored: one version's runners only
     fleet-status) echo "fleet-status.py --service-root $CONTROL";;
     pruner) echo "request-pruner.py --service-root $CONTROL";; esac; }
@@ -89,12 +90,12 @@ start() {
         for _ in $(seq 60); do flock -n "$POOL/hq-server.lock" true || return 0; sleep 1; done
         echo "error: hq-server did not take $POOL/hq-server.lock within 60 s; see $LOGS/hq-server.log; nothing after hq started" >&2; return 1 ;;
     scheduler) launch scheduler "${PY[@]}" -m ecarsi.warm_pool --root "$POOL" scheduler --host "$(hostname -s)" ;;
-    bridge) launch bridge "${PY[@]}" -m ecarsi.agent serve "$BRIDGE" ;;
+    bridge) launch "bridge${BRIDGE_TAG}" "${PY[@]}" -m ecarsi.agent serve "$BRIDGE" ;;
     coordinators) local n; n=$(pids coordinators | wc -l)
         for ((i=n; i<COORDINATORS; i++)); do launch "coordinator${VERSION:+-$VERSION}-$i" env "APPTAINERENV_ECA_RSI_STAGE_LIMIT_FLOORS=$STAGE_LIMIT_FLOORS" \
             "${PY[@]}" -m ecarsi.control --service-root "$CONTROL" --task-queue "$TASK_QUEUE" worker --workflow-slots 2; done ;;
     fleet-status) launch fleet-status "${PY[@]}" "$code/container/fleet-status.py" --service-root "$CONTROL" --out "$BASE/fleet-status.json" ;;
-    runners) launch "runners${VERSION:+-$VERSION}" "${PY[@]}" -m ecarsi.agent runners "$BRIDGE" ${VERSION:+--version "$VERSION"} ;;
+    runners) launch "runners${VERSION:+-$VERSION}${BRIDGE_TAG}" "${PY[@]}" -m ecarsi.agent runners "$BRIDGE" ${VERSION:+--version "$VERSION"} ;;
     pruner) launch request-pruner "${PY[@]}" "$code/container/request-pruner.py" --service-root "$CONTROL" --pool-root "$POOL" \
         --fleet-status "$BASE/fleet-status.json" --interval "${PRUNE_INTERVAL:-3600}" ;;
   esac

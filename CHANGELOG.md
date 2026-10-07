@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **More model keys and endpoints (#54).** A catalog entry may name the variable holding its key (`key_env`) with its
+  own `url`, so a second key or another endpoint of a provider (Ark Agent Plan `/api/plan/v3`) sits beside the
+  first; such entries are exempt from one-URL-per-backend. Keys may live in `~/.config/ecarsi/keys.env` (mode 600,
+  `ECA_KEYS_FILE`), read by runners and pool turns before `~/.bashrc`. A dataset or gate chooses another calling
+  order by its `bridge_root`: `ops/new-bridge.sh` makes a second bridge with its own catalog, `ops/gate.py start
+  --bridge=` runs a gate on it, `BRIDGE=` on the command line of `ops/control-plane.sh` starts its dispatcher and
+  runners; the launcher matches a bridge's processes by its exact root and logs them apart.
 - **Hard agent steps are frozen before their evidence is pruned (decision 0021, #51, #14 step 1).** The run's
   `published` display sync, which the dataset workflow awaits before it completes, copies every hard session
   (restarted, context reset, or at least 2 rejected submissions) with the files its records reach within three

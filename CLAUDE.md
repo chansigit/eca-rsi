@@ -51,7 +51,7 @@ Run directory layout (one run = one dataset):
 Layers, module map and mechanisms: [docs/control-plane/ARCHITECTURE.md](docs/control-plane/ARCHITECTURE.md). The numbers below refer to [docs/decisions/](docs/decisions/README.md).
 
 - **Components** (`control-plane.sh start|stop|restart|status|report`): temporal, hq, scheduler, bridge, runners, coordinators (4; 0008), fleet-status, pruner. Periscope runs from the compute image (`ops/start-periscope.sh`); its control-plane page is `/_control/`. It serves the display zones under `display_root` and `more_display_roots` of `~/.config/ecarsi/results.json` (rescanned every 10 min) plus `~/.config/ecarsi/periscope-datasets.json`.
-- **Settings** (0011): everything in `~/.config/ecarsi/`; `deployment.env` holds every machine path, template `examples/deployment.env`; the table is INSTALL.md A.4. Model API keys stay in `~/.bashrc`.
+- **Settings** (0011): everything in `~/.config/ecarsi/`; `deployment.env` holds every machine path, template `examples/deployment.env`; the table is INSTALL.md A.4. Model API keys go in `~/.config/ecarsi/keys.env` (mode 600) or `~/.bashrc`; never in a catalog, spec, issue or log.
 - **Images** (0010): `CODE=<checkout>` in the launcher shadows the snapshot for development. `control-plane.sh host-code` unpacks the snapshot to `control/image-code` for host-side helpers. Run `warm_pool configure-runtime` inside the compute image.
 - **Workers** (0006): the owner requests Slurm nodes; there is no autoscaler. `container/worker-node.sh` makes the job itself the worker; `warm_pool add-worker <host> --job-id <id>` joins a running allocation (a worker directory keeps its CPU slice: pass the same `--cpus`). Re-add the workers after an image switch. The plane node can be a 6-core test worker; stop it before a real batch. Do not touch the owner's `warmpool-gpu` jobs.
 - **Scheduling** (0006): HQ priority = class base (agent 1000, tool 800, work 0) + 10 × cpus; `infeasible: <reason>` when no live worker can hold a request. DEG runs 8 comparisons per request up to 50,000 cells, fewer above (one from 400,000), and `max_in_flight_deg` grows by the same factor (`control/common.py` `deg_batches`).
@@ -86,7 +86,7 @@ Agent models come from the catalog `~/.config/ecarsi/models.json` (`ECA_MODEL_CA
 
 | Variable | Meaning |
 |---|---|
-| `ARK_API_KEY`, `OPENROUTER_API_KEY`, `VLLM_API_KEY` | Provider keys, in `~/.bashrc`; the runners read them from there. |
+| `ARK_API_KEY`, `OPENROUTER_API_KEY`, `VLLM_API_KEY` | Provider keys, in `~/.config/ecarsi/keys.env` (mode 600; `ECA_KEYS_FILE` for another file) or `~/.bashrc`; the runners and pool turns read them there. A catalog entry with its own `url` and `key_env` (e.g. `ARK_PLAN_API_KEY`) uses that variable (#54). |
 | `OPENAI_AGENTS_API` | The options are `responses` and `chat_completions`. The default value is `responses`. |
 | `OPENAI_AGENTS_MAX_NUDGES`, `OPENAI_AGENTS_MAX_CONTEXT_RESETS` | The default value is 2 for each variable. |
 | `OPENAI_AGENTS_SERVER_STATE` | The default value is 1. This value enables incremental Responses continuation. |

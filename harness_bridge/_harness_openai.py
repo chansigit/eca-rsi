@@ -221,15 +221,17 @@ def model_accepts_images(provider: str, model: str | None) -> bool:
     return (model or "") in listed
 
 
-def _client(provider: str = "ark"):
+def _client(provider: str = "ark", key_env: str | None = None):
     """One client per run_agent call; the caller closes it so hundreds of
-    runs in one Slurm job do not each leave an httpx connection pool behind."""
+    runs in one Slurm job do not each leave an httpx connection pool behind.
+    key_env: a catalog entry's own key variable (eca-rsi #54), else the provider's."""
     from openai import AsyncOpenAI
 
     spec = PROVIDERS[provider]
-    key = os.environ.get(spec["key_env"])
+    key_env = key_env or spec["key_env"]
+    key = os.environ.get(key_env)
     if not key:
-        raise RuntimeError(f"HARNESS={spec['harness']} needs {spec['key_env']}")  # e.g. HARNESS=openai@vllm
+        raise RuntimeError(f"HARNESS={spec['harness']} needs {key_env}")  # e.g. HARNESS=openai@vllm
     return AsyncOpenAI(
         api_key=key,
         base_url=os.environ.get(spec["base_env"], spec["base_default"]),

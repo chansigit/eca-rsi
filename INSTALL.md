@@ -68,14 +68,15 @@ Every setting you edit lives in `~/.config/ecarsi/`:
 |---|---|---|
 | `deployment.env` | This machine: the two images, the state directory, the host directories the containers see (`BINDS`), the host Python, ports, Periscope's port | you; `ops/switch-images.sh` rewrites the two image lines |
 | `results.json` | `display_root` and `archive_root` for new runs; `more_display_roots` that Periscope shows as well | you |
-| `models.json` | The model catalog: harness, model and URL, in calling order. No keys | you, or Periscope's model page |
+| `models.json` | The model catalog: harness, model, URL and optionally `key_env` (the variable holding that entry's key), in calling order. No keys | you, or Periscope's model page |
+| `keys.env` | Model API keys, `NAME=value` lines (mode 600; refused when others can read it) | you |
 | `periscope-datasets.json` | Runs Periscope shows besides the display zones, `{name: run dir}` | Periscope (Bind / Unbind), or you |
 | `temporal.yaml` | Temporal dynamic config: workflow task timeout, history limits | you |
 | `periscope-password` | `user:pass` for Periscope (mode 600) | you |
 | `models-admin-key` | The key for edits on Periscope's model page (mode 600). Not a model API key | you |
 | `gate-dataset.json` | The release gate's dataset: a spec without `run_id`, `output_root`, `dataset_id`, with test `storage` roots (`ops/gate.py`) | you |
 
-Model API keys (`ARK_API_KEY`, ...) stay in `~/.bashrc`; the runners read them from there. Two more files belong to their services and are written by tools: `pool/config.json` (`warm_pool init`, `configure-runtime`) and `bridge/config.json` (`ecarsi.agent init`). To move to another machine, edit `deployment.env` and `results.json`, then initialise the pool (A.5) and the bridge there. Nothing else names a machine path.
+Model API keys (`ARK_API_KEY`, ...) go in `keys.env` or `~/.bashrc`; the runners and pool turns read the process environment first, then `keys.env`, then `~/.bashrc`. Two more files belong to their services and are written by tools: `pool/config.json` (`warm_pool init`, `configure-runtime`) and `bridge/config.json` (`ecarsi.agent init`). To move to another machine, edit `deployment.env` and `results.json`, then initialise the pool (A.5) and the bridge there. Nothing else names a machine path.
 
 `examples/deployment.env` is the template. The launcher lives inside the control image; `ops/control-plane.sh` reads `deployment.env` and runs it:
 
@@ -329,7 +330,7 @@ Agent models come from the catalog `~/.config/ecarsi/models.json` (A.4): harness
 | `OPENAI_AGENTS_MAX_CONTEXT_RESETS` | Recoveries from an over-long context. The default is 2. |
 | `OPENAI_AGENTS_SERVER_STATE` | The default is 1. When set to 1, Responses continues with `previous_response_id`. |
 
-Put the keys in `~/.bashrc`; the runners read them from there. A session is bounded by `max_turns` × the per-turn response timeout (bridge `routing.response_timeout_seconds`, 900 s). Kernel settings (for example `resolution`, `n_pcs`, `n_top_genes`, `n_neighbors`, the zoom-in `min_cells`) are keys of each stage's `config` in the dataset spec, not environment variables; see [docs/control-plane/DATASET_V2.md](docs/control-plane/DATASET_V2.md).
+Put the keys in `~/.config/ecarsi/keys.env` (or `~/.bashrc`). **Another endpoint or key of a provider** (#54): give the catalog entry its own `url` and `key_env`, e.g. `{"harness": "openai", "model": "glm-5-3-flash-260828", "url": "https://ark.cn-beijing.volces.com/api/plan/v3", "key_env": "ARK_PLAN_API_KEY"}` (Ark Agent Plan; its key works only on `/api/plan/v3`). **A different calling order for some datasets:** a second bridge with its own catalog, `bash ops/new-bridge.sh plan-bridge <catalog.json>`, started with `BRIDGE=$STATE/plan-bridge INFRA=<version> bash ops/control-plane.sh start bridge` (and `VERSION=<version> ... start runners` for resident runners); a dataset spec whose `bridge_root` names it sends its model turns there, a gate with `ops/gate.py start --bridge=$STATE/plan-bridge`. Entries with `key_env` need the version of #54 or later wherever the catalog is read: keep them out of the main catalog until every running version and INFRA have it. A session is bounded by `max_turns` × the per-turn response timeout (bridge `routing.response_timeout_seconds`, 900 s). Kernel settings (for example `resolution`, `n_pcs`, `n_top_genes`, `n_neighbors`, the zoom-in `min_cells`) are keys of each stage's `config` in the dataset spec, not environment variables; see [docs/control-plane/DATASET_V2.md](docs/control-plane/DATASET_V2.md).
 
 ## D. Submit a dataset
 

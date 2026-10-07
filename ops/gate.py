@@ -6,6 +6,8 @@ usage (control image; ops/run.sh passes BASE and CONTROL):
                                                    optionally under a stress policy (decision 0017; run id ends -keep)
   VERSION=<name> bash ops/runpy.sh ops/gate.py start
                                                    the gate on a published version, beside production (decision 0019)
+  bash ops/runpy.sh ops/gate.py start --bridge=<bridge root> [label]
+                                                   the gate's model turns go to that bridge and its model catalog (#54)
   bash ops/runpy.sh ops/gate.py wait <run_id>      wait for it (one long Temporal call: run it in the background), then check
   bash ops/runpy.sh ops/gate.py check <run root>   the checks alone, on any finished run
   For a gate on a published version, give wait and check the same VERSION=<name> as start: the checks import that
@@ -37,15 +39,20 @@ RUNS = BASE.parent / "runs" / "gate"
 
 
 def start(*args):
-    policy = args[0].split("=", 1)[1] if args and args[0].startswith("--stress-policy=") else None
-    label = (args[1:] if policy else args)[0] if len(args) > bool(policy) else None
+    options = dict(a[2:].split("=", 1) for a in args if a.startswith("--") and "=" in a)
+    if options.keys() - {"stress-policy", "bridge"}:
+        raise SystemExit("options: --stress-policy=keep, --bridge=<bridge root>")
+    policy, bridge = options.get("stress-policy"), options.get("bridge")
+    label = next((a for a in args if not a.startswith("--")), None)
     template = json.loads((Path.home() / ".config/ecarsi/gate-dataset.json").read_text())
     published = version()  # VERSION=<name> ops/runpy.sh: the gate runs on that version's queue, named after it
     run_id = ("gate-" + time.strftime("%Y%m%d-%H%M") + (f"-{policy}" if policy else "")
-              + (f"-{published['name'][:7]}" if published else ""))
+              + (f"-{published['name'][:7]}" if published else "") + (f"-{Path(bridge).name[:10]}" if bridge else ""))
     spec = dict(template, run_id=run_id, output_root=str(RUNS / run_id), dataset_id=f"Gate {label or run_id}")
     if policy:
         spec["stress_policy"] = policy
+    if bridge:  # another bridge, another model catalog (#54): the gate tries its models beside production
+        spec["bridge_root"] = bridge
     (RUNS / "specs").mkdir(mode=0o700, parents=True, exist_ok=True)
     path = RUNS / "specs" / f"{run_id}.json"
     path.write_text(json.dumps(spec, indent=1) + "\n")

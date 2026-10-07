@@ -3,7 +3,10 @@
 # The launcher comes from the control image or from a published version, $CODE_HOME/versions/<name> (decision 0019):
 # VERSION=<name> runs that version's coordinators and runners; INFRA=<name> (deployment.env) the shared components.
 # CODE=<checkout> before the command runs a checkout instead of the image snapshot (development only).
-set -a; . "$HOME/.config/ecarsi/deployment.env"; set +a
+# BRIDGE=<root> (and INFRA=<name>) given on the command line win over deployment.env: a second bridge with its own
+# model catalog (#54), e.g. BRIDGE=$STATE/plan-bridge INFRA=<version> bash ops/control-plane.sh start bridge
+caller_bridge=${BRIDGE:-}; caller_infra=${INFRA:-}
+set -a; . "$HOME/.config/ecarsi/deployment.env"; BRIDGE=${caller_bridge:-$BRIDGE}; INFRA=${caller_infra:-${INFRA:-}}; set +a
 if [ -n "${VERSION:-}" ]; then   # one version's coordinators and runners
   cat "$CODE_HOME/versions/$VERSION/container/control-plane.sh" > "$BASE/.control-plane.$VERSION.sh" || exit 2
   exec bash "$BASE/.control-plane.$VERSION.sh" "$@"; fi
