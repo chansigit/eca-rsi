@@ -78,3 +78,36 @@ def test_worker_plan_returns_correctable_error_then_accepts_complete_experiments
     accepted = plan_tool("submit_plan", prepared, args, result)
     assert accepted["accepted"] is True and accepted["experiments"]["source"]["experiments"] == 2
     assert accepted["conservation"]["sources"]["source"]["unique_assigned"] == 4
+
+
+def test_inspect_source_names_the_real_columns_and_reads_null_text_as_the_profile(tmp_path, monkeypatch):
+    """A model that guesses column names, or writes JSON null as text, is pointed back at the profile (glm gate 2026-10-07)."""
+    from ecarsi.stages.organize import plan_tool
+    from ecarsi.run_state import digest
+    from ecarsi.files import save
+    from ecarsi.stages import upstream
+    record = {"name": "source", "h5ad": str(tmp_path / "absent.h5ad")}
+    monkeypatch.setattr(upstream, "inspect_unit", lambda r: r)
+    prepared = tmp_path / "prepared.json"
+    save(prepared, {"records": [record], "source_identity": digest([record]),
+        "profiles": [{**record, "species": "human", "n_obs": 4, "n_vars": 4,
+                      "obs_columns": {"sample_id": {"n_unique": 2}, "tissue": {"n_unique": 2}}}]})
+    args, result = tmp_path / "args.json", tmp_path / "result.json"
+    save(args, {"source": "source", "column": "donor", "offset": 0})
+    guessed = plan_tool("inspect_source", prepared, args, result)
+    assert guessed["accepted"] is False and '["sample_id", "tissue"]' in guessed["error"] and "column=null" in guessed["error"]
+    for text in ("null", "None", ""):
+        save(args, {"source": "source", "column": text, "offset": 0})
+        assert sorted(plan_tool("inspect_source", prepared, args, result)["obs_columns"]) == ["sample_id", "tissue"]
+
+
+def test_the_planning_prompt_starts_with_the_read_first_procedure(tmp_path):
+    from ecarsi.stages.organize import planning_spec
+    from ecarsi.files import save
+    prepared = tmp_path / "prepared.json"
+    save(prepared, {"input_root": str(tmp_path), "profiles": [{"name": "11_Shietal"}]})
+    spec = {"input_root": str(tmp_path), "run_id": "r", "pool_root": str(tmp_path), "bridge_root": str(tmp_path),
+            "output_root": str(tmp_path / "out"), "prepare_cpus": 1, "prepare_memory_mb": 1024, "prepare_timeout_seconds": 60}
+    prompt = planning_spec(spec, prepared)["prompt"]
+    assert prompt.startswith("# How to work") and 'Sources: ["11_Shietal"]' in prompt and "{sources}" not in prompt
+    assert prompt.index("Read every profile first") < prompt.index("# Task: propose analysis units")

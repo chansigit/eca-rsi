@@ -45,8 +45,10 @@ def planning_spec(spec, prepared_path):
     for name, parameters, description in (
         ("inspect_source", {"source": {"type": "string", "enum": sources},
             "column": {"type": ["string", "null"]}, "offset": {"type": "integer", "minimum": 0}},
-         "Read a source metadata profile on a worker. Use column=null, offset=0 for its profile. "
-         "For an existing obs column, return up to 100 value counts starting at offset; no expression reads."),
+         "Read a source's metadata on a worker; no expression reads. First call it with column=null (JSON null, "
+         "not the string \"null\") and offset=0: that returns the source's profile, including obs_columns, the "
+         "complete list of its obs columns. Then, for a column copied from obs_columns, it returns up to 100 value "
+         "counts starting at offset (total_values tells whether to page)."),
         ("submit_plan", {"plan_json": {"type": "string"}},
          "Validate and submit the complete plan on a worker. Correct any returned error and resubmit. "
          "plan_json is JSON matching this schema: " + json.dumps(PLAN_SCHEMA))):
@@ -60,13 +62,8 @@ def planning_spec(spec, prepared_path):
             inputs=[reference(prepared_path), *[reference(package / p) for p in (
                 "stages/organize.py", "plan.py", "stages/organize_execute.py", "stages/upstream.py", "stages/h5ad.py")]],
             outputs=["result.json"], result_file="result.json"))
-    prompt = (package / "prompts/plan.md").read_text() + "\n\n" + (package / "prompts/organize_v2.md").read_text()
-    prompt += ("\n\n## Worker tools\nYou have no local filesystem or code execution. "
-               "Call inspect_source for each source before deciding. Request additional column value counts "
-               "only if needed; pagination is explicit. Use submit_plan for the structured plan instead of "
-               "returning it as prose. A rejected plan includes a concrete error: correct it and resubmit. "
-               "An accepted plan ends this planning session automatically. Never bypass the sample mapping "
-               "or cell-conservation checks.\nSources: " + json.dumps(sources))
+    prompt = (package / "prompts/organize_procedure.md").read_text().replace("{sources}", json.dumps(sources))
+    prompt += "\n\n" + (package / "prompts/plan.md").read_text() + "\n\n" + (package / "prompts/organize_v2.md").read_text()
     return dict(session_id="org-" + digest(spec["run_id"])[:24],
         dataset_id=spec.get("dataset_id", spec["run_id"]), prompt=prompt, tools=tools,
         pool_root=spec["pool_root"], bridge_root=spec["bridge_root"],
@@ -89,13 +86,17 @@ def plan_tool(name, prepared_path, arguments_path, destination):
         if name == "inspect_source":
             profile = next(p for p in prepared["profiles"] if p["name"] == arguments["source"])
             column = arguments["column"]
+            if isinstance(column, str) and column.strip().lower() in ("", "null", "none"):
+                column = None  # a model that writes JSON null as text still means the profile
             if column is None:
                 result = {k: profile[k] for k in ("name", "species", "n_obs", "n_vars", "obs_columns")}
                 if profile.get("eca_pp_decision"):
                     result["eca_pp_decision"] = {k: v for k, v in profile["eca_pp_decision"].items() if k != "ladder"}
             else:
-                if column not in profile["obs_columns"]:
-                    raise ValueError("Column is not present in this source")
+                if column not in profile["obs_columns"]:  # name the real columns: a guess is never the way on
+                    raise ValueError(f"{column!r} is not an obs column of {profile['name']}. Its obs columns are "
+                                     f"{json.dumps(sorted(profile['obs_columns']))}; use one of them verbatim, or "
+                                     "column=null for the profile.")
                 from .h5ad import read_obs
                 values = normalize(read_obs(profile["h5ad"])[column])
                 counts = values.value_counts()

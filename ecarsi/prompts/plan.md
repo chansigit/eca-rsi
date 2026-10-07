@@ -1,9 +1,10 @@
 # Task: propose analysis units from eca-pp unit profiles
 
-You are given JSON profiles of eca-pp-standardized h5ad units (one per
-source directory): species, cell counts, and per-column obs metadata with
-value counts for low-cardinality columns. Decide how they become
-**analysis units** — the things the curation loop will process one by one.
+Each source is an eca-pp-standardized h5ad unit (one per source directory),
+described by a JSON profile: species, cell counts, and per-column obs
+metadata with value counts for low-cardinality columns. Decide how the
+sources become **analysis units** — the things the curation loop will
+process one by one.
 
 ## Merge
 

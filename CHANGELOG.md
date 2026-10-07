@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Organize planning reads before it decides (#54 follow-up).** The planning prompt now opens with a procedure (`prompts/organize_procedure.md`): read every source profile with `inspect_source(column=null)`, ask only for columns listed in `obs_columns`, rest every decision on values read and name them in the rationale, submit and correct. `inspect_source` answers a column that does not exist with the source's real column list, and reads the text "null" as null. Found on the glm-5.3-flash gate (2026-10-07), which guessed 27 column names and never submitted a plan; `plan.md` no longer claims the profiles are in the message.
 - **More model keys and endpoints (#54).** A catalog entry may name the variable holding its key (`key_env`) with its
   own `url`, so a second key or another endpoint of a provider (Ark Agent Plan `/api/plan/v3`) sits beside the
   first; such entries are exempt from one-URL-per-backend. Keys may live in `~/.config/ecarsi/keys.env` (mode 600,
