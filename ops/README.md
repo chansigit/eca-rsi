@@ -23,6 +23,7 @@ Logs of builds and switches go to `$BASE/control-logs/`.
 | `gate.py start\|wait <run_id>\|check <run root>` | the release gate after a switch: `~/.config/ecarsi/gate-dataset.json` end to end, then the checks (released, nothing degraded, lineage reports, display zone, archive) |
 | `node-check.sh` | one look: Slurm jobs, HQ, scheduler, productivity, recent failures, coordinator memory |
 | `fail-recent.py` | pool failures of the last ~70 min, grouped by reason |
+| `turn-report.py <run root>` | a run's model-turn attempts by error class and by size (input tokens, image bytes), #31 |
 | `pool-smoke.py [N] [sleep]` | trivial requests through the scheduler, without a dataset |
 | `resume-one.py <workflow id> <reason>`, `resume-many.py <reason> <workflow id>…` | resume closed dataset workflows, each on the queue (version) it was started on |
 

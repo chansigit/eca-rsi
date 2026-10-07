@@ -72,6 +72,9 @@ def test_runner_performs_routed_turns_and_a_lost_runner_falls_back_to_the_pool(t
         assert not marker.exists()
         result = read(root / 'turns' / attempt['turn_id'] / 'result.json')
         assert result['outcome'] == 'success' and result['worker']['pid'] == os.getpid()
+        # #52: the turn's provider call, measured through the real client (chat completions usage names)
+        assert result['error_class'] is None and [c['http_status'] for c in result['provider_calls']] == [200]
+        assert (result['input_tokens'], result['output_tokens'], result['images']) == (10, 4, 0)
         bridge.serve(root, once=True)
         state = bridge.status(root, first_turn)
         assert state['state'] == 'reply_saved' and state['turn_id'] == attempt['turn_id']

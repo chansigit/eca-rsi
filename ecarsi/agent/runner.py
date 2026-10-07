@@ -93,7 +93,8 @@ def unfinished(turn_dir, item, outcome, exc=None):
     save(turn_dir / "result.json", check("turn", dict(outcome=outcome, response=None, error=exc and type(exc).__name__,
                                          error_detail=exc and str(exc)[:2000],
                                          worker=dict(host=os.uname().nodename.split(".")[0], pid=os.getpid()),
-                                         elapsed_seconds=None, model=item.get("model"), provider_response=None)))
+                                         elapsed_seconds=None, model=item.get("model"), provider_response=None,
+                                         error_class="other")))
 
 
 def supervise(root, interval=5):

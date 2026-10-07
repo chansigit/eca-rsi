@@ -44,6 +44,8 @@ A failed portable turn tries an untried eligible alternative first. Consecutive 
 
 The system rereads settings on each tick. The file `summary.json.models` reports state, in-flight admissions, failures, and cooldown expiry. Files in `model-events/*.json` record every attempt outcome.
 
+**What each attempt records (#52).** The attempt's `result.json` (`turns/<turn>/` for a runner, the pool attempt's `outputs/` otherwise) keeps the outcome, the error's type and message, the provider's response shape, and since #52: `provider_calls` (one entry per HTTP request: request bytes, inlined images and their decoded bytes, latency, HTTP status, input and output tokens, provider error code; no latency means no response came), their totals `input_tokens`, `output_tokens`, `images`, `image_bytes`, `latency_s`, and `error_class` (timeout, rate_limit, context_too_long, output_limit, parse_error, other; none for a success; `dispatch.error_class`). The version's runner writes them, so the shared bridge needs no change. `bash ops/runpy.sh ops/turn-report.py <run root>` groups one run's attempts by class and by size; older attempts are classified from their error text.
+
 Ready operation kinds (`trace.unit_id`) take turns to receive admissions. This policy prevents a large per-sample fan-out from delaying cross-sample or zoom-in decisions. Within an operation kind, older sessions go first. The system reserves one in four admissions for the oldest request waiting at least `session_wait_seconds`.
 
 A timeout does not prove that remote inference stopped or was not billed. Superseded or late replies cannot run tools or advance a workflow.

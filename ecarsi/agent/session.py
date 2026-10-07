@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import time
 from types import ModuleType, SimpleNamespace
 
 from ..files import digest, file_digest, immutable, lock, read, reference, save, verified
@@ -311,16 +312,8 @@ async def run_turn(request, folder, *, model=None, portable_upgrade=False):
     if chosen["url"]:
         os.environ[PROVIDERS[provider]["base_env"]] = chosen["url"]
     client = _client(provider)
-    # Persist response shape, never prompts, arguments, credentials or clinical data.
     if hasattr(client, '_client'):
-        async def observe(response):
-            await response.aread()
-            try:
-                body = response.json()
-            except ValueError:
-                body = {}
-            save(folder / 'provider-response.json', provider_summary(response.status_code, body))
-        client._client.event_hooks['response'].append(observe)
+        record_calls(client._client, folder)
     try:
         batchable = [t["name"] for t in policy.values() if t.get("read_only")] if portable else []
         instructions = session["spec"]["prompt"]
@@ -380,6 +373,45 @@ async def run_turn(request, folder, *, model=None, portable_upgrade=False):
         return response
     finally:
         await client.close()
+
+
+def record_calls(http, folder):
+    """Hooks on the provider's httpx client: provider-response.json, the shape of the last response, and
+    provider-calls.json, one entry per HTTP request with its size, images, latency, status and tokens (#31); an
+    entry without latency_s got no response (a timeout or a lost connection). Never prompts, arguments,
+    credentials or clinical data."""
+    calls = []
+
+    async def sent(request):
+        calls.append(dict(started_at=time.time(), **request_size(request.content)))
+        save(folder / 'provider-calls.json', calls)
+
+    async def observe(response):
+        await response.aread()
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        summary = provider_summary(response.status_code, body)
+        save(folder / 'provider-response.json', summary)
+        if calls:
+            usage = body.get('usage') or {}
+            calls[-1].update(latency_s=time.time() - calls[-1]['started_at'], http_status=response.status_code,
+                             input_tokens=usage.get('input_tokens', usage.get('prompt_tokens')),
+                             output_tokens=usage.get('output_tokens', usage.get('completion_tokens')),
+                             error_code=summary['error_code'])
+            save(folder / 'provider-calls.json', calls)
+    http.event_hooks['request'].append(sent)
+    http.event_hooks['response'].append(observe)
+
+
+IMAGE = re.compile(rb'data:image/[a-z+.-]+;base64,([A-Za-z0-9+/]+=*)')
+
+
+def request_size(content):
+    """A provider request's size: its bytes and the images inlined in it (count and decoded bytes)."""
+    images = [len(data) * 3 // 4 for data in IMAGE.findall(content)]
+    return dict(request_bytes=len(content), images=len(images), image_bytes=sum(images))
 
 
 def provider_summary(http_status, body):

@@ -610,9 +610,46 @@ async def perform(plan, folder, *, setup=None):
         # This turn cannot execute tools. A free-text conclusion is not a
         # submitted scientific result; bounded model fallback can safely retry.
         outcome, error = 'incomplete_submission', 'Required completion tool was not called'
+    provider, calls = read(folder / 'provider-response.json'), read(folder / 'provider-calls.json', [])
     save(folder / "result.json", check("turn", dict(outcome=outcome, response=response, error=error, error_detail=detail,
                                      worker=worker, elapsed_seconds=time.time()-started, model=plan["model"],
-                                     provider_response=read(folder / 'provider-response.json'))))
+                                     provider_response=provider, error_class=error_class(outcome, error, detail, provider),
+                                     **call_totals(calls), provider_calls=calls)))
+
+
+def error_class(outcome, error=None, detail=None, provider=None):
+    """What a turn that did not succeed ran into (#31): timeout, rate_limit, context_too_long, output_limit,
+    parse_error (the model's output could not be read) or other; None for a success. It reads only what result.json
+    keeps (the error's type and message, the provider's response summary), so turns recorded before it classify too."""
+    from harness_bridge._harness_openai import CONTEXT_LIMIT_MESSAGES
+    if outcome == "success":
+        return None
+    if outcome in {"worker_lost", "local_error", "worker_setup_timeout"}:
+        return "other"  # the worker, not the provider
+    provider, text = provider or {}, f"{error} {detail}".lower()
+    reason = (provider.get("incomplete_details") or {}).get("reason")
+    if outcome == "timeout" or "timeout" in str(error).lower():
+        return "timeout"
+    if provider.get("http_status") == 429 or error == "RateLimitError":
+        return "rate_limit"
+    if any(message in text for message in CONTEXT_LIMIT_MESSAGES):
+        return "context_too_long"
+    if reason in {"length", "max_output_tokens"} or "reason='length'" in text or "reason='max_output_tokens'" in text:
+        return "output_limit"
+    if error in {"JSONDecodeError", "ModelBehaviorError", "ValidationError"}:
+        return "parse_error"
+    return "other"
+
+
+def call_totals(calls):
+    """A turn's provider calls (session.run_turn records one per HTTP request) summed: tokens and latency over the
+    calls, the images of the last request (a retry resends the same context). None where nothing was recorded."""
+    def total(field):
+        values = [c[field] for c in calls if c.get(field) is not None]
+        return sum(values) if values else None
+    last = calls[-1] if calls else {}
+    return dict(input_tokens=total("input_tokens"), output_tokens=total("output_tokens"),
+                images=last.get("images"), image_bytes=last.get("image_bytes"), latency_s=total("latency_s"))
 
 
 if __name__ == "__main__":

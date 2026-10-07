@@ -255,17 +255,16 @@ def _model(model: str, api_mode: str, client):
     )
 
 
+# What the providers say when the input is too large. Ark's Responses API also caps the total conversation items
+# (not tokens), e.g. "Maximum of 1000 items allowed in input.", hit by long tool-heavy sessions with server_state on.
+# ecarsi.agent.dispatch.error_class reads the same list.
+CONTEXT_LIMIT_MESSAGES = ("exceed max message tokens", "maximum context length", "context length exceeded",
+                          "items allowed in input")
+
+
 def _is_context_limit_error(exc: Exception) -> bool:
     text = str(exc).lower()
-    return exc.__class__.__name__ == "BadRequestError" and (
-        "exceed max message tokens" in text
-        or "maximum context length" in text
-        or "context length exceeded" in text
-        # Ark's Responses API caps total conversation items (not tokens) —
-        # e.g. "Maximum of 1000 items allowed in input." — hit by long
-        # tool-heavy sessions (many clusters/lineages) with server_state on.
-        or "items allowed in input" in text
-    )
+    return exc.__class__.__name__ == "BadRequestError" and any(m in text for m in CONTEXT_LIMIT_MESSAGES)
 
 
 def _is_output_length_error(exc: Exception) -> bool:

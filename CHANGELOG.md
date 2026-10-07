@@ -8,6 +8,7 @@
   references into `<archive_root>/_cases/<collection>/<dataset>/<run>/`, each file once per run and checked
   against its sha256; 24 GiB per case and 96 GiB per run, skipped cases listed with the reason. No shared
   component changes.
+- **Every model turn records its size, latency and failure class (#52, #31 step 1).** The turn's `result.json` gains `provider_calls` (per HTTP request: bytes, inlined images and their bytes, latency, status, tokens, error code) and their totals `input_tokens`, `output_tokens`, `images`, `image_bytes`, `latency_s`, plus `error_class` (timeout, rate_limit, context_too_long, output_limit, parse_error, other). Written by the version's runner (or pool task); the shared bridge is unchanged. `ops/turn-report.py <run root>` groups a run's attempts by class and size, and classifies older attempts from their error text. `harness_bridge` exports its context-limit messages as `CONTEXT_LIMIT_MESSAGES` for both.
 - **needs_review lists the samples the inclusion agent excluded (#46).** The gen2 release never produced the
   documented `sample_excluded` category: one item per excluded sample, with its cell count and the agent's reason,
   built from the `sample_excluded` rows of `cell_exclusions.csv.gz`. Found on Li2019_skin's first batch-1 release
