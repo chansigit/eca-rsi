@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **needs_review lists the samples the inclusion agent excluded (#46).** The gen2 release never produced the
+  documented `sample_excluded` category: one item per excluded sample, with its cell count and the agent's reason,
+  built from the `sample_excluded` rows of `cell_exclusions.csv.gz`. Found on Li2019_skin's first batch-1 release
+  (5 samples, 37 cells).
 - **One stress panel and one mitochondrial rule for every species (decision 0020, #29).** A package `genesets/`
   shared by osp and msp. `is_mito`: an MT- prefix or the bare names of rhesus, cynomolgus and mouse lemur (ND1, COX1,
   CYTB, ...), the rule of stangene.mito; OSP's `pct_counts_mt` and msp's `mito` mark use it, OSP's summary records

@@ -295,7 +295,7 @@ def review_items(unit, exclusions, decisions, root=None, ledger=None):
                 note='no mitochondrial gene recognised: pct_counts_mt is 0 and the mitochondrial QC filters saw nothing',
                 link=f"{L.GEN2_PERSAMPLE}/{bundle['sample']}/report.html"))
     for (number, stage), rows in exclusions.groupby(['round', 'release_stage'], sort=False):
-        uncertain, fragments = [], {}
+        uncertain, fragments, excluded = [], {}, {}  # excluded: whole samples the inclusion agent kept out (#46)
         for row in rows.itertuples():
             # OSP rule reasons are plain strings; later reasons contain decision evidence.
             try:
@@ -306,6 +306,9 @@ def review_items(unit, exclusions, decisions, root=None, ledger=None):
                 if isinstance(r, dict) and r.get('code') == 'fragment_qc':  # #27: removed without an agent, by test
                     tests = ', '.join((r.get('detail') or {}).get('tests', [])) or 'tests not recorded'
                     fragments[tests] = fragments.get(tests, 0) + 1
+                elif isinstance(r, dict) and r.get('code') == 'sample_excluded':
+                    sample = str(getattr(row, 'sample_id', '') or '')
+                    excluded[sample] = (excluded.get(sample, (0, ''))[0] + 1, str(r.get('detail') or ''))
             def low(value):
                 if isinstance(value, dict):
                     return value.get('confidence') in {'low', 'medium'} or any(low(v) for v in value.values())
@@ -319,6 +322,9 @@ def review_items(unit, exclusions, decisions, root=None, ledger=None):
         for tests, n in sorted(fragments.items()):
             items.append(Item('fragment_removed', int(number), stage, n_cells=n, action='remove',
                 note=f'msp minor-sibling fragment QC: {tests}', link=exclusions_link))
+        for sample, (n, detail) in sorted(excluded.items()):
+            items.append(Item('sample_excluded', int(number), stage, scope=sample, n_cells=n, action='exclude',
+                note=detail[:300], link=exclusions_link))
     for entry in decisions:
         if root is not None:
             entry = {**entry, 'source': {**entry['source'], 'link': local_link(root, entry)}}
