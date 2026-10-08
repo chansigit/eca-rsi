@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.4.6 — 2026-10-08
+
+One repository with the kernels and the agent harness (decision 0018, first numbered 0.4.5), code versions that run
+side by side and ship without switching images (decision 0019), one stress panel and mitochondrial rule for every
+species (decision 0020), hard agent steps frozen for replay (decision 0021), and a performance pass measured on batch 2
+of parse-5M: the Wilcoxon DEG, minor-sibling QC and check_genes take seconds to a minute instead of tens of minutes,
+with identical outputs; lookup tool calls start 5-7 s sooner; a rejected proposal can be amended instead of rewritten.
+Lint rules and the tests run on GitHub.
+
 - **A GPU job joins the pool as a GPU worker (#58).** `container/worker-node.sh` re-enters a job with a GPU grant as a
   job step that holds its GPUs (`srun --gpus=N --mem=0`) and starts `slurm-worker --gpu` there, as `add-worker` does;
   started in the batch step, a GPU job joined CPU-only and its card idled (batch 2, 46924984: 6 h, 0 % GPU). INSTALL.md
