@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Every needs_review category comes out of a release (#47).** `tests/test_release_review_categories.py` builds one
+  release input that touches every category of `review.KINDS` and requires the gen2 builder
+  (`stages/release.review_items`) to produce each of them, so a category can no longer exist only on paper or only on
+  the gen1 pages (#46). `review.collect`, the gen1 reader, is documented as frozen: it renders the runs of the layout
+  removed in 0.4.0 and decides nothing new.
+
 - **A minimal lint rule set (#48).** `[tool.ruff]` in pyproject selects one statement per line (E701, E702, E703), no
   unused imports or variables (F401, F841) and no undefined names (F821); `tests/test_lint.py` runs `ruff check`
   (ruff 0.16 from the pytest directory). The 483 existing findings are fixed: statements joined by `;` or after `:` are

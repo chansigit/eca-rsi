@@ -53,6 +53,7 @@ SCIENCE_ONLY = [
     "test_osp_worker.py",
     "test_persample_v2.py",
     "test_release_links.py",
+    "test_release_review_categories.py",
     "test_release_review_sample_excluded.py",
     "test_sample_map_derive.py",
     "test_sample_map_spec.py",

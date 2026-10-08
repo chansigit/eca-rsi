@@ -260,7 +260,9 @@ def _zoomin_items(n: int, zdir: Path, unit: Path) -> list[Item]:
 
 
 def collect(unit: Path, rounds: list[Path], stats: list[dict], forced: bool) -> list[Item]:
-    """All review items of a unit, ordered by section then round."""
+    """All review items of a gen1 unit, ordered by section then round. Frozen (#47): it reads the run tree of the
+    layout 0.4.0 removed, so old pages keep rendering as they did; it decides nothing new. A new category goes into
+    stages/release.review_items, which tests/test_release_review_categories.py holds to KINDS."""
     items: list[Item] = []
     front = L.persample_root(unit) / "needs_review.json"
     if front.is_file():
