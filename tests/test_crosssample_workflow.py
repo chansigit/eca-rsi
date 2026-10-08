@@ -11,6 +11,14 @@ from ecarsi.files import save, read
 from ecarsi.warm_pool.state import validate_trace
 
 
+@pytest.fixture(autouse=True)
+def _no_long_poll(monkeypatch):
+    """check_pool / check_bridge answer 'waiting' at once: the 20 s activity-side wait is the subject of
+    tests/test_long_poll.py, and four tests here paid it 2-3 times each (160 s of a 6 min suite)."""
+    from ecarsi.control import coordinator
+    monkeypatch.setattr(coordinator, "POLL_WAIT_SECONDS", 0)
+
+
 def test_gpu_selection_and_large_fanin(tmp_path):
     pool = tmp_path / 'pool'
     pool.mkdir(mode=0o700)
