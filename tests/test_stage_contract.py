@@ -28,6 +28,11 @@ def test_a_proposal_with_a_trailing_quote_is_accepted():
     with pytest.raises(ValueError):   # real trailing data still reaches the error path
         contract.proposal({'proposal_json': proposal + ', "more": 1}'})
     assert contract.json_hint('Extra data: line 1 column 9') == contract.JSON_NOTE and contract.json_hint('Cover each cluster') == ''
+    broken = '{"clusters": [{"cluster_id": "0", "evidence": {"markers": "Cd3e"}, {"cluster_id": "1"}]}'  # evidence not closed
+    with pytest.raises(ValueError) as error:
+        contract.proposal({'proposal_json': broken})
+    hint = contract.json_hint(str(error.value), broken)
+    assert hint.startswith(contract.JSON_BREAK) and '"Cd3e\\"}, " <<HERE>> "{\\"cluster_id' in hint
 
 
 def test_checklists_exist_for_every_stage_session():

@@ -385,7 +385,7 @@ def error_hint(name, content, state, args, bundle):
     if name != 'submit_decision':
         return ''
     if json_hint(content):
-        return json_hint(content)
+        return json_hint(content, args.get('proposal_json'))
     if state['phase'] == 'inclusion':
         return 'Samples to cover exactly once: ' + json.dumps([s['sample'] for s in bundle['samples']]) + '.'
     if content.startswith(('Query DEG', 'Read a figure')):

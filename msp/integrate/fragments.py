@@ -4,9 +4,12 @@ parent-core marker dot plot that explains what each fragment is."""
 from __future__ import annotations
 
 import csv
+import functools
 import logging
+import math
 import os
 import re
+from fractions import Fraction
 
 import matplotlib
 
@@ -29,6 +32,8 @@ log = logging.getLogger(__name__)
 # "recommend_removal" here are deliberately not "flag" — osp already uses
 # keep/flag/drop for a different, per-cell concept and reusing the word
 # would be confusing side by side.
+HEATMAP_GENES = 150  # rows of fractal_marker_heatmap.png
+HEATMAP_PIXELS = 16_000_000  # its size: the DPI drops below UMAP_DPI to stay under (#31)
 MIN_N_FOR_TEST = 5  # below this, Mann-Whitney has no real power — mark insufficient_data
 BIG_SIBLING_FRAC = 0.25  # sibling >= this fraction of its own parent's core is skipped, not a "minor" fragment
 BIG_SIBLING_N = 800  # sibling >= this many cells (absolute) is skipped too, regardless of frac_of_core
@@ -59,8 +64,39 @@ def _mwu_test(sib_vals, core_vals):
     core_vals = core_vals[np.isfinite(core_vals)]
     if min(len(sib_vals), len(core_vals)) < MIN_N_FOR_TEST:
         return None
+    n1, n2 = len(sib_vals), len(core_vals)
+    if min(n1, n2) <= 8 and len(np.unique(np.concatenate([sib_vals, core_vals]))) == n1 + n2:
+        # scipy's choice for this case is its exact test, whose recursion is quadratic in U: one 5-cell
+        # sibling against 280k core cells took minutes per metric (batch 2). Same p, computed fast.
+        u = mannwhitneyu(sib_vals, core_vals, alternative="greater", method="asymptotic").statistic
+        return _exact_mwu_sf(int(u), n1, n2), float(u / (n1 * n2))
     u, p = mannwhitneyu(sib_vals, core_vals, alternative="greater")
-    return float(p), float(u / (len(sib_vals) * len(core_vals)))
+    return float(p), float(u / (n1 * n2))
+
+
+@functools.lru_cache(maxsize=8)
+def _mwu_counts(n1, n2):
+    """How many of the C(n1+n2, n1) rank arrangements without ties give U = 0 .. n1*n2/2: the coefficients of
+    prod (1 - q^(n2+i)) / (1 - q^i), i = 1..min(n1, n2), in exact integers; linear in U per factor."""
+    n1, n2 = sorted((n1, n2))
+    m = n1 * n2 // 2
+    counts = np.zeros(m + 1, dtype=object)
+    counts[0] = 1
+    for i in range(1, n1 + 1):  # divide by (1 - q^i)
+        for r in range(i):
+            counts[r::i] = np.cumsum(counts[r::i])
+    for d in range(n2 + 1, n2 + n1 + 1):  # multiply by (1 - q^d)
+        if d <= m:
+            counts[d:] = counts[d:] - counts[:m + 1 - d]
+    return counts
+
+
+def _exact_mwu_sf(u, n1, n2):
+    """P(U >= u) under the null, without ties: scipy's exact Mann-Whitney p-value."""
+    counts, total = _mwu_counts(n1, n2), math.comb(n1 + n2, n1)
+    if n1 * n2 - u < len(counts):  # P(U >= u) = P(U <= n1*n2 - u), the distribution is symmetric
+        return float(Fraction(int(sum(counts[:n1 * n2 - u + 1])), total))
+    return float(Fraction(total - int(sum(counts[:u])), total))
 
 
 def _minor_sibling_qc(ad, res, outdir):
@@ -262,6 +298,14 @@ def _fractal_marker_heatmap(ad, res, outdir, figdir, top_n=10):
     leaf_order = dendrogram(col_linkage, no_plot=True)["leaves"]
     cluster_order = [z.columns[i] for i in leaf_order]
     z, frac = z[cluster_order], frac[cluster_order]
+    # The figure draws at most HEATMAP_GENES rows, each parent's first markers; fractal_markers.csv and the
+    # expression tables keep top_n per parent. Batch 2 drew up to 378 rows x 200 fragments, 9853x12055 px,
+    # past the model provider's 36 Mpx per image (#31).
+    if len(markers) > HEATMAP_GENES:
+        rank = {(r["parent"], r["gene"]): r["rank"] for r in marker_rows}
+        per_parent = max(3, HEATMAP_GENES // len(set(gene_parent.values())))
+        markers = [g for g in markers if rank[(gene_parent[g], g)] <= per_parent]
+        z, frac = z.loc[markers], frac.loc[markers]
 
     removal_path = os.path.join(outdir, "minor_sibling_qc.csv")
     removal_set = set()
@@ -356,5 +400,5 @@ def _fractal_marker_heatmap(ad, res, outdir, figdir, top_n=10):
         lax.text(i, 0.15, f"{frac_ref:g}", ha="center", va="top", fontsize=7)
     lax.text(1.5, 0.95, "fraction expressing", ha="center", va="top", fontsize=8)
 
-    fig.savefig(os.path.join(figdir, "fractal_marker_heatmap.png"), dpi=UMAP_DPI)
+    fig.savefig(os.path.join(figdir, "fractal_marker_heatmap.png"), dpi=min(UMAP_DPI, (HEATMAP_PIXELS / (fig_w * fig_h)) ** 0.5))
     plt.close("all")

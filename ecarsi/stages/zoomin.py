@@ -441,14 +441,14 @@ def island_hint(bundle):
             'names whose coarse labels your plan splits across lineages; omit the key when nothing is split.')
 
 
-def error_hint(name, content, state, bundle):
+def error_hint(name, content, state, bundle, args=None):
     """What a rejected submission was missing, so the next turn can be the corrected one."""
     if content.startswith('Complete required checks'):
         return 'Do the listed reads first (they can be batched in one turn), then resubmit the same proposal.'
     if content.startswith('Read the lineage UMAP'):
         return 'Figures: ' + json.dumps([p for p in evidence_paths(bundle) if p.endswith('.png')])
     if json_hint(content):
-        return json_hint(content)
+        return json_hint(content, (args or {}).get('proposal_json'))
     if name in {'submit_types', 'submit_quality'}:
         own, other = lineage_labels(bundle)
         return coverage_hint(data_from(bundle).obs, state, own, other)
@@ -667,7 +667,7 @@ def tool(name, state_path, args_path, destination):
     except (ValueError,KeyError,TypeError,IndexError) as exc:
         content = str(exc)[:8000]
         try:
-            hint = error_hint(name, content, state, bundle)
+            hint = error_hint(name, content, state, bundle, args)
         except Exception:  # noqa: BLE001 - a hint must never turn a correctable error into a crash
             hint = ''
         response = {'is_error':True,'content':(content+'\n'+hint)[:16000] if hint else content}

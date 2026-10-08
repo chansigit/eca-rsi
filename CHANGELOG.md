@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Minor-sibling QC no longer waits minutes on scipy's exact Mann-Whitney.** For a sibling of at most 8 cells
+  without ties scipy computes the exact p-value with a recursion quadratic in U: one test against the ~280k pooled
+  core cells of a parse-5M round took minutes, and the step took 3-33 min per integration in batch 2 depending on how
+  many such siblings it had. `msp.integrate.fragments` now counts the same null distribution as the coefficients of
+  the Gaussian binomial in exact integers, linear per factor and cached per shape: 0.7-3 s, p-values within 3e-13 of
+  scipy's (400 random cases), every other test unchanged. On a 294k-cell eye_male round: 503 s -> 4.9 s, the same
+  minor_sibling_qc.csv byte for byte.
+- **A proposal that does not parse gets a hint at its break.** `contract.json_hint` quotes the text around the
+  character the parser names and says what breaks there (a missing or extra bracket, brace, comma or quote); only
+  text after the document still gets the old note. In batch 2 the breaks were braces of nested `evidence` objects in
+  20-26k-character proposals, and the old note pointed the model at the end of the document.
+- **The fractal marker heatmap has a size (#31).** It draws at most 150 marker rows (each parent's first markers;
+  `fractal_markers.csv` and the expression tables keep 10 per parent) and stays under 16 Mpx by lowering its DPI. In
+  batch 2 it grew to 378 rows x 200 fragments, 9853x12055 px; 22 of its 285 copies exceeded the provider's 36 Mpx.
+
 - **Figures fit the provider's pixel limit (#31).** `stages/common.png_url` scales a figure above 36,000,000 pixels
   (Ark's per-image limit, quoted by its 400 error) down to fit before it reaches the model. In batch 2 a 4237x9631
   figure failed every attempt of an eye_male cross-sample session, on turbo and on the pro fallback, until the session

@@ -15,6 +15,7 @@ rejected 25 times in a row, 167k tokens each). Measured 2026-09-16 over 6 h: 64 
 submit_decision, 56 % of submit_quality and 32 % of submit_types calls were rejected.
 """
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -95,8 +96,23 @@ def proposal(args):
     return value if isinstance(value, (dict, list)) else lenient_json(value)
 
 
-def json_hint(content):
-    return JSON_NOTE if 'Expecting' in content or 'Extra data' in content else ''
+JSON_BREAK = ('proposal_json is not valid JSON: a bracket, brace, comma or quote is missing or extra where it breaks. '
+              'Every { and [ closes with its own } and ] before the next field or entry; a nested object such as '
+              'evidence closes before the next field of its entry.')
+
+
+def json_hint(content, raw=None):
+    """What to fix in a proposal_json that does not parse: text after the document ('Extra data'), or a break
+    inside it, quoted from `raw` at the character the parser names. In batch 2 the breaks were braces of nested
+    objects in 20-26k-character proposals, and the old note sent the model to the end of the document."""
+    if 'Extra data' in content:
+        return JSON_NOTE
+    at = re.search(r': line \d+ column \d+ \(char (\d+)\)', content)
+    if not at:
+        return ''
+    i = int(at.group(1))
+    return JSON_BREAK + (' It breaks here: ' + json.dumps(raw[max(0, i - 160):i]) + ' <<HERE>> ' + json.dumps(raw[i:i + 60])
+                         if isinstance(raw, str) else '')
 
 
 def checklist(name):

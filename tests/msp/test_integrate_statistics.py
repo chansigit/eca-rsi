@@ -1,6 +1,7 @@
 """The core-and-satellite statistics in msp.integrate, on synthetic inputs
 built around each rule's thresholds."""
 
+import io
 from types import SimpleNamespace
 
 import anndata as ad
@@ -46,6 +47,30 @@ def test_parent_core_deg_retains_singletons_without_testing_them(tmp_path, monke
         assert set(pd.read_csv(tmp_path / "de_parent_core_vs_core.csv", dtype={"group": str}).group) == expected
     else:
         assert not (tmp_path / "de_parent_core_vs_core.csv").exists()
+
+
+def test_fractal_heatmap_draws_fewer_rows_and_pixels_but_keeps_every_marker_in_its_tables(tmp_path, monkeypatch):
+    from PIL import Image
+    from msp.integrate import fragments
+    rng, parents = np.random.default_rng(5), 6
+    X = rng.poisson(0.2, (parents * 40, parents * 8)).astype(float)
+    for p in range(parents):
+        X[p * 40:(p + 1) * 40, p * 8:(p + 1) * 8] += rng.poisson(6, (40, 8))  # 8 own markers per parent
+    labels = [f"c{p}_0" for p in range(parents) for _ in range(40)]
+    data = ad.AnnData(np.log1p(X), obs=pd.DataFrame({"standissect_product": labels}, index=[str(i) for i in range(len(labels))]),
+                      var=pd.DataFrame(index=[f"g{i}" for i in range(X.shape[1])]))
+    result = SimpleNamespace(fragments=pd.DataFrame({"subcluster": [f"c{p}_0" for p in range(parents)], "parent": range(parents), "rank": 0}))
+    def draw(folder, **constants):
+        for name, value in constants.items():
+            monkeypatch.setattr(fragments, name, value)
+        folder.mkdir()
+        fragments._fractal_marker_heatmap(data, result, folder, folder)
+        return Image.open(folder / "fractal_marker_heatmap.png").size, (folder / "fractal_markers.csv").read_text()
+    (w, full_h), markers = draw(tmp_path / "all")
+    (_, capped_h), capped_markers = draw(tmp_path / "capped", HEATMAP_GENES=6)  # 3 rows per parent instead of 8
+    (small_w, small_h), _ = draw(tmp_path / "small", HEATMAP_PIXELS=200_000)
+    assert len(pd.read_csv(io.StringIO(markers))) == parents * 8 and capped_markers == markers
+    assert capped_h < full_h and small_w * small_h <= 200_000 < w * full_h
 
 
 # (subcluster, n_cells, mt centre, doublet centre, inherited _qc_action)
@@ -128,6 +153,19 @@ def outlier_dataset():
         index=[f"cell{i}" for i in range(40)],
     )
     return ad.AnnData(np.zeros((40, 1), dtype=np.float32), obs=obs)
+
+
+def test_minor_sibling_mann_whitney_matches_scipy_on_its_exact_path():
+    from scipy.stats import mannwhitneyu
+    from msp.integrate.fragments import _mwu_test
+    rng = np.random.default_rng(1)
+    for n1, n2 in [(5, 9), (8, 400), (6, 2500), (40, 7), (12, 300)]:  # the exact path: a side of at most 8, no ties
+        for shift in (-0.2, 0.3, 0.9):
+            sib, core = rng.random(n1) + shift, rng.random(n2)
+            u, p = mannwhitneyu(sib, core, alternative="greater")
+            assert _mwu_test(sib, core) == pytest.approx((p, u / (n1 * n2)), rel=1e-9, abs=0)
+    tied = np.round(rng.random(6), 1), np.round(rng.random(300), 1)  # ties: scipy's asymptotic test, as before
+    assert _mwu_test(*tied)[0] == mannwhitneyu(*tied, alternative="greater").pvalue
 
 
 def test_cell_level_outliers_need_both_the_mad_and_the_floor_gate(tmp_path):
