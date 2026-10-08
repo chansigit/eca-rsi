@@ -49,8 +49,10 @@ MEASURED_CPUS = {'zoom-in.deg': 1, 'cross-sample.deg': 1, 'zoom-in.compute': 2, 
 # 0.8-2.1 GiB (2026-10-02 journals); the 24 chunks of the 2026-10-04 scale test (~19.4k cells) peaked
 # at 6.8-7.5 GiB of 8.75 asked. cross-sample and zoom-in compute, measured in that scale test (parse-5M
 # heart_male, unsplit): 418k cells peaked at 30.3 GiB (0.069 MiB per cell above 2 GiB), the largest
-# lineage (~181k cells) at 16.8 GiB (0.084); 0.12 keeps ~40 % headroom on both.
-CELL_MB = {'osp.compute': (1024, 0.4), 'cross-sample.compute': (2048, 0.12),
+# lineage (~181k cells) at 16.8 GiB (0.084); 0.12 keeps ~40 % headroom on both. Batch 2 (parse-5M, 2026-10-07):
+# 43 of 222 osp.compute attempts were killed at 8.5-9 GiB, 0.4 MiB per cell of a 20k-cell chunk, and succeeded
+# with peaks up to 10.0 GiB; 0.5 asks 10.8 GiB for such a chunk.
+CELL_MB = {'osp.compute': (1024, 0.5), 'cross-sample.compute': (2048, 0.12),
            'cross-sample.compute-round': (2048, 0.12), 'zoom-in.compute': (2048, 0.12)}
 
 

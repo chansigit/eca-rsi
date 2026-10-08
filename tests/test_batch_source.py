@@ -237,7 +237,7 @@ def test_whole_matrix_steps_are_sized_from_cells_and_never_lowered():
         ]
         > 8192
     )
-    assert np.isclose(from_cells(request, 20_000)["memory_mb"], 9216, atol=256)
+    assert np.isclose(from_cells(request, 20_000)["memory_mb"], 11264, atol=256)  # batch 2: 20k-cell chunks peaked at 10.0 GiB
     # scale test peaks (2026-10-05) with at least 30 % headroom
     cross = {**request, "operation_id": "cross-sample.compute"}
     assert from_cells(cross, 418_322)["memory_mb"] >= 1.3 * 30.34 * 1024

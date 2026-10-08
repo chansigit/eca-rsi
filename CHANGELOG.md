@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Per-sample compute asks 0.5 MiB per cell instead of 0.4.** In batch 2, 43 of 222 `osp.compute` attempts on
+  20k-cell parse-5M chunks were killed at 8.5-9 GiB and succeeded on retry with peaks up to 10.0 GiB; a 20k-cell
+  chunk now asks 10.8 GiB.
+
 - **Wilcoxon DEG ranks only the stored values: 20-40x faster, the same tables to the bit.** Scanpy's
   one-vs-rest Wilcoxon densified every gene chunk and ranked all cells on one thread (`settings.n_jobs` 1): 78 % of
   its time in `rankdata`, the cost of the parent-core DEG (15-31 min of every integration), the DEG pool tasks (164 of
