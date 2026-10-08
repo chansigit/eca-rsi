@@ -164,6 +164,13 @@ a few hundred thousand cells:
 sbatch --job-name=warmpool-bigmem --time=24:00:00 --partition=bigmem --cpus-per-task=64 --mem=256G ops/worker-node.sh
 ```
 
+A GPU job is a GPU worker: the script enters a job step that holds the job's GPUs and joins with `--gpu`, so
+GPU-preferred steps (cross-sample and zoom-in compute) run there (#58):
+
+```bash
+sbatch --job-name=warmpool-gpu --time=12:00:00 --partition=gpu --gpus=1 --cpus-per-task=32 --mem=164G ops/worker-node.sh
+```
+
 These recipes are this deployment's: Slurm on Stanford's Sherlock, with its partitions. They are not a mechanism of
 the package. Another cluster starts `ecarsi.warm_pool slurm-worker` (or runs `add-worker` for an allocation) in
 whatever its scheduler runs. Request only the workers a run needs: an idle node still costs.

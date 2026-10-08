@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **A GPU job joins the pool as a GPU worker (#58).** `container/worker-node.sh` re-enters a job with a GPU grant as a
+  job step that holds its GPUs (`srun --gpus=N --mem=0`) and starts `slurm-worker --gpu` there, as `add-worker` does;
+  started in the batch step, a GPU job joined CPU-only and its card idled (batch 2, 46924984: 6 h, 0 % GPU). INSTALL.md
+  A.7 gives the GPU `sbatch` line. `ops/worker-node.sh` still runs the image's copy of the script until it follows
+  `INFRA`.
+
 - **Per-sample compute asks 0.5 MiB per cell instead of 0.4.** In batch 2, 43 of 222 `osp.compute` attempts on
   20k-cell parse-5M chunks were killed at 8.5-9 GiB and succeeded on retry with peaks up to 10.0 GiB; a 20k-cell
   chunk now asks 10.8 GiB.
