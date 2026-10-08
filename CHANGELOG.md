@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **check_genes and check_qc_scores no longer load the expression matrix (#57).** Where integrated.h5ad is written
+  (cross-sample integrate and refine, zoom-in lineage compute and refine), `cluster_genes.npz` beside it holds every
+  gene's per-cluster expression sum and expressing count (msp `gene_summary`), naming the file it describes;
+  check_genes answers from it (`gene_table_summary`, the same text as `gene_table`) and falls back to the matrix
+  when the summary is missing or describes another file. check_qc_scores reads obs and uns only. On a 231k-cell
+  parse-5M dataset: 54,750 numbers of 300 queries identical, summary built in 7 s (11.5 MiB), a query 45 ms instead
+  of 1.3 s plus loading and hashing the 4.3 GiB file; the tools' memory no longer grows with the cell count (the
+  RSS-budget retries of check_genes on parse-5M).
+
 - **Every needs_review category comes out of a release (#47).** `tests/test_release_review_categories.py` builds one
   release input that touches every category of `review.KINDS` and requires the gen2 builder
   (`stages/release.review_items`) to produce each of them, so a category can no longer exist only on paper or only on

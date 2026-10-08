@@ -10,6 +10,7 @@ from . import PROMPTS
 from .contract import (LOOKUP_NOTE, NO_ARGUMENTS, checklist, deg_lookup_schema, evidence_page, evidence_paths, json_hint,
                        lookup_arguments, proposal as parse_proposal, schema)
 from .common import BASE, artifact, assemble, check_bundle, deg, deg_batch, png_url, publish_bundle, sealed
+from .common import gene_answer, qc_answer, save_gene_summary
 from .common import (STRESS_HOST_POLICY, comparison_cells, dying_evidence, fragment_reasons, fragment_table, guard_retained_drops,
                      guard_stress, mark_retained, soft_fragments, stress_flags, stress_policy)
 from ..files import digest, read, save
@@ -229,6 +230,7 @@ def integrate(data, inspected_ref, inclusion_ref, destination, inputs):
                     resolutions=(.3,1.,2.),n_top_genes=cfg['n_top_genes'],n_pcs=cfg['n_pcs'],
                     n_neighbors=cfg['n_neighbors'],defer_deg=True,inputs=inputs,
                     meta_extra={'compute_backend':backend,'workflow':'cross-sample-v2'})
+    save_gene_summary(data, [BASE], destination)
     plan = read(destination / 'deg_plan.json')
     tasks = []
     for index,item in enumerate(plan['plan']):
@@ -282,6 +284,7 @@ def refine(evidence_ref, types_ref, decision_ref, destination):
     save_deg_input(values, destination / 'deg_input')
     save(destination/'deg_plan.json',{**plan,'keys':keys,'top_n_de':50})
     data.write_h5ad(destination/'integrated.h5ad')
+    save_gene_summary(data, [BASE], destination)
     figures = destination / 'figures'
     figures.mkdir()
     qc_outputs(data,data.uns['msp']['batch_col'],'standissect_product',str(destination),str(figures),keys,[1.,2.])
@@ -404,7 +407,7 @@ def error_hint(name, content, state, args, bundle):
 
 
 def tool(name,state_path,args_path,destination):
-    from msp.api import DegTables,gene_table,qc_table,DegCache,load_removal_mask
+    from msp.api import DegTables,DegCache,load_removal_mask
 
     state = read(state_path)
     args = read(args_path)
@@ -446,10 +449,9 @@ def tool(name,state_path,args_path,destination):
                 response['content']=tables.lookup(**args) if name=='deg_lookup' else tables.sql(**args)
             state['lookups'].append(args)
         elif name=='check_genes':
-            response['content']=gene_table(_data(bundle),args['genes'],BASE,[args['cluster']] if args['cluster'] else None)
+            response['content']=gene_answer(bundle,args['genes'],BASE,[args['cluster']] if args['cluster'] else None,_data)
         elif name=='check_qc_scores':
-            data = _data(bundle)
-            response['content'] = qc_table(data, BASE, data.uns['msp']['batch_col'])
+            response['content'] = qc_answer(bundle, BASE)
             state['qc'] = True
         elif name=='check_deg':
             if not state['lookups'] or not args['reason'].strip():

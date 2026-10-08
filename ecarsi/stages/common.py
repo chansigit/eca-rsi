@@ -45,6 +45,39 @@ def artifact(bundle, name):
     return Path(ref['path'])
 
 
+GENE_SUMMARY = 'cluster_genes.npz'  # msp gene_summary of the integrated.h5ad beside it: what check_genes reads (#57)
+
+
+def save_gene_summary(data, keys, destination):
+    """Write check_genes' table for `data`, just written to destination/integrated.h5ad, naming that file."""
+    import numpy as np
+    from msp.api import gene_summary
+    source = (Path(destination) / 'integrated.h5ad').resolve(strict=True)
+    np.savez_compressed(Path(destination) / GENE_SUMMARY, source=np.asarray(str(source)), **gene_summary(data, keys))
+
+
+def gene_answer(bundle, genes, key, cluster_ids, load):
+    """check_genes from the bundle's summary when the summary describes this bundle's integrated.h5ad (each
+    evidence version writes its own); otherwise, as before, from the whole matrix that `load(bundle)` reads."""
+    import numpy as np
+    from msp.api import gene_table, gene_table_summary
+    if GENE_SUMMARY in bundle['files']:
+        with np.load(artifact(bundle, GENE_SUMMARY)) as summary:
+            if (str(summary['source']) == bundle['files']['integrated.h5ad']['path']
+                    and key in [str(k) for k in summary['keys']]):
+                return gene_table_summary(summary, genes, key, cluster_ids)
+    return gene_table(load(bundle), genes, key, cluster_ids)
+
+
+def qc_answer(bundle, key):
+    """check_qc_scores from obs and uns alone: the per-cluster QC table needs no expression matrix (#57)."""
+    from types import SimpleNamespace
+    from msp.api import qc_table
+    from .h5ad import read_obs, read_uns
+    path = artifact(bundle, 'integrated.h5ad')
+    return qc_table(SimpleNamespace(obs=read_obs(path)), key, read_uns(path, 'msp', 'batch_col'))
+
+
 def publish_bundle(destination, name, parent=None, **metadata):
     files = {k:v for k,v in verified(parent)['files'].items() if not any(p.startswith('.') for p in Path(k).parts)} if parent else {}
     files.update({str(p.relative_to(destination)): reference(p) for p in sorted(destination.rglob('*'))

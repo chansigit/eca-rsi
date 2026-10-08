@@ -22,6 +22,8 @@ _NAMES = {
     "DegCache": ("msp.evidence", "DegCache"),
     "DegTables": ("msp.evidence", "DegTables"),
     "gene_table": ("msp.evidence", "gene_table"),
+    "gene_summary": ("msp.evidence", "gene_summary"),
+    "gene_table_summary": ("msp.evidence", "gene_table_summary"),
     "load_paga_neighbors": ("msp.evidence", "load_paga_neighbors"),
     "load_removal_mask": ("msp.evidence", "load_removal_mask"),
     "plot_annotation": ("msp.evidence", "plot_annotation"),

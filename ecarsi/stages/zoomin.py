@@ -10,6 +10,7 @@ from . import PROMPTS
 from .contract import (LOOKUP_NOTE, NO_ARGUMENTS, checklist, deg_lookup_schema, evidence_page, evidence_paths, json_hint,
                        lookup_arguments, proposal as parse_proposal, schema)
 from .common import artifact, assemble, check_bundle, deg, deg_batch, png_url, publish_bundle, sealed
+from .common import gene_answer, qc_answer, save_gene_summary
 from .common import (RETAINED, STRESS_HOST_POLICY, comparison_cells, dying_evidence, fragment_reasons, fragment_table, guard_stress,
                      mark_retained, soft_fragments, stress_flags, stress_policy)
 from ..files import digest, read, save
@@ -85,6 +86,8 @@ def compute(subset_ref, marker_ref, destination):
     foreign = compute_lineage(data, line['name'], line['coarse_labels'], shared['markers'], destination,
         batch_col=cfg['batch_col'], species=cfg['species'], n_top_genes=cfg['n_top_genes'],
         n_pcs=cfg['n_pcs'], n_neighbors=cfg['n_neighbors'])
+    from zmip.api import TYPE_KEY, QUALITY_KEY
+    save_gene_summary(data, [TYPE_KEY, QUALITY_KEY], destination)
     plan = read(destination/'deg_plan.json')
     tasks = [dict(plan_index=i, cluster=c) for i, item in enumerate(plan['plan'])
              for c in [None, *[c for c in item['valid'] if item['top3'].get(c)]]]
@@ -506,6 +509,7 @@ def refine_evidence(state, args, destination):
     partitions(data.obs).to_csv(output/'type_quality_intersections.csv')
     data.obs[keys].rename_axis('cell').to_csv(output/'cell_partitions.csv.gz')
     data.write_h5ad(output/'integrated.h5ad')
+    save_gene_summary(data, keys, output)
     tasks=[dict(plan_index=i,cluster=c) for i,item in enumerate(plan['plan']) for c in [None,*[c for c in item['valid'] if item['top3'].get(c)]]]
     metadata={k:v for k,v in bundle.items() if k not in {'files','prepared','comparisons','tasks','version'}}
     prepared=publish_bundle(output,'prepared.json',state['evidence'],**metadata,version=bundle['version']+1,tasks=tasks)
@@ -532,7 +536,7 @@ def refine_evidence(state, args, destination):
 
 def tool(name, state_path, args_path, destination):
     from zmip.api import TYPE_KEY, QUALITY_KEY, partitions, validate_types, validate_quality, apply_decisions
-    from msp.api import DegTables, gene_table, qc_table
+    from msp.api import DegTables
     state, args = read(state_path), read(args_path)
     if name == 'deg_lookup':
         args = lookup_arguments(args, TYPE_KEY)
@@ -579,10 +583,9 @@ def tool(name, state_path, args_path, destination):
         elif name == 'check_genes':
             if args['key'] not in {TYPE_KEY,QUALITY_KEY}:
                 raise ValueError('Unknown clustering key')
-            response['content'] = gene_table(data_from(bundle),args['genes'],args['key'],[args['cluster']] if args['cluster'] else None)
+            response['content'] = gene_answer(bundle,args['genes'],args['key'],[args['cluster']] if args['cluster'] else None,data_from)
         elif name == 'check_qc_scores':
-            data = data_from(bundle)
-            response['content'] = qc_table(data, QUALITY_KEY, data.uns['msp']['batch_col'])
+            response['content'] = qc_answer(bundle, QUALITY_KEY)
             state['qc'] = True
         elif name == 'subcluster':
             response['content'] = refine_evidence(state,args,destination)

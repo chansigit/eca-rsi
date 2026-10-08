@@ -39,6 +39,15 @@ def open_counts(path, *, min_vars=2):
     return Counts(path, min_vars=min_vars)
 
 
+def read_uns(h5ad, *keys):
+    """One uns entry alone, e.g. read_uns(path, "msp", "batch_col")."""
+    import h5py
+    from anndata.io import read_elem
+
+    with h5py.File(h5ad, "r") as f:
+        return read_elem(f["/".join(("uns", *keys))])
+
+
 def read_obs(h5ad):
     """The obs table alone."""
     import h5py

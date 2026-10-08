@@ -99,6 +99,61 @@ def gene_table(ad, genes, cluster_key, cluster_ids=None):
     return out
 
 
+def gene_summary(ad, keys):
+    """What gene_table reads, for every gene and every cluster of each key: per-cluster expression sums (float64)
+    and counts of expressing cells. Computed once where integrated.h5ad is written, so check_genes answers from a
+    table of a few MB instead of loading the whole matrix for each call (#57: the matrix of a 400k-cell parse-5M
+    dataset outgrew the tool's memory). Arrays only, for numpy.savez."""
+    X = ad.X if sp.issparse(ad.X) else sp.csr_matrix(ad.X)
+    X = X.tocsr()
+    out = {"var_names": np.asarray(ad.var_names, dtype=str), "keys": np.asarray(keys, dtype=str)}
+    for i, key in enumerate(keys):
+        labels = ad.obs[key].astype(str).to_numpy()
+        clusters = cluster_order(labels)
+        sums = np.zeros((len(clusters), ad.n_vars))
+        positive = np.zeros((len(clusters), ad.n_vars), dtype=np.int32)
+        sizes = np.zeros(len(clusters), dtype=np.int64)
+        for j, c in enumerate(clusters):
+            rows = X[np.flatnonzero(labels == c)]
+            sums[j] = np.asarray(rows.sum(axis=0, dtype=np.float64)).ravel()
+            positive[j] = np.bincount(rows.indices[rows.data > 0], minlength=ad.n_vars)
+            sizes[j] = rows.shape[0]
+        out.update({f"{i}.clusters": np.asarray(clusters, dtype=str), f"{i}.n": sizes, f"{i}.sum": sums,
+                    f"{i}.positive": positive})
+    return out
+
+
+def gene_table_summary(summary, genes, cluster_key, cluster_ids=None):
+    """gene_table answered from gene_summary: the same lookup, messages and layout. The means are summed in
+    float64 rather than gene_table's float32, so a two-decimal mean can differ from it in the last digit."""
+    var_names = [str(g) for g in summary["var_names"]]
+    upper = {g.upper(): g for g in var_names}
+    found = {q: upper[q.upper()] for q in genes if q.upper() in upper}
+    missing = [q for q in genes if q.upper() not in upper]
+    if not found:
+        return f"none of these genes are in var_names: {genes}"
+    i = [str(k) for k in summary["keys"]].index(cluster_key)
+    clusters = [str(c) for c in summary[f"{i}.clusters"]]
+    position = {g: k for k, g in enumerate(var_names)}
+    idx = [position[g] for g in found.values()]
+    selected = clusters if not cluster_ids else list(dict.fromkeys(map(str, cluster_ids)))
+    unknown = sorted(set(selected) - set(clusters))
+    if unknown:
+        return f"unknown cluster IDs: {unknown}; available: {clusters}"
+    sums, positive, sizes = summary[f"{i}.sum"], summary[f"{i}.positive"], summary[f"{i}.n"]
+    cols = {}
+    for c in selected:
+        j = clusters.index(c)
+        mean = sums[j, idx] / sizes[j]
+        pct = 100 * (positive[j, idx] / sizes[j])
+        cols[c] = [f"{mn:.2f}|{p:.0f}%" for mn, p in zip(mean, pct, strict=True)]
+    df = pd.DataFrame(cols, index=list(found.values()))
+    out = "mean lognorm expr | pct expressing, per cluster:\n" + df.to_string()
+    if missing:
+        out += f"\nnot found in var_names: {missing}"
+    return out
+
+
 def qc_table(ad, cluster_key, batch_col):
     """Per-cluster QC (median|p90) + composition: n_samples, dominant-sample
     share, inherited flag/drop fractions — tests (b) and (c) in one view."""
