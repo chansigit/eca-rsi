@@ -15,7 +15,8 @@
   1,292 s -> 56 s (44 s), local DEG (78k cells) 230 s -> 27 s (24 s), lineage markers (12 lineages) 1,497 s -> 49 s
   (37 s); all four tables identical (`DataFrame.equals`, gene order included), lineage_markers.csv byte-identical,
   peak RSS unchanged except the local comparison (+0.4 GB). `tests/msp/test_wilcoxon_parity.py` holds the parity on
-  sparse data with ties, negative values, stored zeros and an untested group.
+  sparse data with ties, negative values, stored zeros and an untested group. The kernel is cached in the pool's
+  `NUMBA_CACHE_DIR` like osp's decontx kernels: a later process starts it in 1.4 s instead of 4.0 s.
 - **A rejected proposal can be amended instead of rewritten.** `submit_decision` (cross-sample), `submit_types` and
   `submit_quality` (zoom-in) accept `{"amend": true, ...}`: the given entries replace those of the session's last
   parsed submission by identity (clusters by `cluster_id`/`cluster`, samples by `sample`, boundary reviews by their

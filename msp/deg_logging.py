@@ -19,7 +19,7 @@ SCANPY_WILCOXON = _scanpy_rgg._RankGenes.wilcoxon
 RANK_BLOCK_NNZ = 1 << 26  # stored values per CSC block of genes: ~0.5 GB, whatever the input's size
 
 
-@numba.njit(parallel=True)
+@numba.njit(parallel=True, cache=True)  # the pool's NUMBA_CACHE_DIR, like osp's decontx kernels
 def _rank_sums(indptr, indices, data, codes, sizes, n_cells):
     """Per gene of a CSC block, per group g (codes, the cells of no group are len(sizes)), the sum of the
     average ranks scanpy's rankdata gives the gene's values over all n_cells cells. Only the stored values
