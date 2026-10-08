@@ -4,6 +4,9 @@
 
 - **`ops/worker-node.sh` runs the worker script of `INFRA`'s version**, no longer the image's copy, so a GPU job
   submitted with it joins as a GPU worker (#58) once `INFRA` is 0.4.6 or later.
+- **Tests: one layer in 10-30 s, the whole suite in about 1.5 min** (`ops/test-lane.sh <layer>|all`, pytest-xdist).
+  The suite took 6 min on one core; 160 s of it were four cross-sample workflow tests paying `check_pool`'s 20 s
+  activity-side wait for each 'waiting' answer, now switched off there (tests/test_long_poll.py covers the wait).
 - **ECA-PP's sample column may leave a few cells blank** (#56, owner 2026-10-08): up to 10 % of a source's cells
   (`upstream.ECA_PP_BLANK_MAX`) are dropped before OSP as `eca-pp-blank-sample`, ledgered and listed under
   needs_review `policy_excluded`; before, any blank cell handed the source to the organize agent (Li2019_skin's

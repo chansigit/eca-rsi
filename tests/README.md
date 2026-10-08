@@ -4,7 +4,16 @@ The whole suite runs inside the compute image; nothing on the host is needed but
 do not carry (install them once into `$GROUP_HOME/<user>/pytest-only` with `pip install --target`, and put ruff's
 binary from its wheel into `pytest-only/bin/`; `ops/run.sh` adds the directory, and `tests/test_lint.py` runs ruff).
 
-    bash ops/runsci-dev.sh -m pytest -q tests          # the dev worktree, every package
+    bash ops/test-lane.sh all                          # the dev worktree, every package, in parallel (about 1.5 min)
+    bash ops/test-lane.sh agent                        # one layer: the test modules that import ecarsi.agent (10-30 s)
+    bash ops/runsci-dev.sh -m pytest -q tests          # the same suite on one core (about 3.5 min)
+
+Lanes: agent, control, pool, stages, ui, shared (ecarsi.<package>: the test modules that import it), osp, msp, zmip,
+bridge, standissect (their own directories), all. A lane is the quick check for the layer you changed; the whole
+suite stays the release check, because the shared modules (`ecarsi/*.py`) reach every layer. Parallel runs use
+pytest-xdist from `pytest-only`. Tests that measure real time (a process that must be killed after a few seconds, a
+provider that answers too late) keep margins for a loaded node; a wait that is the subject of its own test
+(`check_pool`'s 20 s long poll, tests/test_long_poll.py) is switched off where other tests only pass through it.
 
 Since decision 0018 the kernels and `harness_bridge` are packages of this repository, so the checkout comes first on
 `PYTHONPATH` for all of them: a kernel change is tested like any other change and reaches production with the next

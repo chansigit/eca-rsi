@@ -261,7 +261,7 @@ def test_worker_timeout_fallback_continuation_and_dispatcher_recovery(tmp_path):
             body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
             calls.append(body)
             if body['model'] == 'slow':
-                time.sleep(7)
+                time.sleep(14)  # past response_timeout_seconds with margin for a loaded test node
             messages = body['messages']
             if not any(m['role'] == 'tool' for m in messages):
                 message = dict(role='assistant', content=None, tool_calls=[dict(id='compute-once', type='function',
@@ -293,7 +293,7 @@ def test_worker_timeout_fallback_continuation_and_dispatcher_recovery(tmp_path):
         save(pool/'config.json', dict(runtime=dict(command=[sys.executable], files={}, version='test')))
         root = bridge.init(tmp_path/'bridge', catalog, concurrency=2, pool_root=pool)
         config = read(root/'config.json')
-        config['routing'] = dict(response_timeout_seconds=5, failure_threshold=1, cooldown_seconds=60, model_concurrency=1)
+        config['routing'] = dict(response_timeout_seconds=12, failure_threshold=1, cooldown_seconds=60, model_concurrency=1)
         save(root/'config.json', config)
         spec = dict(session_id='worker-agent', dataset_id='data', prompt='Call compute and report.', max_turns=4,
                     pool_root=str(pool), bridge_root=str(root), output_root=str(tmp_path/'session'),
