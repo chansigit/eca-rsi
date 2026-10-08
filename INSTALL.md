@@ -215,7 +215,8 @@ Then run the release gate on the new pair, in the background: `bash ops/runpy.sh
 ### A.10 Ship a code change as a version
 
 A change to eca-rsi's own code (`ecarsi/`, the kernels, `harness_bridge/`) ships as a version (decision 0019); it
-does not wait for running executions, and executions already running finish on the version that started them.
+does not wait for running executions: a running dataset moves to the current version at its next child workflow
+(a sample, a stage, a round, the release; decision 0022), and nothing already running is disturbed.
 
 1. Fast-forward `main` after the full suite passes, then `bash ops/publish-version.sh` (default: `main`). It prints
    the version name, the first 12 characters of the commit.
@@ -224,8 +225,11 @@ does not wait for running executions, and executions already running finish on t
    version next to production.
 4. After the gate passes: `bash ops/set-current.sh <name>` (new datasets use it from now on) and
    `bash ops/start-version.sh <name> 4`.
-5. When `bash ops/runpy.sh ops/count-wf.py` shows no running execution on the old version's queue,
+5. When `bash ops/runpy.sh ops/count-wf.py` shows no running execution on the old version's queue (running
+   datasets leave it at their next child workflow, so this comes soon after step 4),
    `bash ops/retire-version.sh <old name>` stops its coordinators and runners. Its directory stays.
+   To see the move happen once: start a gate on version A, then set-current a later version B while it runs; its
+   stage records name both versions and the gate passes.
 
 **A release** (#50) is a version whose commit bumps the patch number: `version` in `pyproject.toml` goes to 0.4.x
 (only x moves) and the changelog's "Unreleased" entries move under `## 0.4.x — <date>`. Ship that commit with steps
