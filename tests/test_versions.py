@@ -286,3 +286,25 @@ def test_a_version_runs_in_the_image_it_was_published_with(tmp_path, monkeypatch
     command = worker_command(root, profile, ["python"], tmp_path, [0], 100, False, digest(new))
     assert command[command.index("--runtime") + 1] == digest(new)
     assert "--runtime" not in worker_command(root, profile, ["python"], tmp_path, [0], 100, False)
+
+
+def test_current_queue_never_moves_backwards(tmp_path, monkeypatch):
+    """A gate runs on a candidate newer than current and must stay there (0022)."""
+    import json
+    import ecarsi
+
+    versions = tmp_path / "versions"
+    for name, published in (("aaa", "2026-10-08T10:00:00-0700"), ("bbb", "2026-10-08T12:00:00-0700")):
+        (versions / name).mkdir(parents=True)
+        (versions / name / "version.json").write_text(json.dumps(dict(name=name, published=published)))
+    mine = lambda name: dict(json.loads((versions / name / "version.json").read_text()), root=str(versions / name))
+    (versions / "current").symlink_to("aaa")
+    monkeypatch.setattr(ecarsi, "version", lambda: mine("bbb"))
+    assert ecarsi.current_queue() is None          # current is older than this version
+    monkeypatch.setattr(ecarsi, "version", lambda: mine("aaa"))
+    assert ecarsi.current_queue() is None          # current is this version
+    (versions / "current").unlink()
+    (versions / "current").symlink_to("bbb")
+    assert ecarsi.current_queue() == "ecarsi-bbb"  # current is newer
+    monkeypatch.setattr(ecarsi, "version", lambda: None)
+    assert ecarsi.current_queue() is None

@@ -35,10 +35,19 @@ def current_queue() -> str | None:
     import os
     from pathlib import Path
 
+    import json
+
     v = version()
     if not v:
         return None
     try:
-        return "ecarsi-" + os.path.basename(os.readlink(Path(v["root"]).parent / "current"))
-    except OSError:
+        current = Path(v["root"]).parent / "current"
+        name = os.path.basename(os.readlink(current))
+        published = json.loads((current / "version.json").read_text()).get("published", "")
+    except (OSError, ValueError):
         return None
+    # Never backwards: a gate runs on a candidate newer than current, and must stay there (2026-10-08: a gate on
+    # 3fb453d moved its unit to the older current version and tested nothing).
+    if name == v["name"] or published <= v.get("published", ""):
+        return None
+    return "ecarsi-" + name
