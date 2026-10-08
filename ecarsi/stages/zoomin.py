@@ -7,7 +7,7 @@ from pathlib import Path
 
 from ..files import immutable, reference, verified
 from . import PROMPTS
-from .contract import (LOOKUP_NOTE, NO_ARGUMENTS, checklist, deg_lookup_schema, evidence_page, evidence_paths, json_hint,
+from .contract import (AMEND_NOTE, LOOKUP_NOTE, NO_ARGUMENTS, amended, checklist, deg_lookup_schema, evidence_page, evidence_paths, json_hint,
                        lookup_arguments, proposal as parse_proposal, schema)
 from .common import artifact, assemble, check_bundle, deg, deg_batch, png_url, publish_bundle, sealed
 from .common import gene_answer, qc_answer, save_gene_summary
@@ -609,7 +609,7 @@ def tool(name, state_path, args_path, destination):
                 ('read_evidence on a lineage PNG figure', any(p.endswith('.png') for p in state['read']))] if not done]
             if missing:
                 raise ValueError('Complete required checks: ' + ', '.join(missing))
-            proposal = parse_proposal(args)
+            proposal = amended(args, state, 'submit_types')
             if not isinstance(proposal, dict):
                 raise ValueError('Type proposal must be an object')
             submitted=proposal.get('clusters',[])
@@ -635,10 +635,10 @@ def tool(name, state_path, args_path, destination):
                 raise ValueError('Complete required checks: ' + ', '.join(missing))
             data = data_from(bundle)
             own, other = lineage_labels(bundle)
-            proposal = parse_proposal(args)
+            proposal = amended(args, state, 'submit_quality')
             proposal['clusters'] = validate_quality(proposal,data.obs,other)
-            name = bundle['lineage']['name']
-            own_markers = verified(bundle['shared'])['markers'].get(name, []) if bundle.get('shared') else []
+            lineage = bundle['lineage']['name']  # not `name`: the rejection hint below needs the tool's name
+            own_markers = verified(bundle['shared'])['markers'].get(lineage, []) if bundle.get('shared') else []
             core = own_marker_positivity(data, own_markers)
             t, q = data.obs[TYPE_KEY].astype(str), data.obs[QUALITY_KEY].astype(str)
             for group in proposal['clusters']:
@@ -646,7 +646,7 @@ def tool(name, state_path, args_path, destination):
                     if entry['action'] != 'reassign':
                         continue
                     ids = data.obs.index[q.eq(group['cluster_id']) & t.isin(entry['type_clusters'])]
-                    previous = previous_reassignment(data.obs.loc[ids], name, entry['reassign_to'])
+                    previous = previous_reassignment(data.obs.loc[ids], lineage, entry['reassign_to'])
                     if previous:
                         entry['recurring'] = previous
                     problem = reassign_problem(len(ids), own_marker_positivity(data, own_markers, ids), core, entry['reassign_to'], previous)
@@ -677,6 +677,8 @@ def tool(name, state_path, args_path, destination):
             hint = error_hint(name, content, state, bundle, args)
         except Exception:  # noqa: BLE001 - a hint must never turn a correctable error into a crash
             hint = ''
+        if name in {'submit_types', 'submit_quality'} and name in state.get('drafts', {}):
+            hint = (hint + '\n' + AMEND_NOTE).strip()
         response = {'is_error':True,'content':(content+'\n'+hint)[:16000] if hint else content}
     response['state'] = immutable(destination/'state.json',state)
     save(destination/'result.json',response)

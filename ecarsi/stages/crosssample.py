@@ -7,7 +7,7 @@ import shutil
 
 from ..files import immutable, reference, verified
 from . import PROMPTS
-from .contract import (LOOKUP_NOTE, NO_ARGUMENTS, checklist, deg_lookup_schema, evidence_page, evidence_paths, json_hint,
+from .contract import (AMEND_NOTE, LOOKUP_NOTE, NO_ARGUMENTS, amended, checklist, deg_lookup_schema, evidence_page, evidence_paths, json_hint,
                        lookup_arguments, proposal as parse_proposal, schema)
 from .common import BASE, artifact, assemble, check_bundle, deg, deg_batch, png_url, publish_bundle, sealed
 from .common import gene_answer, qc_answer, save_gene_summary
@@ -397,7 +397,7 @@ def error_hint(name, content, state, args, bundle):
                 + '; call type_context once (it takes no arguments and returns every cluster), then resubmit.')
     if 'coarse boundary' in content:
         try:
-            return boundary_hint(bundle, parse_proposal(args))
+            return boundary_hint(bundle, state.get('drafts', {}).get(name) or parse_proposal(args))
         except ValueError:
             return ''
     if state['phase'] == 'type':
@@ -469,7 +469,7 @@ def tool(name,state_path,args_path,destination):
                 response['source']='computed' if cache.n_computed else 'precomputed'
                 state['additional_deg'][key]=immutable(destination/'additional_deg.json',response)
         elif name=='submit_decision':
-            proposal = parse_proposal(args)
+            proposal = amended(args, state, name)
             converted = []
             held = []
             if phase=='inclusion':
@@ -562,6 +562,8 @@ def tool(name,state_path,args_path,destination):
             hint = error_hint(name, content, state, args, bundle)
         except Exception:
             hint = ''  # noqa: BLE001 - a hint must never turn a correctable error into a crash
+        if name == 'submit_decision' and name in state.get('drafts', {}):
+            hint = (hint + '\n' + AMEND_NOTE).strip()
         response = {'is_error': True, 'content': (content + '\n' + hint)[:16000] if hint else content}
     response['state'] = immutable(destination / 'state.json', state)
     save(destination / 'result.json', response)

@@ -117,14 +117,15 @@ def test_zoom_handoffs_and_exact_global_conservation(tmp_path):
     first = folder('first-review')
     tool('submit_quality', review_state['path'], str(args), first)
     warning=json.loads((first/'result.json').read_text())
-    assert warning['is_error'] and 'under the stress policy' in warning['content']
-    removal['removal_review']='Fixture second review: the exact QC intersections have decisive dying-cell evidence.'
-    save(args,{'proposal_json':json.dumps(removal)})
+    assert warning['is_error'] and 'under the stress policy' in warning['content'] and '"amend": true' in warning['content']
+    review='Fixture second review: the exact QC intersections have decisive dying-cell evidence.'
+    save(args,{'proposal_json':json.dumps({'amend':True,'removal_review':review})})  # the rest of the rejected proposal stands
     second = folder('second-review')
     tool('submit_quality', warning['state']['path'], str(args), second)
     confirmed = json.loads((second / 'result.json').read_text())
     assert not confirmed.get('is_error')
-    assert verified(confirmed['state'])['quality']['removal_review']==removal['removal_review']
+    accepted=verified(confirmed['state'])['quality']
+    assert accepted['removal_review']==review and len(accepted['clusters'])==len(removal['clusters'])
 
     from ecarsi.stages.zoomin import refine_evidence
     from ecarsi.stages.contract import NO_ARGUMENTS

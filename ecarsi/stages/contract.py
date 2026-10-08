@@ -14,6 +14,7 @@ A proposal with a stray trailing quote or fence is parsed anyway (Eye 2026-09-17
 rejected 25 times in a row, 167k tokens each). Measured 2026-09-16 over 6 h: 64 % of
 submit_decision, 56 % of submit_quality and 32 % of submit_types calls were rejected.
 """
+import copy
 import json
 import re
 import shutil
@@ -99,6 +100,48 @@ def proposal(args):
 JSON_BREAK = ('proposal_json is not valid JSON: a bracket, brace, comma or quote is missing or extra where it breaks. '
               'Every { and [ closes with its own } and ] before the next field or entry; a nested object such as '
               'evidence closes before the next field of its entry.')
+
+
+AMEND_NOTE = ('To correct it, resubmit only what changes: {"amend": true, ...} with the corrected or added entries '
+              '(clusters by their id, boundary reviews by their label pair, samples by name) and any field to replace; the rest '
+              'of your last submission is kept and the whole is checked again. To drop an entry, resubmit everything.')
+
+
+def _entry_key(entry):
+    """What an amendment entry replaces: a cluster or sample by its id, a boundary review by its label pair."""
+    if not isinstance(entry, dict):
+        return None
+    for key in ('cluster_id', 'cluster', 'sample'):
+        if key in entry:
+            return key, str(entry[key])
+    labels = entry.get('coarse_labels')
+    return ('pair', tuple(sorted(map(str, labels)))) if isinstance(labels, list) else None
+
+
+def amended(args, state, tool):
+    """The submitted proposal; with "amend": true, the last parsed submission of `tool` with the given entries and
+    fields replaced. A rejected 20-26k-character proposal used to be rewritten whole: a fifth of batch 2's model time.
+    The result becomes the tool's draft in `state`, which the caller saves after a rejection too."""
+    value = proposal(args)
+    drafts = state.setdefault('drafts', {})
+    if isinstance(value, dict) and value.pop('amend', False) is True:
+        if tool not in drafts:
+            raise ValueError('Nothing to amend yet: submit the whole proposal')
+        merged = copy.deepcopy(drafts[tool])
+        for field, given in value.items():
+            keys = [_entry_key(e) for e in given] if isinstance(given, list) else []
+            if isinstance(merged.get(field), list) and keys and all(keys):
+                at = {_entry_key(e): i for i, e in enumerate(merged[field])}
+                for key, entry in zip(keys, given):
+                    if key in at:
+                        merged[field][at[key]] = entry
+                    else:
+                        merged[field].append(entry)
+            else:
+                merged[field] = given
+        value = merged
+    drafts[tool] = copy.deepcopy(value)
+    return value
 
 
 def json_hint(content, raw=None):

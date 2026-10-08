@@ -1,5 +1,7 @@
 """Protocol v4 pieces shared by the stage programs; pure Python, no kernel needed."""
 
+import json
+
 import pytest
 from jsonschema import Draft202012Validator
 
@@ -66,3 +68,21 @@ def test_copy_light_replaces_a_same_size_stale_copy(tmp_path):
                          "x.h5ad": {"path": str(source), "sha256": "-"}}, folder)
     assert (folder / "report.md").read_text() == "new session"
     assert not (folder / "x.h5ad").exists()
+
+
+def test_an_amendment_replaces_entries_by_id_and_keeps_the_rest_of_the_last_submission():
+    from ecarsi.stages import contract
+    state = {}
+    first = {'clusters': [{'cluster_id': '0', 'label': 'A'}, {'cluster_id': '1', 'label': 'B'}],
+             'boundary_reviews': [{'coarse_labels': ['A', 'B'], 'evidence': 'old'}], 'removal_review': 'r1'}
+    with pytest.raises(ValueError, match='Nothing to amend'):
+        contract.amended({'proposal_json': {'amend': True}}, {}, 'submit_quality')
+    assert contract.amended({'proposal_json': json.dumps(first)}, state, 'submit_quality') == first
+    change = {'amend': True, 'clusters': [{'cluster_id': '1', 'label': 'C'}, {'cluster_id': '2', 'label': 'D'}],
+              'boundary_reviews': [{'coarse_labels': ['B', 'A'], 'evidence': 'new'}], 'removal_review': 'r2'}
+    merged = contract.amended({'proposal_json': json.dumps(change)}, state, 'submit_quality')
+    assert merged == {'clusters': [{'cluster_id': '0', 'label': 'A'}, {'cluster_id': '1', 'label': 'C'}, {'cluster_id': '2', 'label': 'D'}],
+                      'boundary_reviews': [{'coarse_labels': ['B', 'A'], 'evidence': 'new'}], 'removal_review': 'r2'}
+    merged['clusters'].clear()  # the caller's validation may change what it gets; the draft does not move
+    again = contract.amended({'proposal_json': {'amend': True, 'clusters': [{'cluster': 'x'}]}}, state, 'submit_quality')
+    assert [e.get('cluster_id', e.get('cluster')) for e in again['clusters']] == ['0', '1', '2', 'x']

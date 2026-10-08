@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **A rejected proposal can be amended instead of rewritten.** `submit_decision` (cross-sample), `submit_types` and
+  `submit_quality` (zoom-in) accept `{"amend": true, ...}`: the given entries replace those of the session's last
+  parsed submission by identity (clusters by `cluster_id`/`cluster`, samples by `sample`, boundary reviews by their
+  label pair; new ones are added), other given fields replace theirs, and the merged proposal is validated whole as
+  before (`contract.amended`). Every rejection after a parsed submission says so, and the three checklists ask for
+  it. In batch 2, 403 rejected submissions were rewritten whole (10-26k characters each), a fifth of the model time;
+  half of all decision and quality submissions were such rewrites. A zoom-in quality rejection's hint no longer
+  loses the tool's name to the lineage's.
+
 - **Lookup tool calls no longer import scanpy.** Every agent tool call is a fresh `python -m ecarsi.stages.<stage>
   tool` process, and before this each cross-sample and zoom-in call imported msp's integrate stack (scanpy, anndata,
   sklearn, numba, matplotlib, zarr) before knowing which tool ran. Now `msp`, `zmip` and `osp` load their submodules
