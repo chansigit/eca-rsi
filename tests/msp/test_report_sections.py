@@ -222,4 +222,5 @@ def test_boolean_sample_inclusion_report(tmp_path):
     page=_section_sample_decisions(str(tmp_path))
     assert '1/2 entered integration' in page and '<td>include</td>' in page and '<td>exclude</td>' in page
     path.write_text('sample,include\na,unknown\n')
-    with pytest.raises(ValueError,match='Sample decisions'):_section_sample_decisions(str(tmp_path))
+    with pytest.raises(ValueError, match='Sample decisions'):
+        _section_sample_decisions(str(tmp_path))

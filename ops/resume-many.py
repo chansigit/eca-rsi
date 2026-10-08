@@ -30,12 +30,17 @@ async def one(client, wid):
             err = str(receipt.get("error", ""))
             if req and state == "failed" and ("Errno 122" in err or "WorkerLost" in err or receipt.get("retryable") is True):
                 retry(POOL, rid, reason="retried at the same budget before resume: " + err[:80])
-                say("  retried pool request", rid, "|", err[:100]); continue
+                say("  retried pool request", rid, "|", err[:100])
+                continue
             return say("BLOCKED", wid, "by", rid, state, "|", err[:160] or "(bridge request / no receipt)")
     say("FAILED", wid, "too many reconciliations")
 async def main():
     client = await Client.connect(endpoint(CONTROL)["endpoint"])
     for wid in wids:
-        try: await one(client, wid)
-        except Exception as exc: say("ERROR", wid, type(exc).__name__, str(exc)[:200])
+        try:
+            await one(client, wid)
+        except Exception as exc:
+            say("ERROR", wid, type(exc).__name__, str(exc)[:200])
+
+
 asyncio.run(main())

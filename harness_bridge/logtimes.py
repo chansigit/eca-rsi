@@ -38,7 +38,8 @@ def report(lines, top=15):
     for gap, msg in durations(lines):
         m = TOOK.search(msg)
         if m:
-            tools[m.group(2)][0] += float(m.group(3)); tools[m.group(2)][1] += 1
+            tools[m.group(2)][0] += float(m.group(3))
+            tools[m.group(2)][1] += 1
             continue
         m = STAGE.match(msg)
         if m and "agent:" not in msg:
@@ -55,7 +56,8 @@ def report(lines, top=15):
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if not argv:
-        print(__doc__); return 2
+        print(__doc__)
+        return 2
     top = int(argv[argv.index("--top") + 1]) if "--top" in argv else 15
     with open(argv[0], errors="replace") as fh:
         report(fh.readlines(), top)

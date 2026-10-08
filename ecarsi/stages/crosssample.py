@@ -143,7 +143,8 @@ def compute(inspected_ref, inclusion_ref, destination):
         from osp.api import ANNOTATION_OPS
         proposal = read(artifact(bundle,'annotation_proposal.json')) if 'annotation_proposal.json' in bundle['files'] else {}
         for action in proposal.get('qc_actions',[]):
-            if action['action'] != 'drop':continue
+            if action['action'] != 'drop':
+                continue
             affected = data.obs[proposal['cluster_key']].astype(str).eq(str(action['cluster']))
             if action['scope']=='cells':
                 affected &= ANNOTATION_OPS[action['op']](data.obs[action['metric']],float(action['value']))
@@ -151,12 +152,15 @@ def compute(inspected_ref, inclusion_ref, destination):
                 osp_reasons.setdefault(cid,[]).append({'action':action,'evidence':bundle['files']['annotation_proposal.json']})
         data.file.close()
         table = pd.read_csv(artifact(bundle, 'input_cells.csv.gz'), dtype=str, keep_default_na=False).set_index('cell_id').loc[ids].rename_axis('cell_id').reset_index()
-        table['sample_id'] = sample['sample']; sources.append(table)
+        table['sample_id'] = sample['sample']
+        sources.append(table)
         if sample['sample'] in selected:
             inputs.append(str(artifact(bundle, 'clustered.h5ad')))
         else:
-            table = table.copy();table['reason'] = reasons[sample['sample']]
-            table['reason_code'] = 'sample_excluded';exclusions.append(table)
+            table = table.copy()
+            table['reason'] = reasons[sample['sample']]
+            table['reason_code'] = 'sample_excluded'
+            exclusions.append(table)
     origin = pd.concat(sources, ignore_index=True)
     if origin.cell_id.duplicated().any() or len(origin) != inspected['n_input']:
         raise ValueError('Cross-sample source cells must be unique and conserved')
@@ -166,11 +170,13 @@ def compute(inspected_ref, inclusion_ref, destination):
     excluded.to_csv(destination/'sample_exclusions.csv.gz', index=False)
     pd.DataFrame(decision['samples']).to_csv(destination/'sample_decisions.csv',index=False)
     data=load_and_merge(inputs,inspected['spec']['config']['batch_col'])
-    if len(data)+len(excluded)!=len(origin):raise ValueError('Sample selection lost cells')
+    if len(data) + len(excluded) != len(origin):
+        raise ValueError('Sample selection lost cells')
     if stress_policy(inspected['spec'])=='keep' and '_qc_action' in data.obs:
         # OSP advice to drop dissociation-stressed cells becomes a flag: the cells are kept and labelled (0017)
         soft=data.obs.index.intersection([c for c,r in osp_reasons.items() if all(x['action'].get('reason')=='dissociation-stress' for x in r)])
-        action=data.obs['_qc_action'].astype(str);action[soft]='flag'
+        action = data.obs['_qc_action'].astype(str)
+        action[soft] = 'flag'
         data.obs['_qc_action']=pd.Categorical(action,categories=['keep','flag','drop'])
     integrate(data, inspected_ref, inclusion_ref, destination, inputs)
 
@@ -212,15 +218,19 @@ def compute_round(inspected_ref, destination):
 def integrate(data, inspected_ref, inclusion_ref, destination, inputs):
     from msp.api import integrate_adata
     inspected=verified(inspected_ref)
-    spec = inspected['spec'];cfg=spec['config'];backend=os.environ.get('RSI_COMPUTE_BACKEND','cpu')
+    spec = inspected['spec']
+    cfg = spec['config']
+    backend = os.environ.get('RSI_COMPUTE_BACKEND', 'cpu')
     if cfg['compute_backend'] not in {'auto',backend}:
         raise ValueError('Backend does not match the Pool grant')
-    os.environ['MSP_COMPUTE_ENDPOINT']='local';os.environ['MSP_COMPUTE_GPU']='1' if backend=='rapids' else '0'
+    os.environ['MSP_COMPUTE_ENDPOINT'] = 'local'
+    os.environ['MSP_COMPUTE_GPU'] = '1' if backend == 'rapids' else '0'
     integrate_adata(data,cfg['batch_col'],str(destination),species=cfg['species'],
                     resolutions=(.3,1.,2.),n_top_genes=cfg['n_top_genes'],n_pcs=cfg['n_pcs'],
                     n_neighbors=cfg['n_neighbors'],defer_deg=True,inputs=inputs,
                     meta_extra={'compute_backend':backend,'workflow':'cross-sample-v2'})
-    plan=read(destination/'deg_plan.json');tasks=[]
+    plan = read(destination / 'deg_plan.json')
+    tasks = []
     for index,item in enumerate(plan['plan']):
         tasks.append({'plan_index':index,'cluster':None})
         tasks.extend({'plan_index':index,'cluster':c} for c in item['valid'] if item['top3'].get(c))
@@ -245,7 +255,9 @@ def refine(evidence_ref, types_ref, decision_ref, destination):
             decision['evidence'] != evidence_ref or decision['types'] != types_ref or
             typed.get('accepted') is not True or typed['evidence'] != evidence_ref):
         raise ValueError('Refinement requires a validated request and matching accepted types')
-    data = _data(bundle);request = decision['refinement'];parent = request['cluster']
+    data = _data(bundle)
+    request = decision['refinement']
+    parent = request['cluster']
     mask = load_removal_mask(artifact(bundle,'preannotation_removal.csv').parent,data)
     version = bundle['version'] + 1
     if version > verified(bundle['inspected'])['spec']['max_refinements']:
@@ -262,13 +274,16 @@ def refine(evidence_ref, types_ref, decision_ref, destination):
     preserved = {c:e for c,e in entries.items() if c != parent and c not in affected}
     data.obs['cross_base_v'+str(bundle['version'])] = data.obs[BASE].copy()
     data.obs[BASE] = data.obs.pop(key).cat.remove_unused_categories()
-    eligible = data[~mask];keys = read(artifact(bundle,'deg_plan.json'))['keys']
+    eligible = data[~mask]
+    keys = read(artifact(bundle, 'deg_plan.json'))['keys']
     labels = {k:(eligible.obs[k].cat.codes.to_numpy(),list(eligible.obs[k].cat.categories)) for k in keys}
     values, plan = prepare_deg(eligible.X,list(data.var_names),labels,dict(data.uns.get('log1p',{})),eligible.obsm['X_pca_harmony'],keys)
-    values.obs_names = eligible.obs_names.copy();save_deg_input(values,destination/'deg_input')
+    values.obs_names = eligible.obs_names.copy()
+    save_deg_input(values, destination / 'deg_input')
     save(destination/'deg_plan.json',{**plan,'keys':keys,'top_n_de':50})
     data.write_h5ad(destination/'integrated.h5ad')
-    figures = destination/'figures';figures.mkdir()
+    figures = destination / 'figures'
+    figures.mkdir()
     qc_outputs(data,data.uns['msp']['batch_col'],'standissect_product',str(destination),str(figures),keys,[1.,2.])
     save_single_umap(data,BASE,str(figures/('umap_'+slug(BASE)+'.png')),repel=True)
     tasks = [dict(plan_index=i,cluster=c) for i,item in enumerate(plan['plan']) for c in [None,*[c for c in item['valid'] if item['top3'].get(c)]]]
@@ -323,7 +338,8 @@ def agent_spec(spec, evidence_ref, phase, parent, types_ref=None):
         prompt+='\nAssigned type clusters: '+json.dumps(bundle['type_scope'])+'\nBase key: '+BASE
         if bundle.get('type_entries'):
             prompt+='\nUse type_context for preserved type entries outside your assignment; do not resubmit them.'
-        if types_ref:prompt+='\nRead the accepted type labels with type_context before assessing quality.'
+        if types_ref:
+            prompt += '\nRead the accepted type labels with type_context before assessing quality.'
         prompt+='\n\n'+inline_context(bundle)
     props['list_evidence']=(schema({'offset':{'type':'integer','minimum':0}}),'List evidence paths (the prompt already lists the first ones). Follow next_offset until null.',False)
     prompt+='\nUse worker tools for all evidence. Read figures and use the database before submission. Finish by calling submit_decision; no local execution is available.'
@@ -389,19 +405,30 @@ def error_hint(name, content, state, args, bundle):
 
 def tool(name,state_path,args_path,destination):
     from msp.api import DegTables,gene_table,qc_table,DegCache,load_removal_mask
-    state=read(state_path);args=read(args_path);bundle=verified(state['evidence']);phase=state['phase'];response={}
-    if name=='deg_lookup':args=lookup_arguments(args)
+
+    state = read(state_path)
+    args = read(args_path)
+    bundle = verified(state['evidence'])
+    phase = state['phase']
+    response = {}
+    if name == 'deg_lookup':
+        args = lookup_arguments(args)
     try:
         if name=='read_evidence':
             path=artifact(bundle,args['path']) if args['path'] in bundle['files'] else proposal_artifact(bundle,args['path'])
             if path.suffix=='.png':
-                if path.stat().st_size>8*2**20:raise ValueError('Figure exceeds the image budget')
+                if path.stat().st_size > 8 * 2**20:
+                    raise ValueError('Figure exceeds the image budget')
                 response.update(content=args['path'],images=[png_url(path)])
             elif path.suffix in {'.csv','.json','.md','.txt'}:
                 with path.open() as stream:
-                    stream.seek(args['offset']);text=stream.read(16000);nxt=stream.tell() if stream.read(1) else None
-                response['content']=text;response['next_offset']=nxt
-            else:raise ValueError('Use registered matrix/database tools for this artifact')
+                    stream.seek(args['offset'])
+                    text = stream.read(16000)
+                    nxt = stream.tell() if stream.read(1) else None
+                response['content'] = text
+                response['next_offset'] = nxt
+            else:
+                raise ValueError('Use registered matrix/database tools for this artifact')
             state['read']=sorted(set(state['read'])|{args['path']})
         elif name=='list_evidence':
             page,nxt=evidence_page(evidence_paths(bundle),args.get('offset') or 0)
@@ -421,45 +448,60 @@ def tool(name,state_path,args_path,destination):
         elif name=='check_genes':
             response['content']=gene_table(_data(bundle),args['genes'],BASE,[args['cluster']] if args['cluster'] else None)
         elif name=='check_qc_scores':
-            data=_data(bundle);response['content']=qc_table(data,BASE,data.uns['msp']['batch_col']);state['qc']=True
+            data = _data(bundle)
+            response['content'] = qc_table(data, BASE, data.uns['msp']['batch_col'])
+            state['qc'] = True
         elif name=='check_deg':
-            if not state['lookups'] or not args['reason'].strip():raise ValueError('Query existing evidence and explain the gap first')
+            if not state['lookups'] or not args['reason'].strip():
+                raise ValueError('Query existing evidence and explain the gap first')
             key=digest([args['cluster'],args['reference']])
             cached=state.setdefault('additional_deg',{}).get(key)
             if cached:
                 response.update(verified(cached))
             else:
-                data=_data(bundle);folder=artifact(bundle,'deg.sqlite').parent
+                data = _data(bundle)
+                folder = artifact(bundle, 'deg.sqlite').parent
                 cache=DegCache(data,folder,load_removal_mask(folder,data))
                 response['content']=cache.table(BASE,args['cluster'],args['reference'],30)
                 response['source']='computed' if cache.n_computed else 'precomputed'
                 state['additional_deg'][key]=immutable(destination/'additional_deg.json',response)
         elif name=='submit_decision':
-            proposal=parse_proposal(args);converted=[];held=[]
+            proposal = parse_proposal(args)
+            converted = []
+            held = []
             if phase=='inclusion':
                 from .inclusion import validate_inclusion
                 validate_inclusion(proposal,[s['sample'] for s in bundle['samples']])
-                if set(state.get('inventories',[]))!={s['sample'] for s in bundle['samples']}:raise ValueError('Read every sample inventory before inclusion')
+                if set(state.get('inventories', [])) != {s['sample'] for s in bundle['samples']}:
+                    raise ValueError('Read every sample inventory before inclusion')
                 # #33: the UMAPs of the samples it excludes; every inventory, but not 196 figures, fits one session
                 missing=[s['sample'] for s in proposal['samples'] if not s['include'] and not any(p.startswith(s['sample']+'/figures/') and 'umap_clusters' in p for p in state['read'])]
-                if missing:raise ValueError('Read the cluster UMAP of each sample you exclude before inclusion: '+str(missing))
+                if missing:
+                    raise ValueError('Read the cluster UMAP of each sample you exclude before inclusion: ' + str(missing))
                 proposals={s['sample'] for s in bundle['samples'] if s.get('annotation')}
                 unread=[s['sample'] for s in proposal['samples'] if not s['include'] and s['sample'] in proposals and s['sample']+'/annotation_proposal.json' not in state['read']]
-                if unread:raise ValueError('Read the full annotation proposal (read_evidence on <sample>/annotation_proposal.json) of each sample you exclude before inclusion: '+str(unread))
+                if unread:
+                    raise ValueError('Read the full annotation proposal (read_evidence on <sample>/annotation_proposal.json) of each sample you exclude before inclusion: ' + str(unread))
             else:
-                data=_data(bundle);clusters=sorted(data.obs[BASE].astype(str).unique())
-                if not state['lookups']:raise ValueError('Query DEG with deg_lookup or deg_sql before submission')
+                data = _data(bundle)
+                clusters = sorted(data.obs[BASE].astype(str).unique())
+                if not state['lookups']:
+                    raise ValueError('Query DEG with deg_lookup or deg_sql before submission')
                 if not any(p.endswith('.png') for p in state['read']):
                     figures=[n for n in bundle['files'] if n.endswith('.png')]
                     raise ValueError('Read a figure with read_evidence before submission; none of your '+str(len(state['read']))+' reads was a .png. Figures: '+', '.join(figures[:4]))
                 if phase=='type':
                     from msp.api import validate_cluster,validate_annotation,guard_batch_annotation,check_coarse_boundaries
                     from msp.api import load_paga_neighbors
-                    if not isinstance(proposal.get('clusters'),list):raise ValueError('clusters must be a list')
+
+                    if not isinstance(proposal.get('clusters'), list):
+                        raise ValueError('clusters must be a list')
                     problems=[p for e in proposal['clusters'] for p in validate_cluster(e,clusters)]
-                    if problems:raise ValueError('; '.join(problems))
+                    if problems:
+                        raise ValueError('; '.join(problems))
                     proposed={str(e['cluster_id']):guard_batch_annotation(e) for e in proposal['clusters']}
-                    if set(proposed)!=set(bundle['type_scope']) or len(proposed)!=len(proposal['clusters']):raise ValueError('Cover each assigned type cluster exactly once')
+                    if set(proposed) != set(bundle['type_scope']) or len(proposed) != len(proposal['clusters']):
+                        raise ValueError('Cover each assigned type cluster exactly once')
                     entries={**bundle['type_entries'],**proposed}
                     problems=validate_annotation(entries,clusters)
                     problems+=check_coarse_boundaries(entries,load_paga_neighbors(artifact(bundle,'deg.sqlite').parent,BASE),proposal.get('boundary_reviews',[]))
@@ -474,44 +516,59 @@ def tool(name,state_path,args_path,destination):
                     proposal['clusters']=[entries[c] for c in sorted(entries)]
                 else:
                     from msp.api import validate_inspection,guard_batch_actions
-                    if not state['qc']:raise ValueError('Read QC evidence before quality submission')
+
+                    if not state['qc']:
+                        raise ValueError('Read QC evidence before quality submission')
                     accepted=verified(state['types'])
-                    if accepted['evidence']!=state['evidence'] or accepted.get('accepted') is not True:raise ValueError('Type evidence is incompatible')
-                    if set(state.get('type_read',[]))!=set(clusters):raise ValueError('Read accepted type context for every cluster before assessing quality')
+                    if accepted['evidence'] != state['evidence'] or accepted.get('accepted') is not True:
+                        raise ValueError('Type evidence is incompatible')
+                    if set(state.get('type_read', [])) != set(clusters):
+                        raise ValueError('Read accepted type context for every cluster before assessing quality')
                     if 'refinement' in proposal:
                         import math
                         request=proposal['refinement']
-                        if set(request)!={'cluster','resolution','reason'} or request['cluster'] not in clusters:raise ValueError('Refinement must name a current cluster and explain the split')
-                        if type(request['resolution']) not in (int,float) or not math.isfinite(request['resolution']) or request['resolution']<=0:raise ValueError('Resolution must be finite and positive')
-                        if not isinstance(request['reason'],str) or not request['reason'].strip():raise ValueError('Explain the refinement evidence')
-                        if bundle['version']>=verified(bundle['inspected'])['spec']['max_refinements']:raise ValueError('Refinement limit reached; submit an uncertain quality assessment using available evidence')
-                        response['refinement']=request;problems=[]
+                        if set(request) != {'cluster', 'resolution', 'reason'} or request['cluster'] not in clusters:
+                            raise ValueError('Refinement must name a current cluster and explain the split')
+                        if type(request['resolution']) not in (int, float) or not math.isfinite(request['resolution']) or request['resolution'] <= 0:
+                            raise ValueError('Resolution must be finite and positive')
+                        if not isinstance(request['reason'], str) or not request['reason'].strip():
+                            raise ValueError('Explain the refinement evidence')
+                        if bundle['version'] >= verified(bundle['inspected'])['spec']['max_refinements']:
+                            raise ValueError('Refinement limit reached; submit an uncertain quality assessment using available evidence')
+                        response['refinement'] = request
+                        problems = []
                     else:
                         problems=validate_inspection(proposal,clusters,data.obs)
                         if not problems:
                             guard_batch_actions(proposal)
                             held=guard_retained_drops(proposal,{str(e['cluster_id']) for e in accepted['proposal']['clusters']
                                                                 if e.get('host_adjustment',{}).get('policy')==STRESS_HOST_POLICY})
-                if problems:raise ValueError('; '.join(problems))
+                if problems:
+                    raise ValueError('; '.join(problems))
             response.update(accepted=True,proposal=proposal,evidence=state['evidence'],types=state['types'])
             if converted:
                 response['host_adjustments']=[{'cluster':c,**proposed[c]['host_adjustment']} for c in converted]
             if held:
                 response['host_adjustments']=[{'cluster':c,'action':'flag','policy':STRESS_HOST_POLICY,
                                                'reason':'kept by the type phase under the stress policy: dropped cells are flagged'} for c in held]
-        else:raise ValueError('Unknown worker tool')
-    except (ValueError,KeyError,TypeError,IndexError) as exc:
-        content=str(exc)[:8000]
-        try:hint=error_hint(name,content,state,args,bundle)
-        except Exception:hint=''  # noqa: BLE001 - a hint must never turn a correctable error into a crash
-        response={'is_error':True,'content':(content+'\n'+hint)[:16000] if hint else content}
-    response['state']=immutable(destination/'state.json',state);save(destination/'result.json',response)
+        else:
+            raise ValueError('Unknown worker tool')
+    except (ValueError, KeyError, TypeError, IndexError) as exc:
+        content = str(exc)[:8000]
+        try:
+            hint = error_hint(name, content, state, args, bundle)
+        except Exception:
+            hint = ''  # noqa: BLE001 - a hint must never turn a correctable error into a crash
+        response = {'is_error': True, 'content': (content + '\n' + hint)[:16000] if hint else content}
+    response['state'] = immutable(destination / 'state.json', state)
+    save(destination / 'result.json', response)
 
 
 def _stress_guard(bundle,data,entries,proposed):
     """Decision 0017 on the type removals of this submission, in place; the clusters that stay. The dying check
     compares a cluster with the clusters of its coarse label that no entry removes."""
-    policy=stress_policy(verified(bundle['inspected'])['spec']);flags,mito=stress_flags(bundle),stress_flags(bundle,'mito')
+    policy = stress_policy(verified(bundle['inspected'])['spec'])
+    flags, mito = stress_flags(bundle), stress_flags(bundle, 'mito')
     base=data.obs[BASE].astype(str)
     removing=base.isin([c for c,e in entries.items() if e['action']=='remove']).to_numpy()
     converted=[]
@@ -524,7 +581,8 @@ def _stress_guard(bundle,data,entries,proposed):
     for cid in converted:  # a kept cluster cannot merge into a removed one
         e=entries[cid]
         if e['merge_target'] is not None and entries[str(e['merge_target'])]['action']=='remove':
-            e['requested_merge_target']=e['merge_target'];e['merge_target']=None
+            e['requested_merge_target'] = e['merge_target']
+            e['merge_target'] = None
     return converted
 
 
@@ -534,13 +592,18 @@ def finalize(evidence_ref,types_ref,quality_ref,destination):
     from msp.api import apply_inspection,validate_inspection
     from msp.api import load_removal_mask
     from msp.api import generate_report
-    bundle=verified(evidence_ref);typed=verified(types_ref);quality=verified(quality_ref)
+
+    bundle = verified(evidence_ref)
+    typed = verified(types_ref)
+    quality = verified(quality_ref)
     if any(r.get('accepted') is not True or r['evidence']!=evidence_ref for r in (typed,quality)) or quality['types']!=types_ref:
         raise ValueError('Decisions do not refer to this accepted evidence')
-    data=_data(bundle);clusters=sorted(data.obs[BASE].astype(str).unique())
+    data = _data(bundle)
+    clusters = sorted(data.obs[BASE].astype(str).unique())
     problems=validate_annotation({str(e['cluster_id']):e for e in typed['proposal']['clusters']},clusters)
     problems+=validate_inspection(quality['proposal'],clusters,data.obs)
-    if problems:raise ValueError('; '.join(problems))
+    if problems:
+        raise ValueError('; '.join(problems))
     apply_inspection(data,BASE,quality['proposal'])
     pre=load_removal_mask(artifact(bundle,'preannotation_removal.csv').parent,data)
     # Preserve distinct numerical and inherited sources instead of a generic "filtered" reason.
@@ -554,7 +617,8 @@ def finalize(evidence_ref,types_ref,quality_ref,destination):
     if stress_policy(verified(bundle['inspected'])['spec'])=='keep':
         # Fragments removed only by their dissociation or mitochondrial test stay, labelled (decision 0017);
         # compute() already turned OSP's dissociation-stress drops into flags.
-        soft=soft_fragments(fragments);bad_frag-=set(soft)
+        soft = soft_fragments(fragments)
+        bad_frag -= set(soft)
         product=data.obs['standissect_product'].astype(str) if 'standissect_product' in data.obs else pd.Series('',index=data.obs_names)
         flagged=outliers.index[outliers.recommend_removal.astype(str).str.lower().eq('true')] if 'recommend_removal' in outliers else []
         stay=(product.isin(list(soft))&~data.obs_names.isin(flagged)&~data.obs['_qc_action'].astype(str).eq('drop')).to_numpy()
@@ -571,12 +635,16 @@ def finalize(evidence_ref,types_ref,quality_ref,destination):
         if e.get('host_adjustment',{}).get('policy')==STRESS_HOST_POLICY:
             retained.update({c:e['host_adjustment']['state'] for c in data.obs_names[data.obs[BASE].astype(str).eq(cid)]})
     for cid in reasons:
-        row=data.obs.loc[cid];group=str(row[BASE]);r=reasons[cid]
-        if str(row.get('standissect_product')) in bad_frag:r.append({'code':'fragment_qc','detail':frag_tests.get(str(row.get('standissect_product')),{}),
-                                                                    'evidence':bundle['files']['minor_sibling_qc.csv']})
-        if cid in outliers.index and str(outliers.loc[cid].get('recommend_removal')).lower()=='true':r.append({'code':'cell_outlier','detail':outliers.loc[cid].astype(str).to_dict(),'evidence':bundle['files']['cell_outliers.csv']})
+        row = data.obs.loc[cid]
+        group = str(row[BASE])
+        r = reasons[cid]
+        if str(row.get('standissect_product')) in bad_frag:
+            r.append({'code': 'fragment_qc', 'detail': frag_tests.get(str(row.get('standissect_product')), {}), 'evidence': bundle['files']['minor_sibling_qc.csv']})
+        if cid in outliers.index and str(outliers.loc[cid].get('recommend_removal')).lower() == 'true':
+            r.append({'code': 'cell_outlier', 'detail': outliers.loc[cid].astype(str).to_dict(), 'evidence': bundle['files']['cell_outliers.csv']})
         if str(row.get('_qc_action'))=='drop':
-            if cid not in osp_reasons:raise ValueError('OSP drop lacks its original decision: '+cid)
+            if cid not in osp_reasons:
+                raise ValueError('OSP drop lacks its original decision: ' + cid)
             r.append({'code':'osp_proposal','detail':json.loads(osp_reasons[cid])})
         if str(row['_msp_action'])=='drop':
             from msp.api import INSPECTION_OPS
@@ -584,25 +652,35 @@ def finalize(evidence_ref,types_ref,quality_ref,destination):
                       and a['action']=='drop' and INSPECTION_OPS[a['op']](row[a['metric']],float(a['value']))]
             r.append({'code':'quality_decision','detail':quality_entries[group],
                       'cell_actions':matching,'evidence':quality_ref})
-        if typed_entries[group]['action']=='remove':r.append({'code':typed_entries[group]['remove_reason'],'detail':typed_entries[group]['rationale'],
-                                                              'confidence':typed_entries[group]['confidence'],'evidence':types_ref})
-        if not r:raise ValueError('An excluded cell has no reason: '+cid)
+        if typed_entries[group]['action'] == 'remove':
+            r.append({'code': typed_entries[group]['remove_reason'], 'detail': typed_entries[group]['rationale'], 'confidence': typed_entries[group]['confidence'], 'evidence': types_ref})
+        if not r:
+            raise ValueError('An excluded cell has no reason: ' + cid)
     excluded=pd.read_csv(artifact(bundle,'sample_exclusions.csv.gz'),dtype=str,keep_default_na=False)
     for row in excluded.to_dict('records'):
         reasons[row['cell_id']]=[{'code':'sample_excluded','detail':row['reason'],'evidence':bundle['inclusion']}]
     kept=data[data.obs.msp_ann_action.astype(str).eq('keep')].copy()
     mark_retained(kept.obs,retained)
-    if set(kept.obs_names)&set(reasons) or set(kept.obs_names)|set(reasons)!=set(origin.index):raise ValueError('Cross-sample cell conservation failed')
+    if set(kept.obs_names) & set(reasons) or set(kept.obs_names) | set(reasons) != set(origin.index):
+        raise ValueError('Cross-sample cell conservation failed')
     ledger=origin.loc[list(reasons)].reset_index().rename(columns={'cell_id':'cell_uid'})
-    ledger['reason']=ledger.cell_uid.map(lambda c:json.dumps(reasons[c],ensure_ascii=False));ledger['stage']='cross-sample';ledger['operation']='cross-sample.finalize'
-    ledger['input_version']=evidence_ref['sha256'];ledger['run_id']=verified(bundle['inspected'])['spec']['run_id']
+    ledger['reason'] = ledger.cell_uid.map(lambda c: json.dumps(reasons[c], ensure_ascii=False))
+    ledger['stage'] = 'cross-sample'
+    ledger['operation'] = 'cross-sample.finalize'
+    ledger['input_version'] = evidence_ref['sha256']
+    ledger['run_id'] = verified(bundle['inspected'])['spec']['run_id']
     ledger.to_csv(destination/'cell_exclusions.csv.gz',index=False)
     for name in bundle['files']:
         if name.endswith(('.csv','.png')) and name!='cell_exclusions.csv.gz':
-            path=destination/name;path.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(artifact(bundle,name),path)
-    save(destination/'annotation_proposal.json',typed['proposal']);save(destination/'inspection_proposal.json',{**quality['proposal'],'cluster_key':BASE})
-    archive.to_csv(destination/'annotation_removed.csv',index=False);plot_annotated(data,kept,str(destination/'figures'))
-    kept.write_h5ad(destination/'annotated.h5ad');generate_report(str(destination))
+            path = destination / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(artifact(bundle, name), path)
+    save(destination / 'annotation_proposal.json', typed['proposal'])
+    save(destination / 'inspection_proposal.json', {**quality['proposal'], 'cluster_key': BASE})
+    archive.to_csv(destination / 'annotation_removed.csv', index=False)
+    plot_annotated(data, kept, str(destination / 'figures'))
+    kept.write_h5ad(destination / 'annotated.h5ad')
+    generate_report(str(destination))
     # Verify serialized identities too, before a completion bundle is emitted.
     import anndata as an
     check=an.read_h5ad(destination/'annotated.h5ad',backed='r')
@@ -612,7 +690,8 @@ def finalize(evidence_ref,types_ref,quality_ref,destination):
                 set(check.obs_names)&set(stored.cell_uid) or set(check.obs_names)|set(stored.cell_uid)!=set(origin.index)
                 or stored.reason.eq('').any()):
             raise ValueError('Serialized cross-sample output/ledger conservation failed')
-    finally:check.file.close()
+    finally:
+        check.file.close()
     sealed(destination,destination/'final.json',state='complete',input=verified(bundle['inspected'])['input'],evidence=evidence_ref,types=types_ref,quality=quality_ref,
            n_input=len(origin),n_survived=kept.n_obs,n_removed=len(ledger))
 
@@ -620,27 +699,43 @@ def finalize(evidence_ref,types_ref,quality_ref,destination):
 def main():
     import logging
     logging.basicConfig(level=logging.INFO,format='%(asctime)s %(name)s %(levelname)s %(message)s')
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('operation');p.add_argument('args',nargs='+');a=p.parse_args();dest=Path.cwd()
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('operation')
+    p.add_argument('args', nargs='+')
+    a = p.parse_args()
+    dest = Path.cwd()
     ref=lambda n:reference(a.args[n])
-    if a.operation=='inspect':inspect_input(read(a.args[0]),dest)
+    if a.operation == 'inspect':
+        inspect_input(read(a.args[0]), dest)
     elif a.operation=='agent':
         spec,evidence,phase,parent,types=read(a.args[0])
         immutable(dest/'agent.json',agent_spec(spec,evidence,phase,parent,types))
     elif a.operation=='include-single':
         bundle=verified(ref(0))
-        if len(bundle['samples'])!=1 and not bundle.get('chunked'):raise ValueError('Automatic inclusion requires exactly one sample or chunked samples')
+        if len(bundle['samples']) != 1 and not bundle.get('chunked'):
+            raise ValueError('Automatic inclusion requires exactly one sample or chunked samples')
         from .inclusion import CHUNKED_NOTE, SINGLE_SAMPLE_NOTE
         note=CHUNKED_NOTE if bundle.get('chunked') else SINGLE_SAMPLE_NOTE
         immutable(dest/'decision.json',dict(accepted=True,evidence=ref(0),proposal={'samples':[dict(sample=s['sample'],include=True,reason=note) for s in bundle['samples']],'notes':note}))
-    elif a.operation=='compute':compute(ref(0),ref(1),dest)
-    elif a.operation=='compute-round':compute_round(ref(0),dest)
-    elif a.operation=='refine':refine(ref(0),ref(1),ref(2),dest)
-    elif a.operation=='deg':deg(ref(0),int(a.args[1]),dest)
-    elif a.operation=='deg-batch':deg_batch(ref(0),a.args[1].split(','),dest)
-    elif a.operation=='assemble':assemble(ref(0),read(a.args[1]),dest)
-    elif a.operation=='tool':tool(a.args[0],Path(a.args[1]),Path(a.args[2]),dest)
-    elif a.operation=='finalize':finalize(ref(0),ref(1),ref(2),dest)
-    else:raise ValueError('Unknown cross-sample operation')
+    elif a.operation == 'compute':
+        compute(ref(0), ref(1), dest)
+    elif a.operation == 'compute-round':
+        compute_round(ref(0), dest)
+    elif a.operation == 'refine':
+        refine(ref(0), ref(1), ref(2), dest)
+    elif a.operation == 'deg':
+        deg(ref(0), int(a.args[1]), dest)
+    elif a.operation == 'deg-batch':
+        deg_batch(ref(0), a.args[1].split(','), dest)
+    elif a.operation == 'assemble':
+        assemble(ref(0), read(a.args[1]), dest)
+    elif a.operation == 'tool':
+        tool(a.args[0], Path(a.args[1]), Path(a.args[2]), dest)
+    elif a.operation == 'finalize':
+        finalize(ref(0), ref(1), ref(2), dest)
+    else:
+        raise ValueError('Unknown cross-sample operation')
 
 
-if __name__=='__main__':main()
+if __name__ == '__main__':
+    main()

@@ -1,7 +1,6 @@
 import base64
 import io
 import json
-from pathlib import Path
 
 import anndata as ad
 import numpy as np

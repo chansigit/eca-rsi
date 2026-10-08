@@ -3,7 +3,6 @@ import os
 import subprocess
 import sys
 
-import pytest
 
 from ecarsi.stages.resources import MEASURED_CEILING_MB, size
 from ecarsi.files import digest, read, save

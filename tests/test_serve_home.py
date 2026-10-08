@@ -200,7 +200,7 @@ def test_a_silent_run_the_plane_calls_running_is_not_failed():
 
 def test_sidebar_and_overview_agree_on_a_silent_run_the_plane_calls_running(tmp_path):
     """The sidebar once read raw states while the overview applied unstale: 7 more failed there."""
-    from ecarsi.ui.serve import _home_html, _navigator_html, unstale
+    from ecarsi.ui.serve import _navigator_html, unstale
 
     class Verdicts:
         def of(self, run_id, unit=""):

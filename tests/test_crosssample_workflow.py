@@ -4,7 +4,7 @@ import asyncio
 import pytest
 from temporalio import workflow
 
-from ecarsi.control.crosssample import CrosssampleWorkflow, crosssample_step, validate_spec
+from ecarsi.control.crosssample import CrosssampleWorkflow, crosssample_step
 from tests.temporal_env import QUEUE, fakes, temporal
 from ecarsi.agent.session import reference
 from ecarsi.files import save, read
@@ -12,7 +12,9 @@ from ecarsi.warm_pool.state import validate_trace
 
 
 def test_gpu_selection_and_large_fanin(tmp_path):
-    pool=tmp_path/'pool';pool.mkdir(mode=0o700);(pool/'requests').mkdir()
+    pool = tmp_path / 'pool'
+    pool.mkdir(mode=0o700)
+    (pool / 'requests').mkdir()
     save(pool/'config.json',{'runtime':{}})
     save(tmp_path/'inspected.json',{'n_input':10000})
     save(tmp_path/'inclusion.json',{})
@@ -27,15 +29,17 @@ def test_gpu_selection_and_large_fanin(tmp_path):
     assert repeated['gpu']==request['gpu'] and repeated['trace']['depends_on']==['prior-zoom']
     trace={**request['trace'],'depends_on':['deg-'+str(i) for i in range(100)]}
     assert validate_trace(trace)==trace
-    with pytest.raises(ValueError):validate_trace({**trace,'depends_on':['d'+str(i) for i in range(4097)]})
-
-
+    with pytest.raises(ValueError):
+        validate_trace({**trace, 'depends_on': ['d' + str(i) for i in range(4097)]})
 
 
 def test_confirmed_worker_interruption_recovers_with_a_finite_attempt_budget(tmp_path):
     from ecarsi.control.coordinator import check_pool
     from ecarsi.warm_pool.state import submit
-    tmp_path.chmod(0o700);(tmp_path/'requests').mkdir();save(tmp_path/'config.json',{'runtime':{}})
+
+    tmp_path.chmod(0o700)
+    (tmp_path / 'requests').mkdir()
+    save(tmp_path / 'config.json', {'runtime': {}})
     submit(tmp_path,dict(request_id='r',operation_id='compute',args=['-c','pass'],cpus=1,memory_mb=64,timeout_seconds=30,outputs=['result.json']))
     folder=tmp_path/'requests/r'
     for retry_number in range(3):
@@ -52,7 +56,10 @@ def test_a_time_limit_is_doubled_once(tmp_path):
     # #18: doubled twice, a DEG batch asked for a whole node's time and waited as infeasible.
     from ecarsi.control.coordinator import check_pool
     from ecarsi.warm_pool.state import submit
-    tmp_path.chmod(0o700);(tmp_path/'requests').mkdir();save(tmp_path/'config.json',{'runtime':{}})
+
+    tmp_path.chmod(0o700)
+    (tmp_path / 'requests').mkdir()
+    save(tmp_path / 'config.json', {'runtime': {}})
     submit(tmp_path,dict(request_id='r',operation_id='deg',args=['-c','pass'],cpus=1,memory_mb=64,timeout_seconds=30,outputs=['result.json']))
     folder=tmp_path/'requests/r'
     for expected in ('waiting','failed'):
@@ -68,17 +75,24 @@ def test_a_changed_output_or_pinned_input_fails_at_once(tmp_path):
     # #22: both raised ValueError, which the poll activity retried 40 times over ~35 min.
     from ecarsi.control.coordinator import check_pool
     from ecarsi.warm_pool.state import submit
-    tmp_path.chmod(0o700);(tmp_path/'requests').mkdir();save(tmp_path/'config.json',{'runtime':{}})
-    pinned=tmp_path/'input.json';save(pinned,{'v':1})
+
+    tmp_path.chmod(0o700)
+    (tmp_path / 'requests').mkdir()
+    save(tmp_path / 'config.json', {'runtime': {}})
+    pinned = tmp_path / 'input.json'
+    save(pinned, {'v': 1})
     submit(tmp_path,dict(request_id='r',operation_id='compute',args=['-c','pass'],cpus=1,memory_mb=64,timeout_seconds=30,
         inputs=[reference(pinned)],outputs=['result.json']))
-    folder=tmp_path/'requests/r';request=read(folder/'request.json');attempt=folder/request['attempt_id']
+    folder = tmp_path / 'requests/r'
+    request = read(folder / 'request.json')
+    attempt = folder / request['attempt_id']
     save(attempt/'receipt.json',dict(outputs=[], state='failed',retryable=True,finished_at=1,
         attempt_id=request['attempt_id'],request_digest=request['digest'],runtime_digest=request['runtime_digest']))
     save(pinned,{'v':2})
     result=check_pool(str(tmp_path),'r','result.json')
     assert result['state']=='failed' and 'Retry input changed' in result['detail']
-    output=attempt/'outputs/result.json';save(output,{'v':1})
+    output = attempt / 'outputs/result.json'
+    save(output, {'v': 1})
     save(attempt/'receipt.json',dict(state='succeeded',outputs=[reference(output)]))
     save(output,{'v':2})
     assert check_pool(str(tmp_path),'r','result.json')==dict(state='failed',detail='Pool receipt output changed or missing')
@@ -88,15 +102,21 @@ def test_uncertain_observation_waits_for_same_attempt_receipt(tmp_path):
     from ecarsi.control.coordinator import check_pool, check_bridge
     from ecarsi.warm_pool.state import submit
     from ecarsi.agent.session import reference
-    tmp_path.chmod(0o700); (tmp_path/'requests').mkdir(); save(tmp_path/'config.json', {'runtime':{}})
+
+    tmp_path.chmod(0o700)
+    (tmp_path / 'requests').mkdir()
+    save(tmp_path / 'config.json', {'runtime': {}})
     submit(tmp_path, dict(request_id='r', operation_id='compute', args=['-c','pass'], cpus=1,
         memory_mb=64, timeout_seconds=30, outputs=['result.json']))
-    folder=tmp_path/'requests/r'; request=read(folder/'request.json'); attempt=folder/request['attempt_id']
+    folder = tmp_path / 'requests/r'
+    request = read(folder / 'request.json')
+    attempt = folder / request['attempt_id']
     save(folder/'backend.json', dict(state='unknown_external_result'))
     assert check_pool(str(tmp_path),'r','result.json') == dict(state='waiting', detail='unknown_external_result')
     save(attempt/'accepted.json', dict(started_at=1))
     assert check_pool(str(tmp_path),'r','result.json')['state']=='waiting'
-    output=attempt/'outputs/result.json'; save(output, dict(value=7))
+    output = attempt / 'outputs/result.json'
+    save(output, dict(value=7))
     save(attempt/'receipt.json', dict(state='succeeded', outputs=[reference(output)]))
     assert check_pool(str(tmp_path),'r','result.json')['path']==str(output)
     assert read(folder/'request.json')==request
@@ -252,7 +272,10 @@ def test_a_blocked_pool_request_shows_why_it_waits(tmp_path):
     from ecarsi.control.coordinator import check_pool
     from ecarsi.warm_pool.backend import observe
     from ecarsi.warm_pool.state import submit
-    tmp_path.chmod(0o700); (tmp_path/"requests").mkdir(); save(tmp_path/"config.json", {"runtime": {}})
+
+    tmp_path.chmod(0o700)
+    (tmp_path / "requests").mkdir()
+    save(tmp_path / "config.json", {"runtime": {}})
     submit(tmp_path, dict(request_id="r", operation_id="compute", args=["-c", "pass"], cpus=1,
         memory_mb=64, timeout_seconds=30, outputs=["result.json"]))
     folder, why = tmp_path/"requests/r", "no worker that holds 1 cpus / 64 MB has 60 s left"

@@ -22,8 +22,10 @@ def test_large_barcode_table_is_bounded_and_has_a_real_cursor(tmp_path):
 
 def test_utf8_pages_reconstruct_exactly_without_splitting_characters(tmp_path):
     text='细胞\\nαβγ🙂'*30
-    p=tmp_path/'utf8.txt';p.write_text(text)
-    offset=0;parts=[]
+    p = tmp_path / 'utf8.txt'
+    p.write_text(text)
+    offset = 0
+    parts = []
     for _ in range(1000):
         result=body(T._read(tmp_path,{'file_path':p.name,'byte_offset':offset,'max_bytes':11}))
         payload=result.split('<content>\n',1)[1].rsplit('\n</content>',1)[0]
@@ -31,14 +33,17 @@ def test_utf8_pages_reconstruct_exactly_without_splitting_characters(tmp_path):
         match=re.search(r'next byte_offset=(\d+)',result)
         if not match:
             break
-        new=int(match.group(1));assert new>offset;offset=new
+        new = int(match.group(1))
+        assert new > offset
+        offset = new
     else:
         pytest.fail('reader did not make progress')
     assert ''.join(parts)==text
 
 
 def test_unbroken_line_cannot_evade_byte_cap(tmp_path):
-    p=tmp_path/'long';p.write_text('x'*100000)
+    p = tmp_path / 'long'
+    p.write_text('x' * 100000)
     result=body(T._read(tmp_path,{'file_path':p.name,'max_bytes':10**9}))
     assert len(result)<T.READ_MAX_BYTES+500
     assert f'next byte_offset={T.READ_MAX_BYTES}' in result
@@ -59,14 +64,17 @@ def test_read_schema_describes_bounded_paging(tmp_path):
 
 
 def test_manual_offset_inside_utf8_character_is_rejected(tmp_path):
-    p=tmp_path/'utf8.txt';p.write_text('细胞')
+    p = tmp_path / 'utf8.txt'
+    p.write_text('细胞')
     result=T._read(tmp_path,{'file_path':p.name,'byte_offset':1})
     assert result['is_error'] and 'UTF-8 character' in body(result)
 
 
 def test_read_uses_open_descriptor_size_after_truncation(tmp_path,monkeypatch):
     from pathlib import Path
-    p=tmp_path/'file';p.write_text('x'*100)
+
+    p = tmp_path / 'file'
+    p.write_text('x' * 100)
     original=Path.open
     def truncated(path,*args,**kwargs):
         if path == p and args == ('rb',):
@@ -81,11 +89,14 @@ def test_read_uses_open_descriptor_size_after_truncation(tmp_path,monkeypatch):
 
 def test_file_mutation_during_read_is_rejected(tmp_path,monkeypatch):
     from types import SimpleNamespace
-    p=tmp_path/'file';p.write_text('abc')
+
+    p = tmp_path / 'file'
+    p.write_text('abc')
     original=T.os.fstat
     calls=[]
     def changed(fd):
-        st=original(fd);calls.append(fd)
+        st = original(fd)
+        calls.append(fd)
         return SimpleNamespace(st_size=st.st_size,st_mtime_ns=st.st_mtime_ns+len(calls))
     monkeypatch.setattr(T.os,'fstat',changed)
     result=T._read(tmp_path,{'file_path':p.name})

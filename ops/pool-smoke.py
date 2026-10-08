@@ -1,6 +1,6 @@
 """Submit N trivial pool requests and watch them through the scheduler: an end-to-end check of a
 scheduler deploy without any dataset. usage: pool-smoke.py [N] [sleep_seconds]"""
-import os, sys, time, json
+import os, sys, time
 from pathlib import Path
 from ecarsi.files import read
 from ecarsi.warm_pool.state import submit, status

@@ -15,7 +15,6 @@ State: <pool>/pruned-runs.json (run -> done/pending). Logs to stdout.
 """
 import argparse
 import asyncio
-import json
 import sys
 import time
 from pathlib import Path

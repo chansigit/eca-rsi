@@ -84,7 +84,9 @@ def test_a_turn_on_an_entry_with_its_own_key_sends_that_key(tmp_path, monkeypatc
                      key_env="ARK_PLAN_API_KEY")
         catalog = tmp_path / "models.json"
         save(catalog, dict(models=[model]))
-        pool = tmp_path / "pool"; pool.mkdir(mode=0o700); (pool / "requests").mkdir()
+        pool = tmp_path / "pool"
+        pool.mkdir(mode=0o700)
+        (pool / "requests").mkdir()
         save(pool / "config.json", dict(runtime=dict(command=[sys.executable], files={}, version="test")))
         root = bridge.init(tmp_path / "bridge", catalog, concurrency=2, pool_root=pool)
         save(root / "config.json", dict(read(root / "config.json"), routing=dict(response_timeout_seconds=20),
@@ -96,7 +98,10 @@ def test_a_turn_on_an_entry_with_its_own_key_sends_that_key(tmp_path, monkeypatc
                     args=["-c", "raise AssertionError", "{arguments}"],
                     cpus=1, memory_mb=64, timeout_seconds=30, inputs=[], outputs=["result.json"], result_file="result.json")])
         ref = session.create_session(spec)
-        saved = read(ref["path"]); saved["api_mode"] = "chat_completions"; save(ref["path"], saved); ref = reference(ref["path"])
+        saved = read(ref["path"])
+        saved["api_mode"] = "chat_completions"
+        save(ref["path"], saved)
+        ref = reference(ref["path"])
         key = model_key(model)
         (root / "runners").mkdir()
         save(root / "runners" / (key + ".json"), dict(pid=1, generation="g", observed_at=__import__("time").time(),

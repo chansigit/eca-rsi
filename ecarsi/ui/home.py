@@ -201,7 +201,10 @@ def history_at(hist: dict, at: float) -> dict:
     for d in hist["datasets"].values():
         o = [n for t, n in d["organize"] if t <= at]
         r = [n for t, n in d["release"] if t <= at]
-        cin += sum(o); rel += sum(r); din += bool(o); drel += bool(r)
+        cin += sum(o)
+        rel += sum(r)
+        din += bool(o)
+        drel += bool(r)
     return {"at": at, "cells_in": cin, "cells_released": rel, "datasets_started": din, "datasets_released": drel}
 
 

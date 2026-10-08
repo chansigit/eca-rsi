@@ -25,12 +25,18 @@ def test_nonnested_quality_intersections_preserve_types_and_reassignments():
     assert list(rm.cell)==['001'] and list(ra.cell)==['004']
     assert out.loc['NA','msp_ann_fine']=='Fine 1' and out.loc['003','msp_ann_fine']=='Fine 0'
     assert out.loc['004','msp_ann_coarse']=='Immune'
-    bad=copy.deepcopy(quality);bad['clusters'][0]['decisions'].append(decision(['0']))
-    with pytest.raises(ValueError,match='disjoint'):validate_quality(bad,obs,['Immune'])
-    bad=copy.deepcopy(quality);bad['clusters'][0]['decisions'].pop()
-    with pytest.raises(ValueError,match='every type intersection'):validate_quality(bad,obs,['Immune'])
-    bad=copy.deepcopy(quality);bad['cluster_key']=TYPE_KEY
-    with pytest.raises(ValueError,match='2.0'):validate_quality(bad,obs,['Immune'])
+    bad = copy.deepcopy(quality)
+    bad['clusters'][0]['decisions'].append(decision(['0']))
+    with pytest.raises(ValueError, match='disjoint'):
+        validate_quality(bad, obs, ['Immune'])
+    bad = copy.deepcopy(quality)
+    bad['clusters'][0]['decisions'].pop()
+    with pytest.raises(ValueError, match='every type intersection'):
+        validate_quality(bad, obs, ['Immune'])
+    bad = copy.deepcopy(quality)
+    bad['cluster_key'] = TYPE_KEY
+    with pytest.raises(ValueError, match='2.0'):
+        validate_quality(bad, obs, ['Immune'])
     quality['clusters'][0]['decisions'][0]['remove_reason']='batch'
     _,rm,_,normalized=apply_decisions(obs,types,quality,['Epithelial'],['Immune'],'Epithelial')
     assert rm.empty and normalized[0]['decisions'][0]['review_required']
@@ -43,12 +49,14 @@ def test_lineage_compute_persists_two_fresh_partitions_and_deferred_deg(tmp_path
     from zmip.scheduled import compute_lineage
     rng=np.random.default_rng(7)
     counts=rng.poisson(1.,(150,60)).astype('float32')
-    for group in range(3):counts[group*50:(group+1)*50,group*10:(group+1)*10]+=8
+    for group in range(3):
+        counts[group * 50 : (group + 1) * 50, group * 10 : (group + 1) * 10] += 8
     obs=pd.DataFrame({'sample_id':['a','b']*75,'pct_counts_mt':[2.]*150,
         'n_genes_by_counts':(counts>0).sum(axis=1).astype(float),'total_counts':counts.sum(axis=1),
         'doublet_score':[.05]*150,'msp_ann_coarse_prev':['Epithelial']*150,
         TYPE_KEY:['inherited']*150,QUALITY_KEY:['inherited']*150},index=[f'c{i}' for i in range(150)])
-    data=an.AnnData(counts,obs=obs);data.layers['counts']=counts.copy()
+    data = an.AnnData(counts, obs=obs)
+    data.layers['counts'] = counts.copy()
     compute_lineage(data,'Epithelial',['Epithelial'],{},tmp_path,batch_col='sample_id',species='human',
                     n_top_genes=30,n_pcs=10,n_neighbors=10)
     saved=an.read_h5ad(tmp_path/'integrated.h5ad')

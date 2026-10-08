@@ -1,0 +1,31 @@
+# The tests that need no compute image (#49): the control lock's packages, the lint rule set, and every test module
+# outside tests/conftest.py SCIENCE_ONLY. The full suite runs on Sherlock in the compute image (ops/runsci.sh) and
+# stays the release check.
+name: tests
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  control:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the control image's package versions
+        # the lock's hashes are those of the installed wheels, not of PyPI's files: install by version
+        run: |
+          sed 's/ --hash=[^ ]*//g' container/control-requirements.lock | grep -v '^#' > control-pins.txt
+          python -m pip install -r control-pins.txt pytest ruff==0.16.0
+      - name: Lint
+        run: ruff check --output-format github .
+      - name: Tests
+        env:
+          ECA_TESTS: control
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m pytest -q -p no:cacheprovider tests

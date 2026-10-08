@@ -35,7 +35,8 @@ def test_shared_memory_ledger_keeps_uncertain_workers_reserved(tmp_path, monkeyp
     from ecarsi.warm_pool.reservation import reserve
     monkeypatch.setenv("HOME", str(tmp_path))
     first, second = tmp_path / "first", tmp_path / "second"
-    first.mkdir(); second.mkdir()
+    first.mkdir()
+    second.mkdir()
     profile = dict(host="test", job_id="123", cpu_ids=[0], memory=80, allocation_memory=100)
     reserve(profile, "first", first / "owner.lock", role="worker", worker_directory=first)
     # A released owner lock alone cannot prove detached executors have exited.

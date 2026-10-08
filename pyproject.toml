@@ -52,3 +52,11 @@ genesets = ["*.tsv"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = ["error::FutureWarning:msp"]
+
+# A minimal lint rule set (#48), held by tests/test_lint.py: one statement per line, no unused imports or variables,
+# no undefined names. Formatting is not enforced.
+[tool.ruff]
+extend-exclude = ["docs"]
+
+[tool.ruff.lint]
+select = ["E701", "E702", "E703", "F401", "F841", "F821"]

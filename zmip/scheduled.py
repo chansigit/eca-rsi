@@ -128,7 +128,8 @@ def apply_decisions(obs, types, quality, own_labels, other_labels, lineage, pre_
     rm['reasons'] = [reasons[c] for c in rm.cell]
     ra = out.loc[out.zmip_reassigned_to.notna(), ['zmip_reassigned_to', 'msp_ann_fine']].rename(
         columns={'zmip_reassigned_to': 'reassign_to', 'msp_ann_fine': 'fine_label'})
-    ra.insert(0, 'cluster', t.loc[ra.index]);ra.insert(0, 'lineage', lineage)
+    ra.insert(0, 'cluster', t.loc[ra.index])
+    ra.insert(0, 'lineage', lineage)
     ra = ra.rename_axis('cell').reset_index()
     from .merge import _validate_annotation, _validate_partition
     kept = out.loc[~removed]

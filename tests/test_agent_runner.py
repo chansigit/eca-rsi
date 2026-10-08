@@ -39,7 +39,9 @@ def test_runner_performs_routed_turns_and_a_lost_runner_falls_back_to_the_pool(t
         catalog = tmp_path / 'models.json'
         model = dict(harness='openai@vllm', model='resident', url=f'http://127.0.0.1:{server.server_port}/v1')
         save(catalog, dict(models=[model]))
-        pool = tmp_path / 'pool'; pool.mkdir(mode=0o700); (pool / 'requests').mkdir()
+        pool = tmp_path / 'pool'
+        pool.mkdir(mode=0o700)
+        (pool / 'requests').mkdir()
         save(pool / 'config.json', dict(runtime=dict(command=[sys.executable], files={}, version='test')))
         root = bridge.init(tmp_path / 'bridge', catalog, concurrency=4, pool_root=pool)
         config = read(root / 'config.json')
@@ -53,7 +55,10 @@ def test_runner_performs_routed_turns_and_a_lost_runner_falls_back_to_the_pool(t
                     args=['-c', 'raise AssertionError("not on model caller")', '{arguments}'],
                     cpus=1, memory_mb=64, timeout_seconds=30, inputs=[], outputs=['result.json'], result_file='result.json')])
         ref = session.create_session(spec)
-        saved = read(ref['path']); saved['api_mode'] = 'chat_completions'; save(ref['path'], saved); ref = reference(ref['path'])
+        saved = read(ref['path'])
+        saved['api_mode'] = 'chat_completions'
+        save(ref['path'], saved)
+        ref = reference(ref['path'])
         key = model_key(model)
         beat = root / 'runners' / (key + '.json')
         beat.parent.mkdir()
@@ -83,7 +88,9 @@ def test_runner_performs_routed_turns_and_a_lost_runner_falls_back_to_the_pool(t
         # A runner that dies before starting the turn: stale heartbeat -> worker_lost -> the next attempt
         # is a pool task, because no runner is ready any more.
         second = session.create_session(dict(spec, session_id='resident-agent-2', output_root=str(tmp_path / 'session-2')))
-        saved = read(second['path']); saved['api_mode'] = 'chat_completions'; save(second['path'], saved)
+        saved = read(second['path'])
+        saved['api_mode'] = 'chat_completions'
+        save(second['path'], saved)
         second_turn = session.submit_turn(reference(second['path']), 0)
         save(beat, dict(pid=1, generation='g2', observed_at=time.time(), in_flight=0, done=0, draining=False))
         bridge.serve(root, once=True)
@@ -111,7 +118,8 @@ def test_a_turn_started_by_a_dead_runner_is_settled_lost_not_run_again(tmp_path,
     import ecarsi.agent.runner as runner
     monkeypatch.setattr(runner, 'perform', lambda *a: pytest.fail('the started turn was performed again'))
     turn_dir, marker = tmp_path / 'turn', tmp_path / 'queue' / 't.json'
-    turn_dir.mkdir(); marker.parent.mkdir()
+    turn_dir.mkdir()
+    marker.parent.mkdir()
     save(turn_dir / 'started.json', dict(started_at=1.0))
     save(marker, dict(plan=str(tmp_path / 'plan.json'), turn_dir=str(turn_dir)))
     asyncio.run(runner.run_one(marker, read(marker)))

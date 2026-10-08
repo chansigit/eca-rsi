@@ -23,11 +23,13 @@ def test_later_round_keeps_source_ids_and_archives_labels(tmp_path, monkeypatch)
     data.write_h5ad(tmp_path/'annotated_zmip.h5ad')
     source = sealed(tmp_path, tmp_path/'survivors.json', state='complete', n_survived=3)
     spec = dict(input=source, previous_round=1, config={'batch_col': 'sample_id'})
-    prepared = tmp_path/'prepared'; prepared.mkdir()
+    prepared = tmp_path / 'prepared'
+    prepared.mkdir()
     module.inspect_input(spec, prepared)
     integrated = []
     monkeypatch.setattr(module, 'integrate', lambda data, *args: integrated.append(data))
-    output = tmp_path/'output'; output.mkdir()
+    output = tmp_path / 'output'
+    output.mkdir()
     module.compute_round(reference(prepared/'inspected.json'), output)
     assert list(integrated[0].obs_names) == ['a', 'b', 'c']
     assert 'msp_ann_coarse' not in integrated[0].obs and 'r01_msp_ann_coarse' in integrated[0].obs
@@ -39,7 +41,9 @@ def test_later_round_keeps_source_ids_and_archives_labels(tmp_path, monkeypatch)
 
 def test_agent_tools_have_valid_worker_contracts(tmp_path):
     for name in ('pool','bridge'):
-        root=tmp_path/name;root.mkdir(mode=0o700);save(root/'config.json',{})
+        root = tmp_path / name
+        root.mkdir(mode=0o700)
+        save(root / 'config.json', {})
     spec=dict(run_id='r',dataset_id='D',output_root=str(tmp_path/'run'),pool_root=str(tmp_path/'pool'),
               bridge_root=str(tmp_path/'bridge'),config={},tool_budget=dict(cpus=1,memory_mb=1024,timeout_seconds=30))
     (tmp_path/'run').mkdir(mode=0o700)
@@ -67,16 +71,20 @@ def test_list_evidence_pages_a_large_bundle_without_dropping_or_oversizing_a_pag
     files={f'a/figures/f{i}.png':{} for i in range(3000)}
     evidence=immutable(tmp_path/'evidence.json',dict(samples=[{'sample':'a'}],files=files,type_scope=['0'],type_entries={}))
     state=immutable(tmp_path/'state.json',dict(evidence=evidence,phase='inclusion',read=[],lookups=[],qc=False))
-    seen=[];offset=0
+    seen = []
+    offset = 0
     for i in range(20):
-        args=tmp_path/f'args{i}.json';save(args,{'offset':offset})
-        destination=tmp_path/f'call{i}';destination.mkdir()
+        args = tmp_path / f'args{i}.json'
+        save(args, {'offset': offset})
+        destination = tmp_path / f'call{i}'
+        destination.mkdir()
         tool('list_evidence',state['path'],args,destination)
         response=read(destination/'result.json')
         assert not response.get('is_error')
         assert len(json.dumps(response).encode())<262144
         seen.extend(response['content'])
-        if response['next_offset'] is None:break
+        if response['next_offset'] is None:
+            break
         offset=response['next_offset']
     else:
         pytest.fail('list_evidence did not terminate within 20 pages')
@@ -88,7 +96,8 @@ def test_overlapping_removals_count_once_and_mismatched_decisions_fail(tmp_path,
     # Plot/report presentation is tested by MSP; this check exercises filtering and persisted identities.
     monkeypatch.setattr(msp.annotate,'_plot',lambda *a:None)
     monkeypatch.setattr(msp.report,'generate_report',lambda *a:None)
-    source=tmp_path/'source';source.mkdir()
+    source = tmp_path / 'source'
+    source.mkdir()
     data=an.AnnData(np.ones((4,2)),obs=pd.DataFrame({BASE:pd.Categorical(['0','0','0','1']),
         'doublet_score':[.9,.8,.1,.2],'standissect_product':['0']*4},index=['c0','c1','c2','c3']))
     data.write_h5ad(source/'integrated.h5ad')
@@ -110,9 +119,13 @@ def test_overlapping_removals_count_once_and_mismatched_decisions_fail(tmp_path,
         tests={k:'test evidence' for k in ('markers','qc','composition','geometry','stability')},rationale='test evidence') for c in ('0','1')],
         cell_actions=[dict(cluster='0',metric='doublet_score',op='>',value=.5,action='drop',reason='doublet',note='specific test')])
     quality_ref=immutable(tmp_path/'quality.json',dict(accepted=True,evidence=evidence,types=types,proposal=quality))
-    out=tmp_path/'out';out.mkdir();finalize(evidence,types,quality_ref,out)
-    result=verified(reference(out/'final.json'));assert (result['n_input'],result['n_survived'],result['n_removed'])==(5,1,4)
-    stored=an.read_h5ad(out/'annotated.h5ad');assert list(stored.obs_names)==['c2']
+    out = tmp_path / 'out'
+    out.mkdir()
+    finalize(evidence, types, quality_ref, out)
+    result = verified(reference(out / 'final.json'))
+    assert (result['n_input'], result['n_survived'], result['n_removed']) == (5, 1, 4)
+    stored = an.read_h5ad(out / 'annotated.h5ad')
+    assert list(stored.obs_names) == ['c2']
     ledger=pd.read_csv(out/'cell_exclusions.csv.gz').set_index('cell_uid')
     assert len(json.loads(ledger.loc['c0','reason']))==2
     assert ledger.loc['c1','source_cell_id']=='orig1'
@@ -120,61 +133,90 @@ def test_overlapping_removals_count_once_and_mismatched_decisions_fail(tmp_path,
     assert {'code':'low-quality','confidence':'high'}.items()<=json.loads(ledger.loc['c3','reason'])[0].items()
     assert set(stored.obs['retained_state'].astype(str))=={''}
     other=immutable(tmp_path/'bad.json',dict(accepted=True,evidence=input_ref,types=types,proposal=quality))
-    with pytest.raises(ValueError,match='accepted evidence'):finalize(evidence,types,other,out)
+    with pytest.raises(ValueError, match='accepted evidence'):
+        finalize(evidence, types, other, out)
 
 
 def test_compute_comparisons_and_sql_handoff(tmp_path):
     from ecarsi.stages.crosssample import inspect_input,compute,tool,refine
     from ecarsi.stages.common import deg,deg_batch,assemble
-    rng=np.random.default_rng(2024);samples=[]
+
+    rng = np.random.default_rng(2024)
+    samples = []
     for name in ('a','b'):
-        folder=tmp_path/name;folder.mkdir()
+        folder = tmp_path / name
+        folder.mkdir()
         counts=rng.poisson(1.,(75,60)).astype('float32')
-        for group in range(3):counts[group*25:(group+1)*25,group*10:(group+1)*10]+=8
+        for group in range(3):
+            counts[group * 25 : (group + 1) * 25, group * 10 : (group + 1) * 10] += 8
         data=an.AnnData(counts,obs=pd.DataFrame({'sample_id':[name]*75,'pct_counts_mt':[2.]*75,
             'n_genes_by_counts':(counts>0).sum(axis=1).astype(float),'total_counts':counts.sum(axis=1),
             'doublet_score':[.05]*75},index=[name+str(i) for i in range(75)]))
-        data.layers['counts']=counts.copy();data.write_h5ad(folder/'clustered.h5ad')
+        data.layers['counts'] = counts.copy()
+        data.write_h5ad(folder / 'clustered.h5ad')
         pd.DataFrame({'cell_id':data.obs_names,'source_id':[name]*75,'source_cell_id':data.obs_names}).to_csv(folder/'input_cells.csv.gz',index=False)
         save(folder/'annotation_proposal.json',{'qc_actions':[]})
         samples.append(sealed(folder,folder/'final.json',sample=name,empty=False,validation={'n_survived':75,'qc_summary':{}}))
     publication=immutable(tmp_path/'publication.json',dict(state='complete',failed_samples=[],samples=samples,n_survived=150))
     cfg=dict(batch_col='sample_id',species='human',compute_backend='cpu',n_top_genes=30,n_pcs=10,n_neighbors=10)
-    inspected=tmp_path/'inspected';inspected.mkdir()
+    inspected = tmp_path / 'inspected'
+    inspected.mkdir()
     inspect_input(dict(input=publication,config=cfg,run_id='test',max_refinements=2),inspected)
     inspected_ref=reference(inspected/'inspected.json')
     inclusion=immutable(tmp_path/'inclusion.json',dict(accepted=True,evidence=inspected_ref,
         proposal={'samples':[dict(sample=n,include=True,reason='test fixture') for n in ('a','b')],'notes':'test fixture'}))
-    computed=tmp_path/'computed';computed.mkdir();compute(inspected_ref,inclusion,computed)
-    prepared=reference(computed/'prepared.json');bundle=verified(prepared);n=len(bundle['tasks'])
+    computed = tmp_path / 'computed'
+    computed.mkdir()
+    compute(inspected_ref, inclusion, computed)
+    prepared = reference(computed / 'prepared.json')
+    bundle = verified(prepared)
+    n = len(bundle['tasks'])
     # the last comparison as a single request, the rest as one batch: assemble takes both shapes
-    single=tmp_path/'deg-last';single.mkdir();deg(prepared,n-1,single)
-    batch=tmp_path/'deg-batch';batch.mkdir();deg_batch(prepared,range(n-1),batch)
+    single = tmp_path / 'deg-last'
+    single.mkdir()
+    deg(prepared, n - 1, single)
+    batch = tmp_path / 'deg-batch'
+    batch.mkdir()
+    deg_batch(prepared, range(n - 1), batch)
     assert sorted(p.name for p in batch.iterdir() if p.is_dir())==sorted('deg-'+str(i) for i in range(n-1)) and (batch/'results.json').is_file()
     results=[reference(batch/'results.json'),reference(single/'result.json')]
-    destination=tmp_path/'evidence';destination.mkdir();assemble(prepared,results,destination)
+    destination = tmp_path / 'evidence'
+    destination.mkdir()
+    assemble(prepared, results, destination)
     evidence=reference(destination/'evidence.json')
     state=immutable(tmp_path/'state.json',dict(evidence=evidence,phase='type',types=None,read=[],lookups=[],qc=False))
-    args=tmp_path/'args.json';save(args,{'query':'SELECT key, count(*) FROM deg GROUP BY key'})
-    result=tmp_path/'query';result.mkdir();tool('deg_sql',state['path'],args,result)
-    response=read(result/'result.json');assert not response.get('is_error') and BASE in response['content']
-    bad=tmp_path/'bad';bad.mkdir()
-    with pytest.raises(ValueError,match='Missing or duplicate'):assemble(prepared,results[:-1],bad)
-    original=an.read_h5ad(computed/'integrated.h5ad');clusters=sorted(original.obs[BASE].astype(str).unique())
+    args = tmp_path / 'args.json'
+    save(args, {'query': 'SELECT key, count(*) FROM deg GROUP BY key'})
+    result = tmp_path / 'query'
+    result.mkdir()
+    tool('deg_sql', state['path'], args, result)
+    response = read(result / 'result.json')
+    assert not response.get('is_error') and BASE in response['content']
+    bad = tmp_path / 'bad'
+    bad.mkdir()
+    with pytest.raises(ValueError, match='Missing or duplicate'):
+        assemble(prepared, results[:-1], bad)
+    original = an.read_h5ad(computed / 'integrated.h5ad')
+    clusters = sorted(original.obs[BASE].astype(str).unique())
     real_types=immutable(tmp_path/'report-types.json',dict(accepted=True,evidence=evidence,proposal={'clusters':[
         dict(cluster_id=c,coarse_label='Fixture',fine_label='Fixture '+c,merge_target=None,action='keep',confidence='high',
              evidence={k:'fixture evidence' for k in ('distinctness','markers','merge')},rationale='fixture evidence') for c in clusters]}))
     proposal=dict(clusters=[dict(cluster=c,verdict='real',action='keep',confidence='high',
         tests={k:'fixture evidence' for k in ('markers','qc','composition','geometry','stability')},rationale='fixture evidence') for c in clusters],cell_actions=[])
     real_quality=immutable(tmp_path/'report-quality.json',dict(accepted=True,evidence=evidence,types=real_types,proposal=proposal))
-    published=tmp_path/'published';published.mkdir();finalize(evidence,real_types,real_quality,published)
+    published = tmp_path / 'published'
+    published.mkdir()
+    finalize(evidence, real_types, real_quality, published)
     assert (published/'report.html').is_file()
-    final=verified(reference(published/'final.json'));assert final['n_input']==150 and final['n_survived']+final['n_removed']==150
+    final = verified(reference(published / 'final.json'))
+    assert final['n_input'] == 150 and final['n_survived'] + final['n_removed'] == 150
     typed=immutable(tmp_path/'types.json',dict(accepted=True,evidence=evidence,proposal={'clusters':[
         dict(cluster_id=c,merge_target=None,action='keep') for c in clusters]}))
     request=immutable(tmp_path/'refinement.json',dict(accepted=True,evidence=evidence,types=typed,
         refinement=dict(cluster=clusters[0],resolution=5.,reason='test refinement')))
-    refined=tmp_path/'refined';refined.mkdir();refine(evidence,typed,request,refined)
+    refined = tmp_path / 'refined'
+    refined.mkdir()
+    refine(evidence, typed, request, refined)
     refined_bundle=verified(reference(refined/'prepared.json'))
     assert refined_bundle['version']==1 and clusters[0] not in refined_bundle['type_scope']
     assert all(c.startswith(clusters[0]+',') for c in refined_bundle['type_scope'])
@@ -191,36 +233,47 @@ def test_the_batch_column_decides_harmony_and_the_experiment_stays_the_sample(tm
     column (or skips Harmony for one batch value), and the next round still records the experiment."""
     from ecarsi.sample_mapping import SAMPLE_KEY
     from ecarsi.stages.crosssample import inspect_input, compute, compute_round
-    rng = np.random.default_rng(7); samples = []
+
+    rng = np.random.default_rng(7)
+    samples = []
     for name, batch in zip(('a', 'b'), batches):
-        folder = tmp_path/name; folder.mkdir()
+        folder = tmp_path / name
+        folder.mkdir()
         counts = rng.poisson(1., (60, 50)).astype('float32')
-        for group in range(2): counts[group*30:(group+1)*30, group*10:(group+1)*10] += 8
+        for group in range(2):
+            counts[group * 30 : (group + 1) * 30, group * 10 : (group + 1) * 10] += 8
         data = an.AnnData(counts, obs=pd.DataFrame({SAMPLE_KEY: [name]*60, batch_col: [batch]*60,
             'source_unit': ['src']*60, 'eca_source_cell_id': [name+str(i) for i in range(60)],
             'pct_counts_mt': [2.]*60, 'n_genes_by_counts': (counts > 0).sum(axis=1).astype(float),
             'total_counts': counts.sum(axis=1), 'doublet_score': [.05]*60}, index=[name+str(i) for i in range(60)]))
-        data.layers['counts'] = counts.copy(); data.write_h5ad(folder/'clustered.h5ad')
+        data.layers['counts'] = counts.copy()
+        data.write_h5ad(folder / 'clustered.h5ad')
         pd.DataFrame({'cell_id': data.obs_names, 'source_id': ['src']*60, 'source_cell_id': data.obs_names}).to_csv(folder/'input_cells.csv.gz', index=False)
         save(folder/'annotation_proposal.json', {'qc_actions': []})
         samples.append(sealed(folder, folder/'final.json', sample=name, empty=False, validation={'n_survived': 60, 'qc_summary': {}}))
     publication = immutable(tmp_path/'publication.json', dict(state='complete', failed_samples=[], samples=samples, n_survived=120))
     cfg = dict(batch_col=batch_col, species='human', compute_backend='cpu', n_top_genes=30, n_pcs=10, n_neighbors=10)
-    inspected = tmp_path/'inspected'; inspected.mkdir()
+    inspected = tmp_path / 'inspected'
+    inspected.mkdir()
     inspect_input(dict(input=publication, config=cfg, run_id='test', max_refinements=2), inspected)
     inspected_ref = reference(inspected/'inspected.json')
     inclusion = immutable(tmp_path/'inclusion.json', dict(accepted=True, evidence=inspected_ref,
         proposal={'samples': [dict(sample=n, include=True, reason='fixture') for n in ('a', 'b')], 'notes': 'fixture'}))
-    computed = tmp_path/'computed'; computed.mkdir(); compute(inspected_ref, inclusion, computed)
+    computed = tmp_path / 'computed'
+    computed.mkdir()
+    compute(inspected_ref, inclusion, computed)
     msp = an.read_h5ad(computed/'integrated.h5ad').uns['msp']
     assert msp['batch_col'] == batch_col
     assert (msp['harmony'] != 'skipped: single batch') == harmony_runs
     # a later round: the survivors' experiment, not their batch, is the sample of record
-    survivors = an.read_h5ad(computed/'integrated.h5ad'); survivors.write_h5ad(tmp_path/'annotated_zmip.h5ad')
+    survivors = an.read_h5ad(computed / 'integrated.h5ad')
+    survivors.write_h5ad(tmp_path / 'annotated_zmip.h5ad')
     source = sealed(tmp_path, tmp_path/'survivors.json', state='complete', n_survived=120)
-    later = tmp_path/'later'; later.mkdir()
+    later = tmp_path / 'later'
+    later.mkdir()
     inspect_input(dict(input=source, previous_round=1, config=cfg), later)
-    output = tmp_path/'round2'; output.mkdir()
+    output = tmp_path / 'round2'
+    output.mkdir()
     import ecarsi.stages.crosssample as module
     original = module.integrate
     module.integrate = lambda *args: None
@@ -235,21 +288,28 @@ def test_chunks_of_one_sample_skip_the_inclusion_agent(tmp_path, monkeypatch):
     """Decision 0016: chunks are random slices of a sample; nobody judges which to exclude."""
     import sys
     from ecarsi.stages import crosssample as module
-    rng=np.random.default_rng(0);samples=[]
+
+    rng = np.random.default_rng(0)
+    samples = []
     names=['A__all__0123456789.chunk01','A__all__0123456789.chunk02']
     for name in names:
-        folder=tmp_path/name;folder.mkdir()
+        folder = tmp_path / name
+        folder.mkdir()
         counts=rng.poisson(1.,(20,10)).astype('float32')
         data=an.AnnData(counts,obs=pd.DataFrame({'sample_id':[name]*20},index=[name+str(i) for i in range(20)]))
-        data.layers['counts']=counts.copy();data.write_h5ad(folder/'clustered.h5ad')
+        data.layers['counts'] = counts.copy()
+        data.write_h5ad(folder / 'clustered.h5ad')
         pd.DataFrame({'cell_id':data.obs_names,'source_id':['A']*20,'source_cell_id':data.obs_names}).to_csv(folder/'input_cells.csv.gz',index=False)
         save(folder/'annotation_proposal.json',{'qc_actions':[]})
         samples.append(sealed(folder,folder/'final.json',sample=name,empty=False,validation={'n_survived':20,'qc_summary':{}}))
     publication=immutable(tmp_path/'publication.json',dict(state='complete',failed_samples=[],samples=samples,n_survived=40))
-    inspected=tmp_path/'inspected';inspected.mkdir()
+    inspected = tmp_path / 'inspected'
+    inspected.mkdir()
     module.inspect_input(dict(input=publication,config={},run_id='test',max_refinements=2),inspected)
     assert read(inspected/'inspected.json')['chunked'] is True
-    out=tmp_path/'include';out.mkdir();monkeypatch.chdir(out)
+    out = tmp_path / 'include'
+    out.mkdir()
+    monkeypatch.chdir(out)
     monkeypatch.setattr(sys,'argv',['crosssample','include-single',str(inspected/'inspected.json')])
     module.main()
     decision=read(out/'decision.json')
@@ -264,7 +324,8 @@ def finalize_fixture(tmp_path, monkeypatch, policy, base=None, entries=None, ext
     import msp.annotate,msp.report
     monkeypatch.setattr(msp.annotate,'_plot',lambda *a:None)
     monkeypatch.setattr(msp.report,'generate_report',lambda *a:None)
-    source=tmp_path/'source';source.mkdir()
+    source = tmp_path / 'source'
+    source.mkdir()
     cells=['c'+str(i) for i in range(8)]
     obs=pd.DataFrame({BASE:pd.Categorical(base or ['0']*4+['1']*4),'doublet_score':[.1]*8,
         'standissect_product':['f1','f1','f2']+['core']*5,'_qc_action':['keep']*4+['flag' if policy=='keep' else 'drop']+['keep']*3,
@@ -297,7 +358,9 @@ def test_the_stress_policy_keep_retains_dissociation_fragments_and_osp_stress_dr
     quality=dict(clusters=[dict(cluster=c,verdict='real',action='keep',confidence='high',
         tests={k:'test evidence' for k in ('markers','qc','composition','geometry','stability')},rationale='test evidence') for c in ('0','1')],cell_actions=[])
     quality_ref=immutable(tmp_path/'quality.json',dict(accepted=True,evidence=evidence,types=types,proposal=quality))
-    out=tmp_path/'out';out.mkdir();finalize(evidence,types,quality_ref,out)
+    out = tmp_path / 'out'
+    out.mkdir()
+    finalize(evidence, types, quality_ref, out)
     stored=an.read_h5ad(out/'annotated.h5ad').obs['retained_state'].astype(str)
     ledger=pd.read_csv(out/'cell_exclusions.csv.gz').set_index('cell_uid')
     codes={c:[r['code'] for r in json.loads(ledger.loc[c,'reason'])] for c in ledger.index}
@@ -330,22 +393,28 @@ def test_a_type_removal_the_code_cannot_support_stays_and_leaves_its_merge(tmp_p
 @pytest.mark.parametrize('policy',['remove','keep'])
 def test_compute_turns_osp_dissociation_stress_drops_into_flags_under_keep(tmp_path,monkeypatch,policy):
     from ecarsi.stages import crosssample as module
-    folder=tmp_path/'a';folder.mkdir()
+
+    folder = tmp_path / 'a'
+    folder.mkdir()
     counts=np.ones((6,4),dtype='float32')
     data=an.AnnData(counts,obs=pd.DataFrame({'sample_id':['a']*6,'leiden':['0','0','1','1','2','2'],
         '_qc_action':['drop']*4+['keep']*2},index=['a'+str(i) for i in range(6)]))
-    data.layers['counts']=counts.copy();data.write_h5ad(folder/'clustered.h5ad')
+    data.layers['counts'] = counts.copy()
+    data.write_h5ad(folder / 'clustered.h5ad')
     pd.DataFrame({'cell_id':data.obs_names,'source_id':['src']*6,'source_cell_id':data.obs_names}).to_csv(folder/'input_cells.csv.gz',index=False)
     save(folder/'annotation_proposal.json',{'cluster_key':'leiden','qc_actions':[
         dict(cluster='0',scope='cluster',action='drop',reason='dissociation-stress',note='fixture'),
         dict(cluster='1',scope='cluster',action='drop',reason='doublet',note='fixture')]})
     sample=sealed(folder,folder/'final.json',sample='a',empty=False,validation={'n_survived':6,'qc_summary':{}})
     publication=immutable(tmp_path/'publication.json',dict(state='complete',failed_samples=[],samples=[sample],n_survived=6))
-    inspected=tmp_path/'inspected';inspected.mkdir()
+    inspected = tmp_path / 'inspected'
+    inspected.mkdir()
     module.inspect_input(dict(input=publication,config={'batch_col':'sample_id','stress_policy':policy},run_id='test',max_refinements=2),inspected)
     ref=reference(inspected/'inspected.json')
     inclusion=immutable(tmp_path/'inclusion.json',dict(accepted=True,evidence=ref,proposal={'samples':[dict(sample='a',include=True,reason='fixture')],'notes':'fixture'}))
     seen={}
     monkeypatch.setattr(module,'integrate',lambda data,*a:seen.update(action=data.obs['_qc_action'].astype(str).to_dict()))
-    out=tmp_path/'out';out.mkdir();module.compute(ref,inclusion,out)
+    out = tmp_path / 'out'
+    out.mkdir()
+    module.compute(ref, inclusion, out)
     assert [seen['action']['a'+str(i)] for i in range(6)]==(['flag','flag'] if policy=='keep' else ['drop','drop'])+['drop','drop','keep','keep']

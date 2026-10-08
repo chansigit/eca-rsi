@@ -1,6 +1,5 @@
 """#26: needs_review links a decision to its copy inside the unit, which outlives the pruned pool request."""
 import json
-from pathlib import Path
 
 from ecarsi.stages.release import local_link
 from ecarsi.files import file_digest

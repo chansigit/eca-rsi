@@ -13,7 +13,7 @@ import pytest
 import ecarsi.agent as bridge
 import ecarsi.agent.dispatch as dispatch
 import ecarsi.agent.session as session
-from ecarsi.files import immutable, reference, verified
+from ecarsi.files import reference, verified
 from ecarsi.files import save, read
 from ecarsi.warm_pool.state import status
 
@@ -29,7 +29,8 @@ def test_portable_upgrade_pins_execution_without_rewriting_session(tmp_path, mon
     archived = session.archive_adapter(root, old)
     saved = read(ref['path'])
     save(ref['path'], dict(saved, protocol=2, adapter_sha256=archived['sha256']))
-    ref = reference(ref['path']); before = Path(ref['path']).read_bytes()
+    ref = reference(ref['path'])
+    before = Path(ref['path']).read_bytes()
     turn = session.submit_turn(ref, 0)
     bridge.serve(root, once=True)
     plan = bridge.status(root, turn)['attempts'][0]['plan']
@@ -81,7 +82,8 @@ def test_recovery_ignores_only_terminal_model_attempts_with_an_accepted_replacem
     # A cancellation without its terminal process receipt is still uncertain.
     p = Path(spec['pool_root']) / 'requests' / first
     receipt = p / read(p / 'request.json')['attempt_id'] / 'receipt.json'
-    before = read(receipt); receipt.unlink()
+    before = read(receipt)
+    receipt.unlink()
     assert not dispatch.completed_replacement(spec['pool_root'], first, root)
     save(receipt, before)
     # Cancelling the accepted replacement removes recovery eligibility too.
@@ -99,8 +101,10 @@ def test_audited_retry_survives_dispatch_restart_and_preserves_failed_attempt(tm
     config = read(root / 'config.json')
     config.update(pool_root=spec['pool_root'], routing=dict(max_attempts=1))
     save(root / 'config.json', config)
-    saved = read(ref['path']); saved['protocol'] = 2
-    save(ref['path'], saved); ref = reference(ref['path'])
+    saved = read(ref['path'])
+    saved['protocol'] = 2
+    save(ref['path'], saved)
+    ref = reference(ref['path'])
     request_id = session.submit_turn(ref, 0)
     bridge.serve(root, once=True)
     attempt = bridge.status(root, request_id)['attempts'][0]
@@ -177,7 +181,8 @@ def test_credential_timeout_retries_without_calling_or_penalizing_provider(tmp_p
     save(root/'config.json', dict(read(root/'config.json'), pool_root=spec['pool_root']))
     spec = dict(spec, session_id='setup-retry', output_root=str(tmp_path/'setup-retry'))
     ref = session.create_session(spec)
-    turn = session.submit_turn(ref, 0);bridge.serve(root, once=True)
+    turn = session.submit_turn(ref, 0)
+    bridge.serve(root, once=True)
     first = bridge.status(root, turn)['attempts'][0]
     def fail_setup(*args):
         raise subprocess.TimeoutExpired('credential shell', 30)
@@ -200,13 +205,17 @@ def test_free_text_cannot_finish_a_session_requiring_submission(tmp_path, monkey
     root = Path(spec['bridge_root'])
     save(root/'config.json', dict(read(root/'config.json'), pool_root=spec['pool_root']))
     spec = dict(spec, session_id='contract', output_root=str(tmp_path/'contract'), completion_tool='compute')
-    ref = session.create_session(spec);turn = session.submit_turn(ref, 0)
-    bridge.serve(root, once=True);attempt = bridge.status(root, turn)['attempts'][0]
+    ref = session.create_session(spec)
+    turn = session.submit_turn(ref, 0)
+    bridge.serve(root, once=True)
+    attempt = bridge.status(root, turn)['attempts'][0]
+
     async def premature(*args, **kwargs):
         return dict(kind='final', final_output='I am done', calls=[])
     monkeypatch.setattr(session, 'run_turn', premature)
     monkeypatch.setattr(dispatch, 'load_worker_key', lambda *a: None)
-    monkeypatch.chdir(tmp_path);dispatch.execute(attempt['plan']['path'])
+    monkeypatch.chdir(tmp_path)
+    dispatch.execute(attempt['plan']['path'])
     result = read(tmp_path/'result.json')
     assert result['outcome'] == 'incomplete_submission'
     completed_tool(spec, dict(request_id=attempt['pool_request_id']), result)
@@ -218,12 +227,19 @@ def test_free_text_cannot_finish_a_session_requiring_submission(tmp_path, monkey
 def test_retry_waits_for_untried_backup_before_reusing_failed_primary(tmp_path):
     from tests.test_agent_session import setup
     spec, ref = setup(tmp_path)
-    root=Path(spec['bridge_root']); saved=read(ref['path'])
-    saved['protocol']=2; save(ref['path'],saved); ref=reference(ref['path'])
-    primary=saved['model']; backup=dict(primary,model='backup')
-    config=read(root/'config.json'); config['pool_root']=spec['pool_root']
-    save(config['catalog'],dict(models=[primary,backup])); save(root/'config.json',config)
-    request_id=session.submit_turn(ref,0); folder=root/'requests'/request_id
+    root = Path(spec['bridge_root'])
+    saved = read(ref['path'])
+    saved['protocol'] = 2
+    save(ref['path'], saved)
+    ref = reference(ref['path'])
+    primary = saved['model']
+    backup = dict(primary, model='backup')
+    config = read(root / 'config.json')
+    config['pool_root'] = spec['pool_root']
+    save(config['catalog'], dict(models=[primary, backup]))
+    save(root / 'config.json', config)
+    request_id = session.submit_turn(ref, 0)
+    folder = root / 'requests' / request_id
     save(folder/'state.json',dict(state='queued',attempts=[dict(model=primary)]))
     (root/'model-events').mkdir()
     for i in range(2):
@@ -271,7 +287,9 @@ def test_worker_timeout_fallback_continuation_and_dispatcher_recovery(tmp_path):
         models = [dict(harness='openai@vllm', model=name, url=f'http://127.0.0.1:{server.server_port}/v1')
                   for name in ('slow', 'backup', 'third')]
         save(catalog, dict(models=models))
-        pool = tmp_path/'pool'; pool.mkdir(mode=0o700); (pool/'requests').mkdir()
+        pool = tmp_path / 'pool'
+        pool.mkdir(mode=0o700)
+        (pool / 'requests').mkdir()
         save(pool/'config.json', dict(runtime=dict(command=[sys.executable], files={}, version='test')))
         root = bridge.init(tmp_path/'bridge', catalog, concurrency=2, pool_root=pool)
         config = read(root/'config.json')
@@ -285,7 +303,10 @@ def test_worker_timeout_fallback_continuation_and_dispatcher_recovery(tmp_path):
                     cpus=1, memory_mb=64, timeout_seconds=30, inputs=[], outputs=['result.json'], result_file='result.json')])
         ref = session.create_session(spec)
         # Select Chat in the durable session, without changing any real deployment config.
-        saved = read(ref['path']); saved['api_mode']='chat_completions'; save(ref['path'], saved); ref=reference(ref['path'])
+        saved = read(ref['path'])
+        saved['api_mode'] = 'chat_completions'
+        save(ref['path'], saved)
+        ref = reference(ref['path'])
         request_id = session.submit_turn(ref, 0)
         bridge.serve(root, once=True)
         first = bridge.status(root, request_id)['attempts'][0]
@@ -331,7 +352,8 @@ def test_worker_timeout_fallback_continuation_and_dispatcher_recovery(tmp_path):
         event = next(read(p) for p in (root/'model-events').glob('*.json'))
         assert event['finished_at'] == status(pool, first['pool_request_id'])['receipt']['finished_at']
         # A config edit must not mutate the already submitted task's budget.
-        config['routing']['worker_memory_mb'] = 1536; save(root/'config.json', config)
+        config['routing']['worker_memory_mb'] = 1536
+        save(root / 'config.json', config)
         bridge.serve(root, once=True)
         assert execute(attempts[1])['outcome'] == 'success'
         bridge.serve(root, once=True)
@@ -379,7 +401,9 @@ def test_worker_timeout_fallback_continuation_and_dispatcher_recovery(tmp_path):
         assert not bridge.status(root, queued).get('attempts')
 
     finally:
-        server.shutdown(); server.server_close(); thread.join()
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
 
 def test_model_cooldown_expiry_and_capacity():

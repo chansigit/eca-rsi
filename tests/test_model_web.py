@@ -91,14 +91,21 @@ def test_settings_http_admin_gate_and_no_secret_echo(tmp_path, monkeypatch):
     (tmp_path / 'models-admin-key').write_text(token)
     monkeypatch.setenv('ECA_MODEL_CATALOG', str(catalog))
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), partial(serve.Handler, registry=serve.Registry(tmp_path / 'registry.json')))
-    thread = threading.Thread(target=server.serve_forever, daemon=True);thread.start()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
     def post(action, body, management=None):
         headers = {'X-Forwarded-For': '203.0.113.1', 'Content-Type': 'application/json'}
-        if management:headers['X-Model-Admin'] = management
+        if management:
+            headers['X-Model-Admin'] = management
         req = urllib.request.Request(f'http://127.0.0.1:{server.server_port}/_models/{action}',data=json.dumps(body).encode(),headers=headers)
-        try:r=urllib.request.urlopen(req,timeout=5)
-        except urllib.error.HTTPError as e:r=e
-        with r:return r.status,json.load(r)
+        try:
+            r = urllib.request.urlopen(req, timeout=5)
+        except urllib.error.HTTPError as e:
+            r = e
+        with r:
+            return r.status, json.load(r)
+
     try:
         for action in ('access','save','keys'):
             assert post(action, {})[0] == 403
@@ -110,4 +117,6 @@ def test_settings_http_admin_gate_and_no_secret_echo(tmp_path, monkeypatch):
         assert post('save', {'revision':model_web.snapshot()['revision'],'models':[{'harness':'openai','model':'new','url':'https://secret-value@example.test'}]}, token)[0] == 400
         assert model_web.snapshot()['chain'][0]['model'] == 'new'
     finally:
-        server.shutdown();server.server_close();thread.join(timeout=3)
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)

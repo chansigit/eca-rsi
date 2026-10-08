@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 import math
+import os
 
 import pytest
 
@@ -68,11 +69,16 @@ def test_release_knobs_follow_config_edits(tmp_path):
     hq.root, hq.release, hq._release_stamp = tmp_path, dict(RELEASE_DEFAULTS), None
     config = tmp_path / "config.json"
     config.write_text(json.dumps({"release": {"gpu_host_fraction": 0.3}}))
-    hq._reload_release(); assert hq.release["gpu_host_fraction"] == 0.3
-    config.write_text(json.dumps({"release": {"gpu_host_fraction": 0.2, "typo": 1}})); os.utime(config, ns=(1, 1))
-    hq._reload_release(); assert hq.release["gpu_host_fraction"] == 0.3   # unknown knob: keep what is in force
-    config.write_text(json.dumps({"release": {"pin_wait_seconds": 60}})); os.utime(config, ns=(2, 2))
-    hq._reload_release(); assert hq.release["pin_wait_seconds"] == 60 and hq.release["gpu_host_fraction"] == 0.5
+    hq._reload_release()
+    assert hq.release["gpu_host_fraction"] == 0.3
+    config.write_text(json.dumps({"release": {"gpu_host_fraction": 0.2, "typo": 1}}))
+    os.utime(config, ns=(1, 1))
+    hq._reload_release()
+    assert hq.release["gpu_host_fraction"] == 0.3  # unknown knob: keep what is in force
+    config.write_text(json.dumps({"release": {"pin_wait_seconds": 60}}))
+    os.utime(config, ns=(2, 2))
+    hq._reload_release()
+    assert hq.release["pin_wait_seconds"] == 60 and hq.release["gpu_host_fraction"] == 0.5
 
 
 def test_scheduler_uses_a_separate_hq_server_only_while_one_holds_the_lock(tmp_path):
@@ -120,7 +126,7 @@ def test_numba_site_names_fast_array_utils_types_so_pickle_finds_them(tmp_path):
     probe = ("import pickle, sys; assert 'fast_array_utils' not in sys.modules; "
              "from fast_array_utils._plugins import numba_sparse as m; t = m.TYPES[0]; "
              "assert pickle.loads(pickle.dumps(t)) is t")
-    run = subprocess.run([sys.executable, "-c", probe], env={"PYTHONPATH": f"{site}:{tmp_path}"}, capture_output=True, text=True)
+    run = subprocess.run([sys.executable, "-c", probe], env={"PYTHONPATH": f"{site}:{tmp_path}", **{k: v for k, v in os.environ.items() if k == "LD_LIBRARY_PATH"}}, capture_output=True, text=True)
     assert run.returncode == 0, run.stderr
 
 

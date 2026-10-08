@@ -147,7 +147,9 @@ def test_remote_add_worker_carries_the_library_path(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/python/lib")
     monkeypatch.setattr(provision.subprocess, "run", lambda argv, **kw: calls.append(argv) or subprocess.CompletedProcess(argv, 0))
-    pool = tmp_path / "pool"; pool.mkdir(mode=0o700); (pool / "config.json").write_text("{}")
+    pool = tmp_path / "pool"
+    pool.mkdir(mode=0o700)
+    (pool / "config.json").write_text("{}")
     provision.add_worker(pool, "node1", host_python="/opt/python/bin/python3", job_id=7)
     remote = shlex.split(calls[0][-1])
     assert remote[0] == "env" and "LD_LIBRARY_PATH=/opt/python/lib" in remote

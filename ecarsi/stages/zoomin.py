@@ -225,8 +225,10 @@ def apply_lineage(evidence, decision, destination):
         if source not in data.obs:
             raise ValueError('Lineage input lacks original cell identity: ' + source)
         ledger[target] = ledger.cell_uid.map(data.obs[source].astype(str))
-    ledger['stage'] = 'zoom-in';ledger['operation'] = 'zoom-in.apply'
-    ledger['input_version'] = evidence['sha256'];ledger['decision'] = json.dumps(decision)
+    ledger['stage'] = 'zoom-in'
+    ledger['operation'] = 'zoom-in.apply'
+    ledger['input_version'] = evidence['sha256']
+    ledger['decision'] = json.dumps(decision)
     ledger.to_csv(destination/'cell_exclusions.csv.gz', index=False)
     save(destination/'annotation_proposal.json', accepted)
     degraded = lineage_report(bundle, data, kept, destination)
@@ -463,7 +465,8 @@ def refine_evidence(state, args, destination):
     import math
     if type(args['resolution']) not in (int,float) or not math.isfinite(args['resolution']) or args['resolution'] <= 0:
         raise ValueError('Resolution must be finite and positive')
-    bundle = verified(state['evidence']);data = data_from(bundle)
+    bundle = verified(state['evidence'])
+    data = data_from(bundle)
     cfg = verified(bundle['planning'])['spec']['config']
     if bundle['version'] >= cfg['max_refinements']:
         raise ValueError('Refinement limit reached; use available evidence and explicit uncertainty')
@@ -483,18 +486,23 @@ def refine_evidence(state, args, destination):
     data.obs[key] = data.obs.pop('_zoom_refined')
     kept_types = {c:e for c,e in previous.items() if c not in affected}
     scope = sorted(set(data.obs[TYPE_KEY].astype(str))-set(kept_types))
-    output = destination/'refined';output.mkdir()
-    keys = [TYPE_KEY,QUALITY_KEY];eligible=data[~mask]
+    output = destination / 'refined'
+    output.mkdir()
+    keys = [TYPE_KEY, QUALITY_KEY]
+    eligible = data[~mask]
     labels={k:(eligible.obs[k].cat.codes.to_numpy(),list(eligible.obs[k].cat.categories)) for k in keys}
     values,plan=prepare_deg(eligible.X,list(data.var_names),labels,dict(data.uns.get('log1p',{})),eligible.obsm['X_pca_harmony'],keys)
-    values.obs_names=eligible.obs_names.copy();save_deg_input(values,output/'deg_input')
+    values.obs_names = eligible.obs_names.copy()
+    save_deg_input(values, output / 'deg_input')
     save(output/'deg_plan.json',{**plan,'keys':keys,'top_n_de':50})
-    figures=output/'figures';figures.mkdir()
+    figures = output / 'figures'
+    figures.mkdir()
     qc_outputs(data,data.uns['msp']['batch_col'],'standissect_product',str(output),str(figures),keys,[1.,2.])
     from zmip.api import score_foreign
     shared=verified(bundle['shared'])
     score_foreign(data,shared['markers'],bundle['lineage']['name'],keys,str(output),str(figures))
-    for k in keys:save_single_umap(data,k,str(figures/('umap_'+slug(k)+'.png')),repel=True)
+    for k in keys:
+        save_single_umap(data, k, str(figures / ('umap_' + slug(k) + '.png')), repel=True)
     partitions(data.obs).to_csv(output/'type_quality_intersections.csv')
     data.obs[keys].rename_axis('cell').to_csv(output/'cell_partitions.csv.gz')
     data.write_h5ad(output/'integrated.h5ad')
@@ -503,12 +511,21 @@ def refine_evidence(state, args, destination):
     prepared=publish_bundle(output,'prepared.json',state['evidence'],**metadata,version=bundle['version']+1,tasks=tasks)
     comparisons=[]
     for i in range(len(tasks)):
-        folder=destination/('deg-'+str(i));folder.mkdir();deg(prepared,i,folder);comparisons.append(reference(folder/'result.json'))
-    assembled=destination/'evidence';assembled.mkdir();assemble(prepared,comparisons,assembled)
+        folder = destination / ('deg-' + str(i))
+        folder.mkdir()
+        deg(prepared, i, folder)
+        comparisons.append(reference(folder / 'result.json'))
+    assembled = destination / 'evidence'
+    assembled.mkdir()
+    assemble(prepared, comparisons, assembled)
     state['evidence']=reference(assembled/'evidence.json')
     state['types']={'cluster_key':TYPE_KEY,'clusters':list(kept_types.values())}
-    state['type_scope']=scope;state['types_complete']=not scope
-    state['quality']=None;state['lookups']=[];state['read']=[];state['qc']=False
+    state['type_scope'] = scope
+    state['types_complete'] = not scope
+    state['quality'] = None
+    state['lookups'] = []
+    state['read'] = []
+    state['qc'] = False
     state.pop('budget_warning',None)
     return {'message':message,'version':bundle['version']+1,'type_scope':scope,'evidence':state['evidence']}
 
@@ -533,8 +550,10 @@ def tool(name, state_path, args_path, destination):
                 response.update(content=args['path'], images=[png_url(path)])
             elif path.suffix in {'.csv','.json','.md','.txt'}:
                 with path.open() as stream:
-                    stream.seek(args['offset']);response['content']=stream.read(16000)
-                    offset=stream.tell();response['next_offset']=offset if stream.read(1) else None
+                    stream.seek(args['offset'])
+                    response['content'] = stream.read(16000)
+                    offset = stream.tell()
+                    response['next_offset'] = offset if stream.read(1) else None
             else:
                 raise ValueError('Use the registered matrix/database tools')
             state['read'] = sorted(set(state['read']) | {args['path']})
@@ -563,23 +582,27 @@ def tool(name, state_path, args_path, destination):
             response['content'] = gene_table(data_from(bundle),args['genes'],args['key'],[args['cluster']] if args['cluster'] else None)
         elif name == 'check_qc_scores':
             data = data_from(bundle)
-            response['content'] = qc_table(data,QUALITY_KEY,data.uns['msp']['batch_col']);state['qc']=True
+            response['content'] = qc_table(data, QUALITY_KEY, data.uns['msp']['batch_col'])
+            state['qc'] = True
         elif name == 'subcluster':
             response['content'] = refine_evidence(state,args,destination)
         elif name == 'annotation_status':
-            data = data_from(bundle);table=partitions(data.obs)
+            data = data_from(bundle)
+            table = partitions(data.obs)
             response.update(types=(state['types'] or {}).get('clusters',[]),quality=(state['quality'] or {}).get('clusters',[]),
                 type_scope=state.get('type_scope',sorted(data.obs[TYPE_KEY].astype(str).unique())),
                 intersections={str(q):{str(t):int(n) for t,n in row.items() if n} for q,row in table.iterrows()},
                 next_offset=None,version=bundle['version'])
         elif name == 'submit_types':
-            data = data_from(bundle);own, _ = lineage_labels(bundle)
+            data = data_from(bundle)
+            own, _ = lineage_labels(bundle)
             missing = [name for name, done in [('deg_lookup or deg_sql', bool(state['lookups'])),
                 ('read_evidence on a lineage PNG figure', any(p.endswith('.png') for p in state['read']))] if not done]
             if missing:
                 raise ValueError('Complete required checks: ' + ', '.join(missing))
             proposal = parse_proposal(args)
-            if not isinstance(proposal,dict):raise ValueError('Type proposal must be an object')
+            if not isinstance(proposal, dict):
+                raise ValueError('Type proposal must be an object')
             submitted=proposal.get('clusters',[])
             scope=([str(e['cluster_id']) for e in submitted] if state.get('types_complete')
                    else state.get('type_scope',sorted(data.obs[TYPE_KEY].astype(str).unique())))
@@ -588,8 +611,11 @@ def tool(name, state_path, args_path, destination):
             preserved={str(e['cluster_id']):e for e in (state['types'] or {}).get('clusters',[]) if str(e['cluster_id']) not in scope}
             proposal['clusters']=list(preserved.values())+submitted
             validate_types(proposal,data.obs,own)
-            state['types'] = proposal;state['types_complete']=True;state['type_scope']=[]
-            state['quality'] = None;state.pop('budget_warning',None)
+            state['types'] = proposal
+            state['types_complete'] = True
+            state['type_scope'] = []
+            state['quality'] = None
+            state.pop('budget_warning', None)
             response['content'] = 'Type coverage accepted; continue quality review at resolution 2.0.'
         elif name == 'submit_quality':
             missing = [name for name, done in [('submit_types', state.get('types_complete')),
@@ -597,7 +623,8 @@ def tool(name, state_path, args_path, destination):
                 ('read_evidence on a lineage PNG figure', any(p.endswith('.png') for p in state['read']))] if not done]
             if missing:
                 raise ValueError('Complete required checks: ' + ', '.join(missing))
-            data = data_from(bundle);own, other = lineage_labels(bundle)
+            data = data_from(bundle)
+            own, other = lineage_labels(bundle)
             proposal = parse_proposal(args)
             proposal['clusters'] = validate_quality(proposal,data.obs,other)
             name = bundle['lineage']['name']
@@ -626,7 +653,8 @@ def tool(name, state_path, args_path, destination):
                     raise ValueError(f'Removal review required: {fraction:.1%} beyond numerical exclusions. Review evidence and exact scope under the stress policy in the prompt. Resubmit with a specific removal_review explanation.')
                 if not isinstance(proposal.get('removal_review'),str) or not proposal['removal_review'].strip():
                     raise ValueError('Explain the reviewed removal evidence and scope in removal_review')
-            state['quality'] = proposal;state['removal_fraction'] = fraction
+            state['quality'] = proposal
+            state['removal_fraction'] = fraction
             # An accepted quality proposal completes the session (in 247 finished sessions no model revised after acceptance).
             response.update(accepted=True,evidence=state['evidence'],types=state['types'],quality=proposal,removal_fraction=fraction,
                             content='Quality coverage accepted; the session is complete.' + (
@@ -646,23 +674,39 @@ def tool(name, state_path, args_path, destination):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action');parser.add_argument('args',nargs='+');args=parser.parse_args()
+    parser.add_argument('action')
+    parser.add_argument('args', nargs='+')
+    args = parser.parse_args()
     dest = Path.cwd()
     if args.action == 'tool':
-        tool(*args.args,dest);return
-    packet = read(args.args[0]);refs=packet['refs'];spec=packet['spec']
+        tool(*args.args, dest)
+        return
+    packet = read(args.args[0])
+    refs = packet['refs']
+    spec = packet['spec']
     action = args.action
-    if action == 'prepare':prepare(spec,dest)
-    elif action == 'markers':markers(*refs,dest)
-    elif action == 'subset':subset(*refs,packet['index'],dest)
-    elif action == 'compute':compute(*refs,dest)
-    elif action == 'deg':deg(refs[0],packet['index'],dest)
-    elif action == 'deg-batch':deg_batch(refs[0],packet['indices'],dest)
-    elif action == 'assemble':assemble(refs[0],refs[1:],dest)
-    elif action == 'agent':save(dest/'agent.json',agent_spec(spec,refs[0],packet['kind'],packet['request_id']))
-    elif action == 'apply':apply_lineage(*refs,dest)
-    elif action == 'merge':merge(refs[0],refs[1],refs[2:],dest,packet.get('skipped',()))
-    else:raise ValueError('Unknown zoom-in operation')
+    if action == 'prepare':
+        prepare(spec, dest)
+    elif action == 'markers':
+        markers(*refs, dest)
+    elif action == 'subset':
+        subset(*refs, packet['index'], dest)
+    elif action == 'compute':
+        compute(*refs, dest)
+    elif action == 'deg':
+        deg(refs[0], packet['index'], dest)
+    elif action == 'deg-batch':
+        deg_batch(refs[0], packet['indices'], dest)
+    elif action == 'assemble':
+        assemble(refs[0], refs[1:], dest)
+    elif action == 'agent':
+        save(dest / 'agent.json', agent_spec(spec, refs[0], packet['kind'], packet['request_id']))
+    elif action == 'apply':
+        apply_lineage(*refs, dest)
+    elif action == 'merge':
+        merge(refs[0], refs[1], refs[2:], dest, packet.get('skipped', ()))
+    else:
+        raise ValueError('Unknown zoom-in operation')
 
 
 if __name__ == '__main__':

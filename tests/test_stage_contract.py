@@ -1,5 +1,4 @@
 """Protocol v4 pieces shared by the stage programs; pure Python, no kernel needed."""
-import json
 
 import pytest
 from jsonschema import Draft202012Validator

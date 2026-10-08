@@ -10,7 +10,9 @@ from tests.temporal_env import QUEUE, fakes, temporal
 
 
 def test_gpu_grant_is_selected_for_lineage_compute(tmp_path):
-    pool=tmp_path/'pool';pool.mkdir(mode=0o700);(pool/'requests').mkdir()
+    pool = tmp_path / 'pool'
+    pool.mkdir(mode=0o700)
+    (pool / 'requests').mkdir()
     save(pool/'config.json',{'runtime':{}})
     save(tmp_path/'subset.json',{'lineage':{'n_cells':900}})
     save(tmp_path/'markers.json',{})

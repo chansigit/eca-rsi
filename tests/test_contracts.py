@@ -34,7 +34,8 @@ def test_periscope_skips_a_display_record_that_breaks_the_contract(tmp_path):
     import json
     from ecarsi.ui.registry import display_zones
     good, bad = tmp_path / "zones/c/d/run1", tmp_path / "zones/c/d/run2"
-    good.mkdir(parents=True); bad.mkdir(parents=True)
+    good.mkdir(parents=True)
+    bad.mkdir(parents=True)
     (good / "display.json").write_text(json.dumps({**DISPLAY, "name": "good"}))
     (bad / "display.json").write_text(json.dumps({**DISPLAY, "name": "bad", "work": None}))
     results = tmp_path / "results.json"

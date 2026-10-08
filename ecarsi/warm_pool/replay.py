@@ -78,7 +78,7 @@ def load_trace(pool_root, day, memory_default_mb=118 * 1024):
             ratio[op] = quantile(m["cpu"], .5) / max(quantile(m["gpu"], .5), 1e-6)
     gpu_ops = {op for op, m in modes.items() if m["gpu"]}
     rows.sort(key=lambda r: r["submitted_at"])
-    tasks, by_dataset = [], collections.defaultdict(list)  # dataset -> finished (finished_at, task) sorted by finish
+    tasks = []
     for n, r in enumerate(rows):
         op = r["operation"]
         on_gpu = bool(r.get("gpu_ids"))
@@ -158,7 +158,8 @@ def measured(held, state):
         if t.klass != "work":
             n += 1
         elif cap > 0:
-            n += 1; cap -= 1
+            n += 1
+            cap -= 1
         else:
             break
     return n
@@ -208,9 +209,11 @@ def place(waiting, workers, now, backfill, running, tick, latency=START_LATENCY)
             if w.id in reserved:
                 continue
             if gpu_first and fits(w, t, True):
-                chosen = (w, True); break
+                chosen = (w, True)
+                break
             if fits(w, t, False):
-                chosen = (w, False); break
+                chosen = (w, False)
+                break
         if chosen is None and backfill:
             # reserve the worker that frees enough soonest; allow shorter tasks there meanwhile
             best = None
@@ -233,7 +236,9 @@ def place(waiting, workers, now, backfill, running, tick, latency=START_LATENCY)
         run = (t.gpu_seconds if on_gpu else t.cpu_seconds) + latency
         if backfill and w.id in reserved and now + run > reserved[w.id]:
             continue
-        w.free_cpus -= t.cpus; w.free_mb -= t.memory_mb; w.free_gpus -= int(on_gpu)
+        w.free_cpus -= t.cpus
+        w.free_mb -= t.memory_mb
+        w.free_gpus -= int(on_gpu)
         t.start, t.finish, t.worker, t.on_gpu = now, now + run, w.id, on_gpu
         w.busy_until.append((t.finish, t.cpus, t.memory_mb, on_gpu))
         heapq.heappush(running, (t.finish, t.order, t))
@@ -243,7 +248,6 @@ def place(waiting, workers, now, backfill, running, tick, latency=START_LATENCY)
 
 def simulate(trace, policy="measured", priority="none", backfill=False, tick=TICK_SECONDS, latency=START_LATENCY):
     tasks, workers = trace["tasks"], [Worker(w.id, w.host, w.cpus, w.memory_mb, w.gpus, w.online, w.offline) for w in trace["workers"]]
-    by_id = {t.id: t for t in tasks}
     for t in tasks:
         t.arrival = t.released = t.start = t.finish = t.worker = None
     pol, prio = POLICIES[policy], PRIORITIES[priority]
@@ -274,12 +278,15 @@ def simulate(trace, policy="measured", priority="none", backfill=False, tick=TIC
             t.arrival = now
             key = held_key(t)
             i = bisect.bisect_left(held_keys, key)
-            held_keys.insert(i, key); held.insert(i, t)
+            held_keys.insert(i, key)
+            held.insert(i, t)
             dirty = True
         while running and running[0][0] <= now:
             _, _, t = heapq.heappop(running)
             w = workers_by_id[t.worker]
-            w.free_cpus += t.cpus; w.free_mb += t.memory_mb; w.free_gpus += int(t.on_gpu)
+            w.free_cpus += t.cpus
+            w.free_mb += t.memory_mb
+            w.free_gpus += int(t.on_gpu)
             w.busy_until = [b for b in w.busy_until if b[0] > now]
             done.append(t)
             dirty = True
@@ -293,7 +300,8 @@ def simulate(trace, policy="measured", priority="none", backfill=False, tick=TIC
                 t.released = now
                 key = (-prio(t), t.order)
                 i = bisect.bisect_left(hq_keys, key)
-                hq_keys.insert(i, key); hq_waiting.insert(i, t)
+                hq_keys.insert(i, key)
+                hq_waiting.insert(i, t)
             del held[:n], held_keys[:n]
             released = n
             next_tick = now + tick

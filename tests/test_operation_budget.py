@@ -40,9 +40,11 @@ def test_deg_buffer_budget_requires_accepted_known_inputs_and_is_pinned(tmp_path
     output.parent.mkdir(parents=True)
     files = {}
     for name in ('metadata.h5ad','data.npy','indices.npy','indptr.npy'):
-        path = output.parent/name;path.write_bytes(b'fixed-buffer')
+        path = output.parent / name
+        path.write_bytes(b'fixed-buffer')
         files['deg_input/'+name] = reference(path)
-    save(output, dict(files=files));prepared = reference(output)
+    save(output, dict(files=files))
+    prepared = reference(output)
     receipt_path = output.parent.parent/'receipt.json'
     request = dict(request_id='deg', memory_mb=12288, inputs=[prepared])
     assert from_deg_buffers(request, prepared, tmp_path/'missing.json', pool) == request
@@ -52,10 +54,13 @@ def test_deg_buffer_budget_requires_accepted_known_inputs_and_is_pinned(tmp_path
     assert from_deg_buffers(request, prepared, tmp_path/'policy.json', pool) == result
     with pytest.raises(ValueError, match='request changed'):
         from_deg_buffers(dict(request, memory_mb=8192), prepared, tmp_path/'policy.json', pool)
-    old = pool/'requests/old/request.json';old.parent.mkdir();save(old, {})
+    old = pool / 'requests/old/request.json'
+    old.parent.mkdir()
+    save(old, {})
     assert from_deg_buffers(dict(request,request_id='old'), prepared, tmp_path/'old.json', pool)['memory_mb'] == 12288
     assert from_deg_buffers(dict(request,gpu={'mode':'preferred'}), prepared, tmp_path/'gpu.json', pool)['memory_mb'] == 12288
     assert from_deg_buffers(dict(request,memory_mb=1024), prepared, tmp_path/'small.json', pool)['memory_mb'] == 1024
     save(output, dict(files={**files,'deg_input/new-format.bin':reference(output.parent/'data.npy')}))
-    unknown = reference(output);save(receipt_path, dict(state='succeeded', outputs=[unknown]))
+    unknown = reference(output)
+    save(receipt_path, dict(state='succeeded', outputs=[unknown]))
     assert from_deg_buffers(request, unknown, tmp_path/'unknown.json', pool) == request

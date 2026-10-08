@@ -1,5 +1,4 @@
 """Exercise real SDK pause/serialization/resume with a synthetic model, never a provider."""
-import asyncio
 import json
 from pathlib import Path
 from unittest.mock import patch
@@ -11,8 +10,7 @@ from openai.types.responses import ResponseFunctionToolCall, ResponseOutputMessa
 import ecarsi.agent as bridge
 import ecarsi.agent.session as session
 from ecarsi.files import immutable, reference, verified
-from ecarsi.files import read, save, file_digest
-from ecarsi.warm_pool.state import submit
+from ecarsi.files import read, save
 
 
 class ScriptedModel(Model):
@@ -241,11 +239,14 @@ def test_decoded_json_field_is_losslessly_encoded_before_validation(tmp_path):
     spec = {**spec, 'session_id':'json-test', 'output_root':str(tmp_path/'json-session')}
     spec['tools'] = [{**spec['tools'][0], 'parameters':{'type':'object', 'properties':{'value_json':{'type':'string'}},
                     'required':['value_json'], 'additionalProperties':False}}]
-    ref=session.create_session(spec);root=Path(spec['bridge_root'])
+    ref = session.create_session(spec)
+    root = Path(spec['bridge_root'])
     with patch.object(adapter,'_client',return_value=Client()),patch.object(adapter,'_model',return_value=ScriptedModel()):
         reply=execute_turn(root,session.submit_turn(ref,0))
-    value={'samples':[{'include':True,'label':'a'}]};payload=read(reply)
-    payload['response']['calls'][0]['arguments']={'value_json':value};save(reply,payload)
+    value = {'samples': [{'include': True, 'label': 'a'}]}
+    payload = read(reply)
+    payload['response']['calls'][0]['arguments'] = {'value_json': value}
+    save(reply, payload)
     task=session.tool_request(ref,reply,0)
     request=read(Path(spec['pool_root'])/'requests'/task['request_id']/'request.json')
     arguments=read(request['spec']['args'][-1])
@@ -338,16 +339,21 @@ def test_invalid_arguments_return_to_model_without_executing_tool(tmp_path,monke
     state=immutable(tmp_path/'state.json',{'preserved':17})
     spec={**spec,'session_id':'correcting','output_root':str(tmp_path/'correcting'),'tool_state':state,
           'tools':[{**spec['tools'][0],'args':spec['tools'][0]['args']+['{state}']}]}
-    ref=session.create_session(spec);root=Path(spec['bridge_root']);model=CorrectingModel()
+    ref = session.create_session(spec)
+    root = Path(spec['bridge_root'])
+    model = CorrectingModel()
     with patch.object(adapter,'_client',return_value=Client()),patch.object(adapter,'_model',return_value=model):
         reply=execute_turn(root,session.submit_turn(ref,0))
         item=agent_step('tool',[ref,str(reply),0,None])
         request=read(Path(spec['pool_root'])/'requests'/item['request_id']/'request.json')
         assert request['spec']['args'][:2]==['-m','ecarsi.agent.tool_errors']
         assert 'must never run' not in str(request['spec']['args'])
-        output=tmp_path/'error-output';output.mkdir();monkeypatch.chdir(output)
+        output = tmp_path / 'error-output'
+        output.mkdir()
+        monkeypatch.chdir(output)
         write_rejection(request['spec']['args'][2])
-        response=read(output/'result.json');assert response['is_error'] and response['state']==state
+        response = read(output / 'result.json')
+        assert response['is_error'] and response['state'] == state
         context=session.continuation(ref,reply,[completed_tool(spec,item,response)])
         reply=execute_turn(root,session.submit_turn(ref,1,context,[item['request_id']]))
         corrected=agent_step('tool',[ref,str(reply),0,None])
@@ -425,7 +431,8 @@ def test_mixed_read_and_decision_batch_cannot_dispatch_any_tool(tmp_path):
 def test_adapter_archive_rejects_invalid_source_before_publication(tmp_path):
     import hashlib
     spec, _ = setup(tmp_path)
-    source = tmp_path/'incomplete.py';source.write_text('if True:\nnot indented\n')
+    source = tmp_path / 'incomplete.py'
+    source.write_text('if True:\nnot indented\n')
     sha = hashlib.sha256(source.read_bytes()).hexdigest()
     with pytest.raises(SyntaxError):
         session.archive_adapter(spec['bridge_root'], source)

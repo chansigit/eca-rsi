@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **A minimal lint rule set (#48).** `[tool.ruff]` in pyproject selects one statement per line (E701, E702, E703), no
+  unused imports or variables (F401, F841) and no undefined names (F821); `tests/test_lint.py` runs `ruff check`
+  (ruff 0.16 from the pytest directory). The 483 existing findings are fixed: statements joined by `;` or after `:` are
+  split by formatting only those statements (every changed file has the same AST as before), unused imports and
+  variables removed. No behaviour changes.
+- **Tests on GitHub (#49).** `.github/workflows/tests.yml` installs the control lock's package versions and runs the
+  lint rules and the tests outside `SCIENCE_ONLY` (`tests/conftest.py`, collected only without `ECA_TESTS=control`) on
+  every push to main or dev and on pull requests; the stale PyPI workflow is gone. Three tests that start Python with a
+  clean environment now pass `LD_LIBRARY_PATH` through, which an interpreter with a shared libpython needs.
+
 - **A release convention (#50).** A release is a version whose commit bumps the patch number in `pyproject.toml` and
   gives the changelog's entries their own `## 0.4.x` section; after its gate it is tagged `v0.4.x` with a GitHub
   release (INSTALL.md A.10). `ops/publish-version.sh` records the commit's `package_version` in `version.json`.

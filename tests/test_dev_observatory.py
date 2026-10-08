@@ -224,8 +224,11 @@ def test_token_rows_sum_saved_replies_per_dataset(tmp_path):
             "workflow_id": ("persample/run-" + dataset[-1].lower() + "-" + "0" * 20)}}})
         put(bridge / "requests" / name / "result.json", {"state": state, "response": {
             "usage": {"tokens_in": tokens_in, "tokens_out": tokens_out}, "model": {"model": "m"}}})
-    turn("osp-a.turn-0", "TS / A", 100, 10); turn("cross-a.turn-0", "TS / A", 50, 5)
-    turn("osp-b.turn-0", "TS / B", 30, 3); turn("osp-b.turn-1", "TS / B", 999, 99, state="failed")
+
+    turn("osp-a.turn-0", "TS / A", 100, 10)
+    turn("cross-a.turn-0", "TS / A", 50, 5)
+    turn("osp-b.turn-0", "TS / B", 30, 3)
+    turn("osp-b.turn-1", "TS / B", 999, 99, state="failed")
     rows = token_rows(bridge)
     assert [(r["run"], r["dataset"], r["turns"], r["tokens_in"], r["tokens_out"]) for r in rows] == [("run-a", "TS / A", 2, 150, 15), ("run-b", "TS / B", 1, 30, 3)]
     assert rows[0]["kinds"] == {"osp": 1, "cross": 1} and "TOTAL" in render_tokens(rows) and "180" in render_tokens(rows)

@@ -6,15 +6,17 @@ import pytest
 
 from ecarsi.agent.parallel import choose, eligible, merge_states
 import ecarsi.agent.session as session
-from ecarsi.files import immutable, reference, verified
+from ecarsi.files import immutable, verified
 from ecarsi.files import read, save
 
 
 def test_merge_retains_all_observations_and_rejects_scientific_mutations():
     base = dict(evidence={'sha256': 'original'}, read=['old'], qc=False, lookups=[])
     a, b = deepcopy(base), deepcopy(base)
-    a['read'].append('a.png');a['lookups'].append({'query': 'A'})
-    b['read'].append('b.png');b['qc'] = True
+    a['read'].append('a.png')
+    a['lookups'].append({'query': 'A'})
+    b['read'].append('b.png')
+    b['qc'] = True
     merged = merge_states(base, [b, a])
     assert set(merged['read']) == {'old', 'a.png', 'b.png'} and merged['qc']
     assert merged['lookups'] == [{'query': 'A'}] and base['read'] == ['old']
@@ -22,7 +24,8 @@ def test_merge_retains_all_observations_and_rejects_scientific_mutations():
         with pytest.raises(ValueError):
             merge_states(base, [bad])
     osp = dict(version=3, seen=dict(figures=[], tables=[], genes=False, qc=False))
-    after = deepcopy(osp);after['seen'].update(figures=['a.png'], genes=True)
+    after = deepcopy(osp)
+    after['seen'].update(figures=['a.png'], genes=True)
     assert merge_states(osp, [after])['seen']['genes']
     after['version'] = 4
     with pytest.raises(ValueError):

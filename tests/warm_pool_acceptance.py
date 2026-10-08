@@ -85,7 +85,7 @@ def main():
             workers = [spawn("worker", "--cpus", str(cpu), "--memory-mb", "192",
                              "--work-dir", str(Path(local) / str(i))) for i, cpu in enumerate(cpus)]
             eventually(lambda: len([w for w in backend.call("worker", "list") if w.get("ended") is None]) == 2)
-            big = submit(root, request("too-large", memory=320))
+            submit(root, request("too-large", memory=320))
             first = request("a", seconds=10)
             result = submit(root, first)
             assert submit(root, first)["attempt_id"] == result["attempt_id"]

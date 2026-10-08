@@ -1,5 +1,4 @@
 """A session that resubmits the same rejected call three turns in a row is stopped, not left to burn its turns."""
-import json
 from unittest.mock import patch
 
 import pytest

@@ -4,7 +4,6 @@ On 2026-09-16 a single undeclared read-only tool ended 101 workflows and all 28
 datasets in the scale batch: the host raised, the agent session died, and the
 lineage, unit and dataset died with it.
 """
-import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -132,7 +131,6 @@ def test_artifact_budget_follows_its_input_size(tmp_path):
 
 def test_retry_can_raise_a_memory_budget_without_losing_request_identity(tmp_path):
     """A prepare step that died on its RSS watchdog is retried larger; resubmission still matches."""
-    import json as _json
     from ecarsi.warm_pool import state
     pool = tmp_path / "pool"
     pool.mkdir(mode=0o700)

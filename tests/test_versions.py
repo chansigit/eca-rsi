@@ -26,7 +26,7 @@ def test_version_is_the_version_json_beside_the_packages(tmp_path):
     (tmp_path / "ecarsi").mkdir()
     shutil.copy(ROOT / "ecarsi" / "__init__.py", tmp_path / "ecarsi")
     probe = [sys.executable, "-c", "import ecarsi, json; print(json.dumps([ecarsi.version(), ecarsi.task_queue()]))"]
-    run = lambda: json.loads(subprocess.run(probe, env={"PYTHONPATH": str(tmp_path)}, cwd=tmp_path,
+    run = lambda: json.loads(subprocess.run(probe, env={"PYTHONPATH": str(tmp_path), **{k: v for k, v in os.environ.items() if k == "LD_LIBRARY_PATH"}}, cwd=tmp_path,
                                             capture_output=True, text=True, check=True).stdout)
     assert run() == [None, "ecarsi-durable-v2"]
     save(tmp_path / "version.json", dict(name="0123456789ab", commit="0123456789ab" + "0" * 28))
@@ -218,7 +218,7 @@ def test_the_workflows_load_in_temporals_sandbox_from_a_checkout_and_from_a_vers
     """Production coordinators re-import the workflow modules in Temporal's sandbox, which forbids file access at
     import time (a module-level ecarsi.task_queue() did that); the workflow tests run unsandboxed and miss it."""
     probe = lambda path, cwd: subprocess.run([sys.executable, "-c", SANDBOX_PROBE], cwd=cwd, capture_output=True, text=True,
-                                             env={"PYTHONPATH": os.pathsep.join([str(path), *sys.path[1:]])})
+                                             env={"PYTHONPATH": os.pathsep.join([str(path), *sys.path[1:]]), **{k: v for k, v in os.environ.items() if k == "LD_LIBRARY_PATH"}})
     checkout = probe(ROOT, ROOT)
     assert checkout.returncode == 0 and checkout.stdout.split()[-1] == "ecarsi-durable-v2", checkout.stderr[-2000:]
     shutil.copytree(ROOT / "ecarsi", tmp_path / "ecarsi", ignore=shutil.ignore_patterns("__pycache__"))

@@ -33,7 +33,8 @@ def validate_spec(spec, *, resume=False):
     prior = verified(verified(source['evidence'])['inspected'])['spec']['config']
     if any(spec['config'].get(key) != prior[key] for key in ('batch_col','species')):
         raise ValueError('Species and sample key must match accepted cross-sample input')
-    pool_root(spec['pool_root']);root_path(spec['bridge_root'])
+    pool_root(spec['pool_root'])
+    root_path(spec['bridge_root'])
     for key in budgets:
         budget=spec[key]
         if not isinstance(budget,dict) or set(budget)!={'cpus','memory_mb','timeout_seconds'} or any(type(v) is not int or v<1 for v in budget.values()):
@@ -65,13 +66,17 @@ def zoomin_step(action,args):
     from ..files import immutable, reference, verified
     from ..files import digest
     from ..warm_pool.state import submit
-    if action=='read':return handoff(args[0])
-    if action=='session':return verified(reference(args[0]))
+
+    if action == 'read':
+        return handoff(args[0])
+    if action == 'session':
+        return verified(reference(args[0]))
     if action=='accepted':
         from .persample import sample_step
         return sample_step('accepted_annotation',args)
     if action=='publish':
-        spec,path=args;bundle=verified(reference(path))
+        spec, path = args
+        bundle = verified(reference(path))
         if bundle['state']!='complete' or bundle['input']!=spec['input'] or bundle['n_input']!=bundle['n_survived']+bundle['n_removed']:
             raise ValueError('Zoom-in publication does not conserve its accepted input')
         path=Path(spec['output_root'])/'publication.json'
@@ -84,11 +89,13 @@ def zoomin_step(action,args):
     spec,payload,parents=args
     if action == 'prepare':
         parents = parents or spec.get('depends_on', [])
-    root=Path(spec['output_root']);root.mkdir(mode=0o700,parents=True,exist_ok=True)
+    root = Path(spec['output_root'])
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
     immutable(root/'spec.json',spec)
     refs=[reference(path) for path in payload['paths']]
     request_id=spec['run_id']+'.'+action+'-'+digest(payload)[:16]
-    cfg=spec['config'];gpu={}
+    cfg = spec['config']
+    gpu = {}
     budget,output={
         'prepare':('prepare_budget','prepared.json'),'markers':('compute_budget','markers.json'),
         'subset':('subset_budget','subset.json'),'compute':('compute_budget','prepared.json'),

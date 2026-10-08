@@ -4,9 +4,7 @@ The plan explicitly assigns one worker CPU and one control CPU per host.
 This test never allocates nodes or takes resources away from another pool.
 """
 import argparse
-import hashlib
 import json
-import os
 from pathlib import Path
 import shlex
 import signal

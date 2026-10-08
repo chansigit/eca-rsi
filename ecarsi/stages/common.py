@@ -68,7 +68,8 @@ def _deg_one(prepared_ref,bundle,plan,loaded,index,destination):
     from msp.api import compute_deg_task
     task=bundle['tasks'][index]
     frame=compute_deg_task(loaded,plan[task['plan_index']],task['cluster'])
-    if frame is None:raise ValueError('A planned DEG comparison has no eligible reference')
+    if frame is None:
+        raise ValueError('A planned DEG comparison has no eligible reference')
     # Stress uses only top 10; annotation keeps the documented top 50 per view.
     frame.groupby('group',observed=True).head(50).to_csv(destination/'deg.csv',index=False)
     return immutable(destination/'result.json',dict(prepared=prepared_ref,index=index,task=task,table=reference(destination/'deg.csv')))
@@ -85,10 +86,13 @@ def deg_batch(prepared_ref, indices, destination):
     assemble takes the batch in place of its members. One request per comparison cost each a process
     start, a numba warm-up and a SHA pass over the buffers, and a lineage made N of them (2026-09-27)."""
     indices=[int(i) for i in indices]
-    if len(set(indices))!=len(indices):raise ValueError('A DEG batch lists each comparison once')
-    bundle,plan,loaded=_deg_buffers(prepared_ref);results=[]
+    if len(set(indices)) != len(indices):
+        raise ValueError('A DEG batch lists each comparison once')
+    bundle, plan, loaded = _deg_buffers(prepared_ref)
+    results = []
     for index in indices:
-        folder=destination/('deg-'+str(index));folder.mkdir()
+        folder = destination / ('deg-' + str(index))
+        folder.mkdir()
         results.append(_deg_one(prepared_ref,bundle,plan,loaded,index,folder))
     immutable(destination/'results.json',dict(prepared=prepared_ref,indices=indices,results=results))
 
@@ -100,7 +104,8 @@ def deg_results(prepared_ref,results):
     for r in results:
         doc=verified(r)
         if 'indices' in doc:
-            if doc['prepared']!=prepared_ref:raise ValueError('DEG batch belongs to different evidence')
+            if doc['prepared'] != prepared_ref:
+                raise ValueError('DEG batch belongs to different evidence')
             rows.extend(verified(x) for x in doc['results'])
         else:
             rows.append(doc)
@@ -111,7 +116,10 @@ def assemble(prepared_ref, results, destination):
     import pandas as pd
     from msp.api import write_deg_results
     from msp.api import DegTables
-    bundle=verified(prepared_ref);plan=read(artifact(bundle,'deg_plan.json'));out={**plan,'results':[]}
+
+    bundle = verified(prepared_ref)
+    plan = read(artifact(bundle, 'deg_plan.json'))
+    out = {**plan, 'results': []}
     rows=deg_results(prepared_ref,results)
     if sorted(r['index'] for r in rows)!=list(range(len(bundle['tasks']))):
         raise ValueError('Missing or duplicate DEG results')

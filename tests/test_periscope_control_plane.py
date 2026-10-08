@@ -72,9 +72,7 @@ def test_without_a_control_plane_the_mount_says_how_to_get_one(tmp_path):
 
 
 def test_observatory_cli_no_longer_serves():
-    import argparse
     from ecarsi import observatory
-    parser = argparse.ArgumentParser()
     assert 'ControlPlane' in dir(observatory) and not hasattr(observatory, 'serve')
     assert 'serve' not in observatory.main.__doc__ if observatory.main.__doc__ else True
 

@@ -25,7 +25,8 @@ def run_batch(directory, monkeypatch, module, state, name, arguments, allowed, m
 
 
 def test_osp_returns_required_evidence_without_skipping_marker_judgment(tmp_path, monkeypatch):
-    source = tmp_path / 'computed'; source.mkdir()
+    source = tmp_path / 'computed'
+    source.mkdir()
     data = ad.AnnData(np.ones((6, 3)), obs=pd.DataFrame({
         'cluster': pd.Categorical(['0'] * 6), 'total_counts': [3] * 6},
         index=[f'c{i}' for i in range(6)]), var=pd.DataFrame(index=['CD3D', 'LYZ', 'MS4A1']))
@@ -43,18 +44,22 @@ def test_osp_returns_required_evidence_without_skipping_marker_judgment(tmp_path
     assert len(result['evidence_batch']['calls']) == 4
     assert verified(state)['seen']['qc'] is False
     from ecarsi.stages.persample import tool
-    reject = tmp_path / 'reject'; reject.mkdir()
+
+    reject = tmp_path / 'reject'
+    reject.mkdir()
     args = immutable(reject / 'args.json', dict(proposal_json='{}', version=0))
     tool('submit_annotation', result['state']['path'], args['path'], reject)
     assert 'verify current markers' in read(reject / 'result.json')['error']
 
 
 def inclusion_state(tmp_path, count=3):
-    source = tmp_path / 'source'; source.mkdir()
+    source = tmp_path / 'source'
+    source.mkdir()
     samples = [dict(sample=f's{i}', n_cells=20, annotation={}) for i in range(count)]
     files = {}
     for sample in samples:
-        p = source / (sample['sample'] + '.png'); p.write_bytes(PNG)
+        p = source / (sample['sample'] + '.png')
+        p.write_bytes(PNG)
         files[sample['sample'] + '/figures/umap_clusters.png'] = reference(p)
     evidence = immutable(tmp_path / 'bundle.json', dict(samples=samples, files=files))
     return immutable(tmp_path / 'state.json', dict(evidence=evidence, phase='inclusion',
@@ -84,17 +89,20 @@ def test_inclusion_batches_inventories_and_figures_and_requires_the_umap_of_an_e
         dict(sample=f's{i}', include=True, reason='Reviewed evidence') for i in range(3)]})))
     exclude = immutable(tmp_path / 'exclude.json', dict(proposal_json=json.dumps({'notes': 'One sample is broken', 'samples': [
         dict(sample=f's{i}', include=i != 1, reason='Reviewed evidence') for i in range(3)]})))
-    reject = tmp_path / 'reject'; reject.mkdir()
+    reject = tmp_path / 'reject'
+    reject.mkdir()
     tool('submit_decision', figure['state']['path'], exclude['path'], reject)
     assert "Read the cluster UMAP of each sample you exclude before inclusion: ['s1']" in read(reject / 'result.json')['content']
-    early = tmp_path / 'early'; early.mkdir()  # #33: including every sample needs every inventory, not every figure
+    early = tmp_path / 'early'
+    early.mkdir()  # #33: including every sample needs every inventory, not every figure
     tool('submit_decision', figure['state']['path'], args['path'], early)
     assert read(early / 'result.json')['accepted'] is True
     monkeypatch.setattr(batch, 'IMAGE_BYTES', 12 * 2**20)
     rest = run_batch(tmp_path / 'rest', monkeypatch, 'ecarsi.stages.crosssample', figure['state'],
         pending['tool'], pending['arguments'], allowed)
     assert len(rest['images']) == 2 and len(verified(rest['state'])['read']) == 3
-    accept = tmp_path / 'accept'; accept.mkdir()
+    accept = tmp_path / 'accept'
+    accept.mkdir()
     tool('submit_decision', rest['state']['path'], args['path'], accept)
     assert read(accept / 'result.json')['accepted'] is True
 
@@ -114,14 +122,16 @@ def test_pagination_bound_and_frozen_execution_plan(tmp_path, monkeypatch):
     session = dict(pool_root=str(tmp_path / 'pool'), tools=[dict(name='sample_inventory',
         args=['-m', packet['module'], 'tool', 'sample_inventory', '{state}', '{arguments}'],
         cpus=1, memory_mb=1024, timeout_seconds=60)])
-    directory = tmp_path / 'plan'; directory.mkdir()
+    directory = tmp_path / 'plan'
+    directory.mkdir()
     planned = batch.plan(request, directory, session)
     assert planned['args'][:2] == ['-m', 'ecarsi.stages.evidence']
     assert batch.plan(request, directory, session) == planned
     with pytest.raises(ValueError, match='execution changed'):
         batch.plan(dict(request, memory_mb=2048), directory, session)
     # A previously registered original plan must not be upgraded in place.
-    directory = tmp_path / 'old'; directory.mkdir()
+    directory = tmp_path / 'old'
+    directory.mkdir()
     from ecarsi.stages.execution import plan
     original = plan(request, directory, session['pool_root'])
     assert batch.plan(request, directory, session) == original == request
@@ -130,7 +140,8 @@ def test_pagination_bound_and_frozen_execution_plan(tmp_path, monkeypatch):
 @pytest.mark.parametrize('module', ['ecarsi.stages.crosssample', 'ecarsi.stages.zoomin'])
 def test_text_pages_and_errors_keep_original_checks(tmp_path, monkeypatch, module):
     text = 'gene,score\nCD3D,1\n\u03b22M,2\n' * 4000
-    path = tmp_path / 'table.csv'; path.write_text(text)
+    path = tmp_path / 'table.csv'
+    path.write_text(text)
     evidence = immutable(tmp_path / 'bundle.json', dict(files={'table.csv': reference(path)}))
     state = immutable(tmp_path / 'state.json', dict(evidence=evidence, phase='type', kind='plan', read=[]))
     result = run_batch(tmp_path / 'pages', monkeypatch, module, state, 'read_evidence',
@@ -150,7 +161,8 @@ def test_text_pages_and_errors_keep_original_checks(tmp_path, monkeypatch, modul
 def test_matrix_budget_uses_compute_receipt_and_keeps_prior_request(tmp_path):
     pool = tmp_path/'pool'
     output = pool/'requests/compute/attempt/outputs/prepared.json'
-    output.parent.mkdir(parents=True);save(output, {})
+    output.parent.mkdir(parents=True)
+    save(output, {})
     computed = reference(output)
     save(output.parent.parent/'receipt.json', dict(state='succeeded', peak_rss_bytes=2**30, outputs=[computed]))
     evidence = immutable(tmp_path/'evidence.json', dict(prepared=computed))
@@ -161,7 +173,9 @@ def test_matrix_budget_uses_compute_receipt_and_keeps_prior_request(tmp_path):
     result = batch.budget(req, tmp_path/'new', {'pool_root':str(pool)}, tool, state)
     assert result['memory_mb'] == 3072
     assert batch.budget(req, tmp_path/'new', {'pool_root':str(pool)}, tool, state) == result
-    path = pool/'requests/old/request.json';path.parent.mkdir();save(path, {})
+    path = pool / 'requests/old/request.json'
+    path.parent.mkdir()
+    save(path, {})
     old = dict(req, request_id='old')
     assert batch.budget(old, tmp_path/'old', {'pool_root':str(pool)}, tool, state) == old
 
@@ -181,7 +195,8 @@ def test_stages_declare_their_read_only_tools(tmp_path):
 
 def test_osp_table_pages_reach_the_model_compacted(tmp_path, monkeypatch):
     """Fat TSP25: 185k characters of raw DE CSV over four pages overran the provider context (2026-09-18)."""
-    source = tmp_path / 'computed'; source.mkdir()
+    source = tmp_path / 'computed'
+    source.mkdir()
     data = ad.AnnData(np.ones((6, 3)), obs=pd.DataFrame({'cluster': pd.Categorical(['0'] * 6), 'total_counts': [3] * 6},
         index=[f'c{i}' for i in range(6)]), var=pd.DataFrame(index=['CD3D', 'LYZ', 'MS4A1']))
     data.write_h5ad(source / 'clustered.h5ad')
@@ -202,15 +217,19 @@ def test_osp_table_pages_reach_the_model_compacted(tmp_path, monkeypatch):
 
 def test_inventory_pages_summaries_by_bytes_and_an_exclusion_needs_the_full_proposal(tmp_path, monkeypatch):
     from ecarsi.stages.crosssample import inventory_page, tool
-    source = tmp_path / 'source'; source.mkdir()
+
+    source = tmp_path / 'source'
+    source.mkdir()
     samples, files = [], {}
     for i in range(3):
         name = f's{i}'
         clusters = [dict(cluster=str(c), confidence='high' if c else 'low', label_coarse='T cell' if c else 'Doublet',
                          label_fine='x', doubts='ambient ' * 50, evidence_genes=['CD3D']) for c in range(4)]
         proposal = dict(cluster_key='leiden', clusters=clusters, overall='verdict ' * 80)
-        p = source / f'{name}.json'; p.write_text(json.dumps(proposal))
-        png = source / f'{name}.png'; png.write_bytes(PNG)
+        p = source / f'{name}.json'
+        p.write_text(json.dumps(proposal))
+        png = source / f'{name}.png'
+        png.write_bytes(PNG)
         files[f'{name}/annotation_proposal.json'] = reference(p)
         files[f'{name}/figures/umap_clusters.png'] = reference(png)
         samples.append(dict(sample=name, n_cells=20, qc=dict(median_genes='700.0'), annotation=proposal))
@@ -237,14 +256,17 @@ def test_inventory_pages_summaries_by_bytes_and_an_exclusion_needs_the_full_prop
     decision = immutable(tmp_path / 'decision.json', dict(proposal_json=json.dumps({'notes': 'n', 'samples': [
         dict(sample='s0', include=True, reason='fine'), dict(sample='s1', include=False, reason='doublets'),
         dict(sample='s2', include=True, reason='fine')]})))
-    reject = tmp_path / 'reject'; reject.mkdir()
+    reject = tmp_path / 'reject'
+    reject.mkdir()
     tool('submit_decision', state['path'], decision['path'], reject)
     assert "Read the full annotation proposal" in read(reject / 'result.json')['content'] and "['s1']" in read(reject / 'result.json')['content']
     args = immutable(tmp_path / 'read.json', dict(path='s1/annotation_proposal.json', offset=0))
-    seen = tmp_path / 'seen'; seen.mkdir()
+    seen = tmp_path / 'seen'
+    seen.mkdir()
     tool('read_evidence', state['path'], args['path'], seen)
     result = read(seen / 'result.json')
     assert 'ambient' in result['content'] and result['next_offset'] is None
-    accept = tmp_path / 'accept'; accept.mkdir()
+    accept = tmp_path / 'accept'
+    accept.mkdir()
     tool('submit_decision', result['state']['path'], decision['path'], accept)
     assert read(accept / 'result.json')['accepted'] is True

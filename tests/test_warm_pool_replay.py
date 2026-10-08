@@ -1,6 +1,5 @@
 """The trace replay: causal arrivals, and a wide task that starves under FIFO but not under priority + reservation."""
 import json
-import time
 
 from ecarsi.warm_pool.replay import Task, Worker, load_trace, report, simulate
 

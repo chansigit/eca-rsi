@@ -8,7 +8,6 @@ import urllib.request
 from functools import partial
 from pathlib import Path
 
-import pytest
 
 from ecarsi.ui import fleet, serve
 
@@ -37,7 +36,8 @@ def test_state_cache_serves_from_refresh_and_forgets_unbound(tmp_path, monkeypat
     assert cache.get(a)["stage"] == "Loading status" and calls == []
     cache.refresh()
     assert sorted(calls) == [a, b]
-    cache.get(a); cache.get(b)
+    cache.get(a)
+    cache.get(b)
     cache._states[a] = (0, cache._states[a][1])
     assert cache.get(a)['stage'] == 'x' and cache.get(a)['cached_at'] == 0
     assert len(calls) == 2  # stale hits also never read disk on the request path
@@ -64,7 +64,8 @@ def test_fleet_http_never_scans_on_cold_or_stale_cache(tmp_path, monkeypatch):
                 if path == '/_home':
                     assert b'0 / 1 loaded' in body and b'Loading status' in body
     finally:
-        httpd.shutdown(); httpd.server_close()
+        httpd.shutdown()
+        httpd.server_close()
 
 
 def test_cached_registry_and_saved_states_survive_slow_refresh(tmp_path, monkeypatch):
@@ -101,7 +102,8 @@ def test_rendered_pages_are_gzipped_when_accepted(tmp_path):
         with urllib.request.urlopen(url) as r:  # no Accept-Encoding: plain
             assert r.headers.get("Content-Encoding") is None and b"Periscope" in r.read()
     finally:
-        httpd.shutdown(); httpd.server_close()
+        httpd.shutdown()
+        httpd.server_close()
 
 
 def test_a_quick_sweep_rereads_the_running_datasets_and_leaves_the_finished_ones(tmp_path, monkeypatch):

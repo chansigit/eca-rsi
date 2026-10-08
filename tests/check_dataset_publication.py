@@ -57,7 +57,7 @@ def check(path):
         assert per_sample['n_input'] == len(original)
         assert per_sample['n_survived'] == len(surviving) and per_sample['n_removed'] == len(excluded)
         rounds = []
-        previous_zoom = None
+        previous_zoom = cross_obs = None
         for round_ref in unit['rounds']:
             record = verified(round_ref)
             row = dict(round=record['round'], stats=record['stats'], stages=[])
