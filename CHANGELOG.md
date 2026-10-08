@@ -8,6 +8,11 @@
   (`upstream.ECA_PP_BLANK_MAX`) are dropped before OSP as `eca-pp-blank-sample`, ledgered and listed under
   needs_review `policy_excluded`; before, any blank cell handed the source to the organize agent (Li2019_skin's
   patient column, 5.5 % blank, became 198 amplification batches).
+- **The sample apart from the batch** (#56, ECA-PP 0.5.5, owner 2026-10-08): when ECA-PP's batch is a condition or
+  sex grouping, or none qualified, its `sample_unit` `sample` names the rung-1 column (PanSci: `sample_id`, age x
+  sex) and organize takes the samples from it (`eca_pp_sample`) while Harmony keeps ECA-PP's batch; before, the
+  samples of heart_Prkdc and lung_Rag were the age groups. Also fixes f7beb93, which gave every ECA-PP library or
+  batch decision without blank cells the whole-source rationale and `confirmed_single`.
 
 ## 0.4.6 — 2026-10-08
 

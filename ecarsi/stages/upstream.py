@@ -9,9 +9,11 @@ from ..contracts import check
 from ..sample_mapping import normalize
 from ..run_state import file_identity, read_json, write_json
 
-RESERVED = ("eca_source_cell_id", "eca_pp_batch", "eca_pp_cell_type", "eca_pp_library", "eca_sample_id")
-# ECA-PP identify-columns names each source's per-sample QC unit (0.5.4, decision 0016).
-SAMPLE_UNITS = ("library", "batch", "whole", "stop")
+RESERVED = ("eca_source_cell_id", "eca_pp_batch", "eca_pp_cell_type", "eca_pp_library", "eca_pp_sample",
+            "eca_sample_id")
+# ECA-PP identify-columns names each source's per-sample QC unit (0.5.4, decision 0016; `sample` since 0.5.5:
+# the experimental unit when Harmony's batch is a condition or sex grouping, #56).
+SAMPLE_UNITS = ("library", "sample", "batch", "whole", "stop")
 # ECA-PP's sample column may leave up to this share of a source's cells blank; build_mapping drops them as a
 # policy exclusion (owner 2026-10-08, #56: Li2019_skin's patient column, 5.5 % blank). More: the agent decides.
 ECA_PP_BLANK_MAX = 0.10
@@ -129,7 +131,7 @@ def load_evidence(unit: dict, obs):
         evidence = read_json(path)
         if result_state(evidence, "identify_columns") != "accepted":
             raise ValueError("identify-columns result was rejected; resolve or remove that optional result")
-        for role in ("batch", "cell_type", "library"):
+        for role in ("batch", "cell_type", "library", "sample"):
             s, tsv = column_values(obs, (evidence.get("columns") or {}).get(role), path.parent)
             if s is not None:
                 values[f"eca_pp_{role}"] = s
@@ -144,8 +146,9 @@ def eca_pp_decision(evidence: dict, values: dict) -> dict | None:
     agent decides those. A smaller blank share is dropped (`drop_blank`, sample_mapping.build_mapping).
 
     ECA-PP names the per-sample QC unit (identify-columns 0.5.4 `sample_unit`: library, batch, whole or
-    stop) and keeps the rule; eca-rsi keeps no copy. Batch: ECA-PP's batch only when it recommends the
-    correction. A result from before 0.5.4 names no unit: its library or batch is still the unit, and a
+    stop; 0.5.5 adds sample, its column when the batch is a condition or sex grouping, #56) and keeps the
+    rule; eca-rsi keeps no copy. Batch: ECA-PP's batch only when it recommends the correction, whatever the
+    unit. A result from before 0.5.4 names no unit: its library or batch is still the unit, and a
     source with neither stops until identify-columns is re-run. A stop carries an `error` that organize
     raises unless the owner's sample map decides the source (owner, 2026-10-03)."""
     if not evidence:
@@ -157,7 +160,7 @@ def eca_pp_decision(evidence: dict, values: dict) -> dict | None:
     unit = named.get("value") or ("library" if columns.get("library") else "batch" if batch else "stop")
     if unit not in SAMPLE_UNITS:
         raise ValueError(f"ECA-PP sample_unit {unit!r} is not one of {SAMPLE_UNITS}")
-    role = unit if unit in ("library", "batch") else None
+    role = unit if unit in ("library", "batch", "sample") else None
     blank = float(values[f"eca_pp_{role}"].isna().mean()) if role else 0.0
     if blank > ECA_PP_BLANK_MAX:
         return None
@@ -169,11 +172,13 @@ def eca_pp_decision(evidence: dict, values: dict) -> dict | None:
     if role == "library":
         decision["rationale"] = (f"ECA-PP library {label(columns['library'])!r}: "
                                  + columns["library"].get("evidence", ""))
+    elif role == "sample":
+        decision["rationale"] = (f"ECA-PP sample {label(columns['sample'])!r} (batch "
+                                 f"{label(batch) if batch else None!r}, correction {batch.get('correction')}): "
+                                 + str(columns["sample"].get("evidence", ""))[:400])
     elif role == "batch":
         decision["rationale"] = (f"ECA-PP batch {label(batch)!r} (correction {batch.get('correction')}): "
                                  + str(batch.get("evidence", ""))[:400])
-    if blank:
-        decision["drop_blank"] = round(blank, 4)
     else:
         reason = named.get("reason") or (
             f"identify-columns {evidence.get('step_version')} found no batch and names no sample unit "
@@ -182,6 +187,8 @@ def eca_pp_decision(evidence: dict, values: dict) -> dict | None:
         if unit == "stop":
             decision["error"] = (f"{reason}. ECA-PP ladder: "
                                  f"{evidence.get('ladder') or columns.get('batch_evidence') or 'not recorded'}.")
+    if blank:
+        decision["drop_blank"] = round(blank, 4)
     return decision
 
 

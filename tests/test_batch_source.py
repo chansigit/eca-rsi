@@ -38,9 +38,18 @@ def test_decision_follows_the_sample_unit_eca_pp_names():
     d = eca_pp_decision(evidence(batch=adopted, library=library, unit="library"),
                         values(batch=["D1", "D2"], library=["L1", "L2"]))
     assert (d["sample_column"], d["batch"], d["source"]) == ("eca_pp_library", "eca_pp_batch", "eca_pp")
+    assert d["rationale"].startswith("ECA-PP library") and "confirmed_single" not in d
     unnecessary = {**adopted, "correction": "unnecessary"}
     d = eca_pp_decision(evidence(batch=unnecessary, unit="batch"), values(batch=["S1", "S2"]))
     assert (d["sample_column"], d["batch"]) == ("eca_pp_batch", None)
+    assert d["rationale"].startswith("ECA-PP batch") and "confirmed_single" not in d
+    # 0.5.5 (#56): the sample when Harmony's batch is a condition or sex grouping; the batch stays the batch
+    age = {"value": "Age_group", "kind": "existing", "label": "Age_group", "correction": "recommended"}
+    named = evidence("split-pool", batch=age, unit="sample")
+    named["columns"]["sample"] = {"value": "sample_id", "kind": "existing", "label": "sample_id", "evidence": "rung 1"}
+    d = eca_pp_decision(named, values(batch=["A1", "A2"], sample=["A1_M", "A2_F"]))
+    assert (d["sample_column"], d["batch"]) == ("eca_pp_sample", "eca_pp_batch")
+    assert d["rationale"].startswith("ECA-PP sample 'sample_id' (batch 'Age_group'") and "confirmed_single" not in d
     d = eca_pp_decision(evidence("split-pool", unit="whole"), {})
     assert d["sample_column"] is None and d["confirmed_single"] and "error" not in d
     stop = eca_pp_decision(evidence("droplet", unit="stop"), {})
@@ -278,3 +287,28 @@ def test_cells_eca_pp_leaves_blank_are_dropped_and_listed(tmp_path):
     table = pd.read_csv(L.input_manifest(unit).parent / mapping["path"], index_col=0, keep_default_na=False)
     assert table.excluded_reason.tolist() == [""] * 11 + ["eca-pp-blank-sample"]
     assert table[SAMPLE_KEY].tolist()[-1] == "" and table[SAMPLE_KEY].iloc[:11].nunique() == 2
+
+
+def test_organize_takes_the_sample_apart_from_the_batch(tmp_path):
+    """ECA-PP 0.5.5 (#56), PanSci heart_Prkdc: samples are sample_id (age x sex), Harmony's batch is Age_group."""
+    root, out = tmp_path / "in", tmp_path / "out"
+    step = source(root, n=12)
+    a = ad.read_h5ad(step / "standardized.h5ad")
+    a.obs["sample_id"] = ["young_F"] * 3 + ["young_M"] * 3 + ["old_F"] * 3 + ["old_M"] * 3
+    a.obs["Age_group"] = ["young"] * 6 + ["old"] * 6
+    a.write_h5ad(step / "standardized.h5ad")
+    age = {"value": "Age_group", "kind": "existing", "label": "Age_group", "correction": "recommended"}
+    sample = {"value": "sample_id", "kind": "existing", "label": "sample_id", "evidence": "rung-1 donor column"}
+    write_json(step.parent / "identify_columns" / "result.json", {
+        "schema_version": 2, "step": "identify_columns", "step_version": "0.5.5", "status": "ok", "exit_code": 0,
+        "platform": {"value": "split-pool"}, "sample_unit": {"value": "sample", "reason": "sample 'sample_id'"},
+        "columns": {"batch": age, "library": None, "sample": sample, "cell_type": None}})
+    organize(root, out, {"sample_mapping": {},
+                         "analysis_units": [{"name": "u", "members": [{"source": "A", "obs_filter": None}]}]})
+    decision = read_json(L.input_manifest(L.unit_dir(out, "u")))["sample_mapping"]["decision"]
+    assert decision["sources"]["A"]["sample_column"] == "eca_pp_sample"
+    of = decision["batch_key"]["of_sample"]
+    assert decision["batch_key"]["column"] == "eca_pp_batch"
+    assert sorted(of.values()) == ["old", "old", "young", "young"]
+    assert {sid.split("__")[1]: age for sid, age in of.items()} == {
+        "young_F": "young", "young_M": "young", "old_F": "old", "old_M": "old"}
