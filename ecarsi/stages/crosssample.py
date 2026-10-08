@@ -407,8 +407,7 @@ def error_hint(name, content, state, args, bundle):
 
 
 def tool(name,state_path,args_path,destination):
-    from msp.api import DegTables,DegCache,load_removal_mask
-
+    # Kernel names are imported in the branch that uses them: a file lookup pays no scanpy import (~6 s)
     state = read(state_path)
     args = read(args_path)
     bundle = verified(state['evidence'])
@@ -445,6 +444,7 @@ def tool(name,state_path,args_path,destination):
             response.update(content=entries,next_offset=None)
             state['type_read']=sorted(set(state.get('type_read',[]))|{str(e['cluster_id']) for e in entries})
         elif name in {'deg_lookup','deg_sql'}:
+            from msp.api import DegTables
             with DegTables(database=artifact(bundle,'deg.sqlite'),base_key=BASE) as tables:
                 response['content']=tables.lookup(**args) if name=='deg_lookup' else tables.sql(**args)
             state['lookups'].append(args)
@@ -461,6 +461,7 @@ def tool(name,state_path,args_path,destination):
             if cached:
                 response.update(verified(cached))
             else:
+                from msp.api import DegCache,load_removal_mask
                 data = _data(bundle)
                 folder = artifact(bundle, 'deg.sqlite').parent
                 cache=DegCache(data,folder,load_removal_mask(folder,data))

@@ -535,10 +535,10 @@ def refine_evidence(state, args, destination):
 
 
 def tool(name, state_path, args_path, destination):
-    from zmip.api import TYPE_KEY, QUALITY_KEY, partitions, validate_types, validate_quality, apply_decisions
-    from msp.api import DegTables
+    # Kernel names are imported in the branch that uses them: a file lookup pays no scanpy import (~6 s)
     state, args = read(state_path), read(args_path)
     if name == 'deg_lookup':
+        from zmip.api import TYPE_KEY
         args = lookup_arguments(args, TYPE_KEY)
     bundle = verified(state['evidence'])
     response = {}
@@ -575,21 +575,26 @@ def tool(name, state_path, args_path, destination):
                 raise ValueError('; '.join(problems))
             response.update(accepted=True,evidence=state['evidence'],proposal=plan)
         elif name in {'deg_lookup','deg_sql'}:
+            from zmip.api import TYPE_KEY, QUALITY_KEY
+            from msp.api import DegTables
             if name == 'deg_lookup' and args['key'] not in {TYPE_KEY,QUALITY_KEY}:
                 raise ValueError('Use this lineage version and its explicit 1.0 or 2.0 key')
             with DegTables(database=artifact(bundle,'deg.sqlite'),base_key=TYPE_KEY) as tables:
                 response['content'] = tables.lookup(**args) if name=='deg_lookup' else tables.sql(**args)
             state['lookups'].append(args)
         elif name == 'check_genes':
+            from zmip.api import TYPE_KEY, QUALITY_KEY
             if args['key'] not in {TYPE_KEY,QUALITY_KEY}:
                 raise ValueError('Unknown clustering key')
             response['content'] = gene_answer(bundle,args['genes'],args['key'],[args['cluster']] if args['cluster'] else None,data_from)
         elif name == 'check_qc_scores':
+            from zmip.api import QUALITY_KEY
             response['content'] = qc_answer(bundle, QUALITY_KEY)
             state['qc'] = True
         elif name == 'subcluster':
             response['content'] = refine_evidence(state,args,destination)
         elif name == 'annotation_status':
+            from zmip.api import TYPE_KEY, partitions
             data = data_from(bundle)
             table = partitions(data.obs)
             response.update(types=(state['types'] or {}).get('clusters',[]),quality=(state['quality'] or {}).get('clusters',[]),
@@ -597,6 +602,7 @@ def tool(name, state_path, args_path, destination):
                 intersections={str(q):{str(t):int(n) for t,n in row.items() if n} for q,row in table.iterrows()},
                 next_offset=None,version=bundle['version'])
         elif name == 'submit_types':
+            from zmip.api import TYPE_KEY, validate_types
             data = data_from(bundle)
             own, _ = lineage_labels(bundle)
             missing = [name for name, done in [('deg_lookup or deg_sql', bool(state['lookups'])),
@@ -621,6 +627,7 @@ def tool(name, state_path, args_path, destination):
             state.pop('budget_warning', None)
             response['content'] = 'Type coverage accepted; continue quality review at resolution 2.0.'
         elif name == 'submit_quality':
+            from zmip.api import TYPE_KEY, QUALITY_KEY, validate_quality, apply_decisions
             missing = [name for name, done in [('submit_types', state.get('types_complete')),
                 ('check_qc_scores', state['qc']), ('deg_lookup or deg_sql', bool(state['lookups'])),
                 ('read_evidence on a lineage PNG figure', any(p.endswith('.png') for p in state['read']))] if not done]

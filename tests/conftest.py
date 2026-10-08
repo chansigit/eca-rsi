@@ -59,6 +59,7 @@ SCIENCE_ONLY = [
     "test_sample_map_derive.py",
     "test_sample_map_spec.py",
     "test_stress_policy.py",
+    "test_tool_imports.py",
     "test_top.py",
     "test_zoomin_reassign_guard.py",
     "test_zoomin_v2.py",

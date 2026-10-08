@@ -17,10 +17,7 @@ import os
 
 import numpy as np
 import pandas as pd
-import scanpy as sc
 import scipy.sparse as sp
-
-from .deg_logging import rank_genes_groups
 
 log = logging.getLogger(__name__)
 
@@ -212,6 +209,10 @@ def deg_frame(ad, cluster_key, cluster, ref_groups, remove_mask):
     ids pooled (deg_local_* semantics). remove_mask cells (recommend_removal,
     see Pre-annotation filtering) are excluded first, same as the precomputed
     CSVs."""
+    import scanpy as sc  # here, not at the top: the DEG lookup tools import this module and need no scanpy
+
+    from .deg_logging import rank_genes_groups
+
     base = ad[~remove_mask]
     lab = base.obs[cluster_key].astype(str)
     if cluster not in set(lab):

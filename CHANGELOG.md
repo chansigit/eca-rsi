@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Lookup tool calls no longer import scanpy.** Every agent tool call is a fresh `python -m ecarsi.stages.<stage>
+  tool` process, and before this each cross-sample and zoom-in call imported msp's integrate stack (scanpy, anndata,
+  sklearn, numba, matplotlib, zarr) before knowing which tool ran. Now `msp`, `zmip` and `osp` load their submodules
+  on first use (PEP 562; `from msp import integrate_adata` still works), msp `evidence` imports scanpy only in
+  `deg_frame` and msp `annotate` matplotlib only in `_plot`, and the stage `tool()` functions import kernel names in
+  the branch that uses them. In the compute image: read_evidence 7.5 s -> 0.8 s end to end, deg_lookup and deg_sql
+  7.5 s -> 2.3-2.5 s (they still import numpy, pandas and scipy, 1.7 s), outputs identical;
+  `tests/test_tool_imports.py` holds the import set.
 - **Minor-sibling QC no longer waits minutes on scipy's exact Mann-Whitney.** For a sibling of at most 8 cells
   without ties scipy computes the exact p-value with a recursion quadratic in U: one test against the ~280k pooled
   core cells of a parse-5M round took minutes, and the step took 3-33 min per integration in batch 2 depending on how

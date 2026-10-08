@@ -5,32 +5,26 @@ its agent annotation runs in eca-rsi's own sessions. The standalone command line
 with #28.
 """
 
-from .cluster import (
-    DEFAULT_QC_PCA_COVARIATES,
-    QC_OVERLAY_COLS,
-    cluster_and_deg,
-    run_one_sample_pipeline,
-)
-from .qc import (
-    DOUBLET_SCORE_REFERENCE,
-    SPECIES_GENE_PATTERNS,
-    assert_single_sample,
-    cluster_order,
-    decontx_top_genes,
-    qc_one_sample,
-)
-from .report import generate_report
+import importlib
 
-__all__ = [
-    "DEFAULT_QC_PCA_COVARIATES",
-    "DOUBLET_SCORE_REFERENCE",
-    "QC_OVERLAY_COLS",
-    "SPECIES_GENE_PATTERNS",
-    "assert_single_sample",
-    "cluster_and_deg",
-    "cluster_order",
-    "decontx_top_genes",
-    "generate_report",
-    "qc_one_sample",
-    "run_one_sample_pipeline",
-]
+# public name: submodule
+_LAZY = {
+    "DEFAULT_QC_PCA_COVARIATES": ".cluster",
+    "DOUBLET_SCORE_REFERENCE": ".qc",
+    "QC_OVERLAY_COLS": ".cluster",
+    "SPECIES_GENE_PATTERNS": ".qc",
+    "assert_single_sample": ".qc",
+    "cluster_and_deg": ".cluster",
+    "cluster_order": ".qc",
+    "decontx_top_genes": ".qc",
+    "generate_report": ".report",
+    "qc_one_sample": ".qc",
+    "run_one_sample_pipeline": ".cluster",
+}
+__all__ = sorted(_LAZY)
+
+
+def __getattr__(name):  # PEP 562: a submodule loads on first use, so `import osp` alone loads no scanpy
+    if name not in _LAZY:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return getattr(importlib.import_module(_LAZY[name], __name__), name)

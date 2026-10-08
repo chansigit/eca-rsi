@@ -4,16 +4,21 @@ proposals. eca-rsi's cross-sample stage calls it through ``msp.api`` (decision 0
 own sessions. The standalone command line and agent flows were removed with #28.
 """
 
-from .integrate import integrate_adata, load_and_merge
-from .plots import save_single_umap
-from .report import generate_report
+import importlib
 
 __version__ = "0.5.4"  # the last msp-sc release; since decision 0018 msp ships inside eca-rsi and has no version of its own
 
-__all__ = [
-    "__version__",
-    "integrate_adata",
-    "load_and_merge",
-    "generate_report",
-    "save_single_umap",
-]
+# public name: submodule
+_LAZY = {
+    "integrate_adata": ".integrate",
+    "load_and_merge": ".integrate",
+    "generate_report": ".report",
+    "save_single_umap": ".plots",
+}
+__all__ = ["__version__", *sorted(_LAZY)]
+
+
+def __getattr__(name):  # PEP 562: a submodule loads on first use, so `import msp` alone loads no scanpy
+    if name not in _LAZY:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return getattr(importlib.import_module(_LAZY[name], __name__), name)

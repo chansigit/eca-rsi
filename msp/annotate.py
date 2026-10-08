@@ -17,9 +17,6 @@ import logging
 import os
 import re
 
-import matplotlib
-
-matplotlib.use("Agg")
 import numpy as np
 import pandas as pd
 
@@ -337,6 +334,9 @@ def _palette(ad, col):
 
 
 def _plot(ad_full, ad_kept, figdir):
+    import matplotlib
+
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     from .plots import UMAP_DPI, save_single_umap, umap_axes
