@@ -8,6 +8,7 @@ from ..files import reference, verified
 from .common import RETAINED, STRESS_HOST_POLICY, artifact, sealed
 from ..files import lock, read, save
 from ..contracts import check
+from ..sample_mapping import BLANK_REASON
 
 
 def collect(unit_ref, *, complete=True):
@@ -282,7 +283,8 @@ def review_items(unit, exclusions, decisions, root=None, ledger=None):
     if 'operation' in exclusions:
         for reason, rows in exclusions[exclusions.operation.eq('persample.partition')].groupby('reason', sort=True):
             items.append(Item('policy_excluded', 0, 'per-sample', str(reason), n_cells=len(rows), action='remove',
-                note='excluded before OSP by the sample map (spec organize.sample_map)', link=exclusions_link))
+                note=("excluded before OSP: ECA-PP's sample column leaves them blank" if reason == BLANK_REASON
+                      else 'excluded before OSP by the sample map (spec organize.sample_map)'), link=exclusions_link))
     per_sample = verified(unit['per_sample'])
     for entry in per_sample.get('skipped_samples', []):
         items.append(Item('agent_skipped', 0, 'per-sample', entry['sample'], n_cells=entry['n_cells'],

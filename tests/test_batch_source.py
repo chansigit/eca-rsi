@@ -53,8 +53,12 @@ def test_decision_follows_the_sample_unit_eca_pp_names():
     d = eca_pp_decision(evidence(batch=adopted), values(batch=["S1", "S2"]))
     assert d["sample_column"] == "eca_pp_batch"
     assert "re-run identify-columns" in eca_pp_decision(evidence("split-pool"), {})["error"]
-    # cells the column leaves unassigned, or no ECA-PP result: the organize agent decides
+    # a column leaving more than 10 % of the cells blank, or no ECA-PP result: the organize agent decides
     assert eca_pp_decision(evidence(batch=adopted, unit="batch"), values(batch=["S1", None])) is None
+    # a few blank cells are dropped (#56)
+    d = eca_pp_decision(evidence(batch=adopted, unit="batch"), values(batch=["S1", "S2"] * 10 + [None] * 2))
+    assert (d["sample_column"], d["drop_blank"]) == ("eca_pp_batch", 0.0909)
+    assert "drop_blank" not in eca_pp_decision(evidence(batch=adopted, unit="batch"), values(batch=["S1", "S2"]))
     assert eca_pp_decision({}, {}) is None
 
 
@@ -252,3 +256,25 @@ def test_identify_columns_is_found_beside_a_standardize_input_root(tmp_path):
     (unit,), _ = discover(step)
     assert unit["name"] == "A"
     assert unit["identify_columns_result"] == str(step.parent / "identify_columns" / "result.json")
+
+
+def test_cells_eca_pp_leaves_blank_are_dropped_and_listed(tmp_path):
+    root, out = tmp_path / "in", tmp_path / "out"
+    step = source(root, n=12)
+    a = ad.read_h5ad(step / "standardized.h5ad")
+    a.obs["donor"] = ["D1"] * 6 + ["D2"] * 5 + [""]
+    a.write_h5ad(step / "standardized.h5ad")
+    batch = {"value": "donor", "kind": "existing", "label": "donor", "correction": "recommended"}
+    write_json(step.parent / "identify_columns" / "result.json", {
+        "schema_version": 2, "step": "identify_columns", "step_version": "0.5.4", "status": "ok", "exit_code": 0,
+        "platform": {"value": "droplet"}, "sample_unit": {"value": "batch", "reason": "batch 'donor'"},
+        "columns": {"batch": batch, "library": None, "cell_type": None}})
+    organize(root, out, {"sample_mapping": {},
+                         "analysis_units": [{"name": "u", "members": [{"source": "A", "obs_filter": None}]}]})
+    unit = L.unit_dir(out, "u")
+    mapping = read_json(L.input_manifest(unit))["sample_mapping"]
+    (rule,) = mapping["decision"]["exclude_cells"]
+    assert (rule["reason"], rule["proposed_by"], rule["n_cells"]) == ("eca-pp-blank-sample", "eca_pp", 1)
+    table = pd.read_csv(L.input_manifest(unit).parent / mapping["path"], index_col=0, keep_default_na=False)
+    assert table.excluded_reason.tolist() == [""] * 11 + ["eca-pp-blank-sample"]
+    assert table[SAMPLE_KEY].tolist()[-1] == "" and table[SAMPLE_KEY].iloc[:11].nunique() == 2

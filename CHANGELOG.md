@@ -4,6 +4,10 @@
 
 - **`ops/worker-node.sh` runs the worker script of `INFRA`'s version**, no longer the image's copy, so a GPU job
   submitted with it joins as a GPU worker (#58) once `INFRA` is 0.4.6 or later.
+- **ECA-PP's sample column may leave a few cells blank** (#56, owner 2026-10-08): up to 10 % of a source's cells
+  (`upstream.ECA_PP_BLANK_MAX`) are dropped before OSP as `eca-pp-blank-sample`, ledgered and listed under
+  needs_review `policy_excluded`; before, any blank cell handed the source to the organize agent (Li2019_skin's
+  patient column, 5.5 % blank, became 198 amplification batches).
 
 ## 0.4.6 — 2026-10-08
 

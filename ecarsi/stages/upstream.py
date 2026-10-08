@@ -12,6 +12,9 @@ from ..run_state import file_identity, read_json, write_json
 RESERVED = ("eca_source_cell_id", "eca_pp_batch", "eca_pp_cell_type", "eca_pp_library", "eca_sample_id")
 # ECA-PP identify-columns names each source's per-sample QC unit (0.5.4, decision 0016).
 SAMPLE_UNITS = ("library", "batch", "whole", "stop")
+# ECA-PP's sample column may leave up to this share of a source's cells blank; build_mapping drops them as a
+# policy exclusion (owner 2026-10-08, #56: Li2019_skin's patient column, 5.5 % blank). More: the agent decides.
+ECA_PP_BLANK_MAX = 0.10
 
 
 def is_run_root(p: Path) -> bool:
@@ -137,7 +140,8 @@ def load_evidence(unit: dict, obs):
 
 def eca_pp_decision(evidence: dict, values: dict) -> dict | None:
     """A source's experiment decision taken from ECA-PP identify-columns (decision 0016), or None when the
-    source has no such result or its column leaves cells unassigned: the organize agent decides those.
+    source has no such result or its column leaves more than ECA_PP_BLANK_MAX of the cells blank: the organize
+    agent decides those. A smaller blank share is dropped (`drop_blank`, sample_mapping.build_mapping).
 
     ECA-PP names the per-sample QC unit (identify-columns 0.5.4 `sample_unit`: library, batch, whole or
     stop) and keeps the rule; eca-rsi keeps no copy. Batch: ECA-PP's batch only when it recommends the
@@ -154,7 +158,8 @@ def eca_pp_decision(evidence: dict, values: dict) -> dict | None:
     if unit not in SAMPLE_UNITS:
         raise ValueError(f"ECA-PP sample_unit {unit!r} is not one of {SAMPLE_UNITS}")
     role = unit if unit in ("library", "batch") else None
-    if role and values[f"eca_pp_{role}"].isna().any():
+    blank = float(values[f"eca_pp_{role}"].isna().mean()) if role else 0.0
+    if blank > ECA_PP_BLANK_MAX:
         return None
     label = lambda block: block.get("label") or block.get("value")
     decision = {"sample_column": f"eca_pp_{role}" if role else None, "source": "eca_pp",
@@ -167,6 +172,8 @@ def eca_pp_decision(evidence: dict, values: dict) -> dict | None:
     elif role == "batch":
         decision["rationale"] = (f"ECA-PP batch {label(batch)!r} (correction {batch.get('correction')}): "
                                  + str(batch.get("evidence", ""))[:400])
+    if blank:
+        decision["drop_blank"] = round(blank, 4)
     else:
         reason = named.get("reason") or (
             f"identify-columns {evidence.get('step_version')} found no batch and names no sample unit "

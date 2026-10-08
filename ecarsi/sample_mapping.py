@@ -18,6 +18,9 @@ CHUNK_CELLS = 20000
 CHUNK = re.compile(r"\.chunk\d+$")  # generated sample IDs end in a digest; merge IDs must not end like this
 
 
+BLANK_REASON = "eca-pp-blank-sample"  # cells ECA-PP's sample column leaves blank
+
+
 def normalize(values):
     """Strings stripped; empty and NA spellings become missing."""
     s = values.astype("string").str.strip()
@@ -106,12 +109,6 @@ def build_mapping(h5ad: Path, unit: Path | None, spec: dict | None,
     rules = P.apply_rules(obs, spec.get("exclude_cells", []), excluded, "sample_map") if spec else []
     decisions, groups = {}, {}
     for source in sorted(sources.unique()):
-        part = obs.loc[(sources == source) & excluded.eq("")]
-        if part.empty:
-            raise ValueError(f"{source}: exclude_cells removed every cell of the source")
-        evidence = upstream.get(source, {})
-        profile = obs_profile(part)
-        profile.update(source=source, upstream=evidence)
         if spec is not None:
             decision = spec["sources"][source]
         elif column is not None:
@@ -120,6 +117,19 @@ def build_mapping(h5ad: Path, unit: Path | None, spec: dict | None,
             decision = {"sample_column": None, "confirmed_single": True, "rationale": "explicit --single-sample"}
         else:
             raise ValueError("a sample mapping needs a spec, a sample column or a single sample")
+        if spec is not None and decision.get("drop_blank"):
+            # ECA-PP's sample column leaves a few cells blank (upstream.ECA_PP_BLANK_MAX, #56): dropped like a rule
+            col = decision["sample_column"]
+            m = (sources == source) & excluded.eq("") & normalize(obs[col]).isna()
+            excluded[m] = BLANK_REASON
+            rules.append({"blank": [col], "reason": BLANK_REASON, "proposed_by": "eca_pp", "n_cells": int(m.sum()),
+                          "rationale": f"{source}: ECA-PP's sample column leaves these cells blank"})
+        part = obs.loc[(sources == source) & excluded.eq("")]
+        if part.empty:
+            raise ValueError(f"{source}: exclude_cells removed every cell of the source")
+        evidence = upstream.get(source, {})
+        profile = obs_profile(part)
+        profile.update(source=source, upstream=evidence)
         derive = decision.get("derive_from_cell_id") if spec is not None else None
         missing_as = decision.get("missing_as") if spec is not None else None
         if derive is not None:
