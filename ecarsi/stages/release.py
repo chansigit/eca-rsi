@@ -153,7 +153,7 @@ def reassign_items(entry, quality):
             bounce = flag.get('recurring') or {}
             note = (f"[already moved in {bounce['round']}, {bounce['share']:.0%} of cells] " if bounce else '') + flag.get('rationale', '')
             items.append(Item('reassigned', entry['round'], entry['stage'], entry['scope'],
-                str(cluster.get('cluster_id', '')) + ':' + ','.join(flag.get('type_clusters', [])),
+                str(cluster.get('cluster_id', '')) + ':' + ','.join(flag.get('type_clusters', [])), n_cells=flag.get('n_cells'),
                 label=str(flag.get('fine_label', '')), action='→ ' + str(flag.get('reassign_to', '')),
                 confidence=str(flag.get('confidence', '')), note=note, link=entry['source'].get('link', entry['source']['path']),
                 extra={'reassign_to': flag.get('reassign_to', '')}))

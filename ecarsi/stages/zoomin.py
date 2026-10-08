@@ -144,18 +144,42 @@ def own_marker_positivity(data, genes, cells=None):
     return float((matrix > 0).mean())
 
 
-def previous_reassignment(obs, lineage, target):
-    """The previous round's zoom-in already moved these cells from this lineage to the target and the global
-    round clustered them back here: a population bouncing between two lineages every round."""
+def previous_reassignment(obs):
+    """An earlier round's zoom-in already moved at least half of these cells and a later global round clustered
+    them here again: a population bouncing between lineages. Matched on the cells (every round's
+    `rNN_zmip_reassigned_from`), not on labels: renamed targets and a quiet round in between hid 1,312 repeat
+    movers of batches 1-2 (#55). The round named is the latest one that moved any of them."""
     columns = sorted(c for c in obs.columns if re.fullmatch(r'r\d+_zmip_reassigned_from', c))
     if not columns or not len(obs):
         return None
-    prefix = columns[-1][:-len('zmip_reassigned_from')]
-    moved = obs[columns[-1]].astype(str).eq(lineage)
-    if prefix + 'zmip_ann_coarse' in obs:
-        moved &= obs[prefix + 'zmip_ann_coarse'].astype(str).eq(target)
+    moves = obs[columns].astype(str).replace({'nan': '', 'None': '', '<NA>': ''}).ne('')
+    moved = moves.any(axis=1)
     share = float(moved.mean())
-    return dict(round=prefix.rstrip('_'), share=round(share, 3), cells=int(moved.sum())) if share >= 0.5 else None
+    if share < 0.5:
+        return None
+    latest = [c for c in columns if moves[c].any()][-1]
+    return dict(round=latest[:-len('_zmip_reassigned_from')], share=round(share, 3), cells=int(moved.sum()))
+
+
+def reassign_problems(groups, data, own_markers, core):
+    """Every reassignment the host refuses, one line each, so a proposal with several bad entries costs one
+    rejection (65 lineage sessions spent a turn per entry, #55); records `recurring` and `n_cells` on each entry."""
+    from zmip.api import TYPE_KEY, QUALITY_KEY
+    t, q = data.obs[TYPE_KEY].astype(str), data.obs[QUALITY_KEY].astype(str)
+    problems = []
+    for group in groups:
+        for entry in group['decisions']:
+            if entry['action'] != 'reassign':
+                continue
+            ids = data.obs.index[q.eq(group['cluster_id']) & t.isin(entry['type_clusters'])]
+            previous = previous_reassignment(data.obs.loc[ids])
+            if previous:
+                entry['recurring'] = previous
+            entry['n_cells'] = len(ids)
+            problem = reassign_problem(len(ids), own_marker_positivity(data, own_markers, ids), core, entry['reassign_to'], previous)
+            if problem:
+                problems.append(f"[{group['cluster_id']}:{','.join(entry['type_clusters'])}] {problem}")
+    return problems
 
 
 def reassign_problem(n_cells, share, core, target, previous):
@@ -169,8 +193,8 @@ def reassign_problem(n_cells, share, core, target, previous):
             f'lineage\'s markers together with another lineage\'s is a doublet, not a misassignment: submit remove with '
             f'remove_reason "doublet", or keep it in this lineage with evidence.')
     if previous:
-        text += (f' It was already reassigned from this lineage to {target!r} in {previous["round"]} '
-                 f'({previous["share"]:.0%} of these cells) and clustered back here.')
+        text += (f' {previous["share"]:.0%} of these cells were already reassigned in {previous["round"]} '
+                 f'and clustered back here.')
     return text
 
 
@@ -640,18 +664,10 @@ def tool(name, state_path, args_path, destination):
             lineage = bundle['lineage']['name']  # not `name`: the rejection hint below needs the tool's name
             own_markers = verified(bundle['shared'])['markers'].get(lineage, []) if bundle.get('shared') else []
             core = own_marker_positivity(data, own_markers)
+            problems = reassign_problems(proposal["clusters"], data, own_markers, core)
+            if problems:
+                raise ValueError('\n'.join(problems))
             t, q = data.obs[TYPE_KEY].astype(str), data.obs[QUALITY_KEY].astype(str)
-            for group in proposal['clusters']:
-                for entry in group['decisions']:
-                    if entry['action'] != 'reassign':
-                        continue
-                    ids = data.obs.index[q.eq(group['cluster_id']) & t.isin(entry['type_clusters'])]
-                    previous = previous_reassignment(data.obs.loc[ids], lineage, entry['reassign_to'])
-                    if previous:
-                        entry['recurring'] = previous
-                    problem = reassign_problem(len(ids), own_marker_positivity(data, own_markers, ids), core, entry['reassign_to'], previous)
-                    if problem:
-                        raise ValueError(problem)
             retained = quality_guard(bundle, data, proposal, t, q)
             pre, _ = numerical_reasons(bundle,data)
             _, removed, _, _ = apply_decisions(data.obs,state['types'],proposal,own,other,bundle['lineage']['name'],pre)

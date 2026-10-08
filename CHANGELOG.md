@@ -4,6 +4,10 @@
 
 - **`ops/worker-node.sh` runs the worker script of `INFRA`'s version**, no longer the image's copy, so a GPU job
   submitted with it joins as a GPU worker (#58) once `INFRA` is 0.4.6 or later.
+- **Zoom-in reassign follow-ups (#55):** a proposal with several refused reassignments gets one rejection naming
+  every entry (65 lineage sessions of batches 1-2 spent a turn per entry); needs_review `reassigned` items carry
+  their cell counts; a recurring move is matched on the cells across every earlier round, not on the latest
+  round's target label (1,312 repeat movers were missed behind renamed labels or a quiet round).
 - **Tests: one layer in 10-30 s, the whole suite in about 1.5 min** (`ops/test-lane.sh <layer>|all`, pytest-xdist).
   The suite took 6 min on one core; 160 s of it were four cross-sample workflow tests paying `check_pool`'s 20 s
   activity-side wait for each 'waiting' answer, now switched off there (tests/test_long_poll.py covers the wait).

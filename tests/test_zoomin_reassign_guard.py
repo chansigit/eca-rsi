@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ecarsi.stages.zoomin import REASSIGN_OWN_MARKER_FRACTION, own_marker_positivity, previous_reassignment, reassign_problem
+from ecarsi.stages.zoomin import REASSIGN_OWN_MARKER_FRACTION, own_marker_positivity, previous_reassignment, reassign_problem, reassign_problems
 
 ad = pytest.importorskip('anndata')
 
@@ -31,14 +31,30 @@ def test_a_mixed_profile_is_refused_and_a_clean_population_passes():
     assert reassign_problem(5, 0.7, None, 'T cell', None) == ''   # no markers for this lineage: nothing to judge by
 
 
-def test_the_previous_round_bounce_is_detected_and_named():
-    obs = pd.DataFrame({'r06_zmip_reassigned_from': ['Myeloid'] * 4 + [''],
-                        'r06_zmip_ann_coarse': ['T cell'] * 4 + ['Myeloid cell'],
+def test_an_earlier_move_of_the_same_cells_recurs_whatever_the_labels_and_rounds_between():
+    # moved in r04 under one target name, untouched in r05, proposed again in r06: the cells decide (#55 item 3)
+    obs = pd.DataFrame({'r04_zmip_reassigned_from': ['Distal nephron'] * 3 + [None, ''],
+                        'r04_zmip_ann_coarse': ['Proximal tubule cell'] * 3 + ['x', 'x'],
                         'r05_zmip_reassigned_from': [''] * 5}, index=list('abcde'))
-    bounce = previous_reassignment(obs, 'Myeloid', 'T cell')
-    assert bounce == dict(round='r06', share=0.8, cells=4)
-    assert previous_reassignment(obs, 'Myeloid', 'B cell') is None
-    assert previous_reassignment(obs.drop(columns=['r06_zmip_reassigned_from', 'r05_zmip_reassigned_from']), 'Myeloid', 'T cell') is None
-    assert previous_reassignment(obs.iloc[:0], 'Myeloid', 'T cell') is None
-    text = reassign_problem(5, 0.8, 0.8, 'T cell', bounce)
-    assert 'already reassigned from this lineage to \'T cell\' in r06 (80% of these cells)' in text
+    bounce = previous_reassignment(obs)
+    assert bounce == dict(round='r04', share=0.6, cells=3)
+    assert previous_reassignment(obs.iloc[3:]) is None                                    # under half moved before
+    assert previous_reassignment(obs.drop(columns=['r04_zmip_reassigned_from', 'r05_zmip_reassigned_from'])) is None
+    assert previous_reassignment(obs.iloc[:0]) is None
+    text = reassign_problem(5, 0.8, 0.8, 'Proximal tubule', bounce)
+    assert '60% of these cells were already reassigned in r04' in text
+
+
+def test_every_refused_entry_is_reported_at_once_with_its_cell_count():
+    data = lineage()
+    data.obs['msp_leiden_r1.0'] = ['1'] * 10 + ['2'] * 5 + ['3'] * 5
+    data.obs['msp_leiden_r2.0'] = ['9'] * 20
+    groups = [dict(cluster_id='9', decisions=[
+        dict(action='reassign', type_clusters=['2'], reassign_to='T cell'),       # doublets: refused
+        dict(action='keep', type_clusters=['1']),
+        dict(action='reassign', type_clusters=['3'], reassign_to='T cell'),       # clean: passes
+        dict(action='reassign', type_clusters=['1'], reassign_to='B cell')])]     # the core itself: refused
+    own = ['LYZ', 'CD68']
+    problems = reassign_problems(groups, data, own, own_marker_positivity(data, own))
+    assert [p.split(']')[0] for p in problems] == ['[9:2', '[9:1'] and all('rejected' in p for p in problems)
+    assert [d.get('n_cells') for d in groups[0]['decisions']] == [5, None, 5, 10]

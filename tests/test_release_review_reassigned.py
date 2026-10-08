@@ -9,7 +9,7 @@ def entry(number):
 
 def quality(fine, recurring=None):
     decision = dict(type_clusters=['6'], action='reassign', reassign_to='T cell', fine_label=fine, confidence='high',
-                    rationale='canonical T markers')
+                    rationale='canonical T markers', n_cells=67)
     if recurring:
         decision['recurring'] = recurring
     return dict(clusters=[dict(cluster_id='9', decisions=[decision, dict(type_clusters=['2'], action='keep', confidence='high')])])
@@ -19,6 +19,7 @@ def test_reassignments_become_review_items_and_recur_across_rounds_despite_diffe
     items = reassign_items(entry(6), quality('CD3D+ T cell')) + reassign_items(entry(7), quality('T cell', dict(round='r06', share=0.97, cells=67)))
     assert [it.kind for it in items] == ['reassigned', 'reassigned']
     assert items[0].cluster == '9:6' and items[0].action == '→ T cell' and items[0].extra == {'reassign_to': 'T cell'}
+    assert items[0].n_cells == 67   # from the decision the host counted (#55 item 2)
     assert items[1].note.startswith('[already moved in r06, 97% of cells] canonical')
     _mark_recurring(items)
     assert items[0].extra['recurs_in_rounds'] == [6, 7] and items[1].extra['recurs_in_rounds'] == [6, 7]
