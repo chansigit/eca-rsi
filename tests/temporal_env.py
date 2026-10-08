@@ -40,6 +40,10 @@ def ready(pool_root, request_id, output):
 async def temporal(workflows, activities):
     """A client of a fresh time-skipping server whose worker runs `workflows` and `activities` (sync ones
     in a thread pool, async ones on the worker's loop); timers such as await_pool's polls are skipped."""
+    activities = list(activities)
+    if "before_child" not in {a.__temporal_activity_definition.name for a in activities}:
+        # 0022: every parent asks before_child before a child; a test that does not fake it keeps its queue, no brake
+        activities += fakes(before_child=lambda control: dict(task_queue=None, brake=None))
     async with await WorkflowEnvironment.start_time_skipping() as env:
         with ThreadPoolExecutor(16) as threads:
             async with Worker(

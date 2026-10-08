@@ -10,7 +10,7 @@ from temporalio.exceptions import ApplicationError
 
 from .. import layout as L
 from ..contracts import check
-from .common import await_pool, call, stage_with_waits
+from .common import await_pool, brake_if_asked, call, stage_with_waits, start_child
 
 
 def validate_spec(spec):
@@ -170,8 +170,9 @@ def request_states(pool_root, bridge_root, identities, superseded, sessions):
 async def resume_dataset(client, identity, task_queue, reason):
     """New Temporal run, same immutable dataset and accepted external request IDs.
 
-    task_queue None means the queue the previous run was started on: a run started on a queue
-    no coordinator polls sits at its first workflow task forever (2026-09-16, Eye)."""
+    task_queue None means the queue the previous run was started on (the coordinator's main passes the
+    current version's queue, 0022): a run started on a queue no coordinator polls sits at its first
+    workflow task forever (2026-09-16, Eye)."""
     from temporalio.common import WorkflowIDReusePolicy
     from ..files import immutable, reference
     from ..files import read, digest
@@ -432,9 +433,9 @@ def dataset_step(action, args):
         from ..round_policy import read_control
         spec, unit, stage = args
         control = read_control(L.unit_dir(Path(spec['output_root']), unit['name']))
-        if control.get('pause_after_stage') != stage:
+        if control.get('pause_after_stage') != stage and control.get('brake') != 'stage':
             return None
-        return (f'PAUSED: loop_control stopped the unit after {stage}; clear pause_after_stage '
+        return (f'PAUSED: loop_control stopped the unit after {stage}; clear pause_after_stage or the brake '
                 'and resume the dataset to continue')
     if action == 'round':
         from ..round_policy import decide_with_control, read_control, resolve
@@ -474,8 +475,10 @@ def dataset_step(action, args):
             policy = resolve(spec['round_policy'], control)
             decision, reason = decide_with_control(n, stats, spec['round_policy'], control)
             stats[-1].update(decision=decision, reason=reason)
+            from .. import version
             record = immutable(path, check('round', dict(round=n, stats=stats[-1],
                 cross_sample=reference(cross_path), zoom_in=reference(zoom_path), policy=policy,
+                version=(version() or {}).get('name'),  # the version that decided this round (0022)
                 **({'control': control} if control else {}), **({'control_notes': notes} if notes else {}))))
         result = dict(per_sample=progress['per_sample'], input=zoom_path, stats=stats, rounds=progress['rounds'] + [record])
         for note in notes:
@@ -485,8 +488,9 @@ def dataset_step(action, args):
         if decision == 'release':
             first = verified(reference(progress['per_sample']))
             path = directory.parent.parent / 'publication.json'
+            versions = sorted({v for v in [first.get('version')] + [verified(r).get('version') for r in result['rounds']] if v})
             immutable(path, check('unit', dict(state='complete', unit=unit, per_sample=reference(progress['per_sample']),
-                rounds=result['rounds'], final=reference(zoom_path), policy=policy,
+                rounds=result['rounds'], final=reference(zoom_path), policy=policy, versions=versions,
                 n_input=first['n_input'], n_survived=n_out, n_removed=first['n_input']-n_out,
                 forced_release=reason.startswith('FORCED:'), reason=reason)))
             result['publication'] = str(path)
@@ -559,6 +563,7 @@ def dataset_step(action, args):
         path = Path(spec['output_root']) / 'publication.json'
         publication = dict(state='incomplete' if failures else 'complete', dataset_id=spec['dataset_id'],
             units=publications, failed_units=failures, forced_release=any(u['forced_release'] for u in units),
+            versions=sorted({v for u in units for v in u.get('versions', [])}),  # every version that ran a stage (0022)
             n_input=sum(u['n_input'] for u in units), n_survived=sum(u['n_survived'] for u in units),
             n_removed=sum(u['n_removed'] for u in units))
         check('dataset', publication)
@@ -573,6 +578,20 @@ def dataset_step(action, args):
             save(path, publication)
         return str(path)
     raise ValueError('Unknown dataset operation')
+
+
+async def hard_brake(client, identity, reason):
+    """The hard brake (0022): terminate the dataset workflow now; its children end with it (parent close policy),
+    pool tasks already on a worker run out and are discarded, every directory stays, `resume-dataset` continues."""
+    if not reason.strip():
+        raise ValueError('A brake reason is required')
+    handle = client.get_workflow_handle(identity)
+    info = await handle.describe()
+    if info.status.name != 'RUNNING':
+        raise ValueError(f'{identity} is {info.status.name}, not running')
+    await handle.terminate(reason='hard brake: ' + reason)
+    return dict(workflow_id=identity, run_id=info.run_id, terminated=True,
+                resume=f'resume-dataset {identity.split("/", 1)[1]} --reason ...')
 
 
 async def pause_if_asked(spec, unit, stage):
@@ -620,13 +639,15 @@ class AnalysisUnitWorkflow:
         from .persample import PersampleWorkflow
         from .crosssample import CrosssampleWorkflow
         from .zoomin import ZoominWorkflow
+        # the unit directory whose loop_control.json may brake: L.unit_dir without Path (the sandbox); tests pass bare dicts
+        control = f"{spec['output_root']}/{L.UNITS}/{unit['name']}" if spec.get('output_root') and unit.get('name') else None
         async def execute(kind, source, number, run, prefix):
             stage = await call(dataset_step, 'resume_stage' if resume else 'stage', [spec, unit, kind, source, number])
             if resume:
                 completed = await call(dataset_step, 'completed', [kind, stage])
                 if completed:
                     return completed
-            return await workflow.execute_child_workflow(run, stage, id=prefix + stage['run_id'])
+            return await (await start_child(run, [stage], prefix + stage['run_id'], control))
         if progress is None:
             self._stage = 'per-sample'
             output = await execute('per_sample', None, 0, PersampleWorkflow.run, 'persample/')
@@ -659,6 +680,7 @@ class AnalysisUnitWorkflow:
             # contract `resume-dataset` already serves, and generation 1's exit code 3.
             raise ApplicationError(progress['paused'], non_retryable=True)
         if 'publication' in progress:
+            await brake_if_asked(control)
             self._stage = 'publishing final results'
             request = await call(dataset_step, 'release', [spec, progress['publication']])
             result = await await_pool(spec, request)
@@ -683,13 +705,13 @@ class DatasetWorkflow:
         stage = await call(dataset_step, 'organize', [spec])
         organized = await call(dataset_step, 'completed', ['organize', stage]) if resume else None
         if organized is None:
-            organized = await workflow.execute_child_workflow(OrganizeWorkflow.run, stage, id='organize/' + stage['run_id'])
+            organized = await (await start_child(OrganizeWorkflow.run, [stage], 'organize/' + stage['run_id']))
         await show(spec, 'organize')
         units = await call(dataset_step, 'units', [organized])
         pending = {}
         for index, unit in enumerate(units):
-            child = await workflow.start_child_workflow(AnalysisUnitWorkflow.run, args=[spec, unit, None, True] if resume else [spec, unit],
-                id=workflow.info().workflow_id + '/unit-' + str(index))
+            child = await start_child(AnalysisUnitWorkflow.run, [spec, unit, None, True] if resume else [spec, unit],
+                                      workflow.info().workflow_id + '/unit-' + str(index))
             pending[child] = unit['name']
         results, failures = [], []
         while pending:

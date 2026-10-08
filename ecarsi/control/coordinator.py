@@ -239,7 +239,33 @@ class OrganizeWorkflow:
         return await call(accept_organize, completion, spec["output_root"])
 
 
-ACTIVITIES = [submit_prepare, submit_execute, check_pool, check_bridge, accept_organize, organize_agent_step]
+@activity.defn
+async def before_child(control: str | None) -> dict:
+    """What a parent needs before its next child workflow (0022): the current version's queue, when that version
+    has a coordinator polling it (as ops/set-current.sh checks; None otherwise: the child inherits the parent's
+    queue), and the brake of the unit's loop_control.json, read fresh. `control` None: no brake to read."""
+    from .. import current_queue
+    from ..round_policy import read_control
+    answer = dict(task_queue=None, brake=None)
+    queue = current_queue()
+    if queue and queue != activity.info().task_queue and _CLIENT is not None:
+        from temporalio.api.enums.v1 import TaskQueueType
+        from temporalio.api.taskqueue.v1 import TaskQueue
+        from temporalio.api.workflowservice.v1 import DescribeTaskQueueRequest
+        described = await _CLIENT.workflow_service.describe_task_queue(DescribeTaskQueueRequest(
+            namespace=_CLIENT.namespace, task_queue=TaskQueue(name=queue),
+            task_queue_type=TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW))
+        if described.pollers:
+            answer['task_queue'] = queue
+    if control:
+        answer['brake'] = read_control(control).get('brake')
+    return answer
+
+
+_CLIENT = None  # the worker's Temporal client, for before_child's poller check
+
+
+ACTIVITIES = [submit_prepare, submit_execute, check_pool, check_bridge, accept_organize, organize_agent_step, before_child]
 
 
 @activity.defn
@@ -471,6 +497,8 @@ async def run_worker(client, task_queue, workflow_slots=None, activity_slots=Non
     activity_slots = ACTIVITY_SLOTS if activity_slots is None else activity_slots
     if activity_slots < 1:
         raise ValueError("Activity slots must be positive")
+    global _CLIENT
+    _CLIENT = client
     # The SDK default permits 500 concurrent replays; cold recovery must fit this host.
     # Check activities now wait up to POLL_WAIT_SECONDS each, so slots must cover every
     # in-flight pool request and model turn of this coordinator's workflows, not just bursts.
@@ -522,9 +550,10 @@ async def main():
     connection = parser.add_mutually_exclusive_group(required=True)
     connection.add_argument("--temporal", help="explicit Temporal Service host:port")
     connection.add_argument("--service-root", type=Path, help="shared Temporal service discovery directory")
-    from .. import task_queue, version
-    queue = task_queue()  # an execution stays on its version: this code serves and starts only its own queue
-    parser.add_argument("--task-queue", help="default %s; resume commands default to the queue of the run they resume" % queue)
+    from .. import current_queue, task_queue, version
+    queue = task_queue()  # this code serves and starts only its own queue; children move to the current version (0022)
+    parser.add_argument("--task-queue", help="default %s; resume-dataset defaults to the current version's queue, "
+                        "else the queue of the run it resumes" % queue)
     commands = parser.add_subparsers(dest="command", required=True)
     p = commands.add_parser("worker")
     p.add_argument("--workflow-slots", type=int, help="concurrent workflow activations; default 2 to keep polling responsive and bound Python history replay; activities and Pool tasks remain concurrent")
@@ -546,6 +575,10 @@ async def main():
     p = commands.add_parser("resume-dataset")
     p.add_argument("run_id")
     p.add_argument("--reason", required=True)
+    p = commands.add_parser("brake", help="the hard brake (0022): terminate a running dataset now, keep its directories, resume later")
+    p.add_argument("run_id")
+    p.add_argument("--hard", action="store_true", required=True, help="the softer brakes are loop_control.json's brake key")
+    p.add_argument("--reason", required=True)
     p = commands.add_parser("set-persample-limit")
     p.add_argument("run_id")
     p.add_argument("limit", type=int)
@@ -559,6 +592,8 @@ async def main():
     args = parser.parse_args()
     if args.task_queue is None and not args.command.startswith("resume-"):
         args.task_queue = queue
+    if args.task_queue is None and args.command == "resume-dataset":
+        args.task_queue = current_queue()  # None for a checkout: the queue the run was started on
     if args.command == "worker" and version() and args.task_queue != queue:
         parser.error(f"version {version()['name']} serves only its own queue {queue}, not {args.task_queue}")
     if args.command == 'worker' and args.service_root:
@@ -627,6 +662,10 @@ async def main():
         from ..warm_pool.state import identifier
         handle = await resume_dataset(client, 'dataset/' + identifier(args.run_id), args.task_queue, args.reason)
         print(json.dumps(dict(workflow_id=handle.id, run_id=handle.result_run_id)))
+    elif args.command == 'brake':
+        from .dataset import hard_brake
+        from ..warm_pool.state import identifier
+        print(json.dumps(await hard_brake(client, 'dataset/' + identifier(args.run_id), args.reason)))
     else:
         from ..warm_pool.state import identifier
         from .persample import PersampleWorkflow

@@ -63,3 +63,19 @@ def test_read_control_validates_and_never_raises(tmp_path):
     for bad in ('{"cap": 0}', '{"cap": true}', '{"nope": 1}', '[1]', 'not json', '{"stop_after_round": "9"}'):
         (unit / round_policy.CONTROL_FILE).write_text(bad)
         assert round_policy.read_control(unit) == {}
+
+
+def test_brake_round_and_stage_are_the_old_pause_keys_and_step_is_new(tmp_path):
+    from ecarsi.round_policy import decide_with_control, read_control
+    POLICY = dict(rounds=None, cap=15, extra_rounds_after_convergence=0, max_removed=1000)
+    save = lambda path, value: path.write_text(json.dumps(value))
+    save(tmp_path / "loop_control.json", {"brake": "round"})
+    assert read_control(tmp_path) == {"brake": "round"}
+    assert decide_with_control(1, [dict(n_in=100, n_out=100, removed=0, frac=0.0)], POLICY, {"brake": "round"})[0] == "pause"
+    assert decide_with_control(1, [dict(n_in=100, n_out=100, removed=0, frac=0.0)], POLICY, {"brake": "step"})[0] != "pause"
+    for value in ("stage", "step", None):
+        save(tmp_path / "loop_control.json", {"brake": value})
+        assert read_control(tmp_path) == {"brake": value}
+    notes = []
+    save(tmp_path / "loop_control.json", {"brake": "hard"})
+    assert read_control(tmp_path, on_error=notes.append) == {} and "brake must be" in notes[0]

@@ -41,6 +41,8 @@ image first needs a dependency lock), retiring versions, contracts on the files 
 both read, and showing the version on Periscope; then the workflow `deprecate_patch` lines and the replay check stop
 being deployment steps (0003), and `switch-images.sh` retires.
 
+**Revised by 0022 (2026-10-08):** an execution no longer stays on the version that started it; every child workflow starts on the current version when it has a coordinator.
+
 **Status 2026-10-06.** The first version became current at 04:10 after its gate passed beside production; the
 second (the kernels without their standalone flows, #28) at 11:05 after its gate ran beside the first one's, every
 workflow on its own queue and no turn planned with another version's adapter. `ops/control-plane.sh` starts the

@@ -6,7 +6,7 @@ from temporalio import activity, workflow
 from temporalio.exceptions import ApplicationError
 
 from ..contracts import check
-from .common import SKIPPED_CELL_LIMIT, await_pool, call, stage_with_waits
+from .common import SKIPPED_CELL_LIMIT, await_pool, call, stage_with_waits, start_child
 
 def sample_summary(records, skipped, failed):
     """What the unit page shows per sample. The numbers live in each sample's final.json
@@ -163,8 +163,10 @@ def sample_step(action, args):
             raise ValueError("Per-sample sample/cell conservation failed")
         materialize_reports(root, records)
         save(root / "samples.json", sample_summary(records, skipped, failed))
+        from .. import version
         publication = {
             "state": "incomplete" if failed else "complete", "input": spec["input_manifest"],
+            "version": (version() or {}).get("name"),  # the version that ran this stage (0022)
             "samples": [reference(p) for p in results], "failed_samples": failed, "skipped_samples": skipped,
             "n_input": totals["n_input"], "n_survived": n_kept,
             "n_removed": n_removed + totals["n_excluded"], "partition_exclusions": totals["exclusions"]}
@@ -304,8 +306,22 @@ class PersampleWorkflow:
         prepared_limit = spec.get('max_prepared_samples', max(32, spec['max_in_flight_samples'] * 4))
         offset, total, pending, completed, failed, parent = 0, None, {}, [], [], None
         totals, inputs, replayed = None, {}, set()
+        control = spec["output_root"].rsplit("/", 1)[0]  # the unit directory, whose loop_control.json may brake
+        braked = False
+        async def start(args, identity):
+            nonlocal braked
+            try:
+                return await start_child(SampleWorkflow.run, args, identity, control)
+            except ApplicationError as exc:
+                if not exc.message.startswith("PAUSED"):
+                    raise
+                braked = True  # the step brake (0022): nothing new starts, the samples running finish
+                return None
         while True:
-            recover = bool(failed)
+            if braked and not pending:
+                raise ApplicationError("PAUSED: loop_control brake step stopped the per-sample stage; "
+                                       "clear the brake and resume the dataset to continue", non_retryable=True)
+            recover = bool(failed) and not braked
             if recover:
                 for failure in list(failed):
                     if len(pending) >= prepared_limit:
@@ -314,16 +330,16 @@ class PersampleWorkflow:
                     if sample in replayed or not await call(sample_step, "recoverable", [spec, sample]):
                         continue
                     entry, predecessor, identity = inputs[sample]
-                    handle = await workflow.start_child_workflow(SampleWorkflow.run,
-                        args=[spec, entry, predecessor, True],
-                        id=identity + "/recovered")
+                    handle = await start([spec, entry, predecessor, True], identity + "/recovered")
+                    if handle is None:
+                        break
                     pending[handle] = sample
                     replayed.add(sample)
                     failed.remove(failure)
             if total is not None and offset >= total and not pending:
                 break
             computing = sum(sample not in self._computed for sample in pending.values())
-            if ((total is None or offset < total) and computing <= self._in_flight_limit - spec["batch_size"]
+            if (not braked and (total is None or offset < total) and computing <= self._in_flight_limit - spec["batch_size"]
                     and len(pending) <= prepared_limit - spec['batch_size']):
                 self._stage = "partitioning"
                 request = await call(sample_step, "partition", [spec, offset, parent])
@@ -334,11 +350,12 @@ class PersampleWorkflow:
                 for index, entry in enumerate(batch["entries"]):
                     # IDs depend on immutable sample order, not worker placement or completion order.
                     identity = workflow.info().workflow_id + "/sample-" + str(offset - len(batch["entries"]) + index)
-                    handle = await workflow.start_child_workflow(SampleWorkflow.run,
-                        args=[spec, entry, parent, True], id=identity)
-                    pending[handle] = entry["sample_id"]
                     inputs[entry["sample_id"]] = (entry, parent, identity)
-                if not pending and offset < total:
+                    handle = await start([spec, entry, parent, True], identity)
+                    if handle is None:
+                        break
+                    pending[handle] = entry["sample_id"]
+                if not pending and offset < total and not braked:
                     raise ApplicationError("Partition made no progress", non_retryable=True)
                 continue
             self._stage = "processing samples"

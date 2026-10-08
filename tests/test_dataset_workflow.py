@@ -339,3 +339,59 @@ def test_failed_unit_does_not_cancel_its_running_sibling():
     (spec, results, failures), = published
     assert spec == {} and results == ['healthy.json'] and [f['unit'] for f in failures] == ['failed']
     assert failures[0]['error'] == 'scientific failure'  # the cause, not 'Child Workflow execution failed'
+
+
+# Decision 0022: every child workflow starts on the current version's queue, and the step brake.
+
+def test_stage_children_start_on_the_queue_before_child_answers(tmp_path):
+    """The unit runs on QUEUE; `before_child` names 'tests-b' (the current version with a coordinator), so every
+    stage child runs there. None would keep them on QUEUE, as Temporal does by default."""
+    from temporalio.worker import UnsandboxedWorkflowRunner, Worker
+    actions, asked = [], []
+    def before(control):
+        asked.append(control)
+        return dict(task_queue='tests-b', brake=None)
+    async def main():
+        async with temporal([AnalysisUnitWorkflow], fakes(dataset_step=unit_step(actions), check_pool=ready, before_child=before)) as client:
+            async with Worker(client, task_queue='tests-b', workflows=[Persample, Crosssample, Zoomin],
+                              workflow_runner=UnsandboxedWorkflowRunner()):
+                await client.execute_workflow(AnalysisUnitWorkflow.run, args=[BUDGET | {'output_root': 'run'}, {'name': 'u'}],
+                                              id='unit/test', task_queue=QUEUE)
+            return {wid: (await client.get_workflow_handle(wid).describe()).task_queue
+                    for wid in ('persample/stage', 'cross-sample/stage', 'zoom-in/stage')}
+    queues = asyncio.run(main())
+    assert set(queues.values()) == {'tests-b'}, queues
+    assert asked == ['run/units/u'] * 4   # three children and the release step read the unit's loop_control
+
+
+def test_the_step_brake_ends_the_unit_before_its_next_child(tmp_path):
+    actions, calls = [], []
+    def before(control):
+        calls.append(control)
+        return dict(task_queue=None, brake='step' if len(calls) > 1 else None)
+    with pytest.raises(WorkflowFailureError) as failure:
+        asyncio.run(run_unit(fakes(dataset_step=unit_step(actions), check_pool=ready, before_child=before),
+                             BUDGET | {'output_root': 'run'}, {'name': 'u'}))
+    assert str(failure.value.cause).startswith('PAUSED: loop_control brake step')
+    assert actions == ['stage', 'stage']   # per-sample ran; cross-sample was prepared but never started (no 'round')
+
+
+@workflow.defn(name='Sleeper')
+class Sleeper:
+    @workflow.run
+    async def run(self):
+        await workflow.wait_condition(lambda: False)
+
+
+def test_the_hard_brake_terminates_a_running_dataset_and_refuses_a_closed_one():
+    from ecarsi.control.dataset import hard_brake
+    async def main():
+        async with temporal([Sleeper], []) as client:
+            await client.start_workflow(Sleeper.run, id='dataset/sleepy', task_queue=QUEUE)
+            answer = await hard_brake(client, 'dataset/sleepy', 'owner asked')
+            status = (await client.get_workflow_handle('dataset/sleepy').describe()).status.name
+            with pytest.raises(ValueError, match='not running'):
+                await hard_brake(client, 'dataset/sleepy', 'again')
+            return answer, status
+    answer, status = asyncio.run(main())
+    assert status == 'TERMINATED' and answer['terminated'] and answer['resume'].startswith('resume-dataset sleepy')

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **A running dataset moves to the current version at every child workflow, and four brakes** (#61, decision 0022,
+  owner 2026-10-08). `common.start_child` asks the `before_child` activity for the current version's queue (when a
+  coordinator polls it) and starts the unit, per-sample, sample, cross-sample and zoom-in children there; each
+  per-sample publication and round record names its version and a unit or dataset publication lists `versions`;
+  `resume-dataset` resumes on the current version. `loop_control.json` `brake: round|stage|step` (the old `pause`,
+  `stop_after_round`, `pause_after_stage` stay as aliases); `step` admits no new sample, stage or round and lets the
+  running ones finish; the hard brake `brake <run_id> --hard --reason …` terminates now and keeps everything
+  resumable.
 - **`ops/worker-node.sh` runs the worker script of `INFRA`'s version**, no longer the image's copy, so a GPU job
   submitted with it joins as a GPU worker (#58) once `INFRA` is 0.4.6 or later.
 - **Zoom-in reassign follow-ups (#55):** a proposal with several refused reassignments gets one rejection naming

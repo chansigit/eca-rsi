@@ -27,3 +27,18 @@ def task_queue() -> str:
     """The Temporal task queue this code serves: one per published version, the old shared one otherwise."""
     v = version()
     return "ecarsi-" + v["name"] if v else "ecarsi-durable-v2"
+
+
+def current_queue() -> str | None:
+    """The queue of the version `versions/current` points at (ops/set-current.sh), beside this version's directory;
+    None for a checkout or an image snapshot, which are no version. Every child workflow starts there (0022)."""
+    import os
+    from pathlib import Path
+
+    v = version()
+    if not v:
+        return None
+    try:
+        return "ecarsi-" + os.path.basename(os.readlink(Path(v["root"]).parent / "current"))
+    except OSError:
+        return None

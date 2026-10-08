@@ -183,10 +183,13 @@ def test_an_execution_stays_on_the_queue_it_was_started_on():
 
 
 def test_workflow_code_never_names_a_task_queue():
-    """Only the client side picks a queue: starting a run (coordinator main), resuming one (on the queue it was
-    started on) and serving one (the worker). A queue named inside a workflow would move work off its version."""
+    """Only the client side picks a queue -- starting a run (coordinator main), resuming one and serving one (the
+    worker) -- and `common.start_child`, which passes the queue the `before_child` activity answered (0022). A queue
+    named anywhere else inside a workflow would move work without that check."""
     import ast
-    allowed = {("coordinator.py", "main"), ("coordinator.py", "run_worker"), ("dataset.py", "resume_dataset")}
+    allowed = {("coordinator.py", "main"), ("coordinator.py", "run_worker"), ("dataset.py", "resume_dataset"),
+               ("common.py", "start_child"),  # 0022: the one place a child is sent to the current version's queue
+               ("coordinator.py", "before_child")}  # ... and the activity that names it (a describe_task_queue call)
     found = set()
     for path in sorted((ROOT / "ecarsi" / "control").glob("*.py")):
         tree = ast.parse(path.read_text())

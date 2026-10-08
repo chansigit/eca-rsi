@@ -27,3 +27,4 @@ decision that is replaced keeps its page and says so at the top.
 | [0019](0019-versions-side-by-side.md) | Code versions run side by side, each execution on the version that started it |
 | [0020](0020-shared-gene-sets.md) | One stress panel and one mitochondrial rule, for every species |
 | [0021](0021-hard-case-freezing.md) | Hard agent steps are frozen before their evidence is pruned |
+| [0022](0022-versions-per-child-workflow-and-brakes.md) | A running dataset moves to the current version at every child workflow; four brakes |

@@ -19,4 +19,4 @@ esac
 [ ${#paths[@]} -gt 0 ] || { echo "lane $LANE: no test module imports it" >&2; exit 2; }
 n=(-n auto); case " $* " in *" -n "*|*" -n"[0-9]*) n=() ;; esac
 echo "lane $LANE: ${#paths[@]} test paths" >&2
-exec bash "$HERE/runsci-dev.sh" -m pytest -q -p no:cacheprovider "${n[@]}" "$@" "${paths[@]}"
+exec bash "$HERE/runsci-dev.sh" -m pytest -q -p no:cacheprovider ${n[@]+"${n[@]}"} "$@" "${paths[@]}"

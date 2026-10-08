@@ -53,7 +53,11 @@ PREV_COLS = ("msp_ann_cluster", "msp_ann_coarse", "msp_ann_fine", "msp_ann_actio
 # it was admitted with in its immutable spec; this file is the one thing allowed to override it.
 CONTROL_FILE = "loop_control.json"
 CONTROL_KEYS = {"cap": int, "rounds": int, "extra_rounds_after_convergence": int, "stop_after_round": int,
-                "max_removed": int, "pause": bool, "pause_after_stage": str}
+                "max_removed": int, "pause": bool, "pause_after_stage": str, "brake": str}
+# The brakes (owner 2026-10-08, decision 0022), coarse to fine: round = after this round (the old `pause`),
+# stage = after the stage now running (`pause_after_stage` named it), step = before the next child workflow,
+# the ones running finish. The hard brake is a command (`brake <run_id> --hard`), not a key.
+BRAKES = ("round", "stage", "step")
 
 
 def read_control(unit, on_error=None) -> dict:
@@ -79,6 +83,11 @@ def read_control(unit, on_error=None) -> dict:
             if key == "pause_after_stage":
                 if value not in (None, "crosssample", "zoomin"):
                     raise ValueError("pause_after_stage must be crosssample, zoomin or null")
+                out[key] = value
+                continue
+            if key == "brake":
+                if value not in (None, *BRAKES):
+                    raise ValueError("brake must be round, stage, step or null")
                 out[key] = value
                 continue
             if value is None:
@@ -109,7 +118,7 @@ def decide_with_control(n: int, stats: list[dict], policy: dict, control: dict) 
     including a release the rule would have taken. Stopping is the one instruction the loop
     cannot infer, so it is never overruled by one it can."""
     p = resolve(policy, control)
-    if control.get("pause") or control.get("stop_after_round") == n:
+    if control.get("pause") or control.get("brake") == "round" or control.get("stop_after_round") == n:
         return "pause", (f"PAUSED: loop_control stopped the unit after round {n}; "
                          "clear the control and resume the dataset to continue")
     return decide(n, stats, p["rounds"], p["cap"], p["extra_rounds_after_convergence"], p["max_removed"])

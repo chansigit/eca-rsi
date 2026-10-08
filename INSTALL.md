@@ -360,4 +360,4 @@ apptainer exec --cleanenv --bind "$BINDS" --env PYTHONSAFEPATH=1 --env PYTHONPAT
 
 `start-dataset` adds a `storage` key from `display_root` and `archive_root` of `~/.config/ecarsi/results.json` (`--results` for another file) when the spec has none. With it, the run keeps its display zone up to date after every stage and archives its work tree when the dataset completes.
 
-Follow progress on Periscope. A unit that stops on `loop_control.json` (`pause`, `stop_after_round`, `pause_after_stage`) ends as `PAUSED`. Clear the control. Then run `resume-dataset` on the unit.
+Follow progress on Periscope. A unit that stops on `loop_control.json` (`brake: round|stage|step`, or the older `pause`, `stop_after_round`, `pause_after_stage`) ends as `PAUSED`; `brake <run_id> --hard --reason …` stops a dataset at once. Clear the control. Then run `resume-dataset` on the unit; it continues on the current version (0022), like every child workflow a running dataset starts.

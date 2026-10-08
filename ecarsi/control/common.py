@@ -76,6 +76,28 @@ async def call(fn, *args):
     return await workflow.execute_activity(fn, args=args, start_to_close_timeout=SHORT, retry_policy=activity_retry(fn))
 
 
+async def brake_if_asked(control):
+    """The step brake (0022): `brake: step` in <unit>/loop_control.json ends the unit before its next child
+    workflow or release, the way `pause_after_stage` ends it after a stage; nothing that runs is interrupted."""
+    from .coordinator import before_child
+    answer = await call(before_child, control)
+    if answer.get('brake') == 'step':
+        raise ApplicationError('PAUSED: loop_control brake step stopped the unit before its next step; '
+                               'clear the brake and resume the dataset to continue', non_retryable=True)
+    return answer
+
+
+async def start_child(run, args, id, control=None):
+    """Start a child workflow on the current version's queue (0022): `before_child` names it when that
+    version's coordinators poll, else the child inherits this execution's queue as Temporal does by default.
+    `control` is the unit directory whose loop_control.json may hold the step brake."""
+    answer = await brake_if_asked(control)
+    options = dict(id=id)
+    if answer.get('task_queue'):
+        options['task_queue'] = answer['task_queue']
+    return await workflow.start_child_workflow(run, args=args, **options)
+
+
 def stage_with_waits(owner):
     """A workflow's stage query: its stage plus why its pool requests wait (#18), e.g. 'DEG comparisons;
     waiting: infeasible: no worker that holds 4 cpus / 12288 MB has 7230 s left'."""
