@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **`ops/worker-node.sh` runs the worker script of `INFRA`'s version**, no longer the image's copy, so a GPU job
+  submitted with it joins as a GPU worker (#58) once `INFRA` is 0.4.6 or later.
+
 ## 0.4.6 — 2026-10-08
 
 One repository with the kernels and the agent harness (decision 0018, first numbered 0.4.5), code versions that run

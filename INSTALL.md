@@ -157,7 +157,8 @@ sbatch --time=8:00:00 --cpus-per-task=16 --mem=32G $E/control/image-code/contain
 ```
 
 The job takes every granted core and 90 % of the memory. It joins the HQ server and leaves when the job ends: no
-`add-worker` by hand. `ops/worker-node.sh` wraps it with deployment.env, for example a large node for cross-sample of
+`add-worker` by hand. `ops/worker-node.sh` wraps it with deployment.env and runs the copy in `INFRA`'s published
+version (the image's without `INFRA`), for example a large node for cross-sample of
 a few hundred thousand cells:
 
 ```bash
