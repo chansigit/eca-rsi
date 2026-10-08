@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Wilcoxon DEG ranks only the stored values: 20-40x faster, the same tables to the bit.** Scanpy's
+  one-vs-rest Wilcoxon densified every gene chunk and ranked all cells on one thread (`settings.n_jobs` 1): 78 % of
+  its time in `rankdata`, the cost of the parent-core DEG (15-31 min of every integration), the DEG pool tasks (164 of
+  batch 2's 407 core-hours) and zoom-in's lineage markers (median 19 min). `msp.deg_logging` now replaces
+  `_RankGenes.wilcoxon` (scanpy 1.12.4) for sparse X, reference "rest", no tie correction: per gene it sorts the
+  stored values only, the cells without one tie at zero (rank known in closed form), and sums ranks per group on the
+  task's CPUs (numba, column blocks of 2^26 values). Ranks are halves of integers, so the rank sums are exact in
+  float64 and everything after them is Scanpy's own code; other forms run Scanpy's method. zmip's `lineage_markers`
+  calls it through `msp.api.rank_genes_groups`. On kidney_male of batch 2 (254,240 cells, 56,406 genes, 314M stored
+  values): parent-core DEG (211k cells, 23 parents) 1,235 s -> 45 s on 2 CPUs (36 s on 4), global DEG (30 groups)
+  1,292 s -> 56 s (44 s), local DEG (78k cells) 230 s -> 27 s (24 s), lineage markers (12 lineages) 1,497 s -> 49 s
+  (37 s); all four tables identical (`DataFrame.equals`, gene order included), lineage_markers.csv byte-identical,
+  peak RSS unchanged except the local comparison (+0.4 GB). `tests/msp/test_wilcoxon_parity.py` holds the parity on
+  sparse data with ties, negative values, stored zeros and an untested group.
 - **A rejected proposal can be amended instead of rewritten.** `submit_decision` (cross-sample), `submit_types` and
   `submit_quality` (zoom-in) accept `{"amend": true, ...}`: the given entries replace those of the session's last
   parsed submission by identity (clusters by `cluster_id`/`cluster`, samples by `sample`, boundary reviews by their

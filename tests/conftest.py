@@ -31,6 +31,7 @@ SCIENCE_ONLY = [
     "msp/test_resources.py",
     "msp/test_scheduled_operations.py",
     "msp/test_step_recovery.py",
+    "msp/test_wilcoxon_parity.py",
     "osp/test_annotation_contract.py",
     "osp/test_api.py",
     "osp/test_cluster_contracts.py",

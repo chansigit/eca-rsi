@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 import scanpy as sc
 from anndata import AnnData
-from msp.api import save_single_umap, slug
+from msp.api import rank_genes_groups, save_single_umap, slug
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ def lineage_markers(ad, lineage_col, outdir, top_n=TOP_N):
         tmp = AnnData(X=ad.X, obs=ad.obs[[lineage_col]].copy(), var=pd.DataFrame(index=ad.var_names.copy()))
         if "log1p" in ad.uns:
             tmp.uns["log1p"] = dict(ad.uns["log1p"])
-        sc.tl.rank_genes_groups(tmp, lineage_col, groups=eligible, method="wilcoxon", use_raw=False, pts=True)
+        rank_genes_groups(tmp, lineage_col, groups=eligible, method="wilcoxon", use_raw=False, pts=True)
     rows = []
     for g in eligible:
         df = sc.get.rank_genes_groups_df(tmp, group=g)

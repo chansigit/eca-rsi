@@ -13,6 +13,7 @@ _NAMES = {
     "load_and_merge": ("msp.integrate", "load_and_merge"),
     "compute_deg_task": ("msp.integrate.deg", "compute_deg_task"),
     "load_deg_input": ("msp.integrate.deg", "load_deg_input"),
+    "rank_genes_groups": ("msp.deg_logging", "rank_genes_groups"),
     "prepare_deg": ("msp.integrate.deg", "prepare_deg"),
     "save_deg_input": ("msp.integrate.deg", "save_deg_input"),
     "write_deg_results": ("msp.integrate.deg", "write_deg_results"),
