@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Figures fit the provider's pixel limit (#31).** `stages/common.png_url` scales a figure above 36,000,000 pixels
+  (Ark's per-image limit, quoted by its 400 error) down to fit before it reaches the model. In batch 2 a 4237x9631
+  figure failed every attempt of an eye_male cross-sample session, on turbo and on the pro fallback, until the session
+  restarted.
+
 - **check_genes and check_qc_scores no longer load the expression matrix (#57).** Where integrated.h5ad is written
   (cross-sample integrate and refine, zoom-in lineage compute and refine), `cluster_genes.npz` beside it holds every
   gene's per-cluster expression sum and expressing count (msp `gene_summary`), naming the file it describes;

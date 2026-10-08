@@ -25,17 +25,32 @@ def check_bundle(ref):
     return bundle
 
 
+MAX_IMAGE_PIXELS = 36_000_000  # Ark's limit per image, from its 400 "Image exceeds the maximum allowed total pixels" (#31)
+
+
 def png_url(path):
     """A figure as a data URL for the model. A PNG above 512 KiB goes to a 256-colour palette at full size:
     the 418k-cell umap__ann_coarse.png fell from 1.66 MB to 533 KiB. Turns carrying the original timed out
-    or failed to parse at the provider for 10 minutes at a time (scale test 2026-10-05)."""
+    or failed to parse at the provider for 10 minutes at a time (scale test 2026-10-05). A figure above
+    MAX_IMAGE_PIXELS is scaled down to fit: a 4237x9631 figure failed every attempt of an eye_male
+    cross-sample session (batch 2, 2026-10-07)."""
     data = Path(path).read_bytes()
-    if len(data) > 512 * 1024:
+    pixels = _pixels(data)
+    if len(data) > 512 * 1024 or pixels > MAX_IMAGE_PIXELS:
         from PIL import Image
+        image = Image.open(io.BytesIO(data))
+        if pixels > MAX_IMAGE_PIXELS:
+            scale = (MAX_IMAGE_PIXELS / pixels) ** 0.5
+            image = image.resize((int(image.width * scale), int(image.height * scale)), Image.LANCZOS)
         buffer = io.BytesIO()
-        Image.open(io.BytesIO(data)).convert("RGB").quantize(256).save(buffer, "PNG", optimize=True)
-        data = min(data, buffer.getvalue(), key=len)
+        image.convert("RGB").quantize(256).save(buffer, "PNG", optimize=True)
+        data = buffer.getvalue() if pixels > MAX_IMAGE_PIXELS else min(data, buffer.getvalue(), key=len)
     return "data:image/png;base64," + base64.b64encode(data).decode()
+
+
+def _pixels(png):
+    """Width x height from a PNG's IHDR, without decoding it."""
+    return int.from_bytes(png[16:20], 'big') * int.from_bytes(png[20:24], 'big') if png[:8] == b'\x89PNG\r\n\x1a\n' else 0
 
 
 def artifact(bundle, name):

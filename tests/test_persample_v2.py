@@ -123,3 +123,12 @@ def test_large_figures_reach_the_model_as_a_palette_png(tmp_path):
     big = base64.b64decode(png_url(tmp_path / "big.png").split(",", 1)[1])
     assert len(big) < (tmp_path / "big.png").stat().st_size and Image.open(io.BytesIO(big)).size == (600, 600)
     assert base64.b64decode(png_url(tmp_path / "small.png").split(",", 1)[1]) == (tmp_path / "small.png").read_bytes()
+
+
+def test_figures_above_the_provider_pixel_limit_are_scaled_to_fit(tmp_path, monkeypatch):
+    from PIL import Image
+    from ecarsi.stages import common
+    monkeypatch.setattr(common, "MAX_IMAGE_PIXELS", 10_000)
+    Image.new("RGB", (100, 300), "white").save(tmp_path / "tall.png")  # small in bytes, too many pixels
+    width, height = Image.open(io.BytesIO(base64.b64decode(common.png_url(tmp_path / "tall.png").split(",", 1)[1]))).size
+    assert width * height <= 10_000 and (width, height) == (57, 173)
