@@ -17,6 +17,10 @@
   core-hours, CPU efficiency, durations, failures and RSS kills; integration step times from each integration's
   stdout.log; model turns per stage, latency, tokens and submissions rewritten after a rejection. Cut at the audit's
   time it gives batch 2's 170 dataset-hours: gap 38.0 %, compute 35.4 %, DEG 19.4 %, tools 6.5 %, queue 0.7 %.
+- **The control plane as a Slurm job** (#62): `ops/plane-node.sh` starts every component, the current version and
+  Periscope, and stops them 10 minutes before its walltime; a new plane job takes over from the running one (TERM,
+  then waits until it has left the queue) and restarts the versions whose coordinators ran there. A plane move is
+  one sbatch. It refuses to start beside a plane started by hand.
 
 ## 0.4.7 — 2026-10-08
 

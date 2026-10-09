@@ -25,6 +25,7 @@ Logs of builds and switches go to `$BASE/control-logs/`.
 | `node-check.sh` | one look: Slurm jobs, HQ, scheduler, productivity, recent failures, coordinator memory |
 | `fail-recent.py` | pool failures of the last ~70 min, grouped by reason |
 | `turn-report.py <run root>` | a run's model-turn attempts by error class and by size (input tokens, image bytes), #31 |
+| `plane-node.sh` | the control plane as a Slurm job: starts every component, the current version and Periscope, stops them before the walltime, takes over from the running plane job (INSTALL.md A.6), #62 |
 | `run-health.py <run root \| batch dir> ...` or `--tag <text>` | where a batch's time goes: per run elapsed time split into DEG, compute, tool calls, queue and the gap (model turns, orchestration), per pool operation core-hours, efficiency, durations, failures and RSS kills, integration step times from the integrations' stdout.log (until the pruner removes them), model turns per stage with rewritten submissions; run it before the batch's folders are deleted, #60 |
 | `new-bridge.sh <name> <catalog.json>` | a second bridge `$STATE/<name>` with its own model catalog, routing and service copied from the main one (#54); start it with `BRIDGE=$STATE/<name> INFRA=<version> bash ops/control-plane.sh start bridge`; a dataset or gate (`gate.py start --bridge=`) uses it through its `bridge_root` |
 | `pool-smoke.py [N] [sleep]` | trivial requests through the scheduler, without a dataset |
