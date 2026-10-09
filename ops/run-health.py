@@ -5,7 +5,7 @@ usage: bash ops/runpy.sh ops/run-health.py <run root | batch dir> ...    (a batc
 Reads the worker task journals (pool/workers/*/tasks-*.jsonl, the lines naming the runs), each run folder once
 (model sessions need it), then each turn's bridge records and each integration's stdout.log by name, paced: the
 bridge and pool request folders are never walked. The pruner deletes a finished run's pool requests within the hour,
-so the integration steps of a run finished earlier show as pruned.
+so the integration steps of a run finished earlier show as pruned. msp logs to stderr, zmip to stdout.
 """
 import collections
 import glob
@@ -20,7 +20,7 @@ from ecarsi.files import read
 
 PACE = 0.01  # seconds between reads by name
 INTEGRATIONS = ('cross-sample.compute', 'cross-sample.compute-round', 'zoom-in.compute')
-STEP = re.compile(r'^(\d\d-\d\d \d\d:\d\d:\d\d) == (.*)$')
+STEP = re.compile(r'^(?:\d{4}-)?(\d\d-\d\d \d\d:\d\d:\d\d)\S*.*? == (.*)$')  # msp's own stamp or logging's
 TURN = re.compile(r'(.+)\.turn-\d+\.')
 
 
@@ -111,24 +111,24 @@ def operations(rows):
 
 
 def integration_steps(pool, rows):
-    print('\n== integration steps (from each integration stdout.log; minutes)')
-    steps, read_logs, pruned = collections.defaultdict(list), 0, 0
+    print('\n== integration steps (from each integration\'s stdout.log and stderr.log; minutes)')
+    steps, read_logs, missing = collections.defaultdict(list), 0, 0
     for r in rows:
         if r.get('operation') not in INTEGRATIONS or r.get('state') != 'succeeded':
             continue
         time.sleep(PACE)
-        path = Path(pool) / 'requests' / r['request_id'] / r['attempt_id'] / 'stdout.log'
-        try:
-            lines = path.read_text(errors='replace').splitlines()
-        except OSError:
-            pruned += 1
+        folder = Path(pool) / 'requests' / r['request_id'] / r['attempt_id']
+        lines = [line for name in ('stdout.log', 'stderr.log') if (folder / name).exists()
+                 for line in (folder / name).read_text(errors='replace').splitlines()]
+        if not lines:  # pruned with its run, or a log the worker removed as empty
+            missing += 1
             continue
         read_logs += 1
-        stamped = [(time.mktime(time.strptime('2000-' + m.group(1), '%Y-%m-%d %H:%M:%S')), m.group(2))
-                   for m in map(STEP.match, lines) if m]
+        stamped = sorted((time.mktime(time.strptime('2000-' + m.group(1), '%Y-%m-%d %H:%M:%S')), m.group(2))
+                         for m in map(STEP.match, lines) if m)
         for (t0, text), (t1, _) in zip(stamped, stamped[1:]):
             steps[(r['operation'], re.split(r' \(| \[|:| on | /', text)[0][:40])].append((t1 - t0) % (366 * 86400) / 60)
-    print(f'{read_logs} logs read, {pruned} pruned')
+    print(f'{read_logs} integrations read, {missing} without a log (pruned)')
     for (op, step), minutes in sorted(steps.items(), key=lambda kv: -sum(kv[1])):
         print(f'  {op:26} {step:40} n {len(minutes):4}  median {q(minutes, .5):6.1f}  max {max(minutes):6.1f}  total_h {sum(minutes)/60:6.1f}')
 
