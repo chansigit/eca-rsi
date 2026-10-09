@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.7 — 2026-10-08
 
 - **Each stage names the version that ran it**: cross-sample and zoom-in publications carry `version`, a round record lists its stages' `versions`, the unit the union with per-sample's (the first 0022 gate recorded only the unit's own version although three of its stages ran on the next one).
 - **A dataset never moves to an older version**: `current_queue` compares the versions' `published` times, so a gate on a candidate newer than current stays on it (the first gate of 0022 moved its unit to the older current version and tested nothing).
