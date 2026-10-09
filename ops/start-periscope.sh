@@ -4,7 +4,9 @@
 # (user:pass, mode 600; #21). Settings: ~/.config/ecarsi/deployment.env.
 # Datasets: display_root and more_display_roots of ~/.config/ecarsi/results.json, plus periscope-datasets.json.
 set -a; . "$HOME/.config/ecarsi/deployment.env"; set +a
-cd /tmp && setsid nohup apptainer exec --cleanenv --bind "$BINDS" \
+# cd apart from the background command: `cd && cmd &` backgrounds a subshell that kept an ssh caller's output open and its ssh hung (2026-10-09 move)
+cd /tmp || exit 1
+setsid nohup apptainer exec --cleanenv --bind "$BINDS" \
   --env PYTHONSAFEPATH=1 --env PYTHONPATH=${INFRA:+$CODE_HOME/versions/$INFRA:}/opt/eca-rsi:/opt/rsi-control:/opt/rsi-python \
   "$SCIENCE_IMG" /usr/local/bin/python3.12 -m ecarsi serve --port "$PERISCOPE_PORT" \
   --auth-file "$HOME/.config/ecarsi/periscope-password" \

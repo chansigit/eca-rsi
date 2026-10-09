@@ -27,7 +27,7 @@ The files `container/control-requirements.lock` and `container/science-requireme
 
 | Package | Version |
 |---|---|
-| ecarsi, with `osp`, `msp`, `zmip`, `standissect_lite`, `harness_bridge` (one repository, decision 0018) | 0.4.7 |
+| ecarsi, with `osp`, `msp`, `zmip`, `standissect_lite`, `harness_bridge` (one repository, decision 0018) | 0.4.8 |
 | openai-agents / openai | 0.22.3 / 3.23.0 |
 | claude-agent-sdk | 0.2.163 (bundles Claude Code 2.1.286) |
 | temporalio | 1.32.0 |

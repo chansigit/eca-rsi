@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ecarsi"
-version = "0.4.7"
+version = "0.4.8"
 description = "eca-rsi: organize → persample (osp) → self-driving rounds of crosssample (msp) + zoomin (zmip), ledger, landing pages and serving; the kernels and the agent harness live in this repository (decision 0018)"
 readme = "README.md"
 license = "MIT"

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.8 — 2026-10-09
 
 - **One shared agent-tool layer for cross-sample and zoom-in** (#59): `stages/tools.py` holds `read_evidence`,
   `list_evidence`, `deg_query` (deg_lookup, deg_sql), `check_genes`, `check_qc_scores` and `run`, the tail of every
@@ -17,6 +17,11 @@
   core-hours, CPU efficiency, durations, failures and RSS kills; integration step times from each integration's
   stdout.log; model turns per stage, latency, tokens and submissions rewritten after a rejection. Cut at the audit's
   time it gives batch 2's 170 dataset-hours: gap 38.0 %, compute 35.4 %, DEG 19.4 %, tools 6.5 %, queue 0.7 %.
+- **`ops/start-periscope.sh` returns at once over ssh**: `cd /tmp && cmd &` backgrounded a subshell that held the
+  ssh caller's output until Periscope exited (the 2026-10-09 plane move); the `cd` now runs before the background
+  command (checked: 20 s → 1 s for a 20 s command).
+- The control plane stays started by hand in the owner's job (#62 closed): Sherlock's submit filter rejects a plane
+  job whose script waits while the components run.
 
 ## 0.4.7 — 2026-10-08
 
