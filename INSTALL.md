@@ -145,20 +145,6 @@ Periscope serves the display zones under `display_root` and `more_display_roots`
  "more_display_roots": ["/oak/stanford/projects/eca/eca-rsi-test/display"]}
 ```
 
-**The plane as a Slurm job** (#62). `ops/plane-node.sh` is a job script that does the above: it starts every
-component, the current version and Periscope, and stops them 10 minutes before its walltime. A plane move is one
-command, the next plane job; it takes over from the running one (sends it TERM, waits until it has left the queue)
-and restarts the versions whose coordinators ran there:
-
-```bash
-sbatch --job-name=eca-plane --time=2-00:00:00 --partition=normal --cpus-per-task=8 --mem=96G $BASE/ops/plane-node.sh
-```
-
-`$CONTROL/plane-job` names the job and host that run the plane; point your attended `ssh -L` forward for Periscope
-at that host. The job refuses to start beside a plane started by hand (a fresh scheduler heartbeat): stop that one
-first with `control-plane.sh stop` on its node. Workers stay connected through a move: their launchers wait for the
-HQ server and rejoin it.
-
 ### A.7 Add workers
 
 Workers are Slurm jobs. You can join a worker in two ways.
