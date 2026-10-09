@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.9 — 2026-10-09
 
 - **The final display sync asks for 2 h, not 4 h** (#64): HQ places a task only on a worker with its time request
   left, so at a batch's end a dataset's last step waited for a worker with 4 h left (6.2 h for the v0.4.8 gate, two
