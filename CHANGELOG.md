@@ -12,6 +12,11 @@
   `msp/deg_tables.py` (pandas only where it builds from CSVs and where deg_sql formats rows), the zoom-in keys to
   `zmip/keys.py`; the imports of a deg_lookup call fell from 1.4 s to 0.2 s. `msp.evidence` and `zmip.scheduled`
   still export the names; `tests/test_tool_imports.py` holds it.
+- **`ops/run-health.py`: where a batch's time goes** (#60), the batch-2 audit's five scripts as one report: per run
+  elapsed time split into DEG, compute, tool calls, queue and the gap (model turns, orchestration); per pool operation
+  core-hours, CPU efficiency, durations, failures and RSS kills; integration step times from each integration's
+  stdout.log; model turns per stage, latency, tokens and submissions rewritten after a rejection. Cut at the audit's
+  time it gives batch 2's 170 dataset-hours: gap 38.0 %, compute 35.4 %, DEG 19.4 %, tools 6.5 %, queue 0.7 %.
 
 ## 0.4.7 — 2026-10-08
 
