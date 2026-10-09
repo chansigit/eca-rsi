@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **The final display sync asks for 2 h, not 4 h** (#64): HQ places a task only on a worker with its time request
+  left, so at a batch's end a dataset's last step waited for a worker with 4 h left (6.2 h for the v0.4.8 gate, two
+  datasets in batch 3). 110 final syncs took at most 32 min (median 2 min).
+- `ops/run-health.py` reads the integration steps from stderr.log too (msp logs there).
+
 ## 0.4.8 — 2026-10-09
 
 - **One shared agent-tool layer for cross-sample and zoom-in** (#59): `stages/tools.py` holds `read_evidence`,

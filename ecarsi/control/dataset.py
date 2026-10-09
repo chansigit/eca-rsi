@@ -605,7 +605,8 @@ async def pause_if_asked(spec, unit, stage):
 
 
 DISPLAY_BUDGET = dict(cpus=1, memory_mb=4096, timeout_seconds=1800)  # render the pages, copy what changed
-DISPLAY_FINAL_BUDGET = dict(cpus=1, memory_mb=8192, timeout_seconds=4 * 3600)  # ... archive the work tree, freeze hard cases
+DISPLAY_FINAL_BUDGET = dict(cpus=1, memory_mb=8192, timeout_seconds=2 * 3600)  # ... archive the work tree, freeze hard cases;
+# 2 h: 110 final syncs took at most 32 min (2026-10-09), and HQ places it only on a worker with that much time left (#64)
 
 
 async def show(spec, stage, unit=None, final=False):
