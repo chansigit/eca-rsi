@@ -9,6 +9,7 @@
 # On TERM (a takeover, or 10 min before the walltime) the job records which versions' coordinators run here and how
 # many ($CONTROL/plane-versions), stops Periscope, every version's coordinators and runners and the shared components,
 # and ends. The next job starts the shared components and the current version, then the other recorded versions.
+# While the plane runs, the job restarts a component or Periscope that stopped, once a minute, and logs it.
 # Periscope listens on this node's 127.0.0.1: point your attended ssh -L forward at the host named in plane-job.
 #SBATCH --signal=B:TERM@600
 set -u
@@ -49,4 +50,12 @@ if [ -s "$CONTROL/plane-versions" ]; then
 fi
 bash "$OPS/start-periscope.sh"
 log "plane up"
-sleep infinity & wait $!
+# The job's own work while the plane runs (Sherlock rejects a job that only sleeps): once a minute, restart a component
+# or Periscope that has stopped, and say so here.
+while :; do
+  sleep 60 & wait $!
+  for c in $(bash "$OPS/control-plane.sh" status | awk '$2 == "stopped" {sub("@.*", "", $1); print $1}'); do
+    log "$c stopped: restarting it"; bash "$OPS/control-plane.sh" start "$c" > /dev/null
+  done
+  pgrep -u "$USER" -f "ecarsi serve --port $PERISCOPE_PORT" > /dev/null || { log "Periscope stopped: restarting it"; bash "$OPS/start-periscope.sh"; }
+done
