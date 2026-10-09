@@ -5,7 +5,7 @@
 # 96 GB: the coordinators hold 6-7 GB each under load. Settings: ~/.config/ecarsi/deployment.env.
 # Takeover: $CONTROL/plane-job names the job that runs the plane. A new job sends that job TERM (scancel --signal=TERM
 # --batch), checks every 60 s that it has left the queue (at most 20 min), then starts. A plane that runs outside a
-# plane job (a fresh scheduler heartbeat and no running plane job named) is refused: stop it first.
+# plane job (a running scheduler's heartbeat under 2 min old, no running plane job named) is refused: stop it first.
 # On TERM (a takeover, or 10 min before the walltime) the job records which versions' coordinators run here and how
 # many ($CONTROL/plane-versions), stops Periscope, every version's coordinators and runners and the shared components,
 # and ends. The next job starts the shared components and the current version, then the other recorded versions.
@@ -36,7 +36,7 @@ if [ -n "${old:-}" ] && [ "$old" != "$SLURM_JOB_ID" ] && squeue -h -j "$old" 2>/
   for _ in $(seq 20); do sleep 60; squeue -h -j "$old" 2>/dev/null | grep -q . || break; done
   squeue -h -j "$old" 2>/dev/null | grep -q . && { log "job $old still runs after 20 min: not starting"; exit 1; }
 elif heartbeat=$(python3 -c "import json, time; d = json.load(open('$POOL/scheduler.json'))
-print(d['host'] if time.time() - d['observed_at'] < 120 else '')" 2>/dev/null) && [ -n "$heartbeat" ]; then
+print(d['host'] if d.get('state') != 'stopped' and time.time() - d['observed_at'] < 120 else '')" 2>/dev/null) && [ -n "$heartbeat" ]; then
   log "a plane runs outside a plane job (scheduler heartbeat from $heartbeat): stop it there first (control-plane.sh stop)"; exit 1
 fi
 echo "$SLURM_JOB_ID $(hostname -s)" > "$STATE"
