@@ -8,9 +8,7 @@ import pandas as pd
 from msp.api import REMOVE_REASONS, guard_batch_annotation as _guard_batch_annotation
 
 from .annotate import _validate_cluster, _validate_final, components
-
-TYPE_KEY = 'msp_leiden_r1.0'
-QUALITY_KEY = 'msp_leiden_r2.0'
+from .keys import QUALITY_KEY, TYPE_KEY  # noqa: F401 - zmip.scheduled names them too
 
 
 def partitions(obs):

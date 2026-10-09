@@ -20,6 +20,7 @@ ecarsi/control/     orchestration (Temporal workflows): coordinator, temporal, d
 ecarsi/agent/       model-turn service: dispatch, session, parallel, tool_errors, runners
 ecarsi/warm_pool/   execution pool: requests and receipts (state), HQ adapter, scheduler, workers, provisioning, measure
 ecarsi/stages/      programs the pool runs: organize, persample, crosssample, zoomin, release, display, contract, evidence,
+                    tools (the agent tools cross-sample and zoom-in share, and the tail of every tool call: hint, amend note, result);
                     execution; and their helpers: organize_execute, upstream (ECA-PP products), h5ad, inclusion,
                     osp_worker, osp_contract, ledger, release_state, archive
 ecarsi/ui/          Periscope: serve (HTTP), registry (dataset list), fleet (dataset summaries), home (navigator,

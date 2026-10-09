@@ -1,4 +1,5 @@
 """Versioned cross-sample worker operations; scientific kernels live in MSP."""
+
 import argparse
 import json
 import os
@@ -7,17 +8,39 @@ import shutil
 
 from ..files import immutable, reference, verified
 from . import PROMPTS
-from .contract import (AMEND_NOTE, LOOKUP_NOTE, NO_ARGUMENTS, amended, checklist, deg_lookup_schema, evidence_page, evidence_paths, json_hint,
-                       lookup_arguments, proposal as parse_proposal, schema)
-from .common import BASE, artifact, assemble, check_bundle, deg, deg_batch, png_url, publish_bundle, sealed
-from .common import gene_answer, qc_answer, save_gene_summary
-from .common import (STRESS_HOST_POLICY, comparison_cells, dying_evidence, fragment_reasons, fragment_table, guard_retained_drops,
-                     guard_stress, mark_retained, soft_fragments, stress_flags, stress_policy)
+from .contract import (
+    LOOKUP_NOTE,
+    NO_ARGUMENTS,
+    amended,
+    checklist,
+    deg_lookup_schema,
+    evidence_paths,
+    json_hint,
+    lookup_arguments,
+    proposal as parse_proposal,
+    schema,
+)
+from .common import BASE, artifact, assemble, check_bundle, deg, deg_batch, publish_bundle, sealed
+from .common import save_gene_summary
+from . import tools
+from .common import (
+    STRESS_HOST_POLICY,
+    comparison_cells,
+    dying_evidence,
+    fragment_reasons,
+    fragment_table,
+    guard_retained_drops,
+    guard_stress,
+    mark_retained,
+    soft_fragments,
+    stress_flags,
+    stress_policy,
+)
 from ..files import digest, read, save
 
 INVENTORY_PAGE_BYTES = 64 * 1024  # sample_inventory pages by bytes, like evidence pages: a cohort of 62
-                                  # patients paged one full proposal per call filled the model's context
-                                  # by page 8 in every generation (2026-09-24, six 3CA datasets)
+# patients paged one full proposal per call filled the model's context
+# by page 8 in every generation (2026-09-24, six 3CA datasets)
 
 
 def inventory_entry(sample):
@@ -25,16 +48,23 @@ def inventory_entry(sample):
     labels and doubts stay in <sample>/annotation_proposal.json for read_evidence: the summary screens,
     the full text decides."""
     from collections import Counter
+
     proposal = sample.get('annotation') or {}
     clusters = proposal.get('clusters') or []
     confidence = Counter(str(c.get('confidence', '')) for c in clusters)
     coarse = Counter(str(c.get('label_coarse', '')) for c in clusters)
     uncertain = sum(n for level, n in confidence.items() if level in {'low', 'medium'})
-    return dict(sample=sample['sample'], n_cells=sample['n_cells'], qc=compact_qc(sample.get('qc')), n_clusters=len(clusters),
-                confidence=dict(confidence), uncertain_fraction=round(uncertain / len(clusters), 2) if clusters else None,
-                top_coarse=[f'{label} x{n}' for label, n in coarse.most_common(5)],
-                verdict=str(proposal.get('overall') or '')[:240],
-                proposal=sample['sample'] + '/annotation_proposal.json' if proposal else None)
+    return dict(
+        sample=sample['sample'],
+        n_cells=sample['n_cells'],
+        qc=compact_qc(sample.get('qc')),
+        n_clusters=len(clusters),
+        confidence=dict(confidence),
+        uncertain_fraction=round(uncertain / len(clusters), 2) if clusters else None,
+        top_coarse=[f'{label} x{n}' for label, n in coarse.most_common(5)],
+        verdict=str(proposal.get('overall') or '')[:240],
+        proposal=sample['sample'] + '/annotation_proposal.json' if proposal else None,
+    )
 
 
 def compact_qc(qc):
@@ -61,8 +91,7 @@ def inventory_page(bundle, offset):
         entry = inventory_entry(sample)
         # One figure path per entry: thirty paths a sample were most of a 4 KB entry (2026-09-25); the
         # rest are in list_evidence.
-        entry['umap'] = next((n for n in bundle['files'] if n.startswith(sample['sample'] + '/figures/')
-                              and 'umap_clusters' in n and n.endswith('.png')), None)
+        entry['umap'] = next((n for n in bundle['files'] if n.startswith(sample['sample'] + '/figures/') and 'umap_clusters' in n and n.endswith('.png')), None)
         size += len(json.dumps(entry))
         if page and size > INVENTORY_PAGE_BYTES:
             break
@@ -89,8 +118,9 @@ def inspect_input(spec, destination):
     if 'previous_round' in spec:
         if publication.get('state') != 'complete' or 'annotated_zmip.h5ad' not in publication.get('files', {}):
             raise ValueError('Later rounds require completed Zoom-in survivors')
-        immutable(destination/'inspected.json', dict(previous_round=spec['previous_round'],
-            input=spec['input'], n_input=publication['n_survived'], spec=spec))
+        immutable(
+            destination / 'inspected.json', dict(previous_round=spec['previous_round'], input=spec['input'], n_input=publication['n_survived'], spec=spec)
+        )
         return
     if publication['state'] != 'complete' or publication['failed_samples']:
         raise ValueError('Cross-sample requires a complete per-sample publication')
@@ -102,8 +132,7 @@ def inspect_input(spec, destination):
             continue
         proposal = read(artifact(bundle, 'annotation_proposal.json')) if 'annotation_proposal.json' in bundle['files'] else None
         label = bundle['sample']
-        samples.append(dict(sample=label, bundle=ref, n_cells=bundle['validation']['n_survived'],
-                            qc=bundle['validation']['qc_summary'], annotation=proposal))
+        samples.append(dict(sample=label, bundle=ref, n_cells=bundle['validation']['n_survived'], qc=bundle['validation']['qc_summary'], annotation=proposal))
         for name, item in bundle['files'].items():
             if name.endswith('.png') or name == 'annotation_proposal.json':
                 files[label + '/' + name] = item
@@ -115,17 +144,21 @@ def inspect_input(spec, destination):
         raise ValueError('Per-sample publication cell total changed')
     # All later operations retain this accepted source chain instead of copying historical ledgers.
     from ..sample_mapping import CHUNK
+
     # Chunks of one sample are random slices: no inclusion agent judges them (decision 0016).
     # The key is written only when true, so an unchunked unit's record is the same as before.
     chunked = {'chunked': True} if any(CHUNK.search(s['sample']) for s in samples) else {}
-    immutable(destination/'inspected.json', dict(samples=samples, empty=empty, files=files,
-              input=spec['input'], n_input=publication['n_survived'], spec=spec, **chunked))
+    immutable(
+        destination / 'inspected.json',
+        dict(samples=samples, empty=empty, files=files, input=spec['input'], n_input=publication['n_survived'], spec=spec, **chunked),
+    )
 
 
 def compute(inspected_ref, inclusion_ref, destination):
     import pandas as pd
     from msp.api import load_and_merge
     from .inclusion import validate_inclusion
+
     inspected, inclusion = verified(inspected_ref), verified(inclusion_ref)
     if inclusion.get('accepted') is not True or inclusion['evidence'] != inspected_ref:
         raise ValueError('Inclusion is not accepted for this input')
@@ -139,20 +172,28 @@ def compute(inspected_ref, inclusion_ref, destination):
     for sample in inspected['samples']:
         bundle = verified(sample['bundle'])
         import anndata as an
+
         data = an.read_h5ad(artifact(bundle, 'clustered.h5ad'), backed='r')
         ids = data.obs_names.copy()
         from osp.api import ANNOTATION_OPS
-        proposal = read(artifact(bundle,'annotation_proposal.json')) if 'annotation_proposal.json' in bundle['files'] else {}
-        for action in proposal.get('qc_actions',[]):
+
+        proposal = read(artifact(bundle, 'annotation_proposal.json')) if 'annotation_proposal.json' in bundle['files'] else {}
+        for action in proposal.get('qc_actions', []):
             if action['action'] != 'drop':
                 continue
             affected = data.obs[proposal['cluster_key']].astype(str).eq(str(action['cluster']))
-            if action['scope']=='cells':
-                affected &= ANNOTATION_OPS[action['op']](data.obs[action['metric']],float(action['value']))
+            if action['scope'] == 'cells':
+                affected &= ANNOTATION_OPS[action['op']](data.obs[action['metric']], float(action['value']))
             for cid in data.obs_names[affected]:
-                osp_reasons.setdefault(cid,[]).append({'action':action,'evidence':bundle['files']['annotation_proposal.json']})
+                osp_reasons.setdefault(cid, []).append({'action': action, 'evidence': bundle['files']['annotation_proposal.json']})
         data.file.close()
-        table = pd.read_csv(artifact(bundle, 'input_cells.csv.gz'), dtype=str, keep_default_na=False).set_index('cell_id').loc[ids].rename_axis('cell_id').reset_index()
+        table = (
+            pd.read_csv(artifact(bundle, 'input_cells.csv.gz'), dtype=str, keep_default_na=False)
+            .set_index('cell_id')
+            .loc[ids]
+            .rename_axis('cell_id')
+            .reset_index()
+        )
         table['sample_id'] = sample['sample']
         sources.append(table)
         if sample['sample'] in selected:
@@ -165,20 +206,22 @@ def compute(inspected_ref, inclusion_ref, destination):
     origin = pd.concat(sources, ignore_index=True)
     if origin.cell_id.duplicated().any() or len(origin) != inspected['n_input']:
         raise ValueError('Cross-sample source cells must be unique and conserved')
-    origin.to_csv(destination/'input_cells.csv.gz', index=False)
-    pd.DataFrame([{'cell':c,'reasons':json.dumps(r)} for c,r in osp_reasons.items()],columns=['cell','reasons']).to_csv(destination/'osp_removal_proposals.csv.gz',index=False)
-    excluded = pd.concat(exclusions, ignore_index=True) if exclusions else pd.DataFrame(columns=[*origin.columns,'reason','reason_code'])
-    excluded.to_csv(destination/'sample_exclusions.csv.gz', index=False)
-    pd.DataFrame(decision['samples']).to_csv(destination/'sample_decisions.csv',index=False)
-    data=load_and_merge(inputs,inspected['spec']['config']['batch_col'])
+    origin.to_csv(destination / 'input_cells.csv.gz', index=False)
+    pd.DataFrame([{'cell': c, 'reasons': json.dumps(r)} for c, r in osp_reasons.items()], columns=['cell', 'reasons']).to_csv(
+        destination / 'osp_removal_proposals.csv.gz', index=False
+    )
+    excluded = pd.concat(exclusions, ignore_index=True) if exclusions else pd.DataFrame(columns=[*origin.columns, 'reason', 'reason_code'])
+    excluded.to_csv(destination / 'sample_exclusions.csv.gz', index=False)
+    pd.DataFrame(decision['samples']).to_csv(destination / 'sample_decisions.csv', index=False)
+    data = load_and_merge(inputs, inspected['spec']['config']['batch_col'])
     if len(data) + len(excluded) != len(origin):
         raise ValueError('Sample selection lost cells')
-    if stress_policy(inspected['spec'])=='keep' and '_qc_action' in data.obs:
+    if stress_policy(inspected['spec']) == 'keep' and '_qc_action' in data.obs:
         # OSP advice to drop dissociation-stressed cells becomes a flag: the cells are kept and labelled (0017)
-        soft=data.obs.index.intersection([c for c,r in osp_reasons.items() if all(x['action'].get('reason')=='dissociation-stress' for x in r)])
+        soft = data.obs.index.intersection([c for c, r in osp_reasons.items() if all(x['action'].get('reason') == 'dissociation-stress' for x in r)])
         action = data.obs['_qc_action'].astype(str)
         action[soft] = 'flag'
-        data.obs['_qc_action']=pd.Categorical(action,categories=['keep','flag','drop'])
+        data.obs['_qc_action'] = pd.Categorical(action, categories=['keep', 'flag', 'drop'])
     integrate(data, inspected_ref, inclusion_ref, destination, inputs)
 
 
@@ -188,6 +231,7 @@ def compute_round(inspected_ref, destination):
     import pandas as pd
     from ..round_policy import PREV_COLS
     from ..sample_mapping import SAMPLE_KEY
+
     inspected = verified(inspected_ref)
     previous = verified(inspected['input'])
     path = artifact(previous, 'annotated_zmip.h5ad')
@@ -205,164 +249,254 @@ def compute_round(inspected_ref, destination):
     if set(rename.values()) & set(data.obs):
         raise ValueError('Previous round labels were already archived')
     data.obs = data.obs.rename(columns=rename)
-    origin = pd.DataFrame(dict(cell_id=data.obs_names.astype(str),
-        source_id=data.obs.source_unit.astype(str).to_numpy(),
-        source_cell_id=data.obs.eca_source_cell_id.astype(str).to_numpy(),
-        # the experiment, not the batch: they differ once a sample map names a batch_key (or false)
-        sample_id=data.obs[SAMPLE_KEY if SAMPLE_KEY in data.obs else batch].astype(str).to_numpy()))
-    origin.to_csv(destination/'input_cells.csv.gz', index=False)
-    pd.DataFrame(columns=[*origin.columns, 'reason', 'reason_code']).to_csv(destination/'sample_exclusions.csv.gz', index=False)
-    pd.DataFrame(columns=['cell', 'reasons']).to_csv(destination/'osp_removal_proposals.csv.gz', index=False)
+    origin = pd.DataFrame(
+        dict(
+            cell_id=data.obs_names.astype(str),
+            source_id=data.obs.source_unit.astype(str).to_numpy(),
+            source_cell_id=data.obs.eca_source_cell_id.astype(str).to_numpy(),
+            # the experiment, not the batch: they differ once a sample map names a batch_key (or false)
+            sample_id=data.obs[SAMPLE_KEY if SAMPLE_KEY in data.obs else batch].astype(str).to_numpy(),
+        )
+    )
+    origin.to_csv(destination / 'input_cells.csv.gz', index=False)
+    pd.DataFrame(columns=[*origin.columns, 'reason', 'reason_code']).to_csv(destination / 'sample_exclusions.csv.gz', index=False)
+    pd.DataFrame(columns=['cell', 'reasons']).to_csv(destination / 'osp_removal_proposals.csv.gz', index=False)
     integrate(data, inspected_ref, None, destination, [str(path)])
 
 
 def integrate(data, inspected_ref, inclusion_ref, destination, inputs):
     from msp.api import integrate_adata
-    inspected=verified(inspected_ref)
+
+    inspected = verified(inspected_ref)
     spec = inspected['spec']
     cfg = spec['config']
     backend = os.environ.get('RSI_COMPUTE_BACKEND', 'cpu')
-    if cfg['compute_backend'] not in {'auto',backend}:
+    if cfg['compute_backend'] not in {'auto', backend}:
         raise ValueError('Backend does not match the Pool grant')
     os.environ['MSP_COMPUTE_ENDPOINT'] = 'local'
     os.environ['MSP_COMPUTE_GPU'] = '1' if backend == 'rapids' else '0'
-    integrate_adata(data,cfg['batch_col'],str(destination),species=cfg['species'],
-                    resolutions=(.3,1.,2.),n_top_genes=cfg['n_top_genes'],n_pcs=cfg['n_pcs'],
-                    n_neighbors=cfg['n_neighbors'],defer_deg=True,inputs=inputs,
-                    meta_extra={'compute_backend':backend,'workflow':'cross-sample-v2'})
+    integrate_adata(
+        data,
+        cfg['batch_col'],
+        str(destination),
+        species=cfg['species'],
+        resolutions=(0.3, 1.0, 2.0),
+        n_top_genes=cfg['n_top_genes'],
+        n_pcs=cfg['n_pcs'],
+        n_neighbors=cfg['n_neighbors'],
+        defer_deg=True,
+        inputs=inputs,
+        meta_extra={'compute_backend': backend, 'workflow': 'cross-sample-v2'},
+    )
     save_gene_summary(data, [BASE], destination)
     plan = read(destination / 'deg_plan.json')
     tasks = []
-    for index,item in enumerate(plan['plan']):
-        tasks.append({'plan_index':index,'cluster':None})
-        tasks.extend({'plan_index':index,'cluster':c} for c in item['valid'] if item['top3'].get(c))
-    sealed(destination,destination/'prepared.json',inspected=inspected_ref,inclusion=inclusion_ref,
-           version=0,tasks=tasks,n_input=inspected['n_input'],n_selected=len(data),backend=backend,
-           type_entries={},quality_entries={},type_scope=sorted(data.obs[BASE].astype(str).unique()))
+    for index, item in enumerate(plan['plan']):
+        tasks.append({'plan_index': index, 'cluster': None})
+        tasks.extend({'plan_index': index, 'cluster': c} for c in item['valid'] if item['top3'].get(c))
+    sealed(
+        destination,
+        destination / 'prepared.json',
+        inspected=inspected_ref,
+        inclusion=inclusion_ref,
+        version=0,
+        tasks=tasks,
+        n_input=inspected['n_input'],
+        n_selected=len(data),
+        backend=backend,
+        type_entries={},
+        quality_entries={},
+        type_scope=sorted(data.obs[BASE].astype(str).unique()),
+    )
 
 
 def _data(bundle):
     import anndata as an
-    return an.read_h5ad(artifact(bundle,'integrated.h5ad'))
+
+    return an.read_h5ad(artifact(bundle, 'integrated.h5ad'))
 
 
 def refine(evidence_ref, types_ref, decision_ref, destination):
     from msp.api import subcluster_once
     from msp.api import load_removal_mask
-    from msp.api import prepare_deg,save_deg_input
+    from msp.api import prepare_deg, save_deg_input
     from msp.api import qc_outputs
-    from msp.api import save_single_umap,slug
+    from msp.api import save_single_umap, slug
+
     bundle, typed, decision = verified(evidence_ref), verified(types_ref), verified(decision_ref)
-    if (decision.get('accepted') is not True or not decision.get('refinement') or
-            decision['evidence'] != evidence_ref or decision['types'] != types_ref or
-            typed.get('accepted') is not True or typed['evidence'] != evidence_ref):
+    if (
+        decision.get('accepted') is not True
+        or not decision.get('refinement')
+        or decision['evidence'] != evidence_ref
+        or decision['types'] != types_ref
+        or typed.get('accepted') is not True
+        or typed['evidence'] != evidence_ref
+    ):
         raise ValueError('Refinement requires a validated request and matching accepted types')
     data = _data(bundle)
     request = decision['refinement']
     parent = request['cluster']
-    mask = load_removal_mask(artifact(bundle,'preannotation_removal.csv').parent,data)
+    mask = load_removal_mask(artifact(bundle, 'preannotation_removal.csv').parent, data)
     version = bundle['version'] + 1
     if version > verified(bundle['inspected'])['spec']['max_refinements']:
         raise ValueError('Refinement exceeds the configured limit')
     key = 'cross_sub_' + str(version)
-    n, message = subcluster_once(data,BASE,parent,request['resolution'],key,mask,compute_markers=False)
+    n, message = subcluster_once(data, BASE, parent, request['resolution'], key, mask, compute_markers=False)
     if n < 2:
         raise ValueError(message + '; no new evidence version published')
-    affected = set(data.obs.loc[data.obs[BASE].astype(str).eq(parent),key].astype(str))
-    entries = {str(e['cluster_id']):e for e in typed['proposal']['clusters']}
+    affected = set(data.obs.loc[data.obs[BASE].astype(str).eq(parent), key].astype(str))
+    entries = {str(e['cluster_id']): e for e in typed['proposal']['clusters']}
     # Recheck merge partners too: their references cannot point at a retired parent.
     from msp.api import components
+
     affected.update(c for c in components(entries)[parent] if c != parent)
-    preserved = {c:e for c,e in entries.items() if c != parent and c not in affected}
-    data.obs['cross_base_v'+str(bundle['version'])] = data.obs[BASE].copy()
+    preserved = {c: e for c, e in entries.items() if c != parent and c not in affected}
+    data.obs['cross_base_v' + str(bundle['version'])] = data.obs[BASE].copy()
     data.obs[BASE] = data.obs.pop(key).cat.remove_unused_categories()
     eligible = data[~mask]
     keys = read(artifact(bundle, 'deg_plan.json'))['keys']
-    labels = {k:(eligible.obs[k].cat.codes.to_numpy(),list(eligible.obs[k].cat.categories)) for k in keys}
-    values, plan = prepare_deg(eligible.X,list(data.var_names),labels,dict(data.uns.get('log1p',{})),eligible.obsm['X_pca_harmony'],keys)
+    labels = {k: (eligible.obs[k].cat.codes.to_numpy(), list(eligible.obs[k].cat.categories)) for k in keys}
+    values, plan = prepare_deg(eligible.X, list(data.var_names), labels, dict(data.uns.get('log1p', {})), eligible.obsm['X_pca_harmony'], keys)
     values.obs_names = eligible.obs_names.copy()
     save_deg_input(values, destination / 'deg_input')
-    save(destination/'deg_plan.json',{**plan,'keys':keys,'top_n_de':50})
-    data.write_h5ad(destination/'integrated.h5ad')
+    save(destination / 'deg_plan.json', {**plan, 'keys': keys, 'top_n_de': 50})
+    data.write_h5ad(destination / 'integrated.h5ad')
     save_gene_summary(data, [BASE], destination)
     figures = destination / 'figures'
     figures.mkdir()
-    qc_outputs(data,data.uns['msp']['batch_col'],'standissect_product',str(destination),str(figures),keys,[1.,2.])
-    save_single_umap(data,BASE,str(figures/('umap_'+slug(BASE)+'.png')),repel=True)
-    tasks = [dict(plan_index=i,cluster=c) for i,item in enumerate(plan['plan']) for c in [None,*[c for c in item['valid'] if item['top3'].get(c)]]]
-    metadata = {k:v for k,v in bundle.items() if k not in {'files','prepared','comparisons'}}
-    metadata.update(version=version,tasks=tasks,type_entries=preserved,type_scope=sorted(affected),
-                    prior_types=types_ref,refinement=decision_ref)
-    publish_bundle(destination,'prepared.json',evidence_ref,**metadata)
+    qc_outputs(data, data.uns['msp']['batch_col'], 'standissect_product', str(destination), str(figures), keys, [1.0, 2.0])
+    save_single_umap(data, BASE, str(figures / ('umap_' + slug(BASE) + '.png')), repel=True)
+    tasks = [dict(plan_index=i, cluster=c) for i, item in enumerate(plan['plan']) for c in [None, *[c for c in item['valid'] if item['top3'].get(c)]]]
+    metadata = {k: v for k, v in bundle.items() if k not in {'files', 'prepared', 'comparisons'}}
+    metadata.update(version=version, tasks=tasks, type_entries=preserved, type_scope=sorted(affected), prior_types=types_ref, refinement=decision_ref)
+    publish_bundle(destination, 'prepared.json', evidence_ref, **metadata)
 
 
 def _proposal_schema(phase):
-    if phase=='inclusion':
+    if phase == 'inclusion':
         from .inclusion import INCLUSION_SCHEMA
+
         return json.dumps(INCLUSION_SCHEMA)
-    if phase=='type':
+    if phase == 'type':
         from msp.api import CLUSTER_SCHEMA_DOC
-        return 'Return {"clusters": [entries], "boundary_reviews": [{"coarse_labels": ["A","B"], "evidence": "...", "uncertain": false}]}. Each cluster entry: '+CLUSTER_SCHEMA_DOC
+
+        return (
+            'Return {"clusters": [entries], "boundary_reviews": [{"coarse_labels": ["A","B"], "evidence": "...", "uncertain": false}]}. Each cluster entry: '
+            + CLUSTER_SCHEMA_DOC
+        )
     from msp.api import INSPECTION_SCHEMA_DOC
-    return (INSPECTION_SCHEMA_DOC + '\nInstead of a final proposal, you may submit '
+
+    return (
+        INSPECTION_SCHEMA_DOC + '\nInstead of a final proposal, you may submit '
         '{"refinement": {"cluster": "id", "resolution": 1.0, "reason": "evidence and why a split is necessary"}}. '
         'The coordinator schedules this split, fresh DEG, and targeted type review before restarting quality. '
-        'Do not claim a split was performed by submitting this request.')
+        'Do not claim a split was performed by submitting this request.'
+    )
 
 
 def inline_context(bundle):
     """What list_evidence answers at turn 0 (52 paths), so the first turn reads evidence."""
-    paths=evidence_paths(bundle)
-    return 'Evidence files (read_evidence paths): '+json.dumps(paths)+'\nFigures: '+json.dumps([p for p in paths if p.endswith('.png')])
+    paths = evidence_paths(bundle)
+    return 'Evidence files (read_evidence paths): ' + json.dumps(paths) + '\nFigures: ' + json.dumps([p for p in paths if p.endswith('.png')])
 
 
 def agent_spec(spec, evidence_ref, phase, parent, types_ref=None):
-    from msp.api import DEG_TOOL_DOC,DEG_SQL_DOC
-    bundle=verified(evidence_ref)
-    props={
-      'read_evidence':(schema({'path':{'type':'string'},'offset':{'type':'integer','minimum':0}}),'Read an assigned figure or up to 16000 characters of a table; use only listed paths.',True),
-      'submit_decision':(schema({'proposal_json':{'type':'string'}}),'Submit a validated '+phase+' decision. '+_proposal_schema(phase),False)}
-    if phase=='inclusion':
-        prompt=PROMPTS.joinpath('sample_inclusion.md').read_text()
-        prompt+='\nRead every sample inventory and cluster UMAP before deciding. Sample count: '+str(len(bundle['samples']))
-        props['sample_inventory']=(schema({'offset':{'type':'integer','minimum':0}}),'Read the next page of sample inventories (cells, QC, cluster count, confidence counts, top coarse labels, verdict) with each sample\'s figure and proposal paths. Follow next_offset until null. The full proposal with per-cluster doubts is read_evidence on <sample>/annotation_proposal.json.',False)
+    from msp.api import DEG_TOOL_DOC, DEG_SQL_DOC
+
+    bundle = verified(evidence_ref)
+    props = {
+        'read_evidence': (
+            schema({'path': {'type': 'string'}, 'offset': {'type': 'integer', 'minimum': 0}}),
+            'Read an assigned figure or up to 16000 characters of a table; use only listed paths.',
+            True,
+        ),
+        'submit_decision': (schema({'proposal_json': {'type': 'string'}}), 'Submit a validated ' + phase + ' decision. ' + _proposal_schema(phase), False),
+    }
+    if phase == 'inclusion':
+        prompt = PROMPTS.joinpath('sample_inclusion.md').read_text()
+        prompt += '\nRead every sample inventory and cluster UMAP before deciding. Sample count: ' + str(len(bundle['samples']))
+        props['sample_inventory'] = (
+            schema({'offset': {'type': 'integer', 'minimum': 0}}),
+            'Read the next page of sample inventories (cells, QC, cluster count, confidence counts, top coarse labels, verdict) with each sample\'s figure and proposal paths. Follow next_offset until null. The full proposal with per-cluster doubts is read_evidence on <sample>/annotation_proposal.json.',
+            False,
+        )
     else:
-        prompt=(PROMPTS/'crosssample-deg.md').read_text()
-        prompt+='\n'+(PROMPTS/('crosssample-'+phase+'.md')).read_text()
-        props.update({
-          'deg_lookup':(deg_lookup_schema(),DEG_TOOL_DOC+LOOKUP_NOTE%'the base key',False),
-          'deg_sql':(schema({'query':{'type':'string'}}),DEG_SQL_DOC,False),
-          'check_genes':(schema({'genes':{'type':'array','items':{'type':'string'},'minItems':1,'maxItems':80},'cluster':{'type':'string'}}),'Expression evidence on the assigned clustering; does not run DEG.',False),
-          'check_deg':(schema({'cluster':{'type':'string'},'reference':{'type':'string'},'reason':{'type':'string'}}),'Request uncovered comparison only. Explain what the immutable database lacks. Results are saved on the worker.',False),
-          'check_qc_scores':(schema({}),'Per-cluster QC, composition and accepted type labels.',False),
-          'type_context':(NO_ARGUMENTS,'Every accepted or preserved type entry in one call.',False)})
-        prompt+='\nContext: '+json.dumps(spec['config'])+'\nEvidence version: '+evidence_ref['sha256']
-        prompt+='\nStress policy: '+stress_policy(spec)
-        prompt+='\nAssigned type clusters: '+json.dumps(bundle['type_scope'])+'\nBase key: '+BASE
+        prompt = (PROMPTS / 'crosssample-deg.md').read_text()
+        prompt += '\n' + (PROMPTS / ('crosssample-' + phase + '.md')).read_text()
+        props.update(
+            {
+                'deg_lookup': (deg_lookup_schema(), DEG_TOOL_DOC + LOOKUP_NOTE % 'the base key', False),
+                'deg_sql': (schema({'query': {'type': 'string'}}), DEG_SQL_DOC, False),
+                'check_genes': (
+                    schema({'genes': {'type': 'array', 'items': {'type': 'string'}, 'minItems': 1, 'maxItems': 80}, 'cluster': {'type': 'string'}}),
+                    'Expression evidence on the assigned clustering; does not run DEG.',
+                    False,
+                ),
+                'check_deg': (
+                    schema({'cluster': {'type': 'string'}, 'reference': {'type': 'string'}, 'reason': {'type': 'string'}}),
+                    'Request uncovered comparison only. Explain what the immutable database lacks. Results are saved on the worker.',
+                    False,
+                ),
+                'check_qc_scores': (schema({}), 'Per-cluster QC, composition and accepted type labels.', False),
+                'type_context': (NO_ARGUMENTS, 'Every accepted or preserved type entry in one call.', False),
+            }
+        )
+        prompt += '\nContext: ' + json.dumps(spec['config']) + '\nEvidence version: ' + evidence_ref['sha256']
+        prompt += '\nStress policy: ' + stress_policy(spec)
+        prompt += '\nAssigned type clusters: ' + json.dumps(bundle['type_scope']) + '\nBase key: ' + BASE
         if bundle.get('type_entries'):
-            prompt+='\nUse type_context for preserved type entries outside your assignment; do not resubmit them.'
+            prompt += '\nUse type_context for preserved type entries outside your assignment; do not resubmit them.'
         if types_ref:
             prompt += '\nRead the accepted type labels with type_context before assessing quality.'
-        prompt+='\n\n'+inline_context(bundle)
-    props['list_evidence']=(schema({'offset':{'type':'integer','minimum':0}}),'List evidence paths (the prompt already lists the first ones). Follow next_offset until null.',False)
-    prompt+='\nUse worker tools for all evidence. Read figures and use the database before submission. Finish by calling submit_decision; no local execution is available.'
-    prompt+='\n\n'+checklist('crosssample-inclusion' if phase=='inclusion' else 'crosssample-annotation')
-    state=immutable(Path(spec['output_root'])/f'{phase}-{evidence_ref["sha256"][:12]}-state.json',dict(evidence=evidence_ref,phase=phase,types=types_ref,read=[],lookups=[],qc=False))
-    tools=[]
-    for name,(parameters,description,multimodal) in props.items():
-        tools.append(dict(name=name,description=description,
-          read_only=name in {'read_evidence','list_evidence','sample_inventory','deg_lookup','deg_sql','check_genes','check_qc_scores','type_context'},parameters=parameters,
-          args=['-m','ecarsi.stages.crosssample','tool',name,'{state}','{arguments}'],**spec['tool_budget'],
-          inputs=[reference(Path(__file__).with_name(n)) for n in ('crosssample.py','common.py','contract.py')],outputs=['result.json'],result_file='result.json',multimodal=multimodal))
-    return dict(session_id='cross-'+digest([spec['run_id'],phase,evidence_ref,types_ref])[:24],dataset_id=spec['dataset_id'],prompt=prompt,tools=tools,
-      max_turns=80,pool_root=spec['pool_root'],bridge_root=spec['bridge_root'],output_root=str(Path(spec['output_root'])/(phase+'-'+evidence_ref['sha256'][:12])),
-      completion_tool='submit_decision',tool_state=state,planner='ecarsi.stages.evidence',
-      trace=dict(workflow_id='cross-sample/'+spec['run_id'],dataset_id=spec['dataset_id'],unit_id='cross-sample.'+phase,depends_on=[parent]))
+        prompt += '\n\n' + inline_context(bundle)
+    props['list_evidence'] = (
+        schema({'offset': {'type': 'integer', 'minimum': 0}}),
+        'List evidence paths (the prompt already lists the first ones). Follow next_offset until null.',
+        False,
+    )
+    prompt += '\nUse worker tools for all evidence. Read figures and use the database before submission. Finish by calling submit_decision; no local execution is available.'
+    prompt += '\n\n' + checklist('crosssample-inclusion' if phase == 'inclusion' else 'crosssample-annotation')
+    state = immutable(
+        Path(spec['output_root']) / f'{phase}-{evidence_ref["sha256"][:12]}-state.json',
+        dict(evidence=evidence_ref, phase=phase, types=types_ref, read=[], lookups=[], qc=False),
+    )
+    tools = []
+    for name, (parameters, description, multimodal) in props.items():
+        tools.append(
+            dict(
+                name=name,
+                description=description,
+                read_only=name
+                in {'read_evidence', 'list_evidence', 'sample_inventory', 'deg_lookup', 'deg_sql', 'check_genes', 'check_qc_scores', 'type_context'},
+                parameters=parameters,
+                args=['-m', 'ecarsi.stages.crosssample', 'tool', name, '{state}', '{arguments}'],
+                **spec['tool_budget'],
+                inputs=[reference(Path(__file__).with_name(n)) for n in ('crosssample.py', 'common.py', 'contract.py')],
+                outputs=['result.json'],
+                result_file='result.json',
+                multimodal=multimodal,
+            )
+        )
+    return dict(
+        session_id='cross-' + digest([spec['run_id'], phase, evidence_ref, types_ref])[:24],
+        dataset_id=spec['dataset_id'],
+        prompt=prompt,
+        tools=tools,
+        max_turns=80,
+        pool_root=spec['pool_root'],
+        bridge_root=spec['bridge_root'],
+        output_root=str(Path(spec['output_root']) / (phase + '-' + evidence_ref['sha256'][:12])),
+        completion_tool='submit_decision',
+        tool_state=state,
+        planner='ecarsi.stages.evidence',
+        trace=dict(workflow_id='cross-sample/' + spec['run_id'], dataset_id=spec['dataset_id'], unit_id='cross-sample.' + phase, depends_on=[parent]),
+    )
 
 
 def boundary_hint(bundle, proposal):
     """The adjacent coarse-label pairs the type proposal must review, as check_coarse_boundaries derives them."""
     from msp.api import load_paga_neighbors
+
     entries = {str(e.get('cluster_id')): e for e in proposal.get('clusters', []) if isinstance(e, dict)}
     paga = load_paga_neighbors(artifact(bundle, 'deg.sqlite').parent, BASE)
     pairs = set()
@@ -376,8 +510,9 @@ def boundary_hint(bundle, proposal):
                 labels = tuple(sorted({str(entry.get('coarse_label', '')).strip(), str(neighbour.get('coarse_label', '')).strip()}))
                 if len(labels) == 2:
                     pairs.add(labels)
-    return ('boundary_reviews must contain exactly one review for each of these adjacent coarse-label pairs of your '
-            'kept clusters, and no others: ' + json.dumps(sorted(pairs)))
+    return 'boundary_reviews must contain exactly one review for each of these adjacent coarse-label pairs of your kept clusters, and no others: ' + json.dumps(
+        sorted(pairs)
+    )
 
 
 def error_hint(name, content, state, args, bundle):
@@ -393,8 +528,11 @@ def error_hint(name, content, state, args, bundle):
     if content.startswith('Read accepted type context'):
         clusters = sorted(_data(bundle).obs[BASE].astype(str).unique())
         unread = sorted(set(clusters) - set(state.get('type_read', [])))
-        return ('type_context has not been read for clusters ' + json.dumps(unread)
-                + '; call type_context once (it takes no arguments and returns every cluster), then resubmit.')
+        return (
+            'type_context has not been read for clusters '
+            + json.dumps(unread)
+            + '; call type_context once (it takes no arguments and returns every cluster), then resubmit.'
+        )
     if 'coarse boundary' in content:
         try:
             return boundary_hint(bundle, state.get('drafts', {}).get(name) or parse_proposal(args))
@@ -406,277 +544,314 @@ def error_hint(name, content, state, args, bundle):
     return 'Quality proposal must decide every cluster of ' + BASE + ': ' + json.dumps(clusters) + '.'
 
 
-def tool(name,state_path,args_path,destination):
+def tool(name, state_path, args_path, destination):
     # Kernel names are imported in the branch that uses them: a file lookup pays no scanpy import (~6 s)
     state = read(state_path)
     args = read(args_path)
     bundle = verified(state['evidence'])
-    phase = state['phase']
-    response = {}
     if name == 'deg_lookup':
         args = lookup_arguments(args)
-    try:
-        if name=='read_evidence':
-            path=artifact(bundle,args['path']) if args['path'] in bundle['files'] else proposal_artifact(bundle,args['path'])
-            if path.suffix=='.png':
-                if path.stat().st_size > 8 * 2**20:
-                    raise ValueError('Figure exceeds the image budget')
-                response.update(content=args['path'],images=[png_url(path)])
-            elif path.suffix in {'.csv','.json','.md','.txt'}:
-                with path.open() as stream:
-                    stream.seek(args['offset'])
-                    text = stream.read(16000)
-                    nxt = stream.tell() if stream.read(1) else None
-                response['content'] = text
-                response['next_offset'] = nxt
-            else:
-                raise ValueError('Use registered matrix/database tools for this artifact')
-            state['read']=sorted(set(state['read'])|{args['path']})
-        elif name=='list_evidence':
-            page,nxt=evidence_page(evidence_paths(bundle),args.get('offset') or 0)
-            response.update(content=page,next_offset=nxt)
-        elif name=='sample_inventory':
-            page,nxt=inventory_page(bundle,args['offset'])
-            response.update(content=page,next_offset=nxt)
-            state['inventories']=sorted(set(state.get('inventories',[]))|{e['sample'] for e in page})
-        elif name=='type_context':
-            entries=verified(state['types'])['proposal']['clusters'] if state['types'] else list(bundle['type_entries'].values())
-            response.update(content=entries,next_offset=None)
-            state['type_read']=sorted(set(state.get('type_read',[]))|{str(e['cluster_id']) for e in entries})
-        elif name in {'deg_lookup','deg_sql'}:
-            from msp.api import DegTables
-            with DegTables(database=artifact(bundle,'deg.sqlite'),base_key=BASE) as tables:
-                response['content']=tables.lookup(**args) if name=='deg_lookup' else tables.sql(**args)
-            state['lookups'].append(args)
-        elif name=='check_genes':
-            response['content']=gene_answer(bundle,args['genes'],BASE,[args['cluster']] if args['cluster'] else None,_data)
-        elif name=='check_qc_scores':
-            response['content'] = qc_answer(bundle, BASE)
-            state['qc'] = True
-        elif name=='check_deg':
-            if not state['lookups'] or not args['reason'].strip():
-                raise ValueError('Query existing evidence and explain the gap first')
-            key=digest([args['cluster'],args['reference']])
-            cached=state.setdefault('additional_deg',{}).get(key)
-            if cached:
-                response.update(verified(cached))
-            else:
-                from msp.api import DegCache,load_removal_mask
-                data = _data(bundle)
-                folder = artifact(bundle, 'deg.sqlite').parent
-                cache=DegCache(data,folder,load_removal_mask(folder,data))
-                response['content']=cache.table(BASE,args['cluster'],args['reference'],30)
-                response['source']='computed' if cache.n_computed else 'precomputed'
-                state['additional_deg'][key]=immutable(destination/'additional_deg.json',response)
-        elif name=='submit_decision':
-            proposal = amended(args, state, name)
-            converted = []
-            held = []
-            if phase=='inclusion':
-                from .inclusion import validate_inclusion
-                validate_inclusion(proposal,[s['sample'] for s in bundle['samples']])
-                if set(state.get('inventories', [])) != {s['sample'] for s in bundle['samples']}:
-                    raise ValueError('Read every sample inventory before inclusion')
-                # #33: the UMAPs of the samples it excludes; every inventory, but not 196 figures, fits one session
-                missing=[s['sample'] for s in proposal['samples'] if not s['include'] and not any(p.startswith(s['sample']+'/figures/') and 'umap_clusters' in p for p in state['read'])]
-                if missing:
-                    raise ValueError('Read the cluster UMAP of each sample you exclude before inclusion: ' + str(missing))
-                proposals={s['sample'] for s in bundle['samples'] if s.get('annotation')}
-                unread=[s['sample'] for s in proposal['samples'] if not s['include'] and s['sample'] in proposals and s['sample']+'/annotation_proposal.json' not in state['read']]
-                if unread:
-                    raise ValueError('Read the full annotation proposal (read_evidence on <sample>/annotation_proposal.json) of each sample you exclude before inclusion: ' + str(unread))
-            else:
-                data = _data(bundle)
-                clusters = sorted(data.obs[BASE].astype(str).unique())
-                if not state['lookups']:
-                    raise ValueError('Query DEG with deg_lookup or deg_sql before submission')
-                if not any(p.endswith('.png') for p in state['read']):
-                    figures=[n for n in bundle['files'] if n.endswith('.png')]
-                    raise ValueError('Read a figure with read_evidence before submission; none of your '+str(len(state['read']))+' reads was a .png. Figures: '+', '.join(figures[:4]))
-                if phase=='type':
-                    from msp.api import validate_cluster,validate_annotation,guard_batch_annotation,check_coarse_boundaries
-                    from msp.api import load_paga_neighbors
+    tools.run(
+        name,
+        state,
+        destination,
+        lambda: answer(name, state, args, bundle, destination),
+        {'submit_decision'},
+        lambda content: error_hint(name, content, state, args, bundle),
+    )
 
-                    if not isinstance(proposal.get('clusters'), list):
-                        raise ValueError('clusters must be a list')
-                    problems=[p for e in proposal['clusters'] for p in validate_cluster(e,clusters)]
-                    if problems:
-                        raise ValueError('; '.join(problems))
-                    proposed={str(e['cluster_id']):guard_batch_annotation(e) for e in proposal['clusters']}
-                    if set(proposed) != set(bundle['type_scope']) or len(proposed) != len(proposal['clusters']):
-                        raise ValueError('Cover each assigned type cluster exactly once')
-                    entries={**bundle['type_entries'],**proposed}
-                    problems=validate_annotation(entries,clusters)
-                    problems+=check_coarse_boundaries(entries,load_paga_neighbors(artifact(bundle,'deg.sqlite').parent,BASE),proposal.get('boundary_reviews',[]))
-                    if not problems:
-                        # After the boundary check: boundary reviews judge what the agent submitted.
-                        converted=_stress_guard(bundle,data,entries,proposed)
-                        relabel=validate_annotation(entries,clusters) if converted else []
-                        if relabel:
-                            raise ValueError('Clusters '+', '.join(converted)+' stay under the stress policy (decision 0017; see their host_adjustment) '
-                                             'and, kept, their labels conflict: '+'; '.join(relabel)+'. Give each its identity labels: a fine label of '
-                                             'its own, or merge_target to the population it belongs to; then resubmit.')
-                    proposal['clusters']=[entries[c] for c in sorted(entries)]
-                else:
-                    from msp.api import validate_inspection,guard_batch_actions
 
-                    if not state['qc']:
-                        raise ValueError('Read QC evidence before quality submission')
-                    accepted=verified(state['types'])
-                    if accepted['evidence'] != state['evidence'] or accepted.get('accepted') is not True:
-                        raise ValueError('Type evidence is incompatible')
-                    if set(state.get('type_read', [])) != set(clusters):
-                        raise ValueError('Read accepted type context for every cluster before assessing quality')
-                    if 'refinement' in proposal:
-                        import math
-                        request=proposal['refinement']
-                        if set(request) != {'cluster', 'resolution', 'reason'} or request['cluster'] not in clusters:
-                            raise ValueError('Refinement must name a current cluster and explain the split')
-                        if type(request['resolution']) not in (int, float) or not math.isfinite(request['resolution']) or request['resolution'] <= 0:
-                            raise ValueError('Resolution must be finite and positive')
-                        if not isinstance(request['reason'], str) or not request['reason'].strip():
-                            raise ValueError('Explain the refinement evidence')
-                        if bundle['version'] >= verified(bundle['inspected'])['spec']['max_refinements']:
-                            raise ValueError('Refinement limit reached; submit an uncertain quality assessment using available evidence')
-                        response['refinement'] = request
-                        problems = []
-                    else:
-                        problems=validate_inspection(proposal,clusters,data.obs)
-                        if not problems:
-                            guard_batch_actions(proposal)
-                            held=guard_retained_drops(proposal,{str(e['cluster_id']) for e in accepted['proposal']['clusters']
-                                                                if e.get('host_adjustment',{}).get('policy')==STRESS_HOST_POLICY})
-                if problems:
-                    raise ValueError('; '.join(problems))
-            response.update(accepted=True,proposal=proposal,evidence=state['evidence'],types=state['types'])
-            if converted:
-                response['host_adjustments']=[{'cluster':c,**proposed[c]['host_adjustment']} for c in converted]
-            if held:
-                response['host_adjustments']=[{'cluster':c,'action':'flag','policy':STRESS_HOST_POLICY,
-                                               'reason':'kept by the type phase under the stress policy: dropped cells are flagged'} for c in held]
+def answer(name, state, args, bundle, destination):
+    """The response of one cross-sample tool call, or the ValueError that rejects it."""
+    if name == 'read_evidence':
+        path = artifact(bundle, args['path']) if args['path'] in bundle['files'] else proposal_artifact(bundle, args['path'])
+        return tools.read_evidence(state, args, path)
+    if name == 'list_evidence':
+        return tools.list_evidence(bundle, args)
+    if name == 'sample_inventory':
+        page, nxt = inventory_page(bundle, args['offset'])
+        state['inventories'] = sorted(set(state.get('inventories', [])) | {e['sample'] for e in page})
+        return dict(content=page, next_offset=nxt)
+    if name == 'type_context':
+        entries = verified(state['types'])['proposal']['clusters'] if state['types'] else list(bundle['type_entries'].values())
+        state['type_read'] = sorted(set(state.get('type_read', [])) | {str(e['cluster_id']) for e in entries})
+        return dict(content=entries, next_offset=None)
+    if name in {'deg_lookup', 'deg_sql'}:
+        return tools.deg_query(bundle, name, args, state, BASE)
+    if name == 'check_genes':
+        return tools.check_genes(bundle, args, BASE, _data)
+    if name == 'check_qc_scores':
+        return tools.check_qc_scores(bundle, state, BASE)
+    if name == 'check_deg':
+        if not state['lookups'] or not args['reason'].strip():
+            raise ValueError('Query existing evidence and explain the gap first')
+        key = digest([args['cluster'], args['reference']])
+        cached = state.setdefault('additional_deg', {}).get(key)
+        if cached:
+            return dict(verified(cached))
+        from msp.api import DegCache, load_removal_mask
+
+        data = _data(bundle)
+        folder = artifact(bundle, 'deg.sqlite').parent
+        cache = DegCache(data, folder, load_removal_mask(folder, data))
+        response = dict(content=cache.table(BASE, args['cluster'], args['reference'], 30), source='computed' if cache.n_computed else 'precomputed')
+        state['additional_deg'][key] = immutable(destination / 'additional_deg.json', response)
+        return response
+    if name == 'submit_decision':
+        return submit(state, args, bundle)
+    raise ValueError('Unknown worker tool')
+
+
+def submit(state, args, bundle):
+    """Validate a submit_decision proposal for the session's phase; returns the accepted response."""
+    phase = state['phase']
+    proposal = amended(args, state, 'submit_decision')
+    response = {}
+    converted = []
+    held = []
+    if phase == 'inclusion':
+        from .inclusion import validate_inclusion
+
+        validate_inclusion(proposal, [s['sample'] for s in bundle['samples']])
+        if set(state.get('inventories', [])) != {s['sample'] for s in bundle['samples']}:
+            raise ValueError('Read every sample inventory before inclusion')
+        # #33: the UMAPs of the samples it excludes; every inventory, but not 196 figures, fits one session
+        missing = [
+            s['sample']
+            for s in proposal['samples']
+            if not s['include'] and not any(p.startswith(s['sample'] + '/figures/') and 'umap_clusters' in p for p in state['read'])
+        ]
+        if missing:
+            raise ValueError('Read the cluster UMAP of each sample you exclude before inclusion: ' + str(missing))
+        proposals = {s['sample'] for s in bundle['samples'] if s.get('annotation')}
+        unread = [
+            s['sample']
+            for s in proposal['samples']
+            if not s['include'] and s['sample'] in proposals and s['sample'] + '/annotation_proposal.json' not in state['read']
+        ]
+        if unread:
+            raise ValueError(
+                'Read the full annotation proposal (read_evidence on <sample>/annotation_proposal.json) of each sample you exclude before inclusion: '
+                + str(unread)
+            )
+    else:
+        data = _data(bundle)
+        clusters = sorted(data.obs[BASE].astype(str).unique())
+        if not state['lookups']:
+            raise ValueError('Query DEG with deg_lookup or deg_sql before submission')
+        if not any(p.endswith('.png') for p in state['read']):
+            figures = [n for n in bundle['files'] if n.endswith('.png')]
+            raise ValueError(
+                'Read a figure with read_evidence before submission; none of your '
+                + str(len(state['read']))
+                + ' reads was a .png. Figures: '
+                + ', '.join(figures[:4])
+            )
+        if phase == 'type':
+            from msp.api import validate_cluster, validate_annotation, guard_batch_annotation, check_coarse_boundaries
+            from msp.api import load_paga_neighbors
+
+            if not isinstance(proposal.get('clusters'), list):
+                raise ValueError('clusters must be a list')
+            problems = [p for e in proposal['clusters'] for p in validate_cluster(e, clusters)]
+            if problems:
+                raise ValueError('; '.join(problems))
+            proposed = {str(e['cluster_id']): guard_batch_annotation(e) for e in proposal['clusters']}
+            if set(proposed) != set(bundle['type_scope']) or len(proposed) != len(proposal['clusters']):
+                raise ValueError('Cover each assigned type cluster exactly once')
+            entries = {**bundle['type_entries'], **proposed}
+            problems = validate_annotation(entries, clusters)
+            problems += check_coarse_boundaries(entries, load_paga_neighbors(artifact(bundle, 'deg.sqlite').parent, BASE), proposal.get('boundary_reviews', []))
+            if not problems:
+                # After the boundary check: boundary reviews judge what the agent submitted.
+                converted = _stress_guard(bundle, data, entries, proposed)
+                relabel = validate_annotation(entries, clusters) if converted else []
+                if relabel:
+                    raise ValueError(
+                        'Clusters ' + ', '.join(converted) + ' stay under the stress policy (decision 0017; see their host_adjustment) '
+                        'and, kept, their labels conflict: ' + '; '.join(relabel) + '. Give each its identity labels: a fine label of '
+                        'its own, or merge_target to the population it belongs to; then resubmit.'
+                    )
+            proposal['clusters'] = [entries[c] for c in sorted(entries)]
         else:
-            raise ValueError('Unknown worker tool')
-    except (ValueError, KeyError, TypeError, IndexError) as exc:
-        content = str(exc)[:8000]
-        try:
-            hint = error_hint(name, content, state, args, bundle)
-        except Exception:
-            hint = ''  # noqa: BLE001 - a hint must never turn a correctable error into a crash
-        if name == 'submit_decision' and name in state.get('drafts', {}):
-            hint = (hint + '\n' + AMEND_NOTE).strip()
-        response = {'is_error': True, 'content': (content + '\n' + hint)[:16000] if hint else content}
-    response['state'] = immutable(destination / 'state.json', state)
-    save(destination / 'result.json', response)
+            from msp.api import validate_inspection, guard_batch_actions
+
+            if not state['qc']:
+                raise ValueError('Read QC evidence before quality submission')
+            accepted = verified(state['types'])
+            if accepted['evidence'] != state['evidence'] or accepted.get('accepted') is not True:
+                raise ValueError('Type evidence is incompatible')
+            if set(state.get('type_read', [])) != set(clusters):
+                raise ValueError('Read accepted type context for every cluster before assessing quality')
+            if 'refinement' in proposal:
+                import math
+
+                request = proposal['refinement']
+                if set(request) != {'cluster', 'resolution', 'reason'} or request['cluster'] not in clusters:
+                    raise ValueError('Refinement must name a current cluster and explain the split')
+                if type(request['resolution']) not in (int, float) or not math.isfinite(request['resolution']) or request['resolution'] <= 0:
+                    raise ValueError('Resolution must be finite and positive')
+                if not isinstance(request['reason'], str) or not request['reason'].strip():
+                    raise ValueError('Explain the refinement evidence')
+                if bundle['version'] >= verified(bundle['inspected'])['spec']['max_refinements']:
+                    raise ValueError('Refinement limit reached; submit an uncertain quality assessment using available evidence')
+                response['refinement'] = request
+                problems = []
+            else:
+                problems = validate_inspection(proposal, clusters, data.obs)
+                if not problems:
+                    guard_batch_actions(proposal)
+                    held = guard_retained_drops(
+                        proposal,
+                        {str(e['cluster_id']) for e in accepted['proposal']['clusters'] if e.get('host_adjustment', {}).get('policy') == STRESS_HOST_POLICY},
+                    )
+        if problems:
+            raise ValueError('; '.join(problems))
+    response.update(accepted=True, proposal=proposal, evidence=state['evidence'], types=state['types'])
+    if converted:
+        response['host_adjustments'] = [{'cluster': c, **proposed[c]['host_adjustment']} for c in converted]
+    if held:
+        response['host_adjustments'] = [
+            {
+                'cluster': c,
+                'action': 'flag',
+                'policy': STRESS_HOST_POLICY,
+                'reason': 'kept by the type phase under the stress policy: dropped cells are flagged',
+            }
+            for c in held
+        ]
+    return response
 
 
-def _stress_guard(bundle,data,entries,proposed):
+def _stress_guard(bundle, data, entries, proposed):
     """Decision 0017 on the type removals of this submission, in place; the clusters that stay. The dying check
     compares a cluster with the clusters of its coarse label that no entry removes."""
     policy = stress_policy(verified(bundle['inspected'])['spec'])
     flags, mito = stress_flags(bundle), stress_flags(bundle, 'mito')
-    base=data.obs[BASE].astype(str)
-    removing=base.isin([c for c,e in entries.items() if e['action']=='remove']).to_numpy()
-    converted=[]
-    for cid,e in proposed.items():
-        target=(base==cid).to_numpy()
-        same=base.isin([c for c,x in entries.items() if x['coarse_label'].strip()==e['coarse_label'].strip()]).to_numpy()
-        if guard_stress(e,policy,int(target.sum()),(BASE,cid) in flags,
-                        lambda:dying_evidence(data.obs,target,comparison_cells(data.obs,same,removing)),(BASE,cid) in mito):
+    base = data.obs[BASE].astype(str)
+    removing = base.isin([c for c, e in entries.items() if e['action'] == 'remove']).to_numpy()
+    converted = []
+    for cid, e in proposed.items():
+        target = (base == cid).to_numpy()
+        same = base.isin([c for c, x in entries.items() if x['coarse_label'].strip() == e['coarse_label'].strip()]).to_numpy()
+        if guard_stress(
+            e,
+            policy,
+            int(target.sum()),
+            (BASE, cid) in flags,
+            lambda: dying_evidence(data.obs, target, comparison_cells(data.obs, same, removing)),
+            (BASE, cid) in mito,
+        ):
             converted.append(cid)
     for cid in converted:  # a kept cluster cannot merge into a removed one
-        e=entries[cid]
-        if e['merge_target'] is not None and entries[str(e['merge_target'])]['action']=='remove':
+        e = entries[cid]
+        if e['merge_target'] is not None and entries[str(e['merge_target'])]['action'] == 'remove':
             e['requested_merge_target'] = e['merge_target']
             e['merge_target'] = None
     return converted
 
 
-def finalize(evidence_ref,types_ref,quality_ref,destination):
+def finalize(evidence_ref, types_ref, quality_ref, destination):
     import pandas as pd
-    from msp.api import apply_annotation,plot_annotated,validate_annotation
-    from msp.api import apply_inspection,validate_inspection
+    from msp.api import apply_annotation, plot_annotated, validate_annotation
+    from msp.api import apply_inspection, validate_inspection
     from msp.api import load_removal_mask
     from msp.api import generate_report
 
     bundle = verified(evidence_ref)
     typed = verified(types_ref)
     quality = verified(quality_ref)
-    if any(r.get('accepted') is not True or r['evidence']!=evidence_ref for r in (typed,quality)) or quality['types']!=types_ref:
+    if any(r.get('accepted') is not True or r['evidence'] != evidence_ref for r in (typed, quality)) or quality['types'] != types_ref:
         raise ValueError('Decisions do not refer to this accepted evidence')
     data = _data(bundle)
     clusters = sorted(data.obs[BASE].astype(str).unique())
-    problems=validate_annotation({str(e['cluster_id']):e for e in typed['proposal']['clusters']},clusters)
-    problems+=validate_inspection(quality['proposal'],clusters,data.obs)
+    problems = validate_annotation({str(e['cluster_id']): e for e in typed['proposal']['clusters']}, clusters)
+    problems += validate_inspection(quality['proposal'], clusters, data.obs)
     if problems:
         raise ValueError('; '.join(problems))
-    apply_inspection(data,BASE,quality['proposal'])
-    pre=load_removal_mask(artifact(bundle,'preannotation_removal.csv').parent,data)
+    apply_inspection(data, BASE, quality['proposal'])
+    pre = load_removal_mask(artifact(bundle, 'preannotation_removal.csv').parent, data)
     # Preserve distinct numerical and inherited sources instead of a generic "filtered" reason.
-    fragments=fragment_table(bundle)
-    bad_frag=set(fragments.loc[fragments.recommend_removal.astype(str).str.lower().eq('true'),'subcluster']) if 'recommend_removal' in fragments else set()
-    frag_tests=fragment_reasons(fragments)
-    outliers=(pd.read_csv(artifact(bundle,'cell_outliers.csv'),dtype={'cell':str},keep_default_na=False).set_index('cell')
-              if 'cell_outliers.csv' in bundle['files'] else pd.DataFrame())
-    osp_reasons=pd.read_csv(artifact(bundle,'osp_removal_proposals.csv.gz'),dtype=str,keep_default_na=False).set_index('cell')['reasons'].to_dict()
-    retained={}
-    if stress_policy(verified(bundle['inspected'])['spec'])=='keep':
+    fragments = fragment_table(bundle)
+    bad_frag = set(fragments.loc[fragments.recommend_removal.astype(str).str.lower().eq('true'), 'subcluster']) if 'recommend_removal' in fragments else set()
+    frag_tests = fragment_reasons(fragments)
+    outliers = (
+        pd.read_csv(artifact(bundle, 'cell_outliers.csv'), dtype={'cell': str}, keep_default_na=False).set_index('cell')
+        if 'cell_outliers.csv' in bundle['files']
+        else pd.DataFrame()
+    )
+    osp_reasons = pd.read_csv(artifact(bundle, 'osp_removal_proposals.csv.gz'), dtype=str, keep_default_na=False).set_index('cell')['reasons'].to_dict()
+    retained = {}
+    if stress_policy(verified(bundle['inspected'])['spec']) == 'keep':
         # Fragments removed only by their dissociation or mitochondrial test stay, labelled (decision 0017);
         # compute() already turned OSP's dissociation-stress drops into flags.
         soft = soft_fragments(fragments)
         bad_frag -= set(soft)
-        product=data.obs['standissect_product'].astype(str) if 'standissect_product' in data.obs else pd.Series('',index=data.obs_names)
-        flagged=outliers.index[outliers.recommend_removal.astype(str).str.lower().eq('true')] if 'recommend_removal' in outliers else []
-        stay=(product.isin(list(soft))&~data.obs_names.isin(flagged)&~data.obs['_qc_action'].astype(str).eq('drop')).to_numpy()
-        pre=pre&~stay
+        product = data.obs['standissect_product'].astype(str) if 'standissect_product' in data.obs else pd.Series('', index=data.obs_names)
+        flagged = outliers.index[outliers.recommend_removal.astype(str).str.lower().eq('true')] if 'recommend_removal' in outliers else []
+        stay = (product.isin(list(soft)) & ~data.obs_names.isin(flagged) & ~data.obs['_qc_action'].astype(str).eq('drop')).to_numpy()
+        pre = pre & ~stay
         retained.update(product[stay].map(soft).to_dict())
-        retained.update({c:'dissociation' for c in data.obs_names.intersection(list(osp_reasons)) if str(data.obs.at[c,'_qc_action'])!='drop'})
-    inspect_drop=data.obs['_msp_action'].astype(str).eq('drop').to_numpy()
-    archive=apply_annotation(data,typed['proposal'],pre|inspect_drop,{'preannotation':pre,'inspect_drop':inspect_drop})
-    origin=pd.read_csv(artifact(bundle,'input_cells.csv.gz'),dtype=str,keep_default_na=False).set_index('cell_id')
-    reasons={c:[] for c in archive.cell}
-    typed_entries={str(e['cluster_id']):e for e in typed['proposal']['clusters']}
-    quality_entries={str(e['cluster']):e for e in quality['proposal']['clusters']}
-    for cid,e in typed_entries.items():
-        if e.get('host_adjustment',{}).get('policy')==STRESS_HOST_POLICY:
-            retained.update({c:e['host_adjustment']['state'] for c in data.obs_names[data.obs[BASE].astype(str).eq(cid)]})
+        retained.update({c: 'dissociation' for c in data.obs_names.intersection(list(osp_reasons)) if str(data.obs.at[c, '_qc_action']) != 'drop'})
+    inspect_drop = data.obs['_msp_action'].astype(str).eq('drop').to_numpy()
+    archive = apply_annotation(data, typed['proposal'], pre | inspect_drop, {'preannotation': pre, 'inspect_drop': inspect_drop})
+    origin = pd.read_csv(artifact(bundle, 'input_cells.csv.gz'), dtype=str, keep_default_na=False).set_index('cell_id')
+    reasons = {c: [] for c in archive.cell}
+    typed_entries = {str(e['cluster_id']): e for e in typed['proposal']['clusters']}
+    quality_entries = {str(e['cluster']): e for e in quality['proposal']['clusters']}
+    for cid, e in typed_entries.items():
+        if e.get('host_adjustment', {}).get('policy') == STRESS_HOST_POLICY:
+            retained.update({c: e['host_adjustment']['state'] for c in data.obs_names[data.obs[BASE].astype(str).eq(cid)]})
     for cid in reasons:
         row = data.obs.loc[cid]
         group = str(row[BASE])
         r = reasons[cid]
         if str(row.get('standissect_product')) in bad_frag:
-            r.append({'code': 'fragment_qc', 'detail': frag_tests.get(str(row.get('standissect_product')), {}), 'evidence': bundle['files']['minor_sibling_qc.csv']})
+            r.append(
+                {'code': 'fragment_qc', 'detail': frag_tests.get(str(row.get('standissect_product')), {}), 'evidence': bundle['files']['minor_sibling_qc.csv']}
+            )
         if cid in outliers.index and str(outliers.loc[cid].get('recommend_removal')).lower() == 'true':
             r.append({'code': 'cell_outlier', 'detail': outliers.loc[cid].astype(str).to_dict(), 'evidence': bundle['files']['cell_outliers.csv']})
-        if str(row.get('_qc_action'))=='drop':
+        if str(row.get('_qc_action')) == 'drop':
             if cid not in osp_reasons:
                 raise ValueError('OSP drop lacks its original decision: ' + cid)
-            r.append({'code':'osp_proposal','detail':json.loads(osp_reasons[cid])})
-        if str(row['_msp_action'])=='drop':
+            r.append({'code': 'osp_proposal', 'detail': json.loads(osp_reasons[cid])})
+        if str(row['_msp_action']) == 'drop':
             from msp.api import INSPECTION_OPS
-            matching=[a for a in quality['proposal'].get('cell_actions',[]) if str(a['cluster'])==group
-                      and a['action']=='drop' and INSPECTION_OPS[a['op']](row[a['metric']],float(a['value']))]
-            r.append({'code':'quality_decision','detail':quality_entries[group],
-                      'cell_actions':matching,'evidence':quality_ref})
+
+            matching = [
+                a
+                for a in quality['proposal'].get('cell_actions', [])
+                if str(a['cluster']) == group and a['action'] == 'drop' and INSPECTION_OPS[a['op']](row[a['metric']], float(a['value']))
+            ]
+            r.append({'code': 'quality_decision', 'detail': quality_entries[group], 'cell_actions': matching, 'evidence': quality_ref})
         if typed_entries[group]['action'] == 'remove':
-            r.append({'code': typed_entries[group]['remove_reason'], 'detail': typed_entries[group]['rationale'], 'confidence': typed_entries[group]['confidence'], 'evidence': types_ref})
+            r.append(
+                {
+                    'code': typed_entries[group]['remove_reason'],
+                    'detail': typed_entries[group]['rationale'],
+                    'confidence': typed_entries[group]['confidence'],
+                    'evidence': types_ref,
+                }
+            )
         if not r:
             raise ValueError('An excluded cell has no reason: ' + cid)
-    excluded=pd.read_csv(artifact(bundle,'sample_exclusions.csv.gz'),dtype=str,keep_default_na=False)
+    excluded = pd.read_csv(artifact(bundle, 'sample_exclusions.csv.gz'), dtype=str, keep_default_na=False)
     for row in excluded.to_dict('records'):
-        reasons[row['cell_id']]=[{'code':'sample_excluded','detail':row['reason'],'evidence':bundle['inclusion']}]
-    kept=data[data.obs.msp_ann_action.astype(str).eq('keep')].copy()
-    mark_retained(kept.obs,retained)
+        reasons[row['cell_id']] = [{'code': 'sample_excluded', 'detail': row['reason'], 'evidence': bundle['inclusion']}]
+    kept = data[data.obs.msp_ann_action.astype(str).eq('keep')].copy()
+    mark_retained(kept.obs, retained)
     if set(kept.obs_names) & set(reasons) or set(kept.obs_names) | set(reasons) != set(origin.index):
         raise ValueError('Cross-sample cell conservation failed')
-    ledger=origin.loc[list(reasons)].reset_index().rename(columns={'cell_id':'cell_uid'})
+    ledger = origin.loc[list(reasons)].reset_index().rename(columns={'cell_id': 'cell_uid'})
     ledger['reason'] = ledger.cell_uid.map(lambda c: json.dumps(reasons[c], ensure_ascii=False))
     ledger['stage'] = 'cross-sample'
     ledger['operation'] = 'cross-sample.finalize'
     ledger['input_version'] = evidence_ref['sha256']
     ledger['run_id'] = verified(bundle['inspected'])['spec']['run_id']
-    ledger.to_csv(destination/'cell_exclusions.csv.gz',index=False)
+    ledger.to_csv(destination / 'cell_exclusions.csv.gz', index=False)
     for name in bundle['files']:
-        if name.endswith(('.csv','.png')) and name!='cell_exclusions.csv.gz':
+        if name.endswith(('.csv', '.png')) and name != 'cell_exclusions.csv.gz':
             path = destination / name
             path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(artifact(bundle, name), path)
@@ -688,40 +863,64 @@ def finalize(evidence_ref,types_ref,quality_ref,destination):
     generate_report(str(destination))
     # Verify serialized identities too, before a completion bundle is emitted.
     import anndata as an
-    check=an.read_h5ad(destination/'annotated.h5ad',backed='r')
+
+    check = an.read_h5ad(destination / 'annotated.h5ad', backed='r')
     try:
-        stored=pd.read_csv(destination/'cell_exclusions.csv.gz',dtype=str,keep_default_na=False)
-        if (not check.obs_names.equals(kept.obs_names) or stored.cell_uid.duplicated().any() or
-                set(check.obs_names)&set(stored.cell_uid) or set(check.obs_names)|set(stored.cell_uid)!=set(origin.index)
-                or stored.reason.eq('').any()):
+        stored = pd.read_csv(destination / 'cell_exclusions.csv.gz', dtype=str, keep_default_na=False)
+        if (
+            not check.obs_names.equals(kept.obs_names)
+            or stored.cell_uid.duplicated().any()
+            or set(check.obs_names) & set(stored.cell_uid)
+            or set(check.obs_names) | set(stored.cell_uid) != set(origin.index)
+            or stored.reason.eq('').any()
+        ):
             raise ValueError('Serialized cross-sample output/ledger conservation failed')
     finally:
         check.file.close()
-    sealed(destination,destination/'final.json',state='complete',input=verified(bundle['inspected'])['input'],evidence=evidence_ref,types=types_ref,quality=quality_ref,
-           n_input=len(origin),n_survived=kept.n_obs,n_removed=len(ledger))
+    sealed(
+        destination,
+        destination / 'final.json',
+        state='complete',
+        input=verified(bundle['inspected'])['input'],
+        evidence=evidence_ref,
+        types=types_ref,
+        quality=quality_ref,
+        n_input=len(origin),
+        n_survived=kept.n_obs,
+        n_removed=len(ledger),
+    )
 
 
 def main():
     import logging
-    logging.basicConfig(level=logging.INFO,format='%(asctime)s %(name)s %(levelname)s %(message)s')
+
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(name)s %(levelname)s %(message)s')
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('operation')
     p.add_argument('args', nargs='+')
     a = p.parse_args()
     dest = Path.cwd()
-    ref=lambda n:reference(a.args[n])
+    ref = lambda n: reference(a.args[n])
     if a.operation == 'inspect':
         inspect_input(read(a.args[0]), dest)
-    elif a.operation=='agent':
-        spec,evidence,phase,parent,types=read(a.args[0])
-        immutable(dest/'agent.json',agent_spec(spec,evidence,phase,parent,types))
-    elif a.operation=='include-single':
-        bundle=verified(ref(0))
+    elif a.operation == 'agent':
+        spec, evidence, phase, parent, types = read(a.args[0])
+        immutable(dest / 'agent.json', agent_spec(spec, evidence, phase, parent, types))
+    elif a.operation == 'include-single':
+        bundle = verified(ref(0))
         if len(bundle['samples']) != 1 and not bundle.get('chunked'):
             raise ValueError('Automatic inclusion requires exactly one sample or chunked samples')
         from .inclusion import CHUNKED_NOTE, SINGLE_SAMPLE_NOTE
-        note=CHUNKED_NOTE if bundle.get('chunked') else SINGLE_SAMPLE_NOTE
-        immutable(dest/'decision.json',dict(accepted=True,evidence=ref(0),proposal={'samples':[dict(sample=s['sample'],include=True,reason=note) for s in bundle['samples']],'notes':note}))
+
+        note = CHUNKED_NOTE if bundle.get('chunked') else SINGLE_SAMPLE_NOTE
+        immutable(
+            dest / 'decision.json',
+            dict(
+                accepted=True,
+                evidence=ref(0),
+                proposal={'samples': [dict(sample=s['sample'], include=True, reason=note) for s in bundle['samples']], 'notes': note},
+            ),
+        )
     elif a.operation == 'compute':
         compute(ref(0), ref(1), dest)
     elif a.operation == 'compute-round':

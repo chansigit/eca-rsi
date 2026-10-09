@@ -1,4 +1,5 @@
 """Versioned zoom-in worker operations, using ZMIP/MSP numerical kernels."""
+
 import argparse
 import json
 import os
@@ -7,17 +8,40 @@ from pathlib import Path
 
 from ..files import immutable, reference, verified
 from . import PROMPTS
-from .contract import (AMEND_NOTE, LOOKUP_NOTE, NO_ARGUMENTS, amended, checklist, deg_lookup_schema, evidence_page, evidence_paths, json_hint,
-                       lookup_arguments, proposal as parse_proposal, schema)
-from .common import artifact, assemble, check_bundle, deg, deg_batch, png_url, publish_bundle, sealed
-from .common import gene_answer, qc_answer, save_gene_summary
-from .common import (RETAINED, STRESS_HOST_POLICY, comparison_cells, dying_evidence, fragment_reasons, fragment_table, guard_stress,
-                     mark_retained, soft_fragments, stress_flags, stress_policy)
+from .contract import (
+    LOOKUP_NOTE,
+    NO_ARGUMENTS,
+    amended,
+    checklist,
+    deg_lookup_schema,
+    evidence_paths,
+    json_hint,
+    lookup_arguments,
+    proposal as parse_proposal,
+    schema,
+)
+from .common import artifact, assemble, check_bundle, deg, deg_batch, publish_bundle, sealed
+from .common import save_gene_summary
+from . import tools
+from .common import (
+    RETAINED,
+    STRESS_HOST_POLICY,
+    comparison_cells,
+    dying_evidence,
+    fragment_reasons,
+    fragment_table,
+    guard_stress,
+    mark_retained,
+    soft_fragments,
+    stress_flags,
+    stress_policy,
+)
 from ..files import digest, read, save
 
 
 def data_from(bundle, name='integrated.h5ad', backed=None):
     import anndata as an
+
     return an.read_h5ad(artifact(bundle, name), backed=backed)
 
 
@@ -30,6 +54,7 @@ def accepted_plan(prepared, decision):
 
 def prepare(spec, destination):
     from zmip.api import lineage_evidence
+
     publication = check_bundle(spec['input'])
     if publication.get('state') != 'complete':
         raise ValueError('Zoom-in requires a completed cross-sample publication')
@@ -38,23 +63,31 @@ def prepare(spec, destination):
         raise ValueError('Cross-sample membership changed')
     cfg = spec['config']
     counts, _, _, _ = lineage_evidence(data, 'msp_ann_coarse', cfg['batch_col'], str(destination))
-    sealed(destination, destination/'prepared.json', spec=spec, input=spec['input'],
-           counts={str(k): int(v) for k, v in counts.n_cells.items()}, n_input=len(data))
+    sealed(
+        destination,
+        destination / 'prepared.json',
+        spec=spec,
+        input=spec['input'],
+        counts={str(k): int(v) for k, v in counts.n_cells.items()},
+        n_input=len(data),
+    )
 
 
 def markers(prepared, decision, destination):
     from zmip.api import lineage_markers
+
     plan = accepted_plan(prepared, decision)
     source = verified(prepared)
     data = data_from(verified(source['input']), 'annotated.h5ad')
     owners = {label: line['name'] for line in plan['lineages'] for label in line['coarse_labels']}
     data.obs['zmip_lineage'] = data.obs.msp_ann_coarse.astype(str).map(owners).astype('category')
     result = lineage_markers(data, 'zmip_lineage', str(destination))
-    sealed(destination, destination/'markers.json', prepared=prepared, decision=decision, markers=result)
+    sealed(destination, destination / 'markers.json', prepared=prepared, decision=decision, markers=result)
 
 
 def subset(prepared, decision, index, destination):
     from zmip.api import subset_for
+
     plan = accepted_plan(prepared, decision)
     line = plan['lineages'][index]
     if not line['zoom']:
@@ -66,12 +99,13 @@ def subset(prepared, decision, index, destination):
     sub = subset_for(data, line['coarse_labels'], 'msp_ann_coarse', 'msp_ann_fine')
     if len(sub) != line['n_cells']:
         raise ValueError('Lineage membership changed')
-    sub.write_h5ad(destination/'subset.h5ad')
-    sealed(destination, destination/'subset.json', prepared=prepared, decision=decision, lineage=line, index=index)
+    sub.write_h5ad(destination / 'subset.h5ad')
+    sealed(destination, destination / 'subset.json', prepared=prepared, decision=decision, lineage=line, index=index)
 
 
 def compute(subset_ref, marker_ref, destination):
     from zmip.api import compute_lineage
+
     source, shared = check_bundle(subset_ref), check_bundle(marker_ref)
     if any(source[key] != shared[key] for key in ('prepared', 'decision')):
         raise ValueError('Lineage and markers belong to different plans')
@@ -83,17 +117,37 @@ def compute(subset_ref, marker_ref, destination):
     os.environ['MSP_COMPUTE_GPU'] = '1' if backend == 'rapids' else '0'
     line = source['lineage']
     data = data_from(source, 'subset.h5ad')
-    foreign = compute_lineage(data, line['name'], line['coarse_labels'], shared['markers'], destination,
-        batch_col=cfg['batch_col'], species=cfg['species'], n_top_genes=cfg['n_top_genes'],
-        n_pcs=cfg['n_pcs'], n_neighbors=cfg['n_neighbors'])
+    foreign = compute_lineage(
+        data,
+        line['name'],
+        line['coarse_labels'],
+        shared['markers'],
+        destination,
+        batch_col=cfg['batch_col'],
+        species=cfg['species'],
+        n_top_genes=cfg['n_top_genes'],
+        n_pcs=cfg['n_pcs'],
+        n_neighbors=cfg['n_neighbors'],
+    )
     from zmip.api import TYPE_KEY, QUALITY_KEY
+
     save_gene_summary(data, [TYPE_KEY, QUALITY_KEY], destination)
-    plan = read(destination/'deg_plan.json')
-    tasks = [dict(plan_index=i, cluster=c) for i, item in enumerate(plan['plan'])
-             for c in [None, *[c for c in item['valid'] if item['top3'].get(c)]]]
-    sealed(destination, destination/'prepared.json', source=subset_ref, shared=marker_ref,
-        planning=source['prepared'], decision=source['decision'], lineage=line, version=0,
-        tasks=tasks, n_input=len(data), backend=backend, foreign_columns=foreign)
+    plan = read(destination / 'deg_plan.json')
+    tasks = [dict(plan_index=i, cluster=c) for i, item in enumerate(plan['plan']) for c in [None, *[c for c in item['valid'] if item['top3'].get(c)]]]
+    sealed(
+        destination,
+        destination / 'prepared.json',
+        source=subset_ref,
+        shared=marker_ref,
+        planning=source['prepared'],
+        decision=source['decision'],
+        lineage=line,
+        version=0,
+        tasks=tasks,
+        n_input=len(data),
+        backend=backend,
+        foreign_columns=foreign,
+    )
 
 
 def lineage_policy(bundle):
@@ -108,12 +162,17 @@ def numerical_reasons(bundle, data):
     and fail loudly rather than be recorded vaguely."""
     import pandas as pd
     from msp.api import load_removal_mask
+
     mask = load_removal_mask(artifact(bundle, 'preannotation_removal.csv').parent, data)
     fragments = fragment_table(bundle)
     bad = set(fragments.loc[fragments.recommend_removal.str.lower().eq('true'), 'subcluster']) if 'recommend_removal' in fragments else set()
     soft = soft_fragments(fragments) if lineage_policy(bundle) == 'keep' else {}
     tests = fragment_reasons(fragments)
-    outliers = pd.read_csv(artifact(bundle, 'cell_outliers.csv'), dtype=str, keep_default_na=False).set_index('cell') if 'cell_outliers.csv' in bundle['files'] else pd.DataFrame()
+    outliers = (
+        pd.read_csv(artifact(bundle, 'cell_outliers.csv'), dtype=str, keep_default_na=False).set_index('cell')
+        if 'cell_outliers.csv' in bundle['files']
+        else pd.DataFrame()
+    )
     result, retained = {}, {}
     for cell in data.obs_names[mask]:
         reasons, product = [], str(data.obs.loc[cell].get('standissect_product'))
@@ -136,6 +195,7 @@ REASSIGN_OWN_MARKER_FRACTION = 0.5  # a reassigned population may keep at most h
 def own_marker_positivity(data, genes, cells=None):
     """Mean fraction of (cell, marker) pairs with expression > 0 over this lineage's markers present in the matrix."""
     import scipy.sparse as sp
+
     present = [g for g in genes if g in data.var_names]
     if not present:
         return None
@@ -158,13 +218,14 @@ def previous_reassignment(obs):
     if share < 0.5:
         return None
     latest = [c for c in columns if moves[c].any()][-1]
-    return dict(round=latest[:-len('_zmip_reassigned_from')], share=round(share, 3), cells=int(moved.sum()))
+    return dict(round=latest[: -len('_zmip_reassigned_from')], share=round(share, 3), cells=int(moved.sum()))
 
 
 def reassign_problems(groups, data, own_markers, core):
     """Every reassignment the host refuses, one line each, so a proposal with several bad entries costs one
     rejection (65 lineage sessions spent a turn per entry, #55); records `recurring` and `n_cells` on each entry."""
     from zmip.api import TYPE_KEY, QUALITY_KEY
+
     t, q = data.obs[TYPE_KEY].astype(str), data.obs[QUALITY_KEY].astype(str)
     problems = []
     for group in groups:
@@ -188,13 +249,14 @@ def reassign_problem(n_cells, share, core, target, previous):
     doublets were reassigned Myeloid -> T cell in seven consecutive rounds, 2026-09-24)."""
     if share is None or not core or share < REASSIGN_OWN_MARKER_FRACTION * core:
         return ''
-    text = (f'Reassignment to {target!r} rejected: these {n_cells} cells still express this lineage\'s own markers '
-            f'({share:.0%} of cell-marker pairs positive; {core:.0%} across the lineage). A population carrying this '
-            f'lineage\'s markers together with another lineage\'s is a doublet, not a misassignment: submit remove with '
-            f'remove_reason "doublet", or keep it in this lineage with evidence.')
+    text = (
+        f'Reassignment to {target!r} rejected: these {n_cells} cells still express this lineage\'s own markers '
+        f'({share:.0%} of cell-marker pairs positive; {core:.0%} across the lineage). A population carrying this '
+        f'lineage\'s markers together with another lineage\'s is a doublet, not a misassignment: submit remove with '
+        f'remove_reason "doublet", or keep it in this lineage with evidence.'
+    )
     if previous:
-        text += (f' {previous["share"]:.0%} of these cells were already reassigned in {previous["round"]} '
-                 f'and clustered back here.')
+        text += f' {previous["share"]:.0%} of these cells were already reassigned in {previous["round"]} and clustered back here.'
     return text
 
 
@@ -204,9 +266,13 @@ def quality_guard(bundle, data, proposal, t, q):
     target with the rest of its 1.0 types that no decision removes."""
     import numpy as np
     from zmip.api import TYPE_KEY, QUALITY_KEY
+
     policy, flags, mito = lineage_policy(bundle), stress_flags(bundle), stress_flags(bundle, 'mito')
-    targets = [(group['cluster_id'], entry, (q.eq(group['cluster_id']) & t.isin(entry['type_clusters'])).to_numpy())
-               for group in proposal['clusters'] for entry in group['decisions']]
+    targets = [
+        (group['cluster_id'], entry, (q.eq(group['cluster_id']) & t.isin(entry['type_clusters'])).to_numpy())
+        for group in proposal['clusters']
+        for entry in group['decisions']
+    ]
     removing = np.zeros(len(t), dtype=bool)
     for _, entry, target in targets:
         if entry['action'] == 'remove':
@@ -216,22 +282,23 @@ def quality_guard(bundle, data, proposal, t, q):
         flagged = (QUALITY_KEY, cid) in flags or any((TYPE_KEY, c) in flags for c in entry['type_clusters'])
         marked = (QUALITY_KEY, cid) in mito or any((TYPE_KEY, c) in mito for c in entry['type_clusters'])
         same = t.isin(entry['type_clusters']).to_numpy()
-        if guard_stress(entry, policy, int(target.sum()), flagged,
-                        lambda: dying_evidence(data.obs, target, comparison_cells(data.obs, same, removing)), marked):
+        if guard_stress(
+            entry, policy, int(target.sum()), flagged, lambda: dying_evidence(data.obs, target, comparison_cells(data.obs, same, removing)), marked
+        ):
             retained.append(dict(cluster=cid, type_clusters=entry['type_clusters'], **entry['host_adjustment']))
     return retained
 
 
 def apply_lineage(evidence, decision, destination):
     from zmip.api import TYPE_KEY, QUALITY_KEY, apply_decisions
+
     bundle, accepted = check_bundle(evidence), verified(decision)
     if accepted.get('accepted') is not True or accepted['evidence'] != evidence:
         raise ValueError('Lineage decision belongs to different evidence')
     data = data_from(bundle)
     own, other = lineage_labels(bundle)
     pre, retained = numerical_reasons(bundle, data)
-    obs, removed, reassigned, _ = apply_decisions(data.obs, accepted['types'], accepted['quality'], own, other,
-        bundle['lineage']['name'], pre)
+    obs, removed, reassigned, _ = apply_decisions(data.obs, accepted['types'], accepted['quality'], own, other, bundle['lineage']['name'], pre)
     data.obs = obs
     t, q = data.obs[TYPE_KEY].astype(str), data.obs[QUALITY_KEY].astype(str)
     for group in accepted['quality']['clusters']:
@@ -243,12 +310,12 @@ def apply_lineage(evidence, decision, destination):
     before = set(kept.obs_names[kept.obs[RETAINED].astype(str).ne('')]) if RETAINED in kept.obs else set()
     mark_retained(kept.obs, retained)
     new = kept.obs.loc[~kept.obs_names.isin(list(before)), RETAINED].astype(str)
-    new[new.ne('')].rename_axis('cell').rename('state').reset_index().to_csv(destination/'annotation_retained.csv', index=False)
+    new[new.ne('')].rename_axis('cell').rename('state').reset_index().to_csv(destination / 'annotation_retained.csv', index=False)
     removed['reasons'] = removed.reasons.map(json.dumps)
-    removed.to_csv(destination/'annotation_removed.csv', index=False)
-    reassigned.to_csv(destination/'annotation_reassigned.csv', index=False)
+    removed.to_csv(destination / 'annotation_removed.csv', index=False)
+    reassigned.to_csv(destination / 'annotation_reassigned.csv', index=False)
     ledger = removed.rename(columns={'cell': 'cell_uid', 'reasons': 'reason'}).copy()
-    for target, source in [('source_id','source_unit'), ('source_cell_id','eca_source_cell_id')]:
+    for target, source in [('source_id', 'source_unit'), ('source_cell_id', 'eca_source_cell_id')]:
         if source not in data.obs:
             raise ValueError('Lineage input lacks original cell identity: ' + source)
         ledger[target] = ledger.cell_uid.map(data.obs[source].astype(str))
@@ -256,20 +323,30 @@ def apply_lineage(evidence, decision, destination):
     ledger['operation'] = 'zoom-in.apply'
     ledger['input_version'] = evidence['sha256']
     ledger['decision'] = json.dumps(decision)
-    ledger.to_csv(destination/'cell_exclusions.csv.gz', index=False)
-    save(destination/'annotation_proposal.json', accepted)
+    ledger.to_csv(destination / 'cell_exclusions.csv.gz', index=False)
+    save(destination / 'annotation_proposal.json', accepted)
     degraded = lineage_report(bundle, data, kept, destination)
-    kept.write_h5ad(destination/'annotated.h5ad')
+    kept.write_h5ad(destination / 'annotated.h5ad')
     import anndata as an
-    disk = an.read_h5ad(destination/'annotated.h5ad', backed='r')
+
+    disk = an.read_h5ad(destination / 'annotated.h5ad', backed='r')
     try:
         if not disk.obs_names.equals(kept.obs_names):
             raise ValueError('Serialized lineage cell identities changed')
     finally:
         disk.file.close()
-    sealed(destination, destination/'final.json', state='complete', evidence=evidence,
-        decision=decision, lineage=bundle['lineage'], n_input=len(data), n_survived=len(kept), n_removed=len(removed),
-        **({'degraded': degraded} if degraded else {}))
+    sealed(
+        destination,
+        destination / 'final.json',
+        state='complete',
+        evidence=evidence,
+        decision=decision,
+        lineage=bundle['lineage'],
+        n_input=len(data),
+        n_survived=len(kept),
+        n_removed=len(removed),
+        **({'degraded': degraded} if degraded else {}),
+    )
 
 
 def lineage_report(bundle, data, kept, destination):
@@ -284,6 +361,7 @@ def lineage_report(bundle, data, kept, destination):
     from msp.api import compose_title, generate_report
     from .contract import copy_light
     from ..degraded import note
+
     name, notes = bundle['lineage']['name'], []
     try:
         notes = copy_light(bundle['files'], destination)
@@ -291,9 +369,9 @@ def lineage_report(bundle, data, kept, destination):
         # returns plain strings, so every lineage report failed here (2026-10-02, #26).
         # Draw from a light copy: annotated.h5ad is written from kept, untouched.
         labels = kept.obs[['msp_ann_coarse', 'msp_ann_fine']].astype('category')
-        plot_annotation(data, an.AnnData(obs=labels, obsm={'X_umap': kept.obsm['X_umap']}), str(destination/'figures'))
+        plot_annotation(data, an.AnnData(obs=labels, obsm={'X_umap': kept.obsm['X_umap']}), str(destination / 'figures'))
         generate_report(str(destination), title=compose_title('zoom-in lineage (zmip)', str(destination), subject=name))
-    except Exception as exc:                      # noqa: BLE001 - any drawing failure, never fatal
+    except Exception as exc:  # noqa: BLE001 - any drawing failure, never fatal
         notes.append(note(f'report of lineage {name}', exc))
     return notes
 
@@ -313,10 +391,15 @@ def plan_without(plan, skipped):
         raise ValueError('Skipped lineages must be zoomed lineages of the plan: ' + ', '.join(sorted(names.keys() - zoomed)))
     # Every lineage carries a reason: the agent states one where it declines to zoom, the
     # host states one where it skipped, and zmip's round report prints the column for all.
-    return {**plan, 'lineages': [{**line, 'zoom': False,
-                                  'reason': 'annotation agent failed twice; cross-sample labels kept: '
-                                  + str(names[line['name']].get('error', ''))[:300]} if line['name'] in names
-                                 else {'reason': '', **line} for line in plan['lineages']]}
+    return {
+        **plan,
+        'lineages': [
+            {**line, 'zoom': False, 'reason': 'annotation agent failed twice; cross-sample labels kept: ' + str(names[line['name']].get('error', ''))[:300]}
+            if line['name'] in names
+            else {'reason': '', **line}
+            for line in plan['lineages']
+        ],
+    }
 
 
 def merge(prepared, decision, results, destination, skipped=()):
@@ -324,6 +407,7 @@ def merge(prepared, decision, results, destination, skipped=()):
     from zmip.api import merge_back
     from zmip.api import slug
     from .contract import copy_light
+
     plan = plan_without(accepted_plan(prepared, decision), skipped)
     source = verified(prepared)
     data = data_from(verified(source['input']), 'annotated.h5ad')
@@ -336,9 +420,11 @@ def merge(prepared, decision, results, destination, skipped=()):
         name = result['lineage']['name']
         if name in accepted:
             raise ValueError('Repeated lineage result')
-        accepted[name] = dict(dir=str(artifact(result, 'annotated.h5ad').parent),
+        accepted[name] = dict(
+            dir=str(artifact(result, 'annotated.h5ad').parent),
             removed=pd.read_csv(artifact(result, 'annotation_removed.csv'), dtype=str, keep_default_na=False),
-            reassigned=pd.read_csv(artifact(result, 'annotation_reassigned.csv'), dtype=str, keep_default_na=False))
+            reassigned=pd.read_csv(artifact(result, 'annotation_reassigned.csv'), dtype=str, keep_default_na=False),
+        )
         if 'annotation_retained.csv' in result['files']:
             table = pd.read_csv(artifact(result, 'annotation_retained.csv'), dtype=str, keep_default_na=False)
             retained.update(zip(table.cell, table.state))
@@ -347,24 +433,44 @@ def merge(prepared, decision, results, destination, skipped=()):
         # computed each lineage in that subdirectory, generation 2 in a pool request of its own.
         # Without this copy every zoomed lineage renders "(not run yet)" and its link is dead.
         degraded += [{**d, 'scope': name} for d in result.get('degraded', [])]
-        degraded += [{**d, 'scope': name} for d in copy_light(result['files'], destination/slug(name))]
-    save(destination/'zmip_plan.json', plan)
+        degraded += [{**d, 'scope': name} for d in copy_light(result['files'], destination / slug(name))]
+    save(destination / 'zmip_plan.json', plan)
     mark_retained(data.obs, retained)  # merge_back writes the survivors of `data`
     # with_report: zmip's own global page for the round, as generation 1 always published.
     kept, removed, _ = merge_back(data, plan, accepted, str(destination), with_report=True)
-    ledger = pd.concat(ledgers, ignore_index=True) if ledgers else pd.DataFrame(columns=['cell_uid','source_id','source_cell_id','reason','stage','operation','input_version'])
-    if (ledger.cell_uid.duplicated().any() or set(ledger.cell_uid) != set(removed.cell)
-            or set(kept.obs_names) & set(ledger.cell_uid) or set(kept.obs_names) | set(ledger.cell_uid) != set(data.obs_names)):
+    ledger = (
+        pd.concat(ledgers, ignore_index=True)
+        if ledgers
+        else pd.DataFrame(columns=['cell_uid', 'source_id', 'source_cell_id', 'reason', 'stage', 'operation', 'input_version'])
+    )
+    if (
+        ledger.cell_uid.duplicated().any()
+        or set(ledger.cell_uid) != set(removed.cell)
+        or set(kept.obs_names) & set(ledger.cell_uid)
+        or set(kept.obs_names) | set(ledger.cell_uid) != set(data.obs_names)
+    ):
         raise ValueError('Global zoom-in cell conservation failed')
-    ledger.to_csv(destination/'cell_exclusions.csv.gz', index=False)
-    sealed(destination, destination/'final.json', state='complete', input=source['input'], planning=prepared, decision=decision,
-        lineages=results, skipped_lineages=list(skipped), n_input=len(data), n_survived=len(kept), n_removed=len(ledger),
-        **({'degraded': degraded} if degraded else {}))
+    ledger.to_csv(destination / 'cell_exclusions.csv.gz', index=False)
+    sealed(
+        destination,
+        destination / 'final.json',
+        state='complete',
+        input=source['input'],
+        planning=prepared,
+        decision=decision,
+        lineages=results,
+        skipped_lineages=list(skipped),
+        n_input=len(data),
+        n_survived=len(kept),
+        n_removed=len(ledger),
+        **({'degraded': degraded} if degraded else {}),
+    )
 
 
 def intersections(bundle):
     """2.0 cluster -> {1.0 cluster: cells}, from the table the assemble step writes."""
     import pandas as pd
+
     table = pd.read_csv(artifact(bundle, 'type_quality_intersections.csv'), index_col=0)
     return {str(q): {str(t): int(n) for t, n in row.items() if n} for q, row in table.iterrows()}
 
@@ -376,15 +482,20 @@ def cluster_order(name):
 def inline_context(bundle, kind):
     """What list_evidence and annotation_status answer at turn 0, so the first turn reads evidence."""
     from zmip.api import TYPE_KEY, QUALITY_KEY
+
     paths = evidence_paths(bundle)
-    lines = ['Evidence files (read_evidence paths): ' + json.dumps(paths),
-             'UMAP figures: ' + json.dumps([p for p in paths if p.endswith('.png') and 'umap' in p])]
+    lines = [
+        'Evidence files (read_evidence paths): ' + json.dumps(paths),
+        'UMAP figures: ' + json.dumps([p for p in paths if p.endswith('.png') and 'umap' in p]),
+    ]
     if kind != 'plan' and 'type_quality_intersections.csv' in bundle['files']:
         table = intersections(bundle)
         types = sorted({t for row in table.values() for t in row}, key=cluster_order)
         lines.append('Pending type clusters for submit_types (cluster_key %s): %s' % (TYPE_KEY, json.dumps(types)))
-        lines.append('Quality clusters (cluster_key %s) with their type intersections and cell counts; submit_quality decides '
-                     'each intersection exactly once: %s' % (QUALITY_KEY, json.dumps(table)))
+        lines.append(
+            'Quality clusters (cluster_key %s) with their type intersections and cell counts; submit_quality decides '
+            'each intersection exactly once: %s' % (QUALITY_KEY, json.dumps(table))
+        )
     return '\n'.join(lines)
 
 
@@ -393,55 +504,124 @@ def agent_spec(spec, evidence, kind, parent):
     from zmip.api import CLUSTER_SCHEMA_DOC
     from zmip.api import TYPE_KEY
     from msp.api import DEG_TOOL_DOC, DEG_SQL_DOC
+
     bundle = verified(evidence)
     props = {
-        'list_evidence': (schema({'offset': {'type': 'integer', 'minimum': 0}}), 'List evidence paths (the prompt already lists the first ones). Follow next_offset until null.', False),
-        'read_evidence': (schema({'path': {'type':'string'}, 'offset': {'type':'integer','minimum':0}}), 'Read an assigned figure or 16000 characters of text.', True)}
+        'list_evidence': (
+            schema({'offset': {'type': 'integer', 'minimum': 0}}),
+            'List evidence paths (the prompt already lists the first ones). Follow next_offset until null.',
+            False,
+        ),
+        'read_evidence': (
+            schema({'path': {'type': 'string'}, 'offset': {'type': 'integer', 'minimum': 0}}),
+            'Read an assigned figure or 16000 characters of text.',
+            True,
+        ),
+    }
     if kind == 'plan':
         prompt = PROMPTS.joinpath('zoomin-plan.md').read_text()
         prompt += '\nConfirmed counts: ' + json.dumps(bundle['counts'])
         prompt += '\nMinimum lineage size: ' + str(spec['config']['min_cells'])
-        props['submit_plan'] = (schema({'proposal_json': {'type':'string'}}), 'Submit the lineage plan: '+PLAN_SCHEMA_DOC, False)
+        props['submit_plan'] = (schema({'proposal_json': {'type': 'string'}}), 'Submit the lineage plan: ' + PLAN_SCHEMA_DOC, False)
         completion = 'submit_plan'
     else:
         prompt = PROMPTS.joinpath('zoomin-annotation.md').read_text()
         own, other = lineage_labels(bundle)
-        prompt += '\nLineage labels: '+json.dumps(own)+'\nOther permitted labels: '+json.dumps(other)
-        prompt += '\nEvidence version: '+evidence['sha256']
-        props.update({
-            'subcluster': (schema({'target':{'type':'string','enum':['type','quality']},'cluster':{'type':'string'},'resolution':{'type':'number','exclusiveMinimum':0},'reason':{'type':'string'}}), 'Refine the selected partition only when evidence is inadequate; compute matching DEG and return a new evidence version. Quality refinement preserves accepted types.', False),
-            'annotation_status': (NO_ARGUMENTS, 'Accepted type and quality entries, the pending type clusters and every 2.0 cluster with its type intersections (the prompt already lists them).', False),
-            'deg_lookup': (deg_lookup_schema(), DEG_TOOL_DOC + LOOKUP_NOTE % ('the type key ' + TYPE_KEY), False),
-            'deg_sql': (schema({'query':{'type':'string'}}), DEG_SQL_DOC, False),
-            'check_genes': (schema({'key':{'type':'string'},'cluster':{'type':'string'},'genes':{'type':'array','items':{'type':'string'},'minItems':1,'maxItems':80}}), 'Read expression by the explicitly selected clustering.', False),
-            'check_qc_scores': (schema({}), 'Read QC for resolution 2.0.', False),
-            'submit_types': (schema({'proposal_json':{'type':'string'}}), 'Save {"cluster_key":"msp_leiden_r1.0","clusters":[entries]}. Use action=keep for identity; quality controls removals/reassignments. Each entry: '+CLUSTER_SCHEMA_DOC, False),
-            'submit_quality': (schema({'proposal_json':{'type':'string'}}), 'Save {"cluster_key":"msp_leiden_r2.0","clusters":[{"cluster_id":"QC id","decisions":[{"type_clusters":["type ids"],"action":"keep|remove|reassign","confidence":"high|medium|low","evidence":"specific evidence","rationale":"reason"}]}]}. Each QC group must cover its present 1.0 intersections exactly once. remove needs remove_reason (doublet|low-quality|ambient|stress|dissociation|dying|batch|other). reassign needs reassign_to and fine_label. After a budget warning add removal_review explaining evidence and scope. An accepted quality proposal completes the session.', False)})
+        prompt += '\nLineage labels: ' + json.dumps(own) + '\nOther permitted labels: ' + json.dumps(other)
+        prompt += '\nEvidence version: ' + evidence['sha256']
+        props.update(
+            {
+                'subcluster': (
+                    schema(
+                        {
+                            'target': {'type': 'string', 'enum': ['type', 'quality']},
+                            'cluster': {'type': 'string'},
+                            'resolution': {'type': 'number', 'exclusiveMinimum': 0},
+                            'reason': {'type': 'string'},
+                        }
+                    ),
+                    'Refine the selected partition only when evidence is inadequate; compute matching DEG and return a new evidence version. Quality refinement preserves accepted types.',
+                    False,
+                ),
+                'annotation_status': (
+                    NO_ARGUMENTS,
+                    'Accepted type and quality entries, the pending type clusters and every 2.0 cluster with its type intersections (the prompt already lists them).',
+                    False,
+                ),
+                'deg_lookup': (deg_lookup_schema(), DEG_TOOL_DOC + LOOKUP_NOTE % ('the type key ' + TYPE_KEY), False),
+                'deg_sql': (schema({'query': {'type': 'string'}}), DEG_SQL_DOC, False),
+                'check_genes': (
+                    schema(
+                        {
+                            'key': {'type': 'string'},
+                            'cluster': {'type': 'string'},
+                            'genes': {'type': 'array', 'items': {'type': 'string'}, 'minItems': 1, 'maxItems': 80},
+                        }
+                    ),
+                    'Read expression by the explicitly selected clustering.',
+                    False,
+                ),
+                'check_qc_scores': (schema({}), 'Read QC for resolution 2.0.', False),
+                'submit_types': (
+                    schema({'proposal_json': {'type': 'string'}}),
+                    'Save {"cluster_key":"msp_leiden_r1.0","clusters":[entries]}. Use action=keep for identity; quality controls removals/reassignments. Each entry: '
+                    + CLUSTER_SCHEMA_DOC,
+                    False,
+                ),
+                'submit_quality': (
+                    schema({'proposal_json': {'type': 'string'}}),
+                    'Save {"cluster_key":"msp_leiden_r2.0","clusters":[{"cluster_id":"QC id","decisions":[{"type_clusters":["type ids"],"action":"keep|remove|reassign","confidence":"high|medium|low","evidence":"specific evidence","rationale":"reason"}]}]}. Each QC group must cover its present 1.0 intersections exactly once. remove needs remove_reason (doublet|low-quality|ambient|stress|dissociation|dying|batch|other). reassign needs reassign_to and fine_label. After a budget warning add removal_review explaining evidence and scope. An accepted quality proposal completes the session.',
+                    False,
+                ),
+            }
+        )
         completion = 'submit_quality'
-    prompt += '\nTissue/species and integration context: '+json.dumps(spec['config'])
+    prompt += '\nTissue/species and integration context: ' + json.dumps(spec['config'])
     if kind != 'plan':
         prompt += '\nStress policy: ' + stress_policy(spec)
     prompt += '\nUse the registered tools; no local execution or direct file editing is available.'
     prompt += '\n\n' + inline_context(bundle, kind) + '\n\n' + checklist('zoomin-plan' if kind == 'plan' else 'zoomin-annotation')
-    session = 'zoom-'+digest([spec['run_id'], kind, evidence])[:24]
-    root = Path(spec['output_root'])/session
-    root.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
-    state = immutable(root.with_suffix('.state.json'), dict(evidence=evidence, kind=kind, read=[], lookups=[], qc=False, types=None, quality=None, types_complete=False))
+    session = 'zoom-' + digest([spec['run_id'], kind, evidence])[:24]
+    root = Path(spec['output_root']) / session
+    root.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    state = immutable(
+        root.with_suffix('.state.json'), dict(evidence=evidence, kind=kind, read=[], lookups=[], qc=False, types=None, quality=None, types_complete=False)
+    )
     tools = []
     for name, (parameters, description, multimodal) in props.items():
-        tools.append(dict(name=name, description=description,
-            read_only=name in {'read_evidence','list_evidence','annotation_status','deg_lookup','deg_sql','check_genes','check_qc_scores'},
-            parameters=parameters,
-            args=['-m','ecarsi.stages.zoomin','tool',name,'{state}','{arguments}'], **spec['compute_budget' if name=='subcluster' else 'tool_budget'],
-            inputs=[reference(Path(__file__).with_name(n)) for n in ('zoomin.py','common.py','contract.py')], outputs=['result.json'], result_file='result.json', multimodal=multimodal))
-    return dict(session_id=session, dataset_id=spec['dataset_id'], prompt=prompt, tools=tools,
-        max_turns=100, pool_root=spec['pool_root'], bridge_root=spec['bridge_root'], output_root=str(root),
-        completion_tool=completion, tool_state=state, planner='ecarsi.stages.evidence',
-        trace=dict(workflow_id='zoom-in/'+spec['run_id'],dataset_id=spec['dataset_id'],unit_id='zoom-in.'+kind,depends_on=[parent]))
+        tools.append(
+            dict(
+                name=name,
+                description=description,
+                read_only=name in {'read_evidence', 'list_evidence', 'annotation_status', 'deg_lookup', 'deg_sql', 'check_genes', 'check_qc_scores'},
+                parameters=parameters,
+                args=['-m', 'ecarsi.stages.zoomin', 'tool', name, '{state}', '{arguments}'],
+                **spec['compute_budget' if name == 'subcluster' else 'tool_budget'],
+                inputs=[reference(Path(__file__).with_name(n)) for n in ('zoomin.py', 'common.py', 'contract.py')],
+                outputs=['result.json'],
+                result_file='result.json',
+                multimodal=multimodal,
+            )
+        )
+    return dict(
+        session_id=session,
+        dataset_id=spec['dataset_id'],
+        prompt=prompt,
+        tools=tools,
+        max_turns=100,
+        pool_root=spec['pool_root'],
+        bridge_root=spec['bridge_root'],
+        output_root=str(root),
+        completion_tool=completion,
+        tool_state=state,
+        planner='ecarsi.stages.evidence',
+        trace=dict(workflow_id='zoom-in/' + spec['run_id'], dataset_id=spec['dataset_id'], unit_id='zoom-in.' + kind, depends_on=[parent]),
+    )
 
 
 def coverage_hint(obs, state, own, other):
     from zmip.api import TYPE_KEY, QUALITY_KEY, partitions
+
     table = partitions(obs)
     intersections = {str(q): {str(t): int(n) for t, n in row.items() if n} for q, row in table.iterrows()}
     if state.get('types_complete'):
@@ -449,20 +629,29 @@ def coverage_hint(obs, state, own, other):
     else:
         scope = state.get('type_scope') or sorted(obs[TYPE_KEY].astype(str).unique())
         types = 'submit_types: cluster_key ' + TYPE_KEY + ', exactly these pending clusters: ' + json.dumps(scope) + '.'
-    return ('Required coverage. ' + types + ' submit_quality: cluster_key ' + QUALITY_KEY + ', one entry per 2.0 cluster whose '
-            'decisions name each of its type intersections exactly once; intersections with cell counts: '
-            + json.dumps(intersections) + '. coarse_label for keep must be one of ' + json.dumps(own)
-            + '; reassign_to must be one of ' + json.dumps(other) + '.')
+    return (
+        'Required coverage. ' + types + ' submit_quality: cluster_key ' + QUALITY_KEY + ', one entry per 2.0 cluster whose '
+        'decisions name each of its type intersections exactly once; intersections with cell counts: '
+        + json.dumps(intersections)
+        + '. coarse_label for keep must be one of '
+        + json.dumps(own)
+        + '; reassign_to must be one of '
+        + json.dumps(other)
+        + '.'
+    )
 
 
 def island_hint(bundle):
     import pandas as pd
+
     if 'lineage_islands.csv' not in bundle['files']:
         return ''
     islands = pd.read_csv(artifact(bundle, 'lineage_islands.csv'), index_col=0)
     names = [c for c in islands.columns if c != 'noise']
-    return ('Island names in this evidence: ' + json.dumps(names) + '. shared_island_reviews keys must be island '
-            'names whose coarse labels your plan splits across lineages; omit the key when nothing is split.')
+    return (
+        'Island names in this evidence: ' + json.dumps(names) + '. shared_island_reviews keys must be island '
+        'names whose coarse labels your plan splits across lineages; omit the key when nothing is split.'
+    )
 
 
 def error_hint(name, content, state, bundle, args=None):
@@ -490,7 +679,8 @@ def refine_evidence(state, args, destination):
     from zmip.api import TYPE_KEY, QUALITY_KEY, partitions
     from zmip.api import components
     import math
-    if type(args['resolution']) not in (int,float) or not math.isfinite(args['resolution']) or args['resolution'] <= 0:
+
+    if type(args['resolution']) not in (int, float) or not math.isfinite(args['resolution']) or args['resolution'] <= 0:
         raise ValueError('Resolution must be finite and positive')
     bundle = verified(state['evidence'])
     data = data_from(bundle)
@@ -499,45 +689,46 @@ def refine_evidence(state, args, destination):
         raise ValueError('Refinement limit reached; use available evidence and explicit uncertainty')
     if not args['reason'].strip() or not state['lookups']:
         raise ValueError('Query existing evidence and explain why refinement is necessary')
-    key = TYPE_KEY if args['target']=='type' else QUALITY_KEY
+    key = TYPE_KEY if args['target'] == 'type' else QUALITY_KEY
     if args['cluster'] not in set(data.obs[key].astype(str)):
         raise ValueError('Refinement must name a cluster of the selected partition')
-    mask = load_removal_mask(artifact(bundle,'preannotation_removal.csv').parent,data)
-    count, message = subcluster_once(data,key,args['cluster'],args['resolution'],'_zoom_refined',mask,compute_markers=False)
+    mask = load_removal_mask(artifact(bundle, 'preannotation_removal.csv').parent, data)
+    count, message = subcluster_once(data, key, args['cluster'], args['resolution'], '_zoom_refined', mask, compute_markers=False)
     if not count:
         return message
-    previous = {str(e['cluster_id']):e for e in (state['types'] or {}).get('clusters',[])}
-    affected = {args['cluster']} if args['target']=='type' else set()
-    if args['target']=='type' and args['cluster'] in previous:
+    previous = {str(e['cluster_id']): e for e in (state['types'] or {}).get('clusters', [])}
+    affected = {args['cluster']} if args['target'] == 'type' else set()
+    if args['target'] == 'type' and args['cluster'] in previous:
         affected.update(components(previous)[args['cluster']])
     data.obs[key] = data.obs.pop('_zoom_refined')
-    kept_types = {c:e for c,e in previous.items() if c not in affected}
-    scope = sorted(set(data.obs[TYPE_KEY].astype(str))-set(kept_types))
+    kept_types = {c: e for c, e in previous.items() if c not in affected}
+    scope = sorted(set(data.obs[TYPE_KEY].astype(str)) - set(kept_types))
     output = destination / 'refined'
     output.mkdir()
     keys = [TYPE_KEY, QUALITY_KEY]
     eligible = data[~mask]
-    labels={k:(eligible.obs[k].cat.codes.to_numpy(),list(eligible.obs[k].cat.categories)) for k in keys}
-    values,plan=prepare_deg(eligible.X,list(data.var_names),labels,dict(data.uns.get('log1p',{})),eligible.obsm['X_pca_harmony'],keys)
+    labels = {k: (eligible.obs[k].cat.codes.to_numpy(), list(eligible.obs[k].cat.categories)) for k in keys}
+    values, plan = prepare_deg(eligible.X, list(data.var_names), labels, dict(data.uns.get('log1p', {})), eligible.obsm['X_pca_harmony'], keys)
     values.obs_names = eligible.obs_names.copy()
     save_deg_input(values, output / 'deg_input')
-    save(output/'deg_plan.json',{**plan,'keys':keys,'top_n_de':50})
+    save(output / 'deg_plan.json', {**plan, 'keys': keys, 'top_n_de': 50})
     figures = output / 'figures'
     figures.mkdir()
-    qc_outputs(data,data.uns['msp']['batch_col'],'standissect_product',str(output),str(figures),keys,[1.,2.])
+    qc_outputs(data, data.uns['msp']['batch_col'], 'standissect_product', str(output), str(figures), keys, [1.0, 2.0])
     from zmip.api import score_foreign
-    shared=verified(bundle['shared'])
-    score_foreign(data,shared['markers'],bundle['lineage']['name'],keys,str(output),str(figures))
+
+    shared = verified(bundle['shared'])
+    score_foreign(data, shared['markers'], bundle['lineage']['name'], keys, str(output), str(figures))
     for k in keys:
         save_single_umap(data, k, str(figures / ('umap_' + slug(k) + '.png')), repel=True)
-    partitions(data.obs).to_csv(output/'type_quality_intersections.csv')
-    data.obs[keys].rename_axis('cell').to_csv(output/'cell_partitions.csv.gz')
-    data.write_h5ad(output/'integrated.h5ad')
+    partitions(data.obs).to_csv(output / 'type_quality_intersections.csv')
+    data.obs[keys].rename_axis('cell').to_csv(output / 'cell_partitions.csv.gz')
+    data.write_h5ad(output / 'integrated.h5ad')
     save_gene_summary(data, keys, output)
-    tasks=[dict(plan_index=i,cluster=c) for i,item in enumerate(plan['plan']) for c in [None,*[c for c in item['valid'] if item['top3'].get(c)]]]
-    metadata={k:v for k,v in bundle.items() if k not in {'files','prepared','comparisons','tasks','version'}}
-    prepared=publish_bundle(output,'prepared.json',state['evidence'],**metadata,version=bundle['version']+1,tasks=tasks)
-    comparisons=[]
+    tasks = [dict(plan_index=i, cluster=c) for i, item in enumerate(plan['plan']) for c in [None, *[c for c in item['valid'] if item['top3'].get(c)]]]
+    metadata = {k: v for k, v in bundle.items() if k not in {'files', 'prepared', 'comparisons', 'tasks', 'version'}}
+    prepared = publish_bundle(output, 'prepared.json', state['evidence'], **metadata, version=bundle['version'] + 1, tasks=tasks)
+    comparisons = []
     for i in range(len(tasks)):
         folder = destination / ('deg-' + str(i))
         folder.mkdir()
@@ -546,16 +737,16 @@ def refine_evidence(state, args, destination):
     assembled = destination / 'evidence'
     assembled.mkdir()
     assemble(prepared, comparisons, assembled)
-    state['evidence']=reference(assembled/'evidence.json')
-    state['types']={'cluster_key':TYPE_KEY,'clusters':list(kept_types.values())}
+    state['evidence'] = reference(assembled / 'evidence.json')
+    state['types'] = {'cluster_key': TYPE_KEY, 'clusters': list(kept_types.values())}
     state['type_scope'] = scope
     state['types_complete'] = not scope
     state['quality'] = None
     state['lookups'] = []
     state['read'] = []
     state['qc'] = False
-    state.pop('budget_warning',None)
-    return {'message':message,'version':bundle['version']+1,'type_scope':scope,'evidence':state['evidence']}
+    state.pop('budget_warning', None)
+    return {'message': message, 'version': bundle['version'] + 1, 'type_scope': scope, 'evidence': state['evidence']}
 
 
 def tool(name, state_path, args_path, destination):
@@ -563,141 +754,161 @@ def tool(name, state_path, args_path, destination):
     state, args = read(state_path), read(args_path)
     if name == 'deg_lookup':
         from zmip.api import TYPE_KEY
+
         args = lookup_arguments(args, TYPE_KEY)
     bundle = verified(state['evidence'])
-    response = {}
-    try:
-        if name == 'list_evidence':
-            page, nxt = evidence_page(evidence_paths(bundle), args.get('offset') or 0)
-            response.update(content=page, next_offset=nxt)
-        elif name == 'read_evidence':
-            path = artifact(bundle, args['path'])
-            if path.suffix == '.png':
-                if path.stat().st_size > 8*2**20:
-                    raise ValueError('Figure exceeds image budget')
-                response.update(content=args['path'], images=[png_url(path)])
-            elif path.suffix in {'.csv','.json','.md','.txt'}:
-                with path.open() as stream:
-                    stream.seek(args['offset'])
-                    response['content'] = stream.read(16000)
-                    offset = stream.tell()
-                    response['next_offset'] = offset if stream.read(1) else None
-            else:
-                raise ValueError('Use the registered matrix/database tools')
-            state['read'] = sorted(set(state['read']) | {args['path']})
-        elif name == 'submit_plan':
-            import pandas as pd
-            from zmip.api import validate_plan
-            if not any(p.endswith('.png') for p in state['read']):
-                raise ValueError('Read the lineage UMAP before planning')
-            def frame(name):
-                return pd.read_csv(artifact(bundle,name),index_col=0) if name in bundle['files'] else None
-            counts = frame('lineage_counts.csv')
-            problems, plan = validate_plan(parse_proposal(args),list(counts.index),counts,
-                bundle['spec']['config']['min_cells'],frame('lineage_islands.csv'),frame('lineage_knn.csv'))
-            if problems:
-                raise ValueError('; '.join(problems))
-            response.update(accepted=True,evidence=state['evidence'],proposal=plan)
-        elif name in {'deg_lookup','deg_sql'}:
-            from zmip.api import TYPE_KEY, QUALITY_KEY
-            from msp.api import DegTables
-            if name == 'deg_lookup' and args['key'] not in {TYPE_KEY,QUALITY_KEY}:
-                raise ValueError('Use this lineage version and its explicit 1.0 or 2.0 key')
-            with DegTables(database=artifact(bundle,'deg.sqlite'),base_key=TYPE_KEY) as tables:
-                response['content'] = tables.lookup(**args) if name=='deg_lookup' else tables.sql(**args)
-            state['lookups'].append(args)
-        elif name == 'check_genes':
-            from zmip.api import TYPE_KEY, QUALITY_KEY
-            if args['key'] not in {TYPE_KEY,QUALITY_KEY}:
-                raise ValueError('Unknown clustering key')
-            response['content'] = gene_answer(bundle,args['genes'],args['key'],[args['cluster']] if args['cluster'] else None,data_from)
-        elif name == 'check_qc_scores':
-            from zmip.api import QUALITY_KEY
-            response['content'] = qc_answer(bundle, QUALITY_KEY)
-            state['qc'] = True
-        elif name == 'subcluster':
-            response['content'] = refine_evidence(state,args,destination)
-        elif name == 'annotation_status':
-            from zmip.api import TYPE_KEY, partitions
-            data = data_from(bundle)
-            table = partitions(data.obs)
-            response.update(types=(state['types'] or {}).get('clusters',[]),quality=(state['quality'] or {}).get('clusters',[]),
-                type_scope=state.get('type_scope',sorted(data.obs[TYPE_KEY].astype(str).unique())),
-                intersections={str(q):{str(t):int(n) for t,n in row.items() if n} for q,row in table.iterrows()},
-                next_offset=None,version=bundle['version'])
-        elif name == 'submit_types':
-            from zmip.api import TYPE_KEY, validate_types
-            data = data_from(bundle)
-            own, _ = lineage_labels(bundle)
-            missing = [name for name, done in [('deg_lookup or deg_sql', bool(state['lookups'])),
-                ('read_evidence on a lineage PNG figure', any(p.endswith('.png') for p in state['read']))] if not done]
-            if missing:
-                raise ValueError('Complete required checks: ' + ', '.join(missing))
-            proposal = amended(args, state, 'submit_types')
-            if not isinstance(proposal, dict):
-                raise ValueError('Type proposal must be an object')
-            submitted=proposal.get('clusters',[])
-            scope=([str(e['cluster_id']) for e in submitted] if state.get('types_complete')
-                   else state.get('type_scope',sorted(data.obs[TYPE_KEY].astype(str).unique())))
-            if len(submitted)!=len(scope) or {str(e['cluster_id']) for e in submitted}!=set(scope):
-                raise ValueError('Submit exactly the pending type_scope clusters; preserved types remain valid')
-            preserved={str(e['cluster_id']):e for e in (state['types'] or {}).get('clusters',[]) if str(e['cluster_id']) not in scope}
-            proposal['clusters']=list(preserved.values())+submitted
-            validate_types(proposal,data.obs,own)
-            state['types'] = proposal
-            state['types_complete'] = True
-            state['type_scope'] = []
-            state['quality'] = None
-            state.pop('budget_warning', None)
-            response['content'] = 'Type coverage accepted; continue quality review at resolution 2.0.'
-        elif name == 'submit_quality':
-            from zmip.api import TYPE_KEY, QUALITY_KEY, validate_quality, apply_decisions
-            missing = [name for name, done in [('submit_types', state.get('types_complete')),
-                ('check_qc_scores', state['qc']), ('deg_lookup or deg_sql', bool(state['lookups'])),
-                ('read_evidence on a lineage PNG figure', any(p.endswith('.png') for p in state['read']))] if not done]
-            if missing:
-                raise ValueError('Complete required checks: ' + ', '.join(missing))
-            data = data_from(bundle)
-            own, other = lineage_labels(bundle)
-            proposal = amended(args, state, 'submit_quality')
-            proposal['clusters'] = validate_quality(proposal,data.obs,other)
-            lineage = bundle['lineage']['name']  # not `name`: the rejection hint below needs the tool's name
-            own_markers = verified(bundle['shared'])['markers'].get(lineage, []) if bundle.get('shared') else []
-            core = own_marker_positivity(data, own_markers)
-            problems = reassign_problems(proposal["clusters"], data, own_markers, core)
-            if problems:
-                raise ValueError('\n'.join(problems))
-            t, q = data.obs[TYPE_KEY].astype(str), data.obs[QUALITY_KEY].astype(str)
-            retained = quality_guard(bundle, data, proposal, t, q)
-            pre, _ = numerical_reasons(bundle,data)
-            _, removed, _, _ = apply_decisions(data.obs,state['types'],proposal,own,other,bundle['lineage']['name'],pre)
-            from zmip.api import REMOVE_BUDGET
-            fraction = len(set(removed.cell)-set(pre))/len(data)
-            if fraction > REMOVE_BUDGET:
-                if not state.get('budget_warning'):
-                    state['budget_warning'] = True
-                    raise ValueError(f'Removal review required: {fraction:.1%} beyond numerical exclusions. Review evidence and exact scope under the stress policy in the prompt. Resubmit with a specific removal_review explanation.')
-                if not isinstance(proposal.get('removal_review'),str) or not proposal['removal_review'].strip():
-                    raise ValueError('Explain the reviewed removal evidence and scope in removal_review')
-            state['quality'] = proposal
-            state['removal_fraction'] = fraction
-            # An accepted quality proposal completes the session (in 247 finished sessions no model revised after acceptance).
-            response.update(accepted=True,evidence=state['evidence'],types=state['types'],quality=proposal,removal_fraction=fraction,
-                            content='Quality coverage accepted; the session is complete.' + (
-                                ' Kept under the stress policy (decision 0017): ' + json.dumps(retained) if retained else ''))
-        else:
-            raise ValueError('Unknown zoom-in tool')
-    except (ValueError,KeyError,TypeError,IndexError) as exc:
-        content = str(exc)[:8000]
-        try:
-            hint = error_hint(name, content, state, bundle, args)
-        except Exception:  # noqa: BLE001 - a hint must never turn a correctable error into a crash
-            hint = ''
-        if name in {'submit_types', 'submit_quality'} and name in state.get('drafts', {}):
-            hint = (hint + '\n' + AMEND_NOTE).strip()
-        response = {'is_error':True,'content':(content+'\n'+hint)[:16000] if hint else content}
-    response['state'] = immutable(destination/'state.json',state)
-    save(destination/'result.json',response)
+    tools.run(
+        name,
+        state,
+        destination,
+        lambda: answer(name, state, args, bundle, destination),
+        {'submit_types', 'submit_quality'},
+        lambda content: error_hint(name, content, state, bundle, args),
+    )
+
+
+def answer(name, state, args, bundle, destination):
+    """The response of one zoom-in tool call, or the ValueError that rejects it."""
+    if name == 'list_evidence':
+        return tools.list_evidence(bundle, args)
+    if name == 'read_evidence':
+        return tools.read_evidence(state, args, artifact(bundle, args['path']))
+    if name == 'submit_plan':
+        import pandas as pd
+        from zmip.api import validate_plan
+
+        if not any(p.endswith('.png') for p in state['read']):
+            raise ValueError('Read the lineage UMAP before planning')
+
+        def frame(name):
+            return pd.read_csv(artifact(bundle, name), index_col=0) if name in bundle['files'] else None
+
+        counts = frame('lineage_counts.csv')
+        problems, plan = validate_plan(
+            parse_proposal(args), list(counts.index), counts, bundle['spec']['config']['min_cells'], frame('lineage_islands.csv'), frame('lineage_knn.csv')
+        )
+        if problems:
+            raise ValueError('; '.join(problems))
+        return dict(accepted=True, evidence=state['evidence'], proposal=plan)
+    if name in {'deg_lookup', 'deg_sql'}:
+        from zmip.api import TYPE_KEY, QUALITY_KEY
+
+        if name == 'deg_lookup' and args['key'] not in {TYPE_KEY, QUALITY_KEY}:
+            raise ValueError('Use this lineage version and its explicit 1.0 or 2.0 key')
+        return tools.deg_query(bundle, name, args, state, TYPE_KEY)
+    if name == 'check_genes':
+        from zmip.api import TYPE_KEY, QUALITY_KEY
+
+        if args['key'] not in {TYPE_KEY, QUALITY_KEY}:
+            raise ValueError('Unknown clustering key')
+        return tools.check_genes(bundle, args, args['key'], data_from)
+    if name == 'check_qc_scores':
+        from zmip.api import QUALITY_KEY
+
+        return tools.check_qc_scores(bundle, state, QUALITY_KEY)
+    if name == 'subcluster':
+        return dict(content=refine_evidence(state, args, destination))
+    if name == 'annotation_status':
+        from zmip.api import TYPE_KEY, partitions
+
+        data = data_from(bundle)
+        table = partitions(data.obs)
+        return dict(
+            types=(state['types'] or {}).get('clusters', []),
+            quality=(state['quality'] or {}).get('clusters', []),
+            type_scope=state.get('type_scope', sorted(data.obs[TYPE_KEY].astype(str).unique())),
+            intersections={str(q): {str(t): int(n) for t, n in row.items() if n} for q, row in table.iterrows()},
+            next_offset=None,
+            version=bundle['version'],
+        )
+    if name == 'submit_types':
+        return submit_types(state, args, bundle)
+    if name == 'submit_quality':
+        return submit_quality(state, args, bundle)
+    raise ValueError('Unknown zoom-in tool')
+
+
+def required(state, checks):
+    missing = [name for name, done in checks if not done]
+    if missing:
+        raise ValueError('Complete required checks: ' + ', '.join(missing))
+
+
+def submit_types(state, args, bundle):
+    from zmip.api import TYPE_KEY, validate_types
+
+    data = data_from(bundle)
+    own, _ = lineage_labels(bundle)
+    required(
+        state, [('deg_lookup or deg_sql', bool(state['lookups'])), ('read_evidence on a lineage PNG figure', any(p.endswith('.png') for p in state['read']))]
+    )
+    proposal = amended(args, state, 'submit_types')
+    if not isinstance(proposal, dict):
+        raise ValueError('Type proposal must be an object')
+    submitted = proposal.get('clusters', [])
+    scope = (
+        [str(e['cluster_id']) for e in submitted] if state.get('types_complete') else state.get('type_scope', sorted(data.obs[TYPE_KEY].astype(str).unique()))
+    )
+    if len(submitted) != len(scope) or {str(e['cluster_id']) for e in submitted} != set(scope):
+        raise ValueError('Submit exactly the pending type_scope clusters; preserved types remain valid')
+    preserved = {str(e['cluster_id']): e for e in (state['types'] or {}).get('clusters', []) if str(e['cluster_id']) not in scope}
+    proposal['clusters'] = list(preserved.values()) + submitted
+    validate_types(proposal, data.obs, own)
+    state['types'] = proposal
+    state['types_complete'] = True
+    state['type_scope'] = []
+    state['quality'] = None
+    state.pop('budget_warning', None)
+    return dict(content='Type coverage accepted; continue quality review at resolution 2.0.')
+
+
+def submit_quality(state, args, bundle):
+    from zmip.api import TYPE_KEY, QUALITY_KEY, REMOVE_BUDGET, validate_quality, apply_decisions
+
+    required(
+        state,
+        [
+            ('submit_types', state.get('types_complete')),
+            ('check_qc_scores', state['qc']),
+            ('deg_lookup or deg_sql', bool(state['lookups'])),
+            ('read_evidence on a lineage PNG figure', any(p.endswith('.png') for p in state['read'])),
+        ],
+    )
+    data = data_from(bundle)
+    own, other = lineage_labels(bundle)
+    proposal = amended(args, state, 'submit_quality')
+    proposal['clusters'] = validate_quality(proposal, data.obs, other)
+    lineage = bundle['lineage']['name']
+    own_markers = verified(bundle['shared'])['markers'].get(lineage, []) if bundle.get('shared') else []
+    core = own_marker_positivity(data, own_markers)
+    problems = reassign_problems(proposal["clusters"], data, own_markers, core)
+    if problems:
+        raise ValueError('\n'.join(problems))
+    t, q = data.obs[TYPE_KEY].astype(str), data.obs[QUALITY_KEY].astype(str)
+    retained = quality_guard(bundle, data, proposal, t, q)
+    pre, _ = numerical_reasons(bundle, data)
+    _, removed, _, _ = apply_decisions(data.obs, state['types'], proposal, own, other, lineage, pre)
+    fraction = len(set(removed.cell) - set(pre)) / len(data)
+    if fraction > REMOVE_BUDGET:
+        if not state.get('budget_warning'):
+            state['budget_warning'] = True
+            raise ValueError(
+                f'Removal review required: {fraction:.1%} beyond numerical exclusions. Review evidence and exact scope under the stress policy in the prompt. Resubmit with a specific removal_review explanation.'
+            )
+        if not isinstance(proposal.get('removal_review'), str) or not proposal['removal_review'].strip():
+            raise ValueError('Explain the reviewed removal evidence and scope in removal_review')
+    state['quality'] = proposal
+    state['removal_fraction'] = fraction
+    # An accepted quality proposal completes the session (in 247 finished sessions no model revised after acceptance).
+    return dict(
+        accepted=True,
+        evidence=state['evidence'],
+        types=state['types'],
+        quality=proposal,
+        removal_fraction=fraction,
+        content='Quality coverage accepted; the session is complete.'
+        + (' Kept under the stress policy (decision 0017): ' + json.dumps(retained) if retained else ''),
+    )
 
 
 def main():

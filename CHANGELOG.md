@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- **One shared agent-tool layer for cross-sample and zoom-in** (#59): `stages/tools.py` holds `read_evidence`,
+  `list_evidence`, `deg_query` (deg_lookup, deg_sql), `check_genes`, `check_qc_scores` and `run`, the tail of every
+  tool call (rejection hint, AMEND_NOTE for a submission with a draft, state.json and result.json); each stage's
+  `tool()` keeps only its own tools and its submissions (`answer`, `submit*`). `crosssample.py` and `zoomin.py` are
+  formatted at 160 columns with the same AST. Per-sample keeps its tools: its evidence is a live clustered.h5ad
+  read by OSP and its results carry text/error. Behaviour-neutral: the tool tests pass unchanged.
+- **A DEG lookup imports no numerics** (#59): `DegTables` moved from `msp.evidence` to the standard-library
+  `msp/deg_tables.py` (pandas only where it builds from CSVs and where deg_sql formats rows), the zoom-in keys to
+  `zmip/keys.py`; the imports of a deg_lookup call fell from 1.4 s to 0.2 s. `msp.evidence` and `zmip.scheduled`
+  still export the names; `tests/test_tool_imports.py` holds it.
+
 ## 0.4.7 — 2026-10-08
 
 - **Each stage names the version that ran it**: cross-sample and zoom-in publications carry `version`, a round record lists its stages' `versions`, the unit the union with per-sample's (the first 0022 gate recorded only the unit's own version although three of its stages ran on the next one).
