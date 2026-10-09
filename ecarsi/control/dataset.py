@@ -475,10 +475,10 @@ def dataset_step(action, args):
             policy = resolve(spec['round_policy'], control)
             decision, reason = decide_with_control(n, stats, spec['round_policy'], control)
             stats[-1].update(decision=decision, reason=reason)
-            from .. import version
+            # the versions that ran the round's stages (0022): each stage child names its own in its publication
+            stage_versions = sorted({verified(reference(p)).get('version') for p in (cross_path, zoom_path)} - {None})
             record = immutable(path, check('round', dict(round=n, stats=stats[-1],
-                cross_sample=reference(cross_path), zoom_in=reference(zoom_path), policy=policy,
-                version=(version() or {}).get('name'),  # the version that decided this round (0022)
+                cross_sample=reference(cross_path), zoom_in=reference(zoom_path), policy=policy, versions=stage_versions,
                 **({'control': control} if control else {}), **({'control_notes': notes} if notes else {}))))
         result = dict(per_sample=progress['per_sample'], input=zoom_path, stats=stats, rounds=progress['rounds'] + [record])
         for note in notes:
@@ -488,7 +488,7 @@ def dataset_step(action, args):
         if decision == 'release':
             first = verified(reference(progress['per_sample']))
             path = directory.parent.parent / 'publication.json'
-            versions = sorted({v for v in [first.get('version')] + [verified(r).get('version') for r in result['rounds']] if v})
+            versions = sorted({first.get('version')} | {v for r in result['rounds'] for v in verified(r).get('versions', [])} - {None})
             immutable(path, check('unit', dict(state='complete', unit=unit, per_sample=reference(progress['per_sample']),
                 rounds=result['rounds'], final=reference(zoom_path), policy=policy, versions=versions,
                 n_input=first['n_input'], n_survived=n_out, n_removed=first['n_input']-n_out,

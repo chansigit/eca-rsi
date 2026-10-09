@@ -80,7 +80,9 @@ def zoomin_step(action,args):
         if bundle['state']!='complete' or bundle['input']!=spec['input'] or bundle['n_input']!=bundle['n_survived']+bundle['n_removed']:
             raise ValueError('Zoom-in publication does not conserve its accepted input')
         path=Path(spec['output_root'])/'publication.json'
-        immutable(path,check('stage',{**bundle,'result':reference(args[1])}))
+        from .. import version
+        immutable(path,check('stage',{**bundle,'result':reference(args[1]),
+                                   'version':(version() or {}).get('name')}))  # the version that ran this stage (0022)
         from .artifacts import copy_light
         from ..degraded import save
         save(path.parent, bundle.get('degraded', []) + copy_light(bundle.get('files'), path.parent),

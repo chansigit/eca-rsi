@@ -107,7 +107,9 @@ def crosssample_step(action, args):
         if bundle['state'] != 'complete' or bundle['input'] != spec['input'] or bundle['n_input'] != bundle['n_survived'] + bundle['n_removed']:
             raise ValueError('Cross-sample publication did not conserve the accepted input')
         publication = Path(spec['output_root']) / 'publication.json'
-        immutable(publication, check('stage', {**bundle, 'result': reference(path)}))
+        from .. import version
+        immutable(publication, check('stage', {**bundle, 'result': reference(path),
+                                               'version': (version() or {}).get('name')}))  # the version that ran this stage (0022)
         from .artifacts import copy_light
         from ..degraded import save
         root = Path(spec['output_root'])

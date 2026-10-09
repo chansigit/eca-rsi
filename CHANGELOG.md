@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Each stage names the version that ran it**: cross-sample and zoom-in publications carry `version`, a round record lists its stages' `versions`, the unit the union with per-sample's (the first 0022 gate recorded only the unit's own version although three of its stages ran on the next one).
 - **A dataset never moves to an older version**: `current_queue` compares the versions' `published` times, so a gate on a candidate newer than current stays on it (the first gate of 0022 moved its unit to the older current version and tested nothing).
 - **A running dataset moves to the current version at every child workflow, and four brakes** (#61, decision 0022,
   owner 2026-10-08). `common.start_child` asks the `before_child` activity for the current version's queue (when a
