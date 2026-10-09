@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Replay a frozen hard case** (#14 step 3): `ecarsi.stages.cases.restore` rebuilds a case's files under a new
+  folder with every reference rewritten (a JSON that references a restored file gets the new path and digest),
+  `replay_spec` rebuilds the cross-sample or zoom-in session with this code's prompt and tools under a fresh session
+  id, and `ops/replay-case.py prepare|start|wait|report` runs it as an AgentWorkflow on a version's queue, with the
+  models of a chosen bridge, and compares its process metrics (turns, tool calls, submissions, rejections, tokens,
+  minutes, decision actions) with the original's.
+
 ## 0.4.9 — 2026-10-09
 
 - **The final display sync asks for 2 h, not 4 h** (#64): HQ places a task only on a worker with its time request

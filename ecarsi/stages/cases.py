@@ -13,6 +13,10 @@ run as files/<sha256>, checked against its reference while it is copied.
 Layout: <archive_root>/_cases/<collection>/<dataset>/<run>/{cases.json, files/<sha256>, <session path>/case.json,
 <session path>/session/}. cases.json lists the frozen cases and the skipped ones with the reason (CASE_BYTES,
 RUN_BYTES). A later freeze of the same run (a resumed run publishing again) adds what is new.
+
+Replay (#14 step 3): `restore` rebuilds a case's files under a new folder with every reference rewritten, and
+`replay_spec` rebuilds the session with this code's prompt and tools on that evidence, under a fresh session id;
+ops/replay-case.py starts it as an AgentWorkflow and compares it with the original.
 """
 import hashlib
 import os
@@ -20,7 +24,7 @@ import shutil
 import time
 from pathlib import Path
 
-from ..files import read, save
+from ..files import read, reference, save, verified
 
 REJECTIONS = 2  # host-rejected submissions in one session
 EVIDENCE_DEPTH = 3  # tool state -> evidence bundle -> its files -> the references inside JSON files among them
@@ -162,3 +166,71 @@ def freeze(root, dest) -> dict:
         dest.mkdir(parents=True, exist_ok=True)
         save(dest / 'cases.json', summary)
     return dict(frozen=len(frozen), skipped=len(skipped), bytes=summary['bytes'], library=str(dest))
+
+
+# ---------------------------------------------------------------- replay (#14 step 3)
+
+def case_run(case) -> Path:
+    """The run folder that holds a case folder (<run>/<session path>) and its files/."""
+    case = Path(case)
+    for _ in Path(read(case / 'case.json')['session']).parts:
+        case = case.parent
+    return case
+
+
+def _rewrite(value, place):
+    if isinstance(value, dict):
+        new = place(value['path'], value['sha256']) if isinstance(value.get('path'), str) and isinstance(value.get('sha256'), str) else None
+        rest = {key: _rewrite(item, place) for key, item in value.items() if not (new and key in ('path', 'sha256'))}
+        return {**rest, **new} if new else rest
+    if isinstance(value, list):
+        return [_rewrite(item, place) for item in value]
+    return value
+
+
+def restore(case, dest) -> dict:
+    """Rebuild a case's files under dest/restored/<original path>; returns {original path: new reference}.
+
+    A reference names its file's path and sha256, so a JSON file that references a restored file is rewritten to
+    the new path and digest and gets a digest of its own: files are placed depth first. A reference to a file the
+    case does not hold (past EVIDENCE_DEPTH, or another content of that path) stays as it was."""
+    case, dest = Path(case), Path(dest)
+    stored = case_run(case) / 'files'
+    known = {path: entry['sha256'] for path, entry in read(case / 'case.json')['files'].items()}
+    placed = {}
+
+    def place(path, sha):
+        if known.get(path) != sha:
+            return None
+        if path not in placed:
+            target = dest / 'restored' / path.lstrip('/')
+            target.parent.mkdir(parents=True, exist_ok=True)
+            value = _json(stored / sha) if path.endswith('.json') else None
+            if value is None:
+                shutil.copyfile(stored / sha, target)
+            else:
+                save(target, _rewrite(value, place))
+            placed[path] = reference(target)
+        return placed[path]
+
+    for path, sha in known.items():
+        place(path, sha)
+    return placed
+
+
+def replay_spec(case, dest, run_spec, label, bridge_root=None) -> dict:
+    """A frozen cross-sample or zoom-in session rebuilt by this code on its restored evidence: a replay runs today's
+    prompt and tools (#14), under run id replay-<label> and so a fresh session id (the bridge answers a known
+    request id with its stored reply). run_spec is the run's spec.json; bridge_root picks the models."""
+    case, dest = Path(case), Path(dest)
+    original = read(case / 'session' / 'session.json')['spec']
+    state = verified(restore(case, dest)[original['tool_state']['path']])
+    common = dict(run_id='replay-' + label, dataset_id='Replay ' + original['dataset_id'], output_root=str(dest),
+                  pool_root=original['pool_root'], bridge_root=bridge_root or original['bridge_root'])
+    if original['session_id'].startswith('zoom-'):
+        from .zoomin import agent_spec
+        return agent_spec({**run_spec['zoom_in'], **common}, state['evidence'], state['kind'], 'replay-' + label)
+    if original['session_id'].startswith('cross-'):
+        from .crosssample import agent_spec
+        return agent_spec({**run_spec['cross_sample'], **common}, state['evidence'], state['phase'], 'replay-' + label, state.get('types'))
+    raise ValueError('only cross-sample and zoom-in sessions replay, not ' + original['session_id'])

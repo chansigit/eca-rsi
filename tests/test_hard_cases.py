@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from ecarsi.files import reference, save
+from ecarsi.files import reference, save, verified
 from ecarsi.stages import cases
 from .test_gen2_pages import gen2_run
 
@@ -109,3 +109,25 @@ def test_the_published_sync_freezes_the_run_into_its_case_library(tmp_path):
     assert synced["cases"]["frozen"] == 1
     assert cases.library(record) == tmp_path / "work" / "_cases" / "c" / "d" / "r1"
     assert (cases.library(record) / "cases.json").is_file()
+
+
+def test_restore_rebuilds_a_case_after_its_pool_is_gone_with_every_reference_rewritten(tmp_path):
+    """#14 step 3: the replay reads the case, not the pruned requests; each JSON that references a restored file
+    names the new path and digest, so verified() and the stages' artifact() checks hold on the copy."""
+    run, pool = run_with_sessions(tmp_path)
+    dest = tmp_path / "cases"
+    cases.freeze(run, dest)
+    pool.rename(tmp_path / "pruned")
+    case = dest / "units/u/rounds/round01/03-zoom-in/zoom-a"
+    assert cases.case_run(case) == dest
+    replay = tmp_path / "replay"
+    placed = cases.restore(case, replay)
+    original_state = json.loads((case / "session/session.json").read_text())["spec"]["tool_state"]["path"]
+    state = verified(placed[original_state])
+    bundle = verified(state["evidence"])
+    for ref in bundle["files"].values():
+        assert reference(ref["path"]) == ref and Path(ref["path"]).is_relative_to(replay / "restored")
+    nested = verified(bundle["files"]["nested"])
+    deeper = verified(nested["next"])  # depth 3, kept; its reference to deep.bin (depth 4) was never frozen
+    assert deeper["far"]["path"].startswith(str(tmp_path / "pool")) and not Path(deeper["far"]["path"]).exists()
+    assert (replay / "restored" / str(pool / "requests/a/data.bin").lstrip("/")).read_bytes() == b"a" * 1000
