@@ -4,11 +4,22 @@
 
 ECA-RSI coordinates sample-level QC, cross-sample integration, and lineage-level refinement. The workflow starts from [ECA-PP](https://github.com/chansigit/eca-pp) outputs. It runs dedicated analysis packages. It repeats integration and refinement on the surviving cells until the process meets a numerical stopping rule. Each analysis unit receives an annotated H5AD, reports, a cell ledger, and unresolved questions for review.
 
-The `ecarsi` Python package (0.4.4) provides the implementation. It ships inside two Apptainer images. It installs nothing on the host. New to the code: read [docs/OVERVIEW.md](docs/OVERVIEW.md). To deploy: [INSTALL.md](INSTALL.md).
+The `ecarsi` Python package (0.4.9) provides the implementation, with its analysis kernels in the same repository. It runs from two Apptainer images and installs nothing on the host. New to the code: read [docs/OVERVIEW.md](docs/OVERVIEW.md). To deploy: [INSTALL.md](INSTALL.md).
+
+## Install
+
+The image pair is published on GitHub's container registry; pull it instead of building it:
+
+```bash
+apptainer pull rsi-control-20261006-2.sif oras://ghcr.io/chansigit/eca-rsi/rsi-control:20261006-2
+apptainer pull rsi-science-20261006-2.sif oras://ghcr.io/chansigit/eca-rsi/rsi-science:20261006-2
+```
+
+The control image carries Temporal, PostgreSQL, HyperQueue and the agent SDKs; the science image carries the kernels' environment. The code of a release is a Git commit published as a *version* next to the images ([INSTALL.md A.10](INSTALL.md#a10-ship-a-code-change-as-a-version)): releases are tagged `v0.4.x` on GitHub, and a deployment runs the version it names. The two lock files in `container/` are the record of what each image holds.
 
 ## How it runs
 
-ECA-RSI runs on a control plane: Temporal workflows decide what each dataset does next, a HyperQueue warm pool on Slurm nodes runs the computation, and a model-turn service runs the agents. Every request pins its program files by content. Deploy it per [INSTALL.md](INSTALL.md); the design is in [docs/control-plane/](docs/control-plane/ARCHITECTURE.md). The earlier local path (`eca-rsi run`, one dataset on one machine) was removed in 0.4.0.
+ECA-RSI runs on a control plane: Temporal workflows decide what each dataset does next, a HyperQueue warm pool on Slurm nodes runs the computation, and a model-turn service runs the agents. Every request pins its program files by content. Code ships as versions that run side by side ([decision 0019](docs/decisions/0019-versions-side-by-side.md)): a new version is gated on a fixed dataset next to production, then made current, and running datasets move to it at their next child workflow ([0022](docs/decisions/0022-datasets-move-to-the-current-version.md)); nothing waits for executions to end. Deploy it per [INSTALL.md](INSTALL.md); the design is in [docs/control-plane/](docs/control-plane/ARCHITECTURE.md). The earlier local path (`eca-rsi run`, one dataset on one machine) was removed in 0.4.0.
 
 ## Why iterate?
 
@@ -59,7 +70,7 @@ The input can also be a single source directory that contains `standardize/`. So
 
 The organize stage checks upstream status and exit codes. It opens each accepted H5AD. It validates cell/gene IDs, dimensions, and finite nonnegative values in the required `layers["counts"]`. Failed or inconsistent results block processing. Rejected sources remain in the source inventory even without an H5AD. Nonblocking `needs_review` results can proceed. The system preserves their reasons. The system saves upstream results and metadata evidence as snapshots for later review.
 
-ECA-PP's `identify_columns/result.json` and derived TSV evidence are optional. RSI aligns that evidence to the original cell IDs. It identifies experiments within each source. Two sources that both use `sample=S1` remain separate OSP inputs. A technical batch column is not automatically an experimental sample column. The system supports explicit sample mappings. See [docs/front-integration.md](docs/front-integration.md) for mapping formats.
+Samples and batches come from ECA-PP's `identify_columns/result.json` (eca-pp 0.5.4 or later, [decision 0016](docs/decisions/0016-samples-and-batches-from-eca-pp.md)): its `sample_unit` names the unit (`library`, `batch`, `whole`, or `stop`), and Harmony runs only when ECA-PP recommends a batch correction. Samples above 20,000 cells run as chunks that keep their sample as the batch. A `stop` unit (a large droplet-like source with neither batch nor library) or an older ECA-PP result stops the organize stage: re-run ECA-PP's identify-columns first. Two sources that both use `sample=S1` remain separate OSP inputs. See [docs/front-integration.md](docs/front-integration.md) for mapping formats.
 
 An explicit sample map goes in the dataset spec as `organize.sample_map` ([DATASET_V2.md](docs/control-plane/DATASET_V2.md#explicit-sample-map-optional)). Besides overriding a source's experiment column, it can declare two cell policies (`ecarsi/policies.py`). The host applies these policies deterministically and never infers them:
 
@@ -81,7 +92,7 @@ An explicit sample map goes in the dataset spec as `organize.sample_map` ([DATAS
 
 Submit a dataset spec with `start-dataset` ([INSTALL.md](INSTALL.md#d-submit-a-dataset) has the command; `examples/dataset-v2.json` is a complete spec and [docs/control-plane/DATASET_V2.md](docs/control-plane/DATASET_V2.md) explains its fields). The spec names the ECA-PP input, the run directory, the compute budgets of every stage, and the round policy: a fixed number of rounds or the automatic stopping rule.
 
-The agents' models come from the model catalog `~/.config/ecarsi/models.json` (harness, model and URL, in calling order); their API keys stay in `~/.bashrc`. The default backend uses the OpenAI Agents SDK to drive Doubao through Volcengine Ark, with model `doubao-seed-2-1-turbo-260628` and `ARK_API_KEY`. See [INSTALL.md](INSTALL.md#a4-configuration-and-the-launcher).
+The agents' models come from the model catalog `~/.config/ecarsi/models.json` (harness, model and URL); their API keys stay in `~/.config/ecarsi/keys.env` or `~/.bashrc`, never in a spec or log. The default backend uses the OpenAI Agents SDK to drive Doubao through Volcengine Ark, with model `doubao-seed-2-1-turbo-260628` and `ARK_API_KEY`. See [INSTALL.md](INSTALL.md#a4-configuration-and-the-launcher).
 
 Mapping formats for explicit experiment mappings are in [docs/front-integration.md](docs/front-integration.md).
 
@@ -170,7 +181,7 @@ A run has two zones. Its work tree (`output_root`, on scratch) holds everything 
       cell_ledger.csv.gz  cell_exclusions.csv.gz  decisions.json  sankey.json  umap.json  receipt.json
 ```
 
-Its display zone, `<display_root>/<collection>/<dataset>/<run_id>/` (from `~/.config/ecarsi/results.json`), holds what Periscope shows: the pages' files, the stage reports and the release, under the same relative paths. It is synced after every stage. When the dataset completes, the whole work tree is archived to `<archive_root>/<collection>/<dataset>/<run_id>.tar.gz`.
+Its display zone, `<display_root>/<collection>/<dataset>/<run_id>/` (from `~/.config/ecarsi/results.json`), holds what Periscope shows: the pages' files, the stage reports and the release, under the same relative paths. It is synced after every stage. When the dataset completes, the whole work tree is archived to `<archive_root>/<collection>/<dataset>/<run_id>.tar.gz`, and the evidence of its hard agent sessions (restarted, context reset, or repeatedly rejected) is frozen under `<archive_root>/_cases/` for later replay ([decision 0021](docs/decisions/0021-hard-case-freezing.md), `ops/replay-case.py`).
 
 `release/final.h5ad` contains surviving cells. The final broad and fine labels are `obs["zmip_ann_coarse"]` and `obs["zmip_ann_fine"]`. Read `summary.json` for round counts and the stopping reason. Read `needs_review.md` for steps that failed without failing the run (`degraded`, listed first), uncertain labels, policy-excluded cells, excluded samples, reassignments, and other review items. MSP requires an explicit review for adjacent coarse-label pairs. The system retains unresolved boundaries and lists them here. ZMIP requires a written explanation when a UMAP island splits across lineages. Neither missing DEGs nor a fixed graph mixing percentage proves that labels should merge. The ledger and stage-specific removal CSV files (OSP `qc_removed.csv`, MSP `annotation_removed.csv`, ZMIP `zmip_removed.csv`) record cell-level history.
 
@@ -186,15 +197,15 @@ A dataset is a Temporal workflow. It survives coordinator restarts and moves of 
 
 Agent sessions save their accepted submissions. A failed session restarts once with the same evidence (`<session>-r2`). A second failure skips the sample (labels `unannotated`, needs_review `agent_skipped`) or the lineage (cross-sample labels kept). Cross-sample sessions restart but never skip. A stage fails when skipped cells exceed 10 % of its input.
 
-`<unit>/loop_control.json` is read at every round boundary: `cap`, `rounds`, `extra_rounds_after_convergence`, `max_removed`, `pause`, `stop_after_round`, and `pause_after_stage` (`crosssample` or `zoomin`). A pause ends the unit's workflow as `PAUSED: ...`; clear the control, then run `resume-dataset`.
+`<unit>/loop_control.json` holds the limits `cap`, `rounds`, `extra_rounds_after_convergence` and `max_removed` (read at every round boundary) and the brakes: `brake: round` (after this round), `brake: stage` (after the stage now running) and `brake: step` (before the next sample, stage, round or release). Each ends the unit's workflow as `PAUSED: ...`; clear the control, then run `resume-dataset`. The hard brake, `python -m ecarsi.control ... brake <run_id> --hard --reason ...`, terminates the dataset's workflows now and keeps every directory resumable.
 
 Intermediate matrices live in the pool requests that computed them. The pruner deletes those requests once the run has finished (a failed run keeps them until a later run of the same dataset completes). The release keeps `final.h5ad`, the ledgers and the reports. The scratch work tree stays until you delete it; its archive and the display zone are the durable copies.
 
 ## Validation
 
-The test suite contains 463 tests. It runs inside the compute image. See [INSTALL.md](INSTALL.md#b3-run-the-tests).
+The test suite contains 977 tests (the kernels' included). It runs inside the images in about a minute (`ops/test-lane.sh all`); GitHub runs the subset that needs no compute image on every push. See [INSTALL.md](INSTALL.md#b3-run-the-tests).
 
-The latest end-to-end regression ran on 2026-10-02. The run used dataset 11_Shietal on the `20261002-1` image pair: two fixed rounds, 9,163 to 4,941 cells, with the display zone synced after every stage and the work tree archived at completion.
+Every release passes the gate before it becomes current: dataset 11_Shietal (9,163 cells) end to end on the new version next to production, with its display zone, work archive, reports and links checked (`ops/gate.py`). The latest ran on 2026-10-09 for 0.4.9. The latest production run, ma-devheart PCW12 (32,453 cells, 12 samples), released after four rounds on 2026-10-10 with no failed task; `ops/run-health.py` reports where a run's time went.
 
 Older validation records are in [docs/history/](docs/history/). These records include release checks, pause and recovery, the Clayton and 19Liu runs, and the fixed-task model comparison in [docs/history/eval/RESULTS.md](docs/history/eval/RESULTS.md).
 
@@ -214,3 +225,4 @@ History, oldest first:
 - The six-step prompt loop (`run.sh` and `steps/*.md`) let agents write their own analysis scripts through Explore → Compute → Annotate → QC → Apply → Stop. Branch `primitive` preserves this loop. The path `docs/history/primitive/` also preserves it for reference. Its prompts and timings do not describe `ecarsi`.
 - `ecarsi` replaced this loop with deterministic kernels and narrow agent decisions. The local path ran one dataset per machine (`eca-rsi run`); 0.4.0 removed it.
 - The control-plane path was formerly the `gen2` branch. The project merged this branch in 0.3.1. The control-plane path added Temporal workflows, the HyperQueue warm pool, and the model-turn service. The project removed the earlier Dask pool (`ecarsi.pool`) in 0.3.2. Since then, the project added HyperQueue native priorities with a feasibility gate, DEG batching, resident model runners, and deployment from two images.
+- 0.4.5 brought the five analysis packages into this repository (decision 0018) and 0.4.6 made code ship as side-by-side versions gated next to production (0019); 0.4.7 lets running datasets move to the current version (0022). The images are published on ghcr.io since 0.4.9.
