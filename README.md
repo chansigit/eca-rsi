@@ -19,7 +19,7 @@ The control image carries Temporal, PostgreSQL, HyperQueue and the agent SDKs; t
 
 ## How it runs
 
-ECA-RSI runs on a control plane: Temporal workflows decide what each dataset does next, a HyperQueue warm pool on Slurm nodes runs the computation, and a model-turn service runs the agents. Every request pins its program files by content. Code ships as versions that run side by side ([decision 0019](docs/decisions/0019-versions-side-by-side.md)): a new version is gated on a fixed dataset next to production, then made current, and running datasets move to it at their next child workflow ([0022](docs/decisions/0022-datasets-move-to-the-current-version.md)); nothing waits for executions to end. Deploy it per [INSTALL.md](INSTALL.md); the design is in [docs/control-plane/](docs/control-plane/ARCHITECTURE.md). The earlier local path (`eca-rsi run`, one dataset on one machine) was removed in 0.4.0.
+ECA-RSI runs on a control plane: Temporal workflows decide what each dataset does next, a HyperQueue warm pool on Slurm nodes runs the computation, and a model-turn service runs the agents. Every request pins its program files by content. Code ships as versions that run side by side ([decision 0019](docs/decisions/0019-versions-side-by-side.md)): a new version is gated on a fixed dataset next to production, then made current, and running datasets move to it at their next child workflow ([0022](docs/decisions/0022-versions-per-child-workflow-and-brakes.md)); nothing waits for executions to end. Deploy it per [INSTALL.md](INSTALL.md); the design is in [docs/control-plane/](docs/control-plane/ARCHITECTURE.md). The earlier local path (`eca-rsi run`, one dataset on one machine) was removed in 0.4.0.
 
 ## Why iterate?
 
