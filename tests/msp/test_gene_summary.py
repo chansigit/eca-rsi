@@ -46,10 +46,17 @@ def test_the_stage_tools_use_the_summary_only_for_the_file_it_names(tmp_path, mo
     never = lambda b: pytest.fail("the matrix was loaded although the summary describes it")
     expected = gene_table(a, ["COL2A1", "Acan"], "msp_leiden_r2.0", ["5,2"])
     assert gene_answer(bundle, ["COL2A1", "Acan"], "msp_leiden_r2.0", ["5,2"], never) == expected
+    # the same file under another path (a restored case, #65) still matches: by digest
+    moved = tmp_path / "moved"
+    moved.mkdir()
+    shutil.copy(tmp_path / "integrated.h5ad", moved / "integrated.h5ad")
+    relocated = {"files": {"integrated.h5ad": reference(moved / "integrated.h5ad"), GENE_SUMMARY: bundle["files"][GENE_SUMMARY]}}
+    assert gene_answer(relocated, ["COL2A1", "Acan"], "msp_leiden_r2.0", ["5,2"], never) == expected
     # an evidence version that rewrote integrated.h5ad but inherited its parent's summary falls back to the matrix
     other = tmp_path / "v1"
     other.mkdir()
-    shutil.copy(tmp_path / "integrated.h5ad", other / "integrated.h5ad")
+    a.obs["note"] = "rewritten"
+    a.write_h5ad(other / "integrated.h5ad")
     stale = {"files": {"integrated.h5ad": reference(other / "integrated.h5ad"), GENE_SUMMARY: bundle["files"][GENE_SUMMARY]}}
     loads = []
     load = lambda b: loads.append(b) or ad.read_h5ad(b["files"]["integrated.h5ad"]["path"])

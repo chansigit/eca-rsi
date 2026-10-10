@@ -6,7 +6,7 @@ import io
 import shutil
 from pathlib import Path
 
-from ..files import immutable, read, reference, verified
+from ..files import immutable, read, reference, verified, file_digest
 
 BASE = 'msp_leiden_r2.0'  # the cross-sample annotation resolution
 
@@ -68,18 +68,23 @@ def save_gene_summary(data, keys, destination):
     import numpy as np
     from msp.api import gene_summary
     source = (Path(destination) / 'integrated.h5ad').resolve(strict=True)
-    np.savez_compressed(Path(destination) / GENE_SUMMARY, source=np.asarray(str(source)), **gene_summary(data, keys))
+    # the path, and since #65 the digest: a restored or moved evidence folder (a replay, #14) still matches by content
+    np.savez_compressed(Path(destination) / GENE_SUMMARY, source=np.asarray(str(source)),
+                        source_sha256=np.asarray(file_digest(source)), **gene_summary(data, keys))
 
 
 def gene_answer(bundle, genes, key, cluster_ids, load):
-    """check_genes from the bundle's summary when the summary describes this bundle's integrated.h5ad (each
-    evidence version writes its own); otherwise, as before, from the whole matrix that `load(bundle)` reads."""
+    """check_genes from the bundle's summary when the summary describes this bundle's integrated.h5ad, by digest or
+    (a summary written before #65) by path; each evidence version writes its own. Otherwise, as before, from the
+    whole matrix that `load(bundle)` reads."""
     import numpy as np
     from msp.api import gene_table, gene_table_summary
     if GENE_SUMMARY in bundle['files']:
         with np.load(artifact(bundle, GENE_SUMMARY)) as summary:
-            if (str(summary['source']) == bundle['files']['integrated.h5ad']['path']
-                    and key in [str(k) for k in summary['keys']]):
+            matrix = bundle['files']['integrated.h5ad']
+            described = (str(summary['source_sha256']) == matrix['sha256'] if 'source_sha256' in summary
+                         else str(summary['source']) == matrix['path'])
+            if described and key in [str(k) for k in summary['keys']]:
                 return gene_table_summary(summary, genes, key, cluster_ids)
     return gene_table(load(bundle), genes, key, cluster_ids)
 

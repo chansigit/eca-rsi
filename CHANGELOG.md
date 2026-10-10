@@ -8,6 +8,9 @@
   id, and `ops/replay-case.py prepare|start|wait|report` runs it as an AgentWorkflow on a version's queue, with the
   models of a chosen bridge, and compares its process metrics (turns, tool calls, submissions, rejections, tokens,
   minutes, decision actions) with the original's.
+- **check_genes' summary matches its matrix by digest** (#65): `cluster_genes.npz` records the integrated.h5ad's
+  sha256 beside its path, so a restored or moved evidence folder (a replay) still reads the summary instead of the
+  whole matrix; a summary written before this still matches by path.
 
 ## 0.4.9 — 2026-10-09
 
