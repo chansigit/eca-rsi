@@ -34,6 +34,18 @@ The files `container/control-requirements.lock` and `container/science-requireme
 
 `BUILD.json` inside each image names the eca-rsi commit. The command `control-plane.sh start` logs it to `control-logs/identity.log`.
 
+**Pull the published pair** instead of building it. The images are hosted on GitHub's container registry as
+OCI artifacts (public packages, pushed with `apptainer push`), tagged by their stamp:
+
+```bash
+apptainer pull rsi-control-20261006-2.sif oras://ghcr.io/chansigit/eca-rsi/rsi-control:20261006-2
+apptainer pull rsi-science-20261006-2.sif oras://ghcr.io/chansigit/eca-rsi/rsi-science:20261006-2
+```
+
+Point `IMG` and `SCIENCE_IMG` of `deployment.env` at the files. A new pair is pushed with the same two commands
+(`apptainer push <sif> oras://ghcr.io/chansigit/eca-rsi/<name>:<stamp>`, after `apptainer registry login`); the lock
+files stay the record of what each image holds.
+
 ### A.3 Directory layout
 
 Store runtime state on a shared, writable filesystem. Purged scratch is acceptable because you copy out results at release.

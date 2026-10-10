@@ -11,6 +11,8 @@
 - **check_genes' summary matches its matrix by digest** (#65): `cluster_genes.npz` records the integrated.h5ad's
   sha256 beside its path, so a restored or moved evidence folder (a replay) still reads the summary instead of the
   whole matrix; a summary written before this still matches by path.
+- **The image pair is published on ghcr.io** (`oras://ghcr.io/chansigit/eca-rsi/rsi-{control,science}:<stamp>`);
+  INSTALL.md A.2 says how to pull it instead of building it.
 
 ## 0.4.9 — 2026-10-09
 
