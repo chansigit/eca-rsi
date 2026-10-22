@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **OSP QC stops removing real cell types** (#67): the library-size and gene-count rules keep only their lower
+  bound (a large cell type is not low quality; doublets are Scrublet's job) and set it per coarse Leiden cluster
+  (`osp/qc.py` `_lower_cutoffs`: a clean cluster, 200+ cells with a spread at most 1.5 x the typical cluster
+  spread, is judged against its own median minus 5 typical spreads; a messy or small cluster against the
+  sample's median - 5 MAD; never below the hard minimum, now 400 counts and 200 genes); the share of counts in
+  the top 20 genes is reported, not used to remove cells; the mitochondrial rule is median + 5 MAD and above
+  15 % (was 3 MAD and 8 %), hard maximum 40 % (was 25 %). `qc_reason` says `low_counts` / `low_genes` instead of
+  `mad_outlier`; `qc_removed.csv` carries each cell's cut-offs (`qc_min_counts`, `qc_min_genes`) and cluster;
+  `qc_summary.csv` and `<sample>_qc_overview.json` record the sample bounds, the cluster cases and the
+  mitochondrial bar, `<sample>_qc_cluster_cutoffs.csv` the per-cluster table. On pbmc68k this removes 2,564
+  cells instead of 3,669 (the issue's reconstruction); earlier runs are not redone.
+
 - **Replay a frozen hard case** (#14 step 3): `ecarsi.stages.cases.restore` rebuilds a case's files under a new
   folder with every reference rewritten (a JSON that references a restored file gets the new path and digest),
   `replay_spec` rebuilds the cross-sample or zoom-in session with this code's prompt and tools under a fresh session

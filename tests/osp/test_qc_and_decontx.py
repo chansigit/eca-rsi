@@ -302,3 +302,49 @@ def test_survivors_of_a_too_small_sample_are_booked_in_the_removal_ledger(tmp_pa
     # the QC summary stays honest: the two survivors passed QC, they are not low quality
     qc_summary = pd.read_csv(tmp_path / "qc_summary.csv", index_col=0).iloc[:, 0]
     assert int(qc_summary["n_cells"]) == 3 and int(qc_summary["n_low_quality"]) == 1
+
+
+def test_lower_bounds_are_set_per_clean_cluster_and_top20_removes_nothing():
+    """#67: a compact low-RNA cluster keeps its cells, a compact large cluster
+    loses the cells far below its own median, no upper bound fires, the
+    top-20 share removes nothing and the mitochondrial bar never drops
+    below the floor."""
+    rng = np.random.default_rng(0)
+    n_genes, n = 60, 300
+    size = np.exp(rng.uniform(-0.3, 0.3, size=(n, 1)))  # a bounded spread, the same in both types
+    big = rng.poisson(80 * size, size=(n, n_genes)).astype(float)  # ~4,800 counts
+    big[:5] = rng.poisson(15, size=(5, n_genes))  # ~900 counts: damaged members of the big type
+    small = rng.poisson(15 * size, size=(n, n_genes)).astype(float)  # ~900 counts: a compact low-RNA type
+    huge = rng.poisson(400, size=(3, n_genes)).astype(float)  # 24,000 counts: large cells, no upper bound
+    X = np.vstack([big, small, huge])
+    X[:, 0] += X.sum(axis=1) * 3  # one gene holds 75 % of every cell's counts: a high top-20 share
+    z = np.r_[np.zeros(n), np.ones(n), np.zeros(3)].astype(int)
+    data = ad.AnnData(
+        X,
+        obs=pd.DataFrame({"sample": ["A"] * len(X)}),
+        var=pd.DataFrame(index=[f"G{i}" for i in range(n_genes)]),
+    )
+    result, summary = qc_one_sample(
+        data,
+        run_scrublet=False,
+        run_decontx=False,
+        run_dissociation_score=False,
+        make_plots=False,
+        hard_min_genes=0,  # the panel has 60 genes
+        decontx_kwargs={"z": z},
+    )
+    obs = result.obs
+    table = result.uns["qc_cluster_cutoffs"]
+    # every cell detects all 60 genes, so the gene-count spread is 0 and that
+    # metric falls back to the sample bound (messy); the counts metric is the one under test
+    assert list(table.loc[table["metric"] == "total_counts", "case"]) == ["clean", "clean"]
+    assert list(table.loc[table["metric"] == "n_genes_by_counts", "case"]) == ["messy", "messy"]
+    assert obs["qc_low_counts"][:5].all() and not obs["qc_low_counts"][5:].any()
+    assert not obs["low_quality"][n : 2 * n].any(), "the compact low-RNA type keeps every cell"
+    assert not obs["low_quality"][2 * n :].any(), "no upper bound"
+    assert obs["qc_min_counts"].to_numpy()[:n].min() > obs["qc_min_counts"].to_numpy()[n : 2 * n].max()
+    assert summary["n_low_counts"] == 5 and summary["n_low_quality"] == 5
+    assert summary["n_clusters_clean"] == 2 and summary["n_clusters_messy"] == 2
+    assert summary["mt_bar"] == 15.0 and summary["n_high_mito"] == 0 and summary["n_mito_genes"] == 0
+    assert "n_mad_pct_top20" not in summary
+    assert list(obs["qc_reason"][:5]) == ["low_counts"] * 5

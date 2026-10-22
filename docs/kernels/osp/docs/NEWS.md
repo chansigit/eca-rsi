@@ -3,6 +3,12 @@
 Release notes for OSP. Newest first. Install a specific version with
 `pip install "osp-sc[agent]==<version>"`.
 
+## In eca-rsi (2026-10-22)
+
+- QC removal rules revised (eca-rsi #67): lower bounds only, set per coarse cluster; the top-20
+  share no longer removes cells; mitochondrial rule median + 5 MAD and above 15 %, hard maximum
+  40 %; hard minimum 400 counts. See the eca-rsi CHANGELOG.
+
 ## 0.1.7 (2026-09-17)
 
 ### Changes

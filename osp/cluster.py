@@ -700,7 +700,11 @@ def run_one_sample_pipeline(
             for c in (
                 "qc_reason",
                 "qc_hard_fail",
-                "qc_mad_outlier",
+                "qc_low_counts",
+                "qc_low_genes",
+                "qc_min_counts",
+                "qc_min_genes",
+                "qc_cluster",
                 "qc_mt_outlier",
                 "qc_doublet",
                 "total_counts",

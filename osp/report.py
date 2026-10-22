@@ -267,23 +267,31 @@ def _section_qc(outdir, qc_summary, qc_stats):
     if qc_stats:
         parts.append("<h3>QC thresholds</h3>")
         parts.append(_kv_table(qc_stats.get("thresholds", {}), table_id="qc-thresholds"))
-        mad_ranges = qc_stats.get("mad_keep_ranges")
-        if mad_ranges:
-            nmads = qc_stats.get("mad_nmads", "?")
-            n_fail = qc_stats.get("n_fail_mad", {})
-            parts.append(f"<h3>MAD keep-ranges (median ± {nmads} MADs, per sample)</h3>")
+        rules = qc_stats.get("rules")
+        if rules:
+            nmads = qc_stats.get("nmads", "?")
+            n_fail = qc_stats.get("n_fail", {})
+            parts.append(f"<h3>Lower bounds (median - {nmads} MADs, per cluster where the cluster is clean)</h3>")
             parts.append(
-                '<p class="hint">Cells outside any range are flagged mad_outlier. '
-                "A tight range (or one metric dominating the fail counts) means this "
-                "sample's distribution shape is stressing the MAD assumption — check "
-                "which cell types are being flagged before trusting the calls.</p>"
+                '<p class="hint">A clean cluster (200+ cells, spread at most 1.5x the typical cluster spread) '
+                "is judged against its own median; a messy or small cluster against the sample. "
+                "The top-20 share removes no cell. "
+                "The per-cluster table is qc_figures/&lt;sample&gt;_qc_cluster_cutoffs.csv.</p>"
             )
-            parts.append(
-                _kv_table(
-                    {k: f"[{v[0]:g}, {v[1]:g}]  (n_fail={n_fail.get(k, '?')})" for k, v in mad_ranges.items()},
-                    table_id="qc-mad-ranges",
+            rows = {}
+            for metric in ("total_counts", "n_genes_by_counts"):
+                r = rules.get(metric, {})
+                rows[metric] = (
+                    f"sample bound {r.get('sample_bound')}; clusters clean/messy/small "
+                    f"{r.get('n_clean', 0)}/{r.get('n_messy', 0)}/{r.get('n_small', 0)}  (n_fail={n_fail.get(metric, '?')})"
                 )
+            mt = rules.get("pct_counts_mt", {})
+            rows["pct_counts_mt"] = (
+                "no mitochondrial genes detected"
+                if not mt.get("n_mito_genes")
+                else f"bar {mt.get('bar', 0):.2f}%, hard max {mt.get('hard_max')}%  (n_fail={n_fail.get('pct_counts_mt', '?')})"
             )
+            parts.append(_kv_table(rows, table_id="qc-lower-bounds"))
     return "\n".join(p for p in parts if p)
 
 

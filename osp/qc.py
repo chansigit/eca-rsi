@@ -64,22 +64,79 @@ import logging
 log = logging.getLogger(__name__)
 
 
-def _mad_outlier(x, nmads):
+def _mad(x):
     x = np.asarray(x, dtype=float)
-    med = np.median(x)
-    mad = np.median(np.abs(x - med))
-    if mad == 0:
-        return np.zeros(len(x), dtype=bool)
-    return np.abs(x - med) > nmads * mad
+    med = float(np.median(x))
+    return med, float(np.median(np.abs(x - med)))
 
 
 def _mad_bounds(x, nmads):
-    """The keep-range (lo, hi) implied by _mad_outlier: median ± nmads*MAD.
-    Only for reporting/plotting — the flag itself comes from _mad_outlier."""
-    x = np.asarray(x, dtype=float)
-    med = np.median(x)
-    mad = np.median(np.abs(x - med))
+    """median ± nmads*MAD of x (reporting only: the removal rules are below)."""
+    med, mad = _mad(x)
     return med - nmads * mad, med + nmads * mad
+
+
+# Lower bounds on library size and gene count (#67). The sample-wide bound is
+# median - nmads*MAD on the log1p scale, as before, but only on the low side:
+# a large cell type is not low quality, and doublets are Scrublet's job. On
+# top of it every coarse cluster of at least CLUSTER_MIN_CELLS whose spread is
+# at most CLUSTER_SPREAD_FACTOR x the typical spread ("clean") gets its own
+# bar, median - nmads x typical spread, so a compact low-RNA type keeps its
+# cells and a compact large type loses its damaged ones. A wider ("messy") or
+# smaller cluster keeps the sample-wide bound. No bar goes below the hard
+# minimum.
+CLUSTER_MIN_CELLS = 200
+CLUSTER_SPREAD_FACTOR = 1.5
+
+
+def _lower_cutoffs(x, clusters, nmads, hard_min):
+    """Per-cell lower cut-off of x (log1p scale) and the rule's bookkeeping:
+    (cutoff per cell, per-cluster rows, summary)."""
+    x = np.asarray(x, dtype=float)
+    h = float(np.log1p(hard_min))
+    med, mad = _mad(x)
+    sample_bound = max(med - nmads * mad, h) if mad > 0 else h
+    cutoff = np.full(len(x), sample_bound)
+    summary = {"sample_bound": sample_bound, "typical_spread": float("nan"), "n_clean": 0, "n_messy": 0, "n_small": 0}
+    rows = []
+    if clusters is None:
+        return cutoff, rows, summary
+    clusters = np.asarray(clusters)
+    groups = {g: np.flatnonzero(clusters == g) for g in np.unique(clusters)}
+    stats = {g: (len(idx), *_mad(x[idx])) for g, idx in groups.items()}
+    spreads = [spread for n, _, spread in stats.values() if n >= CLUSTER_MIN_CELLS]
+    typical = float(np.median(spreads)) if spreads else 0.0
+    summary["typical_spread"] = typical
+    for g, idx in groups.items():
+        n, gmed, gmad = stats[g]
+        if n < CLUSTER_MIN_CELLS:
+            case = "small"
+        elif typical == 0 or gmad > CLUSTER_SPREAD_FACTOR * typical:
+            case = "messy"
+        else:
+            case = "clean"
+        bound = max(gmed - nmads * typical, h) if case == "clean" else sample_bound
+        cutoff[idx] = bound
+        summary[f"n_{case}"] += 1
+        rows.append(
+            {
+                "cluster": g,
+                "cells": n,
+                "median": round(float(np.expm1(gmed)), 1),
+                "spread": round(gmad, 4),
+                "case": case,
+                "cutoff": round(float(np.expm1(bound)), 1),
+                "removed": int((x[idx] < bound).sum()),
+            }
+        )
+    return cutoff, rows, summary
+
+
+def _mt_bar(pct_mt, mt_nmads, mt_soft_pct):
+    """The mitochondrial bar: median + mt_nmads*MAD, never below mt_soft_pct
+    (so a sample whose MAD is 0 is judged at the floor, not at its median)."""
+    med, mad = _mad(pct_mt)
+    return max(med + mt_nmads * mad, float(mt_soft_pct))
 
 
 # Scrublet's automatic threshold is only as good as the bimodality of its
@@ -298,11 +355,11 @@ def qc_one_sample(
     ribo_regex=r"^Rp[sl]\d",
     hb_regex=r"^Hb[ab]",
     nmads=5,
-    mt_nmads=3,
-    mt_soft_pct=8.0,
+    mt_nmads=5,
+    mt_soft_pct=15.0,
     hard_min_genes=200,
-    hard_min_counts=500,
-    hard_max_mt_pct=25.0,
+    hard_min_counts=400,
+    hard_max_mt_pct=40.0,
     run_scrublet=True,
     run_decontx=True,
     decontx_kwargs=None,
@@ -322,11 +379,14 @@ def qc_one_sample(
     Four QC flags, OR-combined (hitting any of them marks a cell low-quality):
       1. Hard thresholds: n_genes < hard_min_genes / total_counts <
          hard_min_counts / pct_counts_mt > hard_max_mt_pct
-      2. Within-sample MAD outliers (default nmads=5): any of
-         log1p_total_counts / log1p_n_genes_by_counts /
-         pct_counts_in_top_20_genes exceeding median ± nmads * MAD
-      3. MT% MAD outlier (default mt_nmads=3) AND pct_counts_mt > mt_soft_pct
-         (so MAD doesn't fire on noise when MT% is uniformly low)
+      2. Lower bounds on log1p_total_counts and log1p_n_genes_by_counts, set
+         per coarse cluster (#67; _lower_cutoffs): sample median - nmads*MAD
+         for messy and small clusters, cluster median - nmads x typical
+         spread for clean ones, never below the hard minimum. No upper bound.
+         pct_counts_in_top_20_genes is reported, not used to remove cells.
+      3. pct_counts_mt above median + mt_nmads*MAD and above mt_soft_pct
+         (the bar is max of the two; with no mitochondrial genes nothing fires
+         and summary["n_mito_genes"] is 0)
       4. With run_scrublet=True, Scrublet doublet detection (run within the
          single sample; no batch_key needed). Its predicted_doublet call rests
          on an automatic threshold that is unreliable when the simulated score
@@ -455,20 +515,47 @@ def qc_one_sample(
             ad.obs["dissociation_score"] = tmp.obs["dissociation_score"].values
             del tmp
 
+    # The coarse Leiden clusters serve the lower bounds (#67) and DecontX's z.
+    # Below CLUSTER_MIN_CELLS no cluster can set its own bar, so a small
+    # sample is clustered only when DecontX needs it.
+    dkw = dict(decontx_kwargs or {})
+    decontx_z_source = None
+    z = None
+    if "z" in dkw:
+        z = np.asarray(dkw.pop("z"))
+        decontx_z_source = "user"
+    elif run_decontx or ad.n_obs >= CLUSTER_MIN_CELLS:
+        try:
+            z = _coarse_clusters_for_decontx(ad)
+        except ValueError as exc:
+            log.info(f"== no coarse clustering ({exc}); sample-wide bounds only")
+            if run_decontx:
+                log.info("== skipping decontX")
+                run_decontx = False
+        else:
+            # Recorded as "leiden_fallback" for compatibility with existing summaries.
+            decontx_z_source = "leiden_fallback"
+
     obs = ad.obs
-    # kept as three separate flags (not just the OR) so the summary can say
-    # WHICH metric fired — on pathological samples one of them can dominate
-    # (Liu-2025 FO: pct_top20 alone flagged 69% of all low-quality calls)
-    mad_counts_flag = _mad_outlier(obs["log1p_total_counts"], nmads)
-    mad_genes_flag = _mad_outlier(obs["log1p_n_genes_by_counts"], nmads)
-    mad_top20_flag = _mad_outlier(obs["pct_counts_in_top_20_genes"], nmads)
-    mad_flag = mad_counts_flag | mad_genes_flag | mad_top20_flag
-    mt_mad_flag = _mad_outlier(obs["pct_counts_mt"], mt_nmads) & (obs["pct_counts_mt"] > mt_soft_pct)
+    counts_cutoff, counts_rows, counts_rule = _lower_cutoffs(obs["log1p_total_counts"], z, nmads, hard_min_counts)
+    genes_cutoff, genes_rows, genes_rule = _lower_cutoffs(obs["log1p_n_genes_by_counts"], z, nmads, hard_min_genes)
+    low_counts_flag = obs["log1p_total_counts"].to_numpy() < counts_cutoff
+    low_genes_flag = obs["log1p_n_genes_by_counts"].to_numpy() < genes_cutoff
+    mt_bar = _mt_bar(obs["pct_counts_mt"], mt_nmads, mt_soft_pct)
+    mt_mad_flag = (obs["pct_counts_mt"] > mt_bar).to_numpy()
     hard_flag = (
         (obs["n_genes_by_counts"] < hard_min_genes)
         | (obs["total_counts"] < hard_min_counts)
         | (obs["pct_counts_mt"] > hard_max_mt_pct)
     ).values
+    qc_rules = {
+        "total_counts": {**counts_rule, "sample_bound": _safe_expm1(counts_rule["sample_bound"])},
+        "n_genes_by_counts": {**genes_rule, "sample_bound": _safe_expm1(genes_rule["sample_bound"])},
+        "pct_counts_mt": {"bar": mt_bar, "hard_max": hard_max_mt_pct, "n_mito_genes": int(ad.var["mt"].sum())},
+    }
+    cluster_cutoffs = pd.DataFrame(
+        [{"metric": "total_counts", **r} for r in counts_rows] + [{"metric": "n_genes_by_counts", **r} for r in genes_rows]
+    )
 
     if run_scrublet and ad.n_obs < MIN_CELLS_FOR_SCRUBLET:
         log.info(f"== skipping scrublet: {ad.n_obs} cell(s) < {MIN_CELLS_FOR_SCRUBLET}")
@@ -484,32 +571,14 @@ def qc_one_sample(
     else:
         doublet_flag = np.zeros(ad.n_obs, dtype=bool)
 
-    decontx_z_source = None
     res = None
     if run_decontx:
         from . import _decontx
 
         ad.uns.pop("osp_decontx_degenerate", None)
-        dkw = dict(decontx_kwargs or {})
         dkw.setdefault("seed", 0)
         dkw.setdefault("verbose", False)
-        if "z" in dkw:
-            decontx_z_source = "user"
-            res = _decontx.decontx(ad, **dkw)
-        else:
-            # The explicit-Leiden path is OSP's standard initialization.
-            # Same statistical floor as scrublet: DecontX needs >=2 groups to
-            # separate an ambient profile from real signal, and tiny/homogeneous
-            # samples sometimes can't even produce a coarse 2-way split.
-            try:
-                z = _coarse_clusters_for_decontx(ad)
-            except ValueError as exc:
-                log.info(f"== skipping decontX: {exc}")
-                run_decontx = False
-                res = None
-            else:
-                decontx_z_source = "leiden_fallback"
-                res = _decontx.decontx(ad, z=z, **dkw)
+        res = _decontx.decontx(ad, z=z, **dkw)
     if run_decontx and res is not None:
         # decontx() only writes into the AnnData with copy=True; fold the
         # returned DecontXResult in ourselves (same fields as its copy branch)
@@ -529,12 +598,13 @@ def qc_one_sample(
             ad, cluster_key="decontX_clusters"
         )
 
-    low_quality = hard_flag | mad_flag | mt_mad_flag | doublet_flag
+    low_quality = hard_flag | low_counts_flag | low_genes_flag | mt_mad_flag | doublet_flag
 
     reason = np.array([""] * ad.n_obs, dtype=object)
     for flag, tag in [
         (hard_flag, "hard_threshold"),
-        (mad_flag, "mad_outlier"),
+        (low_counts_flag, "low_counts"),
+        (low_genes_flag, "low_genes"),
         (mt_mad_flag, "high_mito"),
         (doublet_flag, "doublet"),
     ]:
@@ -542,8 +612,16 @@ def qc_one_sample(
     reason[reason == ""] = "pass"
 
     ad.obs["qc_hard_fail"] = hard_flag
-    ad.obs["qc_mad_outlier"] = mad_flag
+    ad.obs["qc_low_counts"] = low_counts_flag
+    ad.obs["qc_low_genes"] = low_genes_flag
+    ad.obs["qc_min_counts"] = np.expm1(counts_cutoff).round(1)
+    ad.obs["qc_min_genes"] = np.expm1(genes_cutoff).round(1)
+    if z is not None:
+        ad.obs["qc_cluster"] = pd.Categorical(z)
     ad.obs["qc_mt_outlier"] = mt_mad_flag
+    ad.uns["qc_rules"] = qc_rules
+    if len(cluster_cutoffs):
+        ad.uns["qc_cluster_cutoffs"] = cluster_cutoffs
     ad.obs["qc_doublet"] = doublet_flag
     ad.obs["low_quality"] = low_quality
     ad.obs["qc_reason"] = reason
@@ -555,11 +633,15 @@ def qc_one_sample(
         "n_low_quality": int(low_quality.sum()),
         "pct_low_quality": float(100 * low_quality.mean()),
         "n_hard_fail": int(hard_flag.sum()),
-        "n_mad_outlier": int(mad_flag.sum()),
-        "n_mad_counts": int(mad_counts_flag.sum()),
-        "n_mad_genes": int(mad_genes_flag.sum()),
-        "n_mad_pct_top20": int(mad_top20_flag.sum()),
+        "n_low_counts": int(low_counts_flag.sum()),
+        "n_low_genes": int(low_genes_flag.sum()),
         "n_high_mito": int(mt_mad_flag.sum()),
+        "min_counts_sample": qc_rules["total_counts"]["sample_bound"],
+        "min_genes_sample": qc_rules["n_genes_by_counts"]["sample_bound"],
+        "n_clusters_clean": counts_rule["n_clean"] + genes_rule["n_clean"],
+        "n_clusters_messy": counts_rule["n_messy"] + genes_rule["n_messy"],
+        "n_clusters_small": counts_rule["n_small"] + genes_rule["n_small"],
+        "mt_bar": mt_bar,
         "n_doublet": int(doublet_flag.sum()),
         "median_counts": float(np.median(obs["total_counts"])),
         "median_genes": float(np.median(obs["n_genes_by_counts"])),
@@ -590,6 +672,10 @@ def qc_one_sample(
         figdir = resolved_figdir
         os.makedirs(figdir, exist_ok=True)
         _plot_sample_qc(ad, sample_label, hard_min_genes, hard_min_counts, hard_max_mt_pct, figdir, nmads=nmads)
+        if len(cluster_cutoffs):
+            atomic_write_dataframe_csv(
+                cluster_cutoffs, os.path.join(figdir, f"{sample_label}_qc_cluster_cutoffs.csv"), index=False
+            )
         if run_decontx:
             _plot_decontx_top_genes(ad, sample_label, figdir)
 
@@ -739,11 +825,8 @@ def _plot_sample_qc(ad, sample_label, min_genes, min_counts, max_mt_pct, figdir,
         title=f"pct_counts_mt | median={obs['pct_counts_mt'].median():.2f}%",
     )
 
-    # pct_top20 is the third metric behind the MAD-outlier rule but has no
-    # hard threshold, so unlike counts/genes/mt it gets no line "for free" —
-    # draw the MAD keep-range upper bound instead. Low-complexity cell types
-    # (neutrophils, erythroid) sit naturally high here, so when this line
-    # flags a lot of cells it deserves a manual look, not blind trust.
+    # pct_top20 removes no cell (#67: neutrophils, erythroid and plasma cells
+    # sit naturally high); the MAD upper bound is drawn for orientation only.
     top20 = obs["pct_counts_in_top_20_genes"]
     _, top20_hi = _mad_bounds(top20, nmads)
     n_above_top20 = int((top20 > top20_hi).sum())
@@ -755,7 +838,7 @@ def _plot_sample_qc(ad, sample_label, min_genes, min_counts, max_mt_pct, figdir,
         figdir,
         suffix="pct_top20",
         threshold=top20_hi,
-        thresh_label=f"MAD hi={top20_hi:.1f}\nn_fail={n_above_top20}",
+        thresh_label=f"MAD hi={top20_hi:.1f} (report only)\nn_above={n_above_top20}",
         title=f"pct_counts_in_top_20_genes | median={top20.median():.1f}%",
     )
 
@@ -842,22 +925,19 @@ def _plot_sample_qc(ad, sample_label, min_genes, min_counts, max_mt_pct, figdir,
         "median_n_genes": float(obs["n_genes_by_counts"].median()),
         "median_pct_mt": float(obs["pct_counts_mt"].median()),
         "median_pct_top20": float(top20.median()),
-        # the adaptive (±nmads MAD) keep-ranges in ORIGINAL units, plus how
-        # many cells each metric flags — the counterpart of "thresholds" for
-        # the MAD layer. On healthy samples these ranges are generous; a
-        # suspiciously tight range (or one metric dominating the fail counts)
-        # means the sample's distribution shape is breaking the MAD assumption.
-        "mad_nmads": nmads,
-        "mad_keep_ranges": {
-            "total_counts": [_safe_expm1(b) for b in _mad_bounds(obs["log1p_total_counts"], nmads)],
-            "n_genes_by_counts": [_safe_expm1(b) for b in _mad_bounds(obs["log1p_n_genes_by_counts"], nmads)],
-            "pct_counts_in_top_20_genes": [round(float(b), 2) for b in _mad_bounds(top20, nmads)],
+        # the removal rules (#67) in ORIGINAL units: the sample-wide lower
+        # bounds, the typical cluster spread and the cluster cases behind the
+        # per-cluster bars, the mitochondrial bar actually applied. The
+        # per-cluster table is <sample>_qc_cluster_cutoffs.csv next to this file.
+        "nmads": nmads,
+        "rules": ad.uns.get("qc_rules", {}),
+        "n_fail": {
+            "total_counts": int(obs["qc_low_counts"].sum()),
+            "n_genes_by_counts": int(obs["qc_low_genes"].sum()),
+            "pct_counts_mt": int(obs["qc_mt_outlier"].sum()),
         },
-        "n_fail_mad": {
-            "total_counts": int(_mad_outlier(obs["log1p_total_counts"], nmads).sum()),
-            "n_genes_by_counts": int(_mad_outlier(obs["log1p_n_genes_by_counts"], nmads).sum()),
-            "pct_counts_in_top_20_genes": int(_mad_outlier(top20, nmads).sum()),
-        },
+        "pct_top20_mad_hi": round(float(top20_hi), 2),
+        "n_above_top20_mad_hi": n_above_top20,
     }
     if has_contam:
         stats["median_decontx_contamination"] = float(obs["decontX_contamination"].median())
