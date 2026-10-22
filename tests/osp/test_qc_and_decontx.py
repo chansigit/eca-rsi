@@ -214,11 +214,13 @@ def test_failed_pipeline_rerun_invalidates_old_completion_markers(tmp_path):
     assert (tmp_path / "qc_summary.csv").exists()
 
 
-def _fake_scrublet(threshold):
+def _fake_scrublet(threshold, sim=None):
     def run(adata, **kwargs):
         adata.obs["doublet_score"] = np.linspace(0.0, 0.6, adata.n_obs)
         adata.obs["predicted_doublet"] = adata.obs["doublet_score"] > threshold if threshold is not None else False
         adata.uns["scrublet"] = {} if threshold is None else {"threshold": threshold}
+        if sim is not None:
+            adata.uns["scrublet"]["doublet_scores_sim"] = np.asarray(sim)
 
     return run
 
@@ -235,6 +237,7 @@ def test_qc_summary_reports_scrublet_threshold_and_score_distribution(monkeypatc
     _, summary = qc_one_sample(data, run_decontx=False, run_dissociation_score=False, make_plots=False)
     assert summary["scrublet_threshold"] == threshold
     assert summary["n_doublet"] == (1 if threshold else 0)
+    assert summary["doublets_called"] is bool(threshold) and summary["scrublet_sim_above_threshold"] is None
     assert summary["median_doublet_score"] == pytest.approx(0.3)
     assert summary["p99_doublet_score"] == pytest.approx(0.6, abs=0.03)
     assert summary["pct_doublet_score_above_0.25"] == pytest.approx(60.0)
@@ -348,3 +351,52 @@ def test_lower_bounds_are_set_per_clean_cluster_and_top20_removes_nothing():
     assert summary["mt_bar"] == 15.0 and summary["n_high_mito"] == 0 and summary["n_mito_genes"] == 0
     assert "n_mad_pct_top20" not in summary
     assert list(obs["qc_reason"][:5]) == ["low_counts"] * 5
+
+
+@pytest.mark.parametrize("sim_above, called", [(0.3, True), (0.1, False)])
+def test_qc_trusts_scrublet_threshold_only_when_enough_simulated_doublets_exceed_it(monkeypatch, sim_above, called):
+    """#67 follow-up: a threshold in the tail of the simulated-doublet scores calls almost nothing
+    (pbmc68k per library: 2-4 % of simulated doublets above it); below SCRUBLET_MIN_SIM_ABOVE it
+    counts as failed, no cell is called and the scores stay."""
+    sim = np.r_[np.full(int(100 * sim_above), 0.9), np.full(100 - int(100 * sim_above), 0.1)]
+    monkeypatch.setattr("scanpy.pp.scrublet", _fake_scrublet(0.5, sim))
+    monkeypatch.setattr(qc, "MIN_CELLS_FOR_SCRUBLET", 0)
+    data = ad.AnnData(
+        np.ones((5, 3)),
+        obs=pd.DataFrame({"sample": ["A"] * 5}),
+        var=pd.DataFrame(index=["G1", "G2", "G3"]),
+    )
+    result, summary = qc_one_sample(data, run_decontx=False, run_dissociation_score=False, make_plots=False)
+    assert summary["doublets_called"] is called
+    assert summary["scrublet_sim_above_threshold"] == pytest.approx(sim_above)
+    assert summary["n_doublet"] == (1 if called else 0)
+    assert "doublet_score" in result.obs
+
+
+def test_messy_and_small_clusters_get_the_lower_of_sample_and_own_bound():
+    """#67 follow-up: classical monocytes (median 646 counts) sharing a messy cluster with cDC2
+    (2,618) lost a fifth of their cells to the sample bound set by T cells; a messy or small
+    cluster now takes the lower of the sample bound and its own median - 5 x typical spread."""
+    rng = np.random.default_rng(1)
+    n_genes = 60
+    size = np.exp(rng.uniform(-0.3, 0.3, size=(300, 1)))
+    t_cells = rng.poisson(22 * size, size=(300, n_genes)).astype(float)  # ~1,300 counts, 3 clean clusters
+    wide = np.exp(rng.uniform(-0.6, 0.6, size=(250, 1)))  # monocytes vary in size: twice the T-cell spread
+    mono = rng.poisson(14 * wide, size=(250, n_genes)).astype(float)  # ~840 counts, most of the cluster
+    cdc2 = rng.poisson(44 * size[:50], size=(50, n_genes)).astype(float)  # ~2,600 counts, same cluster: messy
+    X = np.vstack([t_cells, t_cells, t_cells, mono, cdc2])
+    z = np.r_[np.zeros(300), np.ones(300), np.full(300, 2), np.full(300, 3)].astype(int)
+    data = ad.AnnData(X, obs=pd.DataFrame({"sample": ["A"] * len(X)}), var=pd.DataFrame(index=[f"G{i}" for i in range(n_genes)]))
+    result, summary = qc_one_sample(
+        data, run_scrublet=False, run_decontx=False, run_dissociation_score=False, make_plots=False,
+        hard_min_genes=0, decontx_kwargs={"z": z},
+    )
+    table = result.uns["qc_cluster_cutoffs"]
+    messy = table[(table["metric"] == "total_counts") & (table["cluster"] == 3)].iloc[0]
+    assert messy["case"] == "messy"
+    sample_bound = summary["min_counts_sample"]
+    assert messy["cutoff"] < sample_bound, "the messy cluster's bound is below the T-cell sample bound"
+    counts = result.obs["total_counts"].to_numpy()[900:]
+    assert messy["cutoff"] >= 400
+    assert messy["removed"] == int((counts < messy["cutoff"]).sum()) < int((counts < sample_bound).sum())
+    assert int(result.obs["low_quality"][900:].sum()) == messy["removed"], "nothing else removes a monocyte or cDC2"

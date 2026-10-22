@@ -83,8 +83,10 @@ def _mad_bounds(x, nmads):
 # at most CLUSTER_SPREAD_FACTOR x the typical spread ("clean") gets its own
 # bar, median - nmads x typical spread, so a compact low-RNA type keeps its
 # cells and a compact large type loses its damaged ones. A wider ("messy") or
-# smaller cluster keeps the sample-wide bound. No bar goes below the hard
-# minimum.
+# smaller cluster gets the lower of the sample bound and that own bar: a
+# cluster that mixes classical monocytes with cDC2 (pbmc68k, a 4-fold
+# library-size gap) must not lose a fifth of its monocytes to a bound set by
+# T cells (#67 follow-up). No bar goes below the hard minimum.
 CLUSTER_MIN_CELLS = 200
 CLUSTER_SPREAD_FACTOR = 1.5
 
@@ -115,7 +117,8 @@ def _lower_cutoffs(x, clusters, nmads, hard_min):
             case = "messy"
         else:
             case = "clean"
-        bound = max(gmed - nmads * typical, h) if case == "clean" else sample_bound
+        own = gmed - nmads * typical
+        bound = max(own, h) if case == "clean" else (max(min(sample_bound, own), h) if typical > 0 else sample_bound)
         cutoff[idx] = bound
         summary[f"n_{case}"] += 1
         rows.append(
@@ -143,6 +146,24 @@ def _mt_bar(pct_mt, mt_nmads, mt_soft_pct):
 # simulated-doublet score histogram, so the summary also reports the score
 # distribution and the share of cells above this fixed reference value.
 DOUBLET_SCORE_REFERENCE = 0.25
+# A threshold that fewer than this share of the simulated doublets exceed sits
+# in the tail of their distribution and calls almost nothing (pbmc68k per
+# library: 0.51-0.60 with 2-4 % above it, 106 doublets instead of 1,276 at
+# 68k cells pooled; #67 follow-up). It counts as failed: no doublet is called
+# at OSP, the scores stay in obs, and the summary says so.
+SCRUBLET_MIN_SIM_ABOVE = 0.25
+
+
+def _scrublet_call(ad):
+    """(doublets_called, share of simulated doublets above the threshold or None)."""
+    info = ad.uns.get("scrublet", {})
+    threshold, sim = info.get("threshold"), info.get("doublet_scores_sim")
+    if threshold is None:
+        return False, None
+    if sim is None or len(sim) == 0:
+        return True, None
+    share = float(np.mean(np.asarray(sim, dtype=float) > float(threshold)))
+    return share >= SCRUBLET_MIN_SIM_ABOVE, share
 
 
 def _doublet_summary(ad):
@@ -153,8 +174,11 @@ def _doublet_summary(ad):
     """
     scores = ad.obs["doublet_score"].to_numpy(dtype=float)
     threshold = ad.uns.get("scrublet", {}).get("threshold")
+    called, sim_above = _scrublet_call(ad)
     return {
         "scrublet_threshold": None if threshold is None else float(threshold),
+        "scrublet_sim_above_threshold": sim_above,
+        "doublets_called": called,
         "median_doublet_score": float(np.median(scores)),
         "p90_doublet_score": float(np.quantile(scores, 0.9)),
         "p99_doublet_score": float(np.quantile(scores, 0.99)),
@@ -393,7 +417,10 @@ def qc_one_sample(
          histogram is not bimodal, so the summary also records the threshold
          (``scrublet_threshold``, ``None`` when scanpy found none) and the
          doublet_score median / p90 / p99 and the share of cells above
-         DOUBLET_SCORE_REFERENCE; trust the scores over ``n_doublet``.
+         DOUBLET_SCORE_REFERENCE; trust the scores over ``n_doublet``. A
+         threshold that fewer than SCRUBLET_MIN_SIM_ABOVE of the simulated
+         doublets exceed counts as failed too (``doublets_called`` False):
+         no cell is called, ``doublet_score`` stays in obs.
 
     With run_decontx=True, DecontX (osp._decontx, a vendored pure-Python port
     of DecontX) runs additionally for ambient-RNA monitoring — monitoring/reporting only
@@ -567,7 +594,12 @@ def qc_one_sample(
         # JIT that every OSP subprocess repeats, and exact neighbours are the
         # better estimate anyway (scores may differ marginally from approx).
         sc.pp.scrublet(ad, n_prin_comps=max(1, n_prin_comps), use_approx_neighbors=False)
-        doublet_flag = ad.obs["predicted_doublet"].astype(bool).values
+        called, sim_above = _scrublet_call(ad)
+        if called:
+            doublet_flag = ad.obs["predicted_doublet"].astype(bool).values
+        else:
+            log.info(f"== scrublet threshold not trusted (simulated doublets above it: {sim_above}); no doublet called")
+            doublet_flag = np.zeros(ad.n_obs, dtype=bool)
     else:
         doublet_flag = np.zeros(ad.n_obs, dtype=bool)
 

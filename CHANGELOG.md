@@ -12,7 +12,13 @@
   `mad_outlier`; `qc_removed.csv` carries each cell's cut-offs (`qc_min_counts`, `qc_min_genes`) and cluster;
   `qc_summary.csv` and `<sample>_qc_overview.json` record the sample bounds, the cluster cases and the
   mitochondrial bar, `<sample>_qc_cluster_cutoffs.csv` the per-cluster table. On pbmc68k this removes 2,564
-  cells instead of 3,669 (the issue's reconstruction); earlier runs are not redone.
+  cells instead of 3,669 (the issue's reconstruction); earlier runs are not redone. Follow-up from the pbmc68k run
+  (8 libraries): a messy or small cluster takes the lower of the sample bound and its own median - 5 x typical
+  spread (classical monocytes sharing a cluster with cDC2 lost a fifth of their cells to the T-cell sample bound);
+  and Scrublet's automatic threshold counts as failed when fewer than 25 % of its simulated doublets exceed it
+  (`SCRUBLET_MIN_SIM_ABOVE`; per library the threshold sat at 0.51-0.60 with 2-4 % above it and called 106
+  doublets where the pooled run called 1,276): no doublet is called at OSP, `doublet_score` stays in obs, and
+  `qc_summary.csv` and the report carry `doublets_called` and `scrublet_sim_above_threshold`.
 
 - **Replay a frozen hard case** (#14 step 3): `ecarsi.stages.cases.restore` rebuilds a case's files under a new
   folder with every reference rewritten (a JSON that references a restored file gets the new path and digest),

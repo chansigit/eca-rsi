@@ -267,6 +267,16 @@ def _section_qc(outdir, qc_summary, qc_stats):
     if qc_stats:
         parts.append("<h3>QC thresholds</h3>")
         parts.append(_kv_table(qc_stats.get("thresholds", {}), table_id="qc-thresholds"))
+        doublet = qc_stats.get("doublet")
+        if doublet:
+            parts.append("<h3>Doublets (Scrublet)</h3>")
+            if not doublet.get("doublets_called"):
+                parts.append(
+                    '<p class="hint">No doublet was removed at this stage: Scrublet found no threshold, or too few '
+                    "of its simulated doublets score above it (the threshold sits in their tail). "
+                    "doublet_score is kept per cell for later stages.</p>"
+                )
+            parts.append(_kv_table(doublet, table_id="qc-doublets"))
         rules = qc_stats.get("rules")
         if rules:
             nmads = qc_stats.get("nmads", "?")
