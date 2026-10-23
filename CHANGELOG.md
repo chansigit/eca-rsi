@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.10 — 2026-10-22
 
 - **OSP QC stops removing real cell types** (#67): the library-size and gene-count rules keep only their lower
   bound (a large cell type is not low quality; doublets are Scrublet's job) and set it per coarse Leiden cluster
