@@ -576,7 +576,7 @@ async def main():
     p.add_argument("run_id")
     p.add_argument("--reason", required=True)
     p = commands.add_parser("restart-from", help="redo a dataset from a stage of a round (#69): its records move to <unit>/attic/, "
-                            "the stages before are reused, the redone ones run on the current version")
+                            "the stages before are reused, the redone ones run on the current version (make the new code current first)")
     p.add_argument("run_id")
     p.add_argument("--stage", choices=["cross-sample", "zoom-in"], required=True)
     p.add_argument("--round", type=int, default=1)

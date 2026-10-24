@@ -1,13 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.4.11 — 2026-10-23
 
 - **`restart-from`** (#69): `python -m ecarsi.control … restart-from <run_id> --stage cross-sample|zoom-in --round N
   --reason …` redoes a finished or stopped dataset from that stage: the records from it on move to
   `units/<unit>/attic/NN/` (a zoom-in restart keeps that round's cross-sample), the stages before are reused through
   the resume checks, the redone stages and the display syncs get new pool request ids (`<unit>/restarts.json`
   counts the restarts; the pool would otherwise replay the old receipts), and they run on the current version
-  (0022) or the queue given with `--task-queue`. For refining one stage at a time on the same OSP results.
+  (0022). For refining one stage at a time on the same OSP results.
 
 ## 0.4.10 — 2026-10-22
 

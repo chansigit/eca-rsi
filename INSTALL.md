@@ -27,7 +27,7 @@ The files `container/control-requirements.lock` and `container/science-requireme
 
 | Package | Version |
 |---|---|
-| ecarsi, with `osp`, `msp`, `zmip`, `standissect_lite`, `harness_bridge` (one repository, decision 0018) | 0.4.10 |
+| ecarsi, with `osp`, `msp`, `zmip`, `standissect_lite`, `harness_bridge` (one repository, decision 0018) | 0.4.11 |
 | openai-agents / openai | 0.22.3 / 3.23.0 |
 | claude-agent-sdk | 0.2.163 (bundles Claude Code 2.1.286) |
 | temporalio | 1.32.0 |
@@ -376,4 +376,4 @@ apptainer exec --cleanenv --bind "$BINDS" --env PYTHONSAFEPATH=1 --env PYTHONPAT
 
 `start-dataset` adds a `storage` key from `display_root` and `archive_root` of `~/.config/ecarsi/results.json` (`--results` for another file) when the spec has none. With it, the run keeps its display zone up to date after every stage and archives its work tree when the dataset completes.
 
-Follow progress on Periscope. A unit that stops on `loop_control.json` (`brake: round|stage|step`, or the older `pause`, `stop_after_round`, `pause_after_stage`) ends as `PAUSED`; `brake <run_id> --hard --reason …` stops a dataset at once. Clear the control. Then run `resume-dataset` on the unit; it continues on the current version (0022), like every child workflow a running dataset starts. To redo a dataset from a stage with new code while keeping the stages before it (refining msp on a finished run, #69): `restart-from RUN_ID --stage cross-sample --round 1 --reason "..."` (also `--stage zoom-in`); the replaced records go to `<unit>/attic/NN/`, and with `--task-queue` of a version started by `start-version.sh <name> 1` the redone stages run that version beside production, as the gate does. The pruner must stay off meanwhile: it deletes the pool outputs the reused stages point to.
+Follow progress on Periscope. A unit that stops on `loop_control.json` (`brake: round|stage|step`, or the older `pause`, `stop_after_round`, `pause_after_stage`) ends as `PAUSED`; `brake <run_id> --hard --reason …` stops a dataset at once. Clear the control. Then run `resume-dataset` on the unit; it continues on the current version (0022), like every child workflow a running dataset starts. To redo a dataset from a stage with new code while keeping the stages before it (refining msp on a finished run, #69): `restart-from RUN_ID --stage cross-sample --round 1 --reason "..."` (also `--stage zoom-in`); the replaced records go to `<unit>/attic/NN/`. The redone stages are child workflows, so they run on the current version (0022): publish the changed code, gate it, `set-current`, then restart. The pruner must stay off meanwhile: it deletes the pool outputs the reused stages point to.
