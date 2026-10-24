@@ -4,7 +4,7 @@
 
 ECA-RSI coordinates sample-level QC, cross-sample integration, and lineage-level refinement. The workflow starts from [ECA-PP](https://github.com/chansigit/eca-pp) outputs. It runs dedicated analysis packages. It repeats integration and refinement on the surviving cells until the process meets a numerical stopping rule. Each analysis unit receives an annotated H5AD, reports, a cell ledger, and unresolved questions for review.
 
-The `ecarsi` Python package (0.4.11) provides the implementation, with its analysis kernels in the same repository. It runs from two Apptainer images and installs nothing on the host. New to the code: read [docs/OVERVIEW.md](docs/OVERVIEW.md). To deploy: [INSTALL.md](INSTALL.md).
+The `ecarsi` Python package (0.4.12) provides the implementation, with its analysis kernels in the same repository. It runs from two Apptainer images and installs nothing on the host. New to the code: read [docs/OVERVIEW.md](docs/OVERVIEW.md). To deploy: [INSTALL.md](INSTALL.md).
 
 ## Install
 
@@ -205,7 +205,7 @@ Intermediate matrices live in the pool requests that computed them. The pruner d
 
 The test suite contains 977 tests (the kernels' included). It runs inside the images in about a minute (`ops/test-lane.sh all`); GitHub runs the subset that needs no compute image on every push. See [INSTALL.md](INSTALL.md#b3-run-the-tests).
 
-Every release passes the gate before it becomes current: dataset 11_Shietal (9,163 cells) end to end on the new version next to production, with its display zone, work archive, reports and links checked (`ops/gate.py`). The latest ran on 2026-10-23 for 0.4.11. The latest production run, pbmc68k (68,579 cells, 8 libraries), released after two rounds on 2026-10-22 with no failed task; `ops/run-health.py` reports where a run's time went.
+Every release passes the gate before it becomes current: dataset 11_Shietal (9,163 cells) end to end on the new version next to production, with its display zone, work archive, reports and links checked (`ops/gate.py`). The latest ran on 2026-10-24 for 0.4.12. The latest production run, pbmc68k (68,579 cells, 8 libraries), released after two rounds on 2026-10-22 with no failed task; `ops/run-health.py` reports where a run's time went.
 
 Older validation records are in [docs/history/](docs/history/). These records include release checks, pause and recovery, the Clayton and 19Liu runs, and the fixed-task model comparison in [docs/history/eval/RESULTS.md](docs/history/eval/RESULTS.md).
 

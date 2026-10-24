@@ -124,3 +124,21 @@ def test_restart_from_refuses_a_run_without_that_stage_and_plain_resume_refuses_
         asyncio.run(dataset_workflow.resume_dataset(FakeClient('COMPLETED', 'old', spec), 'dataset/ds', None, 'x', restart=('zoom_in', 1)))
     with pytest.raises(ValueError, match='restart-from also takes a completed one'):
         asyncio.run(dataset_workflow.resume_dataset(FakeClient('COMPLETED', 'old', spec), 'dataset/ds', None, 'x'))
+
+
+def test_a_completed_stage_record_is_accepted_with_its_version_key(tmp_path, monkeypatch):
+    """Resume reuses a finished cross-sample or zoom-in stage when its publication equals the worker
+    result plus the result reference; since 0022 the record also names its version, which made every
+    resume past a finished cross-sample fail ('Publication differs from its accepted worker result',
+    the first restart-from, 2026-10-24)."""
+    from ecarsi.files import reference
+    from ecarsi.control.dataset import dataset_step
+    stage_dir = tmp_path / 'round01' / '02-cross-sample'
+    final = tmp_path / 'pool' / 'requests' / 'req' / 'h' / 'outputs' / 'final.json'
+    body = dict(state='complete', input=dict(path='/in', sha256='0' * 64), n_input=10, n_survived=8, n_removed=2, files={})
+    put(final, body)
+    spec = dict(run_id='r', output_root=str(stage_dir), input=body['input'], pool_root=str(tmp_path / 'pool'))
+    put(stage_dir / 'spec.json', spec)
+    put(stage_dir / 'publication.json', dict(body, result=reference(final), version='eb24736b516b'))
+    monkeypatch.setattr('ecarsi.control.coordinator.check_pool', lambda root, request, name: dict(state='ready', path=str(final)))
+    assert dataset_step('completed', ['cross_sample', spec]) == str(stage_dir / 'publication.json')

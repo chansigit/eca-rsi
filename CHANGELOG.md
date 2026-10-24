@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.12 — 2026-10-24
+
+- **Resume past a finished cross-sample or zoom-in works again**: the check that a reused stage record equals its
+  worker result ignored that the record also names its version (0022), so every resume after such a stage failed
+  with "Publication differs from its accepted worker result" (found by the first `restart-from`, 2026-10-24).
+
 ## 0.4.11 — 2026-10-23
 
 - **`restart-from`** (#69): `python -m ecarsi.control … restart-from <run_id> --stage cross-sample|zoom-in --round N

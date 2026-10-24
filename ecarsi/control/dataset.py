@@ -419,7 +419,8 @@ def dataset_step(action, args):
             ref = publication['partition_exclusions']
             if reference(ref['path']) != ref:
                 raise ValueError('Partition exclusion ledger changed')
-        elif publication != {**accepted(publication['result']), 'result': publication['result']}:
+        elif {k: v for k, v in publication.items() if k != 'version'} != {**accepted(publication['result']), 'result': publication['result']}:
+            # the record also names the version that ran the stage (0022), which the worker result does not
             raise ValueError('Publication differs from its accepted worker result')
         if publication['n_input'] != publication['n_survived'] + publication['n_removed']:
             raise ValueError('Cached stage does not conserve cells')
