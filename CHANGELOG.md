@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **The final sync packs the work archive again when the tree changed** (a `restart-from`, #69); before, an existing
+  archive was kept as is, so a redone run's archive was the tree before the restart.
+
 ## 0.4.12 — 2026-10-24
 
 - **Resume past a finished cross-sample or zoom-in works again**: the check that a reused stage record equals its

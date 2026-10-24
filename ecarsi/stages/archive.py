@@ -32,9 +32,10 @@ def listing(archive) -> dict[str, int]:
 
 
 def pack(source, out) -> dict:
-    """Archive `source` into `out` (.tar.gz); an existing `out` is kept as is."""
+    """Archive `source` into `out` (.tar.gz); an existing `out` that still lists the tree is kept as is,
+    one that does not (the run was redone from a stage, #69) is packed again and replaced."""
     source, out = Path(source), Path(out)
-    if out.exists():
+    if out.exists() and listing(out) == inventory(source):
         return dict(archive=str(out), state="exists")
     out.parent.mkdir(parents=True, exist_ok=True)
     partial = out.with_name(out.name + ".partial")

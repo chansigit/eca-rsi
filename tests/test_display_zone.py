@@ -101,6 +101,8 @@ def test_archive_round_trips_and_keeps_an_existing_one(tmp_path):
         t.extractall(tmp_path / "back", filter="tar")
     assert (tmp_path / "back" / "hard.json").read_text() == "x" * 1000 and os.readlink(tmp_path / "back" / "sym") == "a/x.json"
     assert archive.pack(src, out)["state"] == "exists" and not list(out.parent.glob("*.partial"))
+    (src / "a" / "y.json").write_text("y")  # the tree changed (a restart-from, #69): the archive is replaced
+    assert archive.pack(src, out)["state"] == "packed" and archive.listing(out) == archive.inventory(src)
 
 
 def unit_run(spec, fail_display=False):
