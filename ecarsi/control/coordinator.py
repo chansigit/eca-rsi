@@ -575,6 +575,12 @@ async def main():
     p = commands.add_parser("resume-dataset")
     p.add_argument("run_id")
     p.add_argument("--reason", required=True)
+    p = commands.add_parser("restart-from", help="redo a dataset from a stage of a round (#69): its records move to <unit>/attic/, "
+                            "the stages before are reused, the redone ones run on the current version")
+    p.add_argument("run_id")
+    p.add_argument("--stage", choices=["cross-sample", "zoom-in"], required=True)
+    p.add_argument("--round", type=int, default=1)
+    p.add_argument("--reason", required=True)
     p = commands.add_parser("brake", help="the hard brake (0022): terminate a running dataset now, keep its directories, resume later")
     p.add_argument("run_id")
     p.add_argument("--hard", action="store_true", required=True, help="the softer brakes are loop_control.json's brake key")
@@ -590,9 +596,9 @@ async def main():
         p = commands.add_parser(name)
         p.add_argument("run_id")
     args = parser.parse_args()
-    if args.task_queue is None and not args.command.startswith("resume-"):
+    if args.task_queue is None and args.command not in ("resume-dataset", "restart-from"):
         args.task_queue = queue
-    if args.task_queue is None and args.command == "resume-dataset":
+    if args.task_queue is None and args.command in ("resume-dataset", "restart-from"):
         args.task_queue = current_queue()  # None for a checkout: the queue the run was started on
     if args.command == "worker" and version() and args.task_queue != queue:
         parser.error(f"version {version()['name']} serves only its own queue {queue}, not {args.task_queue}")
@@ -661,6 +667,12 @@ async def main():
         from .dataset import resume_dataset
         from ..warm_pool.state import identifier
         handle = await resume_dataset(client, 'dataset/' + identifier(args.run_id), args.task_queue, args.reason)
+        print(json.dumps(dict(workflow_id=handle.id, run_id=handle.result_run_id)))
+    elif args.command == 'restart-from':
+        from .dataset import resume_dataset
+        from ..warm_pool.state import identifier
+        handle = await resume_dataset(client, 'dataset/' + identifier(args.run_id), args.task_queue, args.reason,
+                                      restart=(args.stage.replace('-', '_'), args.round))
         print(json.dumps(dict(workflow_id=handle.id, run_id=handle.result_run_id)))
     elif args.command == 'brake':
         from .dataset import hard_brake

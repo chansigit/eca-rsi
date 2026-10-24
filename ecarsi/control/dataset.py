@@ -167,12 +167,75 @@ def request_states(pool_root, bridge_root, identities, superseded, sessions):
     return requests
 
 
-async def resume_dataset(client, identity, task_queue, reason):
+RESTARTS = 'restarts.json'  # <unit>/restarts.json: every restart-from of the unit (#69), newest last
+STAGE_ORDER = {'per_sample': 0, 'cross_sample': 1, 'zoom_in': 2}
+
+
+def restart_attempt(unit_dir, stage, round_number):
+    """How many restarts (#69) cover this stage of this round. 0 keeps the original request ids, so the
+    stages before the restart point are found again and reused; a covered stage gets fresh ids, or the
+    pool would replay the receipts of the run being redone (a request id names recorded work)."""
+    from ..files import read
+    position = (round_number, STAGE_ORDER[stage])
+    return sum(1 for r in (read(Path(unit_dir) / RESTARTS) or []) if position >= (r['round'], STAGE_ORDER[r['stage']]))
+
+
+def restart_count(root):
+    """Restarts of every unit of a run, for request ids that are not per unit (the display syncs)."""
+    from ..files import read
+    units = Path(root) / L.UNITS
+    return sum(len(read(unit / RESTARTS) or []) for unit in units.glob('*') if unit.is_dir()) if units.is_dir() else 0
+
+
+def restart_records(root, stage, round_number, reason):
+    """Move every unit's records from (stage, round) on into <unit>/attic/<attempt>/ and note the attempt
+    (#69): the round directories from that round (for a zoom-in restart, round N keeps its cross-sample),
+    the release and the unit publication. The records before the point stay and are reused on resume."""
+    import time
+    from ..files import read, save
+    if stage not in ('cross_sample', 'zoom_in') or round_number < 1:
+        raise ValueError('restart-from takes --stage cross-sample|zoom-in and --round >= 1')
+    units = [p for p in sorted((Path(root) / L.UNITS).glob('*')) if p.is_dir()]
+    if not units:
+        raise ValueError('The dataset has no unit directory to restart from')
+    for unit in units:
+        restarts = read(unit / RESTARTS) or []
+        attempt = len(restarts) + 1
+        attic, moved = unit / 'attic' / f'{attempt:02d}', []
+        def move(rel):
+            source = unit / rel
+            if source.exists():
+                (attic / rel).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                os.rename(source, attic / rel)
+                moved.append(str(rel))
+        rounds = unit / L.ROUNDS
+        for rd in sorted(rounds.glob('round*')) if rounds.is_dir() else []:
+            n = L.round_number(rd)
+            if n is None or n < round_number:
+                continue
+            if n > round_number or stage == 'cross_sample':
+                move(Path(L.ROUNDS) / rd.name)
+            else:
+                for name in [L.GEN2_ZOOM, 'ledger', 'ledger-input.json', L.GEN2_PUBLICATION] + [p.name for p in rd.glob('publication-*.json')]:
+                    move(Path(L.ROUNDS) / rd.name / name)
+        if not moved:
+            raise ValueError(f"{unit.name}: no {stage.replace('_', '-')} record of round {round_number} to restart from; resume-dataset continues a stopped unit")
+        for name in (L.RELEASE, 'release-input.json', 'release.lock', L.GEN2_PUBLICATION):
+            move(Path(name))
+        restarts.append(dict(attempt=attempt, stage=stage, round=round_number, reason=reason, at=time.time(), moved=moved))
+        save(unit / RESTARTS, restarts)
+
+
+async def resume_dataset(client, identity, task_queue, reason, restart=None):
     """New Temporal run, same immutable dataset and accepted external request IDs.
 
     task_queue None means the queue the previous run was started on (the coordinator's main passes the
     current version's queue, 0022): a run started on a queue no coordinator polls sits at its first
-    workflow task forever (2026-09-16, Eye)."""
+    workflow task forever (2026-09-16, Eye).
+
+    restart=(stage, round) is restart-from (#69): the dataset may also be COMPLETED, the records from that
+    stage on move to the units' attics first, and the run redoes them (on the current version) while the
+    stages before are reused."""
     from temporalio.common import WorkflowIDReusePolicy
     from ..files import immutable, reference
     from ..files import read, digest
@@ -180,8 +243,9 @@ async def resume_dataset(client, identity, task_queue, reason):
         raise ValueError('A recovery reason is required')
     previous = client.get_workflow_handle(identity)
     info = await previous.describe()
-    if info.status.name not in UNFINISHED:
-        raise ValueError('Dataset resume requires a failed, terminated, cancelled or timed-out workflow')
+    if info.status.name not in (UNFINISHED | {'COMPLETED'} if restart else UNFINISHED):
+        raise ValueError('Dataset resume requires a failed, terminated, cancelled or timed-out workflow'
+                         + ('' if restart else '; restart-from also takes a completed one'))
     history = await client.get_workflow_handle(identity, run_id=info.run_id).fetch_history()
     started = history.events[0].workflow_execution_started_event_attributes
     task_queue = task_queue or started.task_queue.name
@@ -190,6 +254,8 @@ async def resume_dataset(client, identity, task_queue, reason):
     root = Path(spec['output_root'])
     if read(root / 'spec.json') != spec:
         raise ValueError('Saved dataset specification changed')
+    if restart:
+        restart_records(root, *restart, reason)
     pending, visited, identities = [(identity, info.run_id)], set(), set()
     while pending:
         key = pending.pop()
@@ -233,9 +299,10 @@ async def resume_dataset(client, identity, task_queue, reason):
         (root / 'publication.json').unlink()
     intent = immutable(audit, dict(workflow_id=identity, failed_run_id=info.run_id, reason=reason,
         spec=reference(root / 'spec.json'), previous_publication=previous_publication,
-        workflows=sorted(visited), requests=requests))
+        workflows=sorted(visited), requests=requests, **(dict(restart=list(restart)) if restart else {})))
+    policy = WorkflowIDReusePolicy.ALLOW_DUPLICATE if restart else WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY
     handle = await client.start_workflow(DatasetWorkflow.run, args=[spec, True], id=identity,
-        task_queue=task_queue, id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY)
+        task_queue=task_queue, id_reuse_policy=policy)
     immutable(audit.with_suffix('.started.json'), dict(intent=intent, run_id=handle.result_run_id))
     return handle
 
@@ -391,7 +458,8 @@ def dataset_step(action, args):
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         template = spec[stage]
         common = {k: spec[k] for k in ('dataset_id', 'pool_root', 'bridge_root')}
-        common['run_id'] = spec['run_id'][:20] + '-' + digest([spec['run_id'], unit['name'], stage, round_number])[:20]
+        attempt = restart_attempt(directory, stage, round_number)  # 0 unless a restart-from covers this stage (#69)
+        common['run_id'] = spec['run_id'][:20] + '-' + digest([spec['run_id'], unit['name'], stage, round_number] + ([attempt] if attempt else []))[:20]
         if stage == 'per_sample':
             from .persample import validate_spec as validate
             return validated({**template, **common, 'unit': unit['path'], 'output_root': str(directory / L.GEN2_PERSAMPLE),
@@ -501,7 +569,8 @@ def dataset_step(action, args):
         from ..warm_pool.state import submit
         from .. import stages
         spec, label, final = args
-        key = digest([label, bool(final)])[:16]
+        restarts = restart_count(spec['output_root'])  # a restarted run syncs again under new ids (#69)
+        key = digest([label, bool(final)] + ([restarts] if restarts else []))[:16]
         (Path(spec['output_root']) / L.GEN2_DISPLAY_SYNC).mkdir(exist_ok=True)
         packet = immutable(Path(spec['output_root']) / L.GEN2_DISPLAY_SYNC / (key + '.json'),
                            dict(zone(spec), root=spec['output_root'], final=bool(final), label=label))
