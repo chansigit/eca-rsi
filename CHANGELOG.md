@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.15 — 2026-10-25
+
+- **OSP QC of a sample of 1-3 cells completes again.** The QC overview JSON writes null for what so few cells cannot
+  give (the typical cluster spread, NaN without clusters) instead of failing its strict writer, and the sample ends
+  empty as designed (`qc_too_few_survivors`). Since #67 (0.4.10) such a sample failed its compute and so the run;
+  05_Fuetal, whose barcode-suffix samples include 1-3 cells, was the first to have one.
+
 ## 0.4.14 — 2026-10-25
 
 - **start-dataset accepts a spec with `organize.sample_map`.** `ecarsi.policies` imports pandas only where it reads
