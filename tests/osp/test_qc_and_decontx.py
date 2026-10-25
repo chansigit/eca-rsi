@@ -414,3 +414,19 @@ def test_osp_flags_scrublet_doublets_and_keeps_them_for_cross_sample(monkeypatch
     assert summary["doublets_called"] is True and summary["n_doublet"] == 1
     assert result.obs["qc_doublet"].sum() == 1 and not result.obs["low_quality"].any()
     assert set(result.obs["qc_reason"]) == {"pass"}
+
+
+def test_qc_overview_of_a_two_cell_sample_writes_null_for_what_two_cells_cannot_give(tmp_path):
+    """05_Fuetal (2026-10-25): barcode-suffix samples of 1-3 cells; the overview JSON held a NaN and its strict
+    writer failed the sample, so the run."""
+    import json
+
+    rng = np.random.default_rng(0)
+    data = ad.AnnData(
+        rng.poisson(3, size=(2, 40)).astype(float),
+        obs=pd.DataFrame({"sample": ["A", "A"]}, index=["c1", "c2"]),
+        var=pd.DataFrame(index=[f"MT-G{i}" if i < 3 else f"G{i}" for i in range(40)]),
+    )
+    qc_one_sample(data, sample_label="A", run_scrublet=False, run_dissociation_score=False, figdir=str(tmp_path))
+    overview = json.loads((tmp_path / "A_qc_overview.json").read_text())
+    assert overview["median_total_counts"] > 0

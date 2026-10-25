@@ -979,7 +979,18 @@ def _plot_sample_qc(ad, sample_label, min_genes, min_counts, max_mt_pct, figdir,
         stats["median_pct_counts_malat1"] = float(obs["pct_counts_malat1"].median())
     if has_diss:
         stats["median_dissociation_score"] = float(obs["dissociation_score"].median())
-    atomic_write_json(os.path.join(figdir, f"{sample_label}_qc_overview.json"), stats)
+    atomic_write_json(os.path.join(figdir, f"{sample_label}_qc_overview.json"), _finite_or_none(stats))
+
+
+def _finite_or_none(value):
+    """NaN or infinity, a statistic too few cells cannot give (a sample of 1-3 cells), as JSON null."""
+    if isinstance(value, dict):
+        return {k: _finite_or_none(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite_or_none(v) for v in value]
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
+    return value
 
 
 def _plot_decontx_top_genes(ad, sample_label, figdir, top_n_plot=15):
