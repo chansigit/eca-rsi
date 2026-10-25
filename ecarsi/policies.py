@@ -22,10 +22,12 @@ batch_key       obs column Harmony corrects by instead of eca_sample_id. Must
 from __future__ import annotations
 
 import re
-
-import pandas as pd
+from typing import TYPE_CHECKING
 
 from .sample_mapping import normalize
+
+if TYPE_CHECKING:  # pandas is imported where cells are read: start-dataset checks a sample map in the control image
+    import pandas as pd
 
 
 REASON_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}")
@@ -96,6 +98,8 @@ def value_key(v) -> str:
 
 
 def rule_mask(obs: pd.DataFrame, rule: dict) -> pd.Series:
+    import pandas as pd
+
     check_rule(rule, obs.columns)
     if "where" in rule:
         m = pd.Series(True, index=obs.index)
@@ -156,6 +160,8 @@ def resolve_batch_key(obs: pd.DataFrame, sample: pd.Series, key) -> dict:
     """{"column", "of_sample": {sample: value}, "n_filled"}; NA cells (blank /
     "missing") are ignored for constancy and later filled with their
     experiment's value in the OSP subset."""
+    import pandas as pd
+
     if not isinstance(key, str) or key not in obs.columns:
         raise ValueError(
             f"batch_key {key!r} is not an obs column of the organized input"

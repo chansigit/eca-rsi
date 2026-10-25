@@ -257,3 +257,17 @@ def test_where_rule_matches_numbers_by_value_and_text_literally():
     assert hits("n", "4.5") == [False, False, True]
     assert hits("flag", "true") == hits("flag", True) == [True, False, True]
     assert hits("plate", 3) == [False, True, False]  # text stays literal: "03" is not 3
+
+
+def test_start_dataset_checks_a_sample_map_without_pandas():
+    """start-dataset runs in the control image, which has no pandas (2026-10-25: the first spec with a sample map
+    failed there on importing ecarsi.policies)."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = ("import sys; sys.modules['pandas'] = None\n"
+            "from ecarsi.control.coordinator import validate_sample_map\n"
+            "validate_sample_map({'sources': {'Lung': {'sample_column': 'sample_id', 'rationale': 'libraries'}},"
+            " 'merges': [], 'batch_key': 'donor'})\n")
+    subprocess.run([sys.executable, "-c", code], check=True, cwd=Path(__file__).parents[1])
