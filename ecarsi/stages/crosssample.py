@@ -37,6 +37,7 @@ from .common import (
     stress_policy,
 )
 from ..files import digest, read, save
+from ..sample_mapping import SAMPLE_KEY
 
 INVENTORY_PAGE_BYTES = 64 * 1024  # sample_inventory pages by bytes, like evidence pages: a cohort of 62
 # patients paged one full proposal per call filled the model's context
@@ -167,7 +168,10 @@ def compute(inspected_ref, inclusion_ref, destination):
     selected = {s['sample'] for s in decision['samples'] if s['include']}
     if not selected:
         raise ValueError('Inclusion rejected all samples; no integration is authorized')
-    inputs, sources, exclusions, osp_reasons = [], [], [], {}
+    from msp.api import DOUBLET_THRESHOLD, library_threshold
+    from osp.api import SCRUBLET_MIN_SIM_ABOVE
+
+    inputs, sources, exclusions, osp_reasons, thresholds = [], [], [], {}, {}
     reasons = {s['sample']: s['reason'] for s in decision['samples']}
     for sample in inspected['samples']:
         bundle = verified(sample['bundle'])
@@ -175,6 +179,8 @@ def compute(inspected_ref, inclusion_ref, destination):
 
         data = an.read_h5ad(artifact(bundle, 'clustered.h5ad'), backed='r')
         ids = data.obs_names.copy()
+        scrublet = data.uns.get('scrublet') or {}  # the library's Scrublet run: its threshold for MSP's doublet checks (#70)
+        thresholds.update(dict.fromkeys(ids, library_threshold(scrublet.get('threshold'), scrublet.get('doublet_scores_sim'), SCRUBLET_MIN_SIM_ABOVE)))
         from osp.api import ANNOTATION_OPS
 
         proposal = read(artifact(bundle, 'annotation_proposal.json')) if 'annotation_proposal.json' in bundle['files'] else {}
@@ -214,6 +220,7 @@ def compute(inspected_ref, inclusion_ref, destination):
     excluded.to_csv(destination / 'sample_exclusions.csv.gz', index=False)
     pd.DataFrame(decision['samples']).to_csv(destination / 'sample_decisions.csv', index=False)
     data = load_and_merge(inputs, inspected['spec']['config']['batch_col'])
+    data.obs[DOUBLET_THRESHOLD] = data.obs_names.map(thresholds).astype(float)
     if len(data) + len(excluded) != len(origin):
         raise ValueError('Sample selection lost cells')
     if stress_policy(inspected['spec']) == 'keep' and '_qc_action' in data.obs:
@@ -285,6 +292,7 @@ def integrate(data, inspected_ref, inclusion_ref, destination, inputs):
         n_pcs=cfg['n_pcs'],
         n_neighbors=cfg['n_neighbors'],
         defer_deg=True,
+        library_col=SAMPLE_KEY,  # the doublet checks compare RNA within a cluster and OSP library (#70)
         inputs=inputs,
         meta_extra={'compute_backend': backend, 'workflow': 'cross-sample-v2'},
     )
@@ -751,6 +759,30 @@ def _stress_guard(bundle, data, entries, proposed):
     return converted
 
 
+def _contamination(data, typed_entries, outliers, removed, destination):
+    """The decontX contamination check (#70, msp contamination_check), after the type agent: its coarse labels
+    name each cluster's lineage. Candidates are the decontX candidates nothing else removes, judged within their
+    r1.0 cluster against the cells nothing removes. (table or None, removal mask); the table is written to
+    contamination_check.csv, the evidence of every removal it makes. A candidate it does not remove stays."""
+    import numpy as np
+    import pandas as pd
+    from msp.api import contamination_check
+
+    none = np.zeros(data.n_obs, dtype=bool)
+    if 'decontX_candidate' not in outliers or 'msp_leiden_r1.0' not in data.obs:
+        return None, none
+    base = data.obs[BASE].astype(str)
+    type_removed = base.isin([c for c, e in typed_entries.items() if e['action'] == 'remove']).to_numpy()
+    left = ~(np.asarray(removed) | type_removed)
+    flagged = outliers['decontX_candidate'].astype(str).str.lower().eq('true')
+    candidate = data.obs_names.isin(flagged.index[flagged]) & left
+    lineage = base.map({c: e['coarse_label'].strip() for c, e in typed_entries.items()}).astype(str).to_numpy()
+    table = contamination_check(data, candidate, 'msp_leiden_r1.0', lineage, left=left)
+    table.to_csv(destination / 'contamination_check.csv')
+    hit = table.index[table['contamination'].astype(bool)] if len(table) else pd.Index([])
+    return table, data.obs_names.isin(hit)
+
+
 def finalize(evidence_ref, types_ref, quality_ref, destination):
     import pandas as pd
     from msp.api import apply_annotation, plot_annotated, validate_annotation
@@ -794,10 +826,12 @@ def finalize(evidence_ref, types_ref, quality_ref, destination):
         retained.update(product[stay].map(soft).to_dict())
         retained.update({c: 'dissociation' for c in data.obs_names.intersection(list(osp_reasons)) if str(data.obs.at[c, '_qc_action']) != 'drop'})
     inspect_drop = data.obs['_msp_action'].astype(str).eq('drop').to_numpy()
-    archive = apply_annotation(data, typed['proposal'], pre | inspect_drop, {'preannotation': pre, 'inspect_drop': inspect_drop})
+    typed_entries = {str(e['cluster_id']): e for e in typed['proposal']['clusters']}
+    contamination, contaminated = _contamination(data, typed_entries, outliers, pre | inspect_drop, destination)
+    archive = apply_annotation(data, typed['proposal'], pre | inspect_drop | contaminated,
+                               {'preannotation': pre, 'inspect_drop': inspect_drop, 'contamination': contaminated})
     origin = pd.read_csv(artifact(bundle, 'input_cells.csv.gz'), dtype=str, keep_default_na=False).set_index('cell_id')
     reasons = {c: [] for c in archive.cell}
-    typed_entries = {str(e['cluster_id']): e for e in typed['proposal']['clusters']}
     quality_entries = {str(e['cluster']): e for e in quality['proposal']['clusters']}
     for cid, e in typed_entries.items():
         if e.get('host_adjustment', {}).get('policy') == STRESS_HOST_POLICY:
@@ -812,6 +846,9 @@ def finalize(evidence_ref, types_ref, quality_ref, destination):
             )
         if cid in outliers.index and str(outliers.loc[cid].get('recommend_removal')).lower() == 'true':
             r.append({'code': 'cell_outlier', 'detail': outliers.loc[cid].astype(str).to_dict(), 'evidence': bundle['files']['cell_outliers.csv']})
+        if contamination is not None and cid in contamination.index and contamination.at[cid, 'contamination']:
+            r.append({'code': 'contamination', 'detail': contamination.loc[cid].astype(str).to_dict(),
+                      'evidence': reference(destination / 'contamination_check.csv')})
         if str(row.get('_qc_action')) == 'drop':
             if cid not in osp_reasons:
                 raise ValueError('OSP drop lacks its original decision: ' + cid)
@@ -932,7 +969,7 @@ def main():
     elif a.operation == 'deg-batch':
         deg_batch(ref(0), a.args[1].split(','), dest)
     elif a.operation == 'assemble':
-        assemble(ref(0), read(a.args[1]), dest)
+        assemble(ref(0), read(a.args[1]), dest, stress=False)
     elif a.operation == 'tool':
         tool(a.args[0], Path(a.args[1]), Path(a.args[2]), dest)
     elif a.operation == 'finalize':

@@ -144,7 +144,7 @@ def test_every_section_renders_in_order_with_consecutive_numbers(report_text):
         "StanDissect Per-cluster QC violins",
         "Fractal marker dot plot",
         "MARKERGENE",
-        "Cell-level doublet / ambient-RNA outliers",  # leiden QC
+        "Cell-level doublets and decontX candidates",  # leiden QC
         "Per-cluster cutoff violins",
         "Pre-annotation filtering",  # cluster annotations
         "msp_leiden_r1.0 — global",

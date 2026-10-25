@@ -43,11 +43,11 @@ def _mito_hits(names) -> list[str]:
     return [n for n in names if is_mito(n)]
 
 
-def _stress_row(key, cluster, view, names, small=False) -> dict:
+def _stress_row(key, cluster, view, names, small=False, stress=True) -> dict:
     """One stress_clusters.csv row: the stress-gene and the mitochondrial gene hits among a view's top genes."""
     hits, mito = _stress_hits(names), _mito_hits(names)
     return {"key": key, "cluster": cluster, "view": view, "n_hits": len(hits), "hit_genes": "|".join(hits),
-            "stress": len(hits) > STRESS_HIT_THRESHOLD, "n_mito_hits": len(mito), "mito_genes": "|".join(mito),
+            "stress": stress and len(hits) > STRESS_HIT_THRESHOLD, "n_mito_hits": len(mito), "mito_genes": "|".join(mito),
             "mito": view == "local" and small and len(mito) > STRESS_HIT_THRESHOLD}
 
 
@@ -310,8 +310,10 @@ def _cluster_annotations(ad, remove_mask, leiden_keys, resolutions, outdir, top_
     write_deg_results(out, keys, outdir, top_n_de)
 
 
-def write_deg_results(out, keys, outdir, top_n_de=50):
-    """Single writer for legacy and scheduled comparison outputs."""
+def write_deg_results(out, keys, outdir, top_n_de=50, stress=True):
+    """Single writer for legacy and scheduled comparison outputs. stress=False (cross-sample, #68) keeps the
+    stress-gene hits in stress_clusters.csv for reading but marks no cluster stress: a stress state is defined
+    against cells of the same type, which a cross-lineage comparison cannot give. The mito rule stays."""
     plan, results = out["plan"], out["results"]
     for key in keys:
         # Keep the existing columns even when this graph has no positive edges.
@@ -333,7 +335,7 @@ def write_deg_results(out, keys, outdir, top_n_de=50):
             os.path.join(outdir, f"deg_global_{key}.csv"), index=False
         )
         for c, sub in gdf.groupby("group", observed=True).head(STRESS_CHECK_TOP_N).groupby("group", observed=True):
-            stress_rows.append(_stress_row(key, c, "global", sub["names"].tolist()))
+            stress_rows.append(_stress_row(key, c, "global", sub["names"].tolist(), stress=stress))
         sizes = item.get("sizes", {})  # a plan made before the mito axis has none: no cluster counts as small
         local_rows = []
         for k, view, c, ldf in results:
@@ -341,7 +343,7 @@ def write_deg_results(out, keys, outdir, top_n_de=50):
                 continue
             siblings = sum(sizes.get(n, 0) for n in item["top3"].get(c, []))
             small = c in sizes and sizes[c] < MITO_SMALL_FRAC * siblings
-            stress_rows.append(_stress_row(key, c, "local", ldf.head(STRESS_CHECK_TOP_N)["names"].tolist(), small))
+            stress_rows.append(_stress_row(key, c, "local", ldf.head(STRESS_CHECK_TOP_N)["names"].tolist(), small, stress))
             local_rows.append(ldf.head(top_n_de))
         if local_rows:
             pd.concat(local_rows, ignore_index=True).to_csv(os.path.join(outdir, f"deg_local_{key}.csv"), index=False)

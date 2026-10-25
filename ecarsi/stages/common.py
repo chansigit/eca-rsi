@@ -165,7 +165,8 @@ def deg_results(prepared_ref,results):
     return rows
 
 
-def assemble(prepared_ref, results, destination):
+def assemble(prepared_ref, results, destination, stress=True):
+    """stress=False at cross-sample (#68): stress is judged within a lineage, at zoom-in."""
     import pandas as pd
     from msp.api import write_deg_results
     from msp.api import DegTables
@@ -186,7 +187,7 @@ def assemble(prepared_ref, results, destination):
     for name in bundle['files']:
         if '/' not in name and name.endswith('.csv') and not name.startswith(('deg_','stress_clusters')):
             shutil.copyfile(artifact(bundle,name),destination/name)
-    write_deg_results(out,plan['keys'],str(destination),top_n_de=50)
+    write_deg_results(out,plan['keys'],str(destination),top_n_de=50,stress=stress)
     with DegTables(destination,BASE) as tables:
         tables.write_database(destination/'deg.sqlite',provenance={'prepared':prepared_ref,'mask':bundle['files']['preannotation_removal.csv'],'coverage':'top 50 per cluster and view'})
     publish_bundle(destination,'evidence.json',prepared_ref,**{k:v for k,v in bundle.items() if k!='files'},prepared=prepared_ref,comparisons=results)
@@ -292,7 +293,8 @@ def guard_retained_drops(proposal, retained):
     return sorted(adjusted)
 
 
-FRAGMENT_TESTS = ('decontX', 'dissociation', 'doublet', 'mt')  # msp minor-sibling QC, columns <test>_significant
+FRAGMENT_TESTS = ('decontX', 'dissociation', 'doublet', 'mt')  # msp minor-sibling QC, columns <test>_significant; since #70 msp
+# writes only doublet and mt, the other two are read from tables written before
 
 
 def fragment_reasons(table):
@@ -311,8 +313,9 @@ def fragment_reasons(table):
 
 
 def soft_fragments(table):
-    """{fragment: state} of msp minor-sibling fragments removed only by their dissociation and/or mitochondrial
-    test: no decontX or doublet hit and not more than half dropped upstream. Kept under the policy keep."""
+    """{fragment: state} of msp minor-sibling fragments removed only by their mitochondrial test: no doublet hit
+    and not more than half dropped upstream. Kept under the policy keep, labelled dying. (A table from before
+    #70 may still mark dissociation: such a fragment is kept as dissociation.)"""
     def hit(row, name):
         return str(row.get(name + '_significant', '')).lower() == 'true'
     soft = {}
@@ -320,7 +323,7 @@ def soft_fragments(table):
         if str(row.get('recommend_removal', '')).lower() != 'true' or hit(row, 'decontX') or hit(row, 'doublet'):
             continue
         dropped = str(row.get('pct_drop_upstream', '')).strip()
-        if dropped and float(dropped) > FRAGMENT_DROP_PCT:
+        if dropped and dropped != 'nan' and float(dropped) > FRAGMENT_DROP_PCT:
             continue
         if hit(row, 'dissociation') or hit(row, 'mt'):
             soft[str(row['subcluster'])] = 'dissociation' if hit(row, 'dissociation') else 'dying'

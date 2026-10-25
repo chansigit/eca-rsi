@@ -1,7 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.4.13 — 2026-10-24
 
+- **Doublets from Scrublet, contamination from decontX, no stress at cross-sample** (decision 0023; #70, first part of
+  #68). OSP flags Scrublet doublets instead of removing them. msp removes a cell before annotation by three doublet
+  checks against its library's Scrublet threshold (`msp/integrate/doublets.py`): raised RNA within its cluster and
+  library; an over-clustering cluster half above the threshold with no gene of its own; a decontX candidate with a
+  high score for its cluster and raised RNA. decontX candidates are otherwise judged only for contamination, after
+  the type agent (`contamination_check.csv`, code `contamination`). Fragments lose the decontX and dissociation
+  tests and compare mitochondria with their own parent core. Cross-sample marks no cluster stress and its prompts
+  say so; the mito rule stays. The type agent also gets `osp_labels_<key>.csv`, the per-library OSP labels of
+  every cluster.
 - **The final sync packs the work archive again when the tree changed** (a `restart-from`, #69); before, an existing
   archive was kept as is, so a redone run's archive was the tree before the restart.
 

@@ -369,14 +369,35 @@ def _dissect(ad, leiden_keys, resolutions, outdir):
     return res
 
 
-def _evidence(ad, res, leiden_keys, resolutions, outdir, figdir, top_n_de, defer_deg=False):
+def _osp_label_tables(ad, leiden_keys, resolutions, outdir, library_col=None):
+    """osp_labels_<key>.csv for the r1.0 and r2.0 clusters: how many cells carry each per-library OSP coarse
+    label (spellings differ between libraries), and in how many libraries; evidence for the type agent (#70)."""
+    if "_ann_coarse" not in ad.obs:
+        return
+    res_to_key = dict(zip(resolutions, leiden_keys, strict=True))
+    for r in (1.0, 2.0):
+        key = res_to_key.get(r)
+        if key is None:
+            continue
+        frame = pd.DataFrame({"cluster": ad.obs[key].astype(str).to_numpy(), "osp_coarse_label": ad.obs["_ann_coarse"].astype(str).to_numpy()})
+        if library_col and library_col in ad.obs:
+            frame["library"] = ad.obs[library_col].astype(str).to_numpy()
+        groups = frame.groupby(["cluster", "osp_coarse_label"], observed=True)
+        table = groups.size().rename("n_cells").reset_index()
+        if "library" in frame:
+            table["n_libraries"] = groups["library"].nunique().to_numpy()
+        table.sort_values(["cluster", "n_cells"], ascending=[True, False]).to_csv(os.path.join(outdir, f"osp_labels_{key}.csv"), index=False)
+
+
+def _evidence(ad, res, leiden_keys, resolutions, outdir, figdir, top_n_de, defer_deg=False, library_col=None):
     """Fragment QC, cell-level outliers, the pre-annotation removal union,
     then PAGA + global/local DEG on the survivors."""
     log.info("== minor-sibling QC")
     msq_df = _minor_sibling_qc(ad, res, outdir)
 
-    log.info("== cell-level doublet/ambient-RNA outliers (per-cluster MAD + hard floor)")
-    cell_outliers_df = _cell_level_outliers(ad, leiden_keys, resolutions, outdir)
+    log.info("== cell-level doublets (Scrublet, library thresholds) and decontX candidates")
+    cell_outliers_df = _cell_level_outliers(ad, leiden_keys, resolutions, outdir, library_col)
+    _osp_label_tables(ad, leiden_keys, resolutions, outdir, library_col)
 
     log.info("== leiden cluster QC violins (per-cluster cutoffs)")
     _leiden_cluster_qc_violins(ad, leiden_keys, resolutions, figdir)
@@ -457,6 +478,7 @@ def integrate_adata(
     inputs=(),
     meta_extra=None,
     defer_deg=False,
+    library_col=None,
 ):
     """The integration core on an in-memory AnnData: X is reset from
     layers[counts_layer] (so any prior normalization/embedding on the object
@@ -473,7 +495,9 @@ def integrate_adata(
     min(round(N/30), 100)), tau, block_size, max_iter_harmony (10),
     max_iter_kmeans (4), epsilon_cluster (1e-3), epsilon_harmony (1e-2),
     alpha, batch_prop_cutoff. Recorded in uns["msp"]["harmony"].
-    meta_extra: extra keys merged into uns["msp"] (zmip records its lineage)."""
+    meta_extra: extra keys merged into uns["msp"] (zmip records its lineage).
+    library_col: the obs column naming each cell's OSP library (its Scrublet run); the doublet checks compare
+    RNA within a cluster and library (#70). None compares within the cluster only."""
     ensure()
     _validate_inputs(ad, batch_col, resolutions, n_top_genes, n_pcs, n_neighbors, counts_layer)
     harmony_kwargs = dict(harmony_kwargs or {})
@@ -491,7 +515,7 @@ def integrate_adata(
 
     figdir = os.path.join(outdir, "figures")
     os.makedirs(figdir, exist_ok=True)
-    remove_mask = _evidence(ad, res, leiden_keys, resolutions, outdir, figdir, top_n_de, defer_deg)
+    remove_mask = _evidence(ad, res, leiden_keys, resolutions, outdir, figdir, top_n_de, defer_deg, library_col)
     if defer_deg:
         from .deg import prepare_deg, save_deg_input
         import json

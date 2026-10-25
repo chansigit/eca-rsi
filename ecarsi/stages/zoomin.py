@@ -37,6 +37,7 @@ from .common import (
     stress_policy,
 )
 from ..files import digest, read, save
+from ..sample_mapping import SAMPLE_KEY
 
 
 def data_from(bundle, name='integrated.h5ad', backed=None):
@@ -128,6 +129,7 @@ def compute(subset_ref, marker_ref, destination):
         n_top_genes=cfg['n_top_genes'],
         n_pcs=cfg['n_pcs'],
         n_neighbors=cfg['n_neighbors'],
+        library_col=SAMPLE_KEY,  # the doublet checks compare RNA within a cluster and OSP library (#70)
     )
     from zmip.api import TYPE_KEY, QUALITY_KEY
 

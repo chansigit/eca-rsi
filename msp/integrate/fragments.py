@@ -37,7 +37,6 @@ HEATMAP_PIXELS = 16_000_000  # its size: the DPI drops below UMAP_DPI to stay un
 MIN_N_FOR_TEST = 5  # below this, Mann-Whitney has no real power — mark insufficient_data
 BIG_SIBLING_FRAC = 0.25  # sibling >= this fraction of its own parent's core is skipped, not a "minor" fragment
 BIG_SIBLING_N = 800  # sibling >= this many cells (absolute) is skipped too, regardless of frac_of_core
-DOUBLET_MEDIAN_THRESH = 0.2  # scrublet score, 0-1 scale
 MT_MEDIAN_THRESH = 20.0  # pct_counts_mt is already on a 0-100 scale
 DROP_PCT_THRESH = 50.0  # % of a sibling's cells already _qc_action=drop upstream (osp)
 MIN_AUC = 0.7  # a test also needs this effect size (owner, 2026-10-06, #27; decision 0017 judges dying cells the same way)
@@ -101,44 +100,36 @@ def _exact_mwu_sf(u, n1, n2):
 
 def _minor_sibling_qc(ad, res, outdir):
     """Test minor-sibling fragments (standissect subclusters c{parent}_i,
-    i>0) for a QC profile worse than the pooled parent-core cells, plus one
-    hard upstream-drop rule — candidates for msp.inspect to verify, but ANY
-    one of these criteria hitting is enough to mark the whole fragment
-    recommend_removal (this function proposes, it never removes anything
-    itself).
+    i>0) — candidates for msp.inspect to verify, but ANY one of these
+    criteria hitting is enough to mark the whole fragment recommend_removal
+    (this function proposes, it never removes anything itself).
 
     Parent cores (rank 0) are never tested. Siblings holding >=25% of their
     own parent core's cell count, OR >=800 cells outright, are "big"
     fragments, not minor — skipped entirely (no rows below apply to them).
 
-    For every remaining (non-big) sibling: if >50% of its cells already
-    carry _qc_action=="drop" from the upstream per-sample annotation, that
-    alone is enough — a fragment that's already majority-drop upstream just
-    inherits that verdict as a group. This is computed even when the
-    sibling is too small for the statistical tests below.
+    For every remaining (non-big) sibling (#70; decontX and dissociation are no
+    fragment tests any more: a fragment of another subtype carries other clusters'
+    genes, and stress is judged within a lineage, #68):
+      - upstream drop: >50% of its cells already carry _qc_action=="drop" from the
+        per-sample annotation (computed even when the sibling is too small to test);
+      - doublet: the doublet-cluster criterion of msp.integrate.doublets — at least
+        20 cells, at least half above their library's Scrublet threshold, and no gene
+        of its own against the other standissect products;
+      - mt: one-sided Mann-Whitney U against its OWN parent core (the largest UMAP
+        piece of the same parent), p < 0.05 and AUC >= MIN_AUC, and its median above
+        MT_MEDIAN_THRESH; needs >= MIN_N_FOR_TEST cells."""
+    from .doublets import DOUBLET_CLUSTER_MIN_CELLS, DOUBLET_CLUSTER_SHARE, THRESHOLD_COL, doublet_above, own_gene_counts
 
-    Siblings with >=5 cells are additionally tested one-sided (sibling >
-    pooled cores) via Mann-Whitney U on: decontX_contamination,
-    dissociation_score, doublet_score, pct_counts_mt. A test hits on p < 0.05
-    AND AUC >= MIN_AUC (0.7; #27: p alone flagged ordinary fragments, and eca-rsi
-    removes what is marked here); doublet/mt tests additionally require the
-    sibling's own median to clear an absolute floor (0.2 and 20% respectively).
-    No multiple-testing correction. A sibling is recommend_removal if the
-    upstream-drop rule fires OR any one of the four tests hits."""
     frag = res.fragments
     core_n = frag.loc[frag["rank"] == 0].set_index("parent")["n_cells"]
-    core_subclusters = set(frag.loc[frag["rank"] == 0, "subcluster"])
-    core_mask = ad.obs["standissect_product"].astype(str).isin(core_subclusters)
+    core_of = frag.loc[frag["rank"] == 0].set_index("parent")["subcluster"]
+    product = ad.obs["standissect_product"].astype(str)
+    above = doublet_above(ad.obs)
+    has_threshold = THRESHOLD_COL in ad.obs
+    X = ad.layers["counts"] if "counts" in ad.layers else ad.X
 
-    metric_tests = [
-        ("decontX_contamination", "decontX", None),
-        ("dissociation_score", "dissociation", None),
-        ("doublet_score", "doublet", DOUBLET_MEDIAN_THRESH),
-        ("pct_counts_mt", "mt", MT_MEDIAN_THRESH),
-    ]
-    metric_tests = [(col, name, thr) for col, name, thr in metric_tests if col in ad.obs]
-
-    rows = []
+    rows, doublet_targets = [], []
     for _, frow in frag[frag["rank"] > 0].iterrows():
         sub, parent, n_cells = frow["subcluster"], frow["parent"], int(frow["n_cells"])
         cn = int(core_n.get(parent, 0))
@@ -154,34 +145,41 @@ def _minor_sibling_qc(ad, res, outdir):
             rows.append(row)
             continue
 
-        sib_mask = ad.obs["standissect_product"].astype(str) == sub
-        drop_hit = False
+        sib_mask = (product == sub).to_numpy()
         if "_qc_action" in ad.obs:
-            pct_drop = float((ad.obs.loc[sib_mask, "_qc_action"] == "drop").mean() * 100)
-            row["pct_drop_upstream"] = round(pct_drop, 2)
-            drop_hit = pct_drop > DROP_PCT_THRESH
+            row["pct_drop_upstream"] = round(float((ad.obs.loc[sib_mask, "_qc_action"] == "drop").mean() * 100), 2)
 
-        stat_hit = False
+        if has_threshold:
+            row["doublet_above_pct"] = round(float(above[sib_mask].mean() * 100), 2)
+            if n_cells >= DOUBLET_CLUSTER_MIN_CELLS and above[sib_mask].mean() >= DOUBLET_CLUSTER_SHARE:
+                doublet_targets.append(sub)
+
         if n_cells < MIN_N_FOR_TEST:
             row["status"] = "insufficient_data"
         else:
             row["status"] = "tested"
-            n_hits = 0
-            for col, name, thr in metric_tests:
-                sib_vals, core_vals = ad.obs.loc[sib_mask, col], ad.obs.loc[core_mask, col]
+            if "pct_counts_mt" in ad.obs and parent in core_of.index:
+                sib_vals = ad.obs.loc[sib_mask, "pct_counts_mt"]
+                core_vals = ad.obs.loc[(product == core_of[parent]).to_numpy(), "pct_counts_mt"]
                 test = _mwu_test(sib_vals, core_vals)
                 sig = None if test is None else bool(test[0] < 0.05 and test[1] >= MIN_AUC)
-                if thr is not None and sig:
-                    sig = bool(sib_vals.median() > thr)
-                row[f"{name}_median"] = round(float(sib_vals.median()), 4)
-                row[f"{name}_auc"] = None if test is None else round(test[1], 3)
-                row[f"{name}_significant"] = sig
-                n_hits += bool(sig)
-            row["n_hits"] = n_hits
-            stat_hit = n_hits > 0
-
-        row["recommend_removal"] = bool(drop_hit or stat_hit)
+                row["mt_median"] = round(float(sib_vals.median()), 4)
+                row["mt_auc"] = None if test is None else round(test[1], 3)
+                row["mt_significant"] = bool(sig and sib_vals.median() > MT_MEDIAN_THRESH) if sig is not None else None
         rows.append(row)
+
+    own = own_gene_counts(X, product.to_numpy(), doublet_targets) if doublet_targets else {}
+    for row in rows:
+        if row["status"] == "big_sibling_skip":
+            continue
+        sub = row["subcluster"]
+        if sub in doublet_targets:
+            row["n_own_genes"] = own.get(sub)
+        row["doublet_significant"] = bool(sub in doublet_targets and own.get(sub, 1) == 0) if has_threshold else None
+        drop_hit = row.get("pct_drop_upstream", 0) > DROP_PCT_THRESH
+        hits = [bool(row.get("doublet_significant")), bool(row.get("mt_significant"))]
+        row["n_hits"] = sum(hits)
+        row["recommend_removal"] = bool(drop_hit or any(hits))
 
     df = pd.DataFrame(rows)
     df.to_csv(os.path.join(outdir, "minor_sibling_qc.csv"), index=False)

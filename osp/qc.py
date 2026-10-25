@@ -400,7 +400,7 @@ def qc_one_sample(
     inputs whose X was already normalized (same convention as
     cluster_and_deg).
 
-    Four QC flags, OR-combined (hitting any of them marks a cell low-quality):
+    Three removal rules, OR-combined (hitting any of them marks a cell low-quality), and a doublet flag:
       1. Hard thresholds: n_genes < hard_min_genes / total_counts <
          hard_min_counts / pct_counts_mt > hard_max_mt_pct
       2. Lower bounds on log1p_total_counts and log1p_n_genes_by_counts, set
@@ -411,7 +411,8 @@ def qc_one_sample(
       3. pct_counts_mt above median + mt_nmads*MAD and above mt_soft_pct
          (the bar is max of the two; with no mitochondrial genes nothing fires
          and summary["n_mito_genes"] is 0)
-      4. With run_scrublet=True, Scrublet doublet detection (run within the
+      4. Not a removal (#70): with run_scrublet=True, Scrublet doublet detection
+         sets obs["qc_doublet"] and keeps the cell; MSP decides doublets (run within the
          single sample; no batch_key needed). Its predicted_doublet call rests
          on an automatic threshold that is unreliable when the simulated score
          histogram is not bimodal, so the summary also records the threshold
@@ -630,7 +631,9 @@ def qc_one_sample(
             ad, cluster_key="decontX_clusters"
         )
 
-    low_quality = hard_flag | low_counts_flag | low_genes_flag | mt_mad_flag | doublet_flag
+    # Doublets are flagged (qc_doublet), not removed (#70): MSP removes them after integration, where the
+    # flagged ones gather with the doublets Scrublet scored low and mark their cluster.
+    low_quality = hard_flag | low_counts_flag | low_genes_flag | mt_mad_flag
 
     reason = np.array([""] * ad.n_obs, dtype=object)
     for flag, tag in [
@@ -638,7 +641,6 @@ def qc_one_sample(
         (low_counts_flag, "low_counts"),
         (low_genes_flag, "low_genes"),
         (mt_mad_flag, "high_mito"),
-        (doublet_flag, "doublet"),
     ]:
         reason[flag] = np.where(reason[flag] == "", tag, reason[flag] + "+" + tag)
     reason[reason == ""] = "pass"

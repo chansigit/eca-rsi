@@ -122,8 +122,9 @@ def test_minor_sibling_qc_applies_every_rule_at_its_threshold(tmp_path):
 
     tested = df[df["status"] == "tested"]
     assert set(tested.index) == {"c0_1", "c0_4", "c0_5"}
-    assert df.loc["c0_1", "n_hits"] == 2 and df.loc["c0_1", "recommend_removal"] == True  # noqa: E712
-    assert df.loc["c0_1", "mt_significant"] and df.loc["c0_1", "doublet_significant"]
+    # no library threshold in obs: the doublet criterion is not applied (#70); mt is tested against c0_0, its own core
+    assert df.loc["c0_1", "n_hits"] == 1 and df.loc["c0_1", "recommend_removal"] == True  # noqa: E712
+    assert df.loc["c0_1", "mt_significant"] and pd.isna(df.loc["c0_1", "doublet_significant"])
     assert df.loc["c0_4", "n_hits"] == 0 and df.loc["c0_4", "recommend_removal"] == False  # noqa: E712
     # shifted but below the absolute floor: the statistical hit alone does not count
     assert df.loc["c0_5", "mt_median"] < 20 and not df.loc["c0_5", "mt_significant"]
@@ -131,7 +132,7 @@ def test_minor_sibling_qc_applies_every_rule_at_its_threshold(tmp_path):
 
     written = pd.read_csv(tmp_path / "minor_sibling_qc.csv").set_index("subcluster")
     assert written["recommend_removal"].astype(str).to_dict() == df["recommend_removal"].astype(str).to_dict()
-    for col in ("core_n_cells", "frac_of_core", "pct_drop_upstream", "doublet_median", "mt_median"):
+    for col in ("core_n_cells", "frac_of_core", "pct_drop_upstream", "mt_median", "mt_auc"):
         assert col in written
 
 
@@ -147,9 +148,10 @@ def test_minor_sibling_qc_without_inherited_actions_skips_the_drop_rule(tmp_path
 
 
 def outlier_dataset():
-    doublet = np.array([0.05] * 18 + [0.45, 0.90] + [0.60] * 19 + [0.95])
+    decontx = np.array([0.05] * 18 + [0.45, 0.90] + [0.60] * 19 + [0.95])
     obs = pd.DataFrame(
-        {"msp_leiden_r1.0": pd.Categorical(["0"] * 20 + ["1"] * 20), "doublet_score": doublet},
+        {"msp_leiden_r1.0": pd.Categorical(["0"] * 20 + ["1"] * 20), "doublet_score": np.full(40, 0.1),
+         "decontX_contamination": decontx},
         index=[f"cell{i}" for i in range(40)],
     )
     return ad.AnnData(np.zeros((40, 1), dtype=np.float32), obs=obs)
@@ -168,26 +170,25 @@ def test_minor_sibling_mann_whitney_matches_scipy_on_its_exact_path():
     assert _mwu_test(*tied)[0] == mannwhitneyu(*tied, alternative="greater").pvalue
 
 
-def test_cell_level_outliers_need_both_the_mad_and_the_floor_gate(tmp_path):
+def test_decontx_candidates_need_both_the_mad_and_the_floor_gate_and_remove_nothing_alone(tmp_path):
     data = outlier_dataset()
     df = _cell_level_outliers(data, ["msp_leiden_r1.0"], [1.0], tmp_path)
-    flagged = set(df.index[df["recommend_removal"]])
     # cluster 0: MAD is 0, so 0.45 clears the MAD gate but not the 0.5 floor; 0.90 clears both.
     # cluster 1: 0.95 clears both; the 0.60 cells sit at the median.
-    assert flagged == {"cell19", "cell39"}
+    assert set(df.index[df["decontX_candidate"]]) == {"cell19", "cell39"}
+    assert not df["recommend_removal"].any(), "a decontX candidate is not a removal; no library threshold, no doublet check (#70)"
     written = pd.read_csv(tmp_path / "cell_outliers.csv", dtype={"cell": str}).set_index("cell")
-    assert set(written.index[written["recommend_removal"]]) == flagged
+    assert set(written.index[written["decontX_candidate"]]) == {"cell19", "cell39"}
     summary = pd.read_csv(tmp_path / "cell_outlier_summary.csv", dtype={"cluster": str}).set_index("cluster")
-    assert summary["n_doublet_score_outlier"].to_dict() == {"0": 1, "1": 1}
-    assert summary["n_recommend_removal"].to_dict() == {"0": 1, "1": 1}
-    assert summary["pct_recommend_removal"].to_dict() == {"0": 5.0, "1": 5.0}
+    assert summary["n_decontX_candidate"].to_dict() == {"0": 1, "1": 1}
+    assert summary["n_recommend_removal"].to_dict() == {"0": 0, "1": 0}
     assert summary["n_cells"].sum() == 40
 
 
 def test_cell_level_outliers_return_none_without_metrics_or_target_resolutions(tmp_path):
     data = outlier_dataset()
     assert _cell_level_outliers(data, ["msp_leiden_r0.3"], [0.3], tmp_path) is None
-    del data.obs["doublet_score"]
+    del data.obs["doublet_score"], data.obs["decontX_contamination"]
     assert _cell_level_outliers(data, ["msp_leiden_r1.0"], [1.0], tmp_path) is None
     assert not (tmp_path / "cell_outliers.csv").exists()
 
@@ -195,9 +196,9 @@ def test_cell_level_outliers_return_none_without_metrics_or_target_resolutions(t
 def test_leiden_cutoff_violins_draw_one_file_per_metric_and_resolution(tmp_path):
     data = outlier_dataset()
     _leiden_cluster_qc_violins(data, ["msp_leiden_r1.0"], [1.0], tmp_path)
-    (png,) = tmp_path.glob("leiden_qc_violin_*.png")
-    assert png.name == "leiden_qc_violin_doublet_score_msp_leiden_r1.0.png"
-    assert png.read_bytes().startswith(b"\x89PNG")
+    pngs = sorted(p.name for p in tmp_path.glob("leiden_qc_violin_*.png"))
+    assert pngs == ["leiden_qc_violin_decontX_contamination_msp_leiden_r1.0.png", "leiden_qc_violin_doublet_score_msp_leiden_r1.0.png"]
+    assert (tmp_path / pngs[0]).read_bytes().startswith(b"\x89PNG")
 
 
 # ---------------------------------------------------------------- removal union
@@ -340,3 +341,50 @@ def test_fractal_marker_selection_filters_orders_and_deduplicates():
 def test_fractal_marker_selection_handles_no_passing_genes():
     de = pd.DataFrame({"group": ["0"], "names": ["X"], "logfoldchanges": [-1.0], "pvals_adj": [0.5]})
     assert _select_fractal_markers(de, ribo=set(), top_n=5) == ([], {}, [])
+
+
+def test_cross_sample_lists_stress_genes_but_marks_no_cluster_stress_and_keeps_the_mito_rule(tmp_path):
+    """#68: stress is relative to cells of the same type, which a comparison across lineages cannot give;
+    write_deg_results(stress=False) keeps the hit genes for reading, the mito rule unchanged."""
+    top = ["FOS", "JUN", "JUNB", "IER2", "DUSP1", "MT-CO1", "MT-ND1", "MT-ND2", "MT-CYB", "A"]
+    frame = lambda group: pd.DataFrame({"group": group, "names": top, "logfoldchanges": 1.0, "pvals_adj": 0.01})
+    sizes = {"small": 20, "core": 100}
+    plan = [{"key": "k", "cats": list(sizes), "valid": list(sizes), "sizes": sizes, "top3": {"small": ["core"], "core": ["small"]}}]
+    results = [("k", "global", None, pd.concat([frame(c) for c in sizes]))] + [("k", "local", c, frame(c)) for c in sizes]
+    out = {"plan": plan, "results": results, "paga": {"k": []}, "skipped": {"k": []}}
+    write_deg_results(out, ["k"], str(tmp_path), stress=False)
+    table = pd.read_csv(tmp_path / "stress_clusters.csv", dtype={"cluster": str}).set_index(["cluster", "view"])
+    assert table["n_hits"].eq(5).all() and not table["stress"].any()
+    assert table.loc[("small", "local"), "mito"] and table.loc["small", "recommend_removal"].all()
+    assert not table.loc["core", "recommend_removal"].any()
+    write_deg_results(out, ["k"], str(tmp_path))  # zoom-in, until #68 moves it: the old rule
+    assert pd.read_csv(tmp_path / "stress_clusters.csv")["stress"].all()
+
+
+def test_a_fragment_is_a_doublet_group_or_has_more_mitochondria_than_its_own_core(tmp_path):
+    """#70: no decontX or dissociation test. Parent 0: core genes 0-4; fragment c0_1 is a doublet group
+    (genes of both cores, all cells above the threshold), c0_2 a distinct type above the threshold with a gene
+    of its own, c0_3 cells as mitochondrial as their core. Parent 1: low-mito core; c1_1 clearly higher."""
+    from msp.integrate.doublets import THRESHOLD_COL
+    rng = np.random.default_rng(3)
+    spec = [("c0_0", 0, 0, 300, range(0, 5), 30.0, 0.1), ("c0_1", 0, 1, 25, range(0, 10), 30.0, 0.9),
+            ("c0_2", 0, 2, 25, [0, 1, 2, 3, 4, 10], 30.0, 0.9), ("c0_3", 0, 3, 25, range(0, 5), 30.0, 0.1),
+            ("c1_0", 1, 0, 300, range(5, 10), 3.0, 0.1), ("c1_1", 1, 1, 25, range(5, 10), 30.0, 0.1)]
+    rows, obs, frags = [], [], []
+    for sub, parent, rank, n, genes, mt, dbl in spec:
+        frags.append({"subcluster": sub, "parent": str(parent), "rank": rank, "n_cells": n})
+        for _ in range(n):
+            x = np.zeros(11)
+            x[list(genes)] = 3
+            rows.append(x)
+            obs.append({"standissect_product": sub, "pct_counts_mt": max(0.0, rng.normal(mt, 1.0)), "doublet_score": dbl})
+    obs = pd.DataFrame(obs, index=[f"c{i}" for i in range(len(obs))])
+    obs[THRESHOLD_COL] = 0.5
+    data = ad.AnnData(sparse.csr_matrix(np.array(rows)), obs=obs)
+    data.layers["counts"] = data.X.copy()
+    df = _minor_sibling_qc(data, SimpleNamespace(fragments=pd.DataFrame(frags)), tmp_path).set_index("subcluster")
+    assert df.loc["c0_1", "doublet_significant"] and df.loc["c0_1", "n_own_genes"] == 0 and df.loc["c0_1", "recommend_removal"]
+    assert not df.loc["c0_2", "doublet_significant"] and df.loc["c0_2", "n_own_genes"] == 1
+    assert not df.loc["c0_3", "mt_significant"], "as mitochondrial as its own core: pooled cores would have flagged it"
+    assert df.loc["c1_1", "mt_significant"] and df.loc["c1_1", "recommend_removal"]
+    assert not {"decontX_significant", "dissociation_significant"} & set(df.columns)

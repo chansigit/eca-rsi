@@ -10,6 +10,11 @@ import importlib
 # public name: (module, attribute)
 _NAMES = {
     "integrate_adata": ("msp.integrate", "integrate_adata"),
+    "DOUBLET_THRESHOLD": ("msp.integrate.doublets", "THRESHOLD_COL"),
+    "contamination_check": ("msp.integrate.doublets", "contamination_check"),
+    "library_threshold": ("msp.integrate.doublets", "library_threshold"),
+    "min_background": ("msp.integrate.doublets", "min_background"),
+    "overcluster": ("msp.integrate.doublets", "overcluster"),
     "load_and_merge": ("msp.integrate", "load_and_merge"),
     "compute_deg_task": ("msp.integrate.deg", "compute_deg_task"),
     "load_deg_input": ("msp.integrate.deg", "load_deg_input"),

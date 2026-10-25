@@ -400,3 +400,17 @@ def test_messy_and_small_clusters_get_the_lower_of_sample_and_own_bound():
     assert messy["cutoff"] >= 400
     assert messy["removed"] == int((counts < messy["cutoff"]).sum()) < int((counts < sample_bound).sum())
     assert int(result.obs["low_quality"][900:].sum()) == messy["removed"], "nothing else removes a monocyte or cDC2"
+
+
+def test_osp_flags_scrublet_doublets_and_keeps_them_for_cross_sample(monkeypatch):
+    """#70: a trusted Scrublet call sets qc_doublet but removes nothing; MSP decides doublets after integration,
+    where the flagged ones mark the cluster the missed ones gather in."""
+    sim = np.r_[np.full(30, 0.9), np.full(70, 0.1)]
+    monkeypatch.setattr("scanpy.pp.scrublet", _fake_scrublet(0.5, sim))
+    monkeypatch.setattr(qc, "MIN_CELLS_FOR_SCRUBLET", 0)
+    data = ad.AnnData(np.ones((5, 3)), obs=pd.DataFrame({"sample": ["A"] * 5}), var=pd.DataFrame(index=["G1", "G2", "G3"]))
+    result, summary = qc_one_sample(data, run_decontx=False, run_dissociation_score=False, make_plots=False,
+                                    hard_min_genes=0, hard_min_counts=0)
+    assert summary["doublets_called"] is True and summary["n_doublet"] == 1
+    assert result.obs["qc_doublet"].sum() == 1 and not result.obs["low_quality"].any()
+    assert set(result.obs["qc_reason"]) == {"pass"}

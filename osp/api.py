@@ -10,6 +10,7 @@ import importlib
 # public name: (module, attribute)
 _NAMES = {
     "run_one_sample_pipeline": ("osp", "run_one_sample_pipeline"),
+    "SCRUBLET_MIN_SIM_ABOVE": ("osp.qc", "SCRUBLET_MIN_SIM_ABOVE"),
     "generate_report": ("osp.report", "generate_report"),
     "write_report_context": ("osp.report", "write_report_context"),
     "ANNOTATION_OPS": ("osp.annotate", "_OPS"),

@@ -1,4 +1,4 @@
-"""Cell-level doublet / ambient-RNA outliers, their per-cluster cutoff
+"""Cell-level doublets and decontX candidates (#70), their per-cluster
 violins, and the union of every removal source proposed before Cluster
 Annotations (the pre-annotation filtering mask and UMAP)."""
 
@@ -24,14 +24,15 @@ CELL_OUTLIER_MAD_K = 3.0
 CELL_OUTLIER_HARD_FLOOR = 0.5
 
 
-def _cell_level_outliers(ad, leiden_keys, resolutions, outdir):
-    """Per-cell doublet/ambient-RNA outlier flagging, at both the r1.0 and
-    r2.0 leiden resolutions. A cell is a metric outlier in a cluster if it
-    clears BOTH gates together: cluster median + 3*MAD, AND an absolute
-    floor of 0.5 (the MAD rule alone is too permissive in near-clean
-    clusters where MAD itself is tiny). recommend_removal is the OR across
-    both metrics and both resolutions — propose-only, this CSV is the only
-    place the flag lives, never written back to ad.obs/h5ad."""
+def _cell_level_outliers(ad, leiden_keys, resolutions, outdir, library_col=None):
+    """Cell-level doublets (#70, msp.integrate.doublets). decontX_contamination is screened per r1.0 and
+    r2.0 cluster with the MAD rule (cluster median + 3*MAD and above the 0.5 floor): a candidate, never a
+    removal by itself here; it feeds the decontX-assisted doublet check, and the contamination check after the
+    type agent. recommend_removal is the union of the three doublet checks (doublets.doublet_checks); none
+    run without a doublet_score and a library threshold (obs[THRESHOLD_COL]). Propose-only: this CSV is the only
+    place the flags live, never written back to ad.obs/h5ad."""
+    from .doublets import doublet_checks
+
     metrics = [m for m in CELL_OUTLIER_METRICS if m in ad.obs]
     if not metrics:
         return None
@@ -44,42 +45,46 @@ def _cell_level_outliers(ad, leiden_keys, resolutions, outdir):
     for m in metrics:
         df[m] = ad.obs[m]
 
-    flag_cols = []
+    decontx_cols = []
     for _r, key in targets:
         df[key] = ad.obs[key].values
-        g = ad.obs.groupby(key, observed=True)
-        for m in metrics:
-            med = g[m].transform("median")
-            mad = g[m].transform(lambda s: (s - s.median()).abs().median())
-            outlier = ad.obs[m] > (med + CELL_OUTLIER_MAD_K * mad)
-            hard = ad.obs[m] > CELL_OUTLIER_HARD_FLOOR
-            col = f"{key}_{m}_outlier"
-            df[col] = (outlier & hard).values
-            flag_cols.append(col)
+        if "decontX_contamination" not in ad.obs:
+            continue
+        g = ad.obs.groupby(key, observed=True)["decontX_contamination"]
+        med = g.transform("median")
+        mad = g.transform(lambda s: (s - s.median()).abs().median())
+        value = ad.obs["decontX_contamination"]
+        col = f"{key}_decontX_contamination_outlier"
+        df[col] = ((value > med + CELL_OUTLIER_MAD_K * mad) & (value > CELL_OUTLIER_HARD_FLOOR)).values
+        decontx_cols.append(col)
+    df["decontX_candidate"] = df[decontx_cols].any(axis=1) if decontx_cols else False
 
-    df["recommend_removal"] = df[flag_cols].any(axis=1)
+    checks = doublet_checks(ad, targets[0][1], df["decontX_candidate"].to_numpy(), library_col)
+    if checks is None:
+        log.info("== doublets: no doublet_score or no library threshold; no doublet check made")
+        df["recommend_removal"] = False
+    else:
+        df = df.join(checks)
+        df["recommend_removal"] = df["doublet"]
+
     df.index.name = "cell"
     df.reset_index().to_csv(os.path.join(outdir, "cell_outliers.csv"), index=False)
 
+    flags = ["decontX_candidate"] + [c for c in ("doublet_cell", "doublet_cluster", "doublet_decontx") if c in df]
     summary_rows = []
     for _r, key in targets:
-        g = df.groupby(key, observed=True)
-        for cl, sub in g:
+        for cl, sub in df.groupby(key, observed=True):
             row = {"key": key, "cluster": cl, "n_cells": len(sub)}
-            for m in metrics:
-                col = f"{key}_{m}_outlier"
-                row[f"n_{m}_outlier"] = int(sub[col].sum())
-                row[f"pct_{m}_outlier"] = round(100 * sub[col].mean(), 2)
+            for col in flags:
+                row[f"n_{col}"] = int(sub[col].sum())
             row["n_recommend_removal"] = int(sub["recommend_removal"].sum())
             row["pct_recommend_removal"] = round(100 * sub["recommend_removal"].mean(), 2)
             summary_rows.append(row)
-    summary_df = pd.DataFrame(summary_rows)
-    summary_df.to_csv(os.path.join(outdir, "cell_outlier_summary.csv"), index=False)
+    pd.DataFrame(summary_rows).to_csv(os.path.join(outdir, "cell_outlier_summary.csv"), index=False)
 
-    n_removal = int(df["recommend_removal"].sum())
     log.info(
-        f"== cell-level outliers: {n_removal}/{len(df)} cells recommend_removal "
-        f"(doublet/ambient, MAD+floor, r1.0 or r2.0)",
+        f"== doublets: {int(df['recommend_removal'].sum())}/{len(df)} cells recommend_removal "
+        f"({', '.join(f'{c} {int(df[c].sum())}' for c in flags)})",
     )
     return df
 
@@ -104,6 +109,8 @@ def _leiden_cluster_qc_violins(ad, leiden_keys, resolutions, figdir):
             cutoff = pd.concat(
                 [med + CELL_OUTLIER_MAD_K * mad, pd.Series(CELL_OUTLIER_HARD_FLOOR, index=med.index)], axis=1
             ).max(axis=1)
+            if m != "decontX_contamination":  # doublets are judged against library thresholds, not this bar (#70)
+                cutoff = cutoff.iloc[:0]
 
             fig, ax = plt.subplots(figsize=(max(6, len(order) * 0.5), 4))
             sns.violinplot(
@@ -112,7 +119,7 @@ def _leiden_cluster_qc_violins(ad, leiden_keys, resolutions, figdir):
             for xi, cl in enumerate(order):
                 if cl in cutoff.index:
                     ax.hlines(cutoff.loc[cl], xi - 0.4, xi + 0.4, colors="#c0392b", linewidth=2, zorder=5)
-            ax.set_title(f"{m} by {key} (red = per-cluster outlier cutoff)")
+            ax.set_title(f"{m} by {key}" + (" (red = per-cluster decontX candidate cutoff)" if len(cutoff) else ""))
             ax.set_xlabel(key)
             ax.tick_params(axis="x", rotation=90)
             fig.tight_layout()

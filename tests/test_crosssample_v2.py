@@ -153,6 +153,9 @@ def test_compute_comparisons_and_sql_handoff(tmp_path):
             'n_genes_by_counts':(counts>0).sum(axis=1).astype(float),'total_counts':counts.sum(axis=1),
             'doublet_score':[.05]*75},index=[name+str(i) for i in range(75)]))
         data.layers['counts'] = counts.copy()
+        # a's Scrublet threshold is trusted (40% of simulated doublets above it), b's is not (#70)
+        sim = np.r_[np.full(40, .8), np.linspace(0, .3, 60)] if name == 'a' else np.linspace(0, .4, 100)
+        data.uns['scrublet'] = {'threshold': .5, 'doublet_scores_sim': sim}
         data.write_h5ad(folder / 'clustered.h5ad')
         pd.DataFrame({'cell_id':data.obs_names,'source_id':[name]*75,'source_cell_id':data.obs_names}).to_csv(folder/'input_cells.csv.gz',index=False)
         save(folder/'annotation_proposal.json',{'qc_actions':[]})
@@ -168,6 +171,9 @@ def test_compute_comparisons_and_sql_handoff(tmp_path):
     computed = tmp_path / 'computed'
     computed.mkdir()
     compute(inspected_ref, inclusion, computed)
+    thresholds = an.read_h5ad(computed / 'integrated.h5ad', backed='r').obs.groupby('sample_id', observed=True)['osp_doublet_threshold'].unique()
+    assert thresholds['a'].tolist() == [.5] and thresholds['b'].tolist() == pytest.approx([np.quantile(np.linspace(0, .4, 100), .75)])
+    assert {'doublet_cell', 'doublet_cluster', 'doublet_decontx'} <= set(pd.read_csv(computed / 'cell_outliers.csv').columns)
     prepared = reference(computed / 'prepared.json')
     bundle = verified(prepared)
     n = len(bundle['tasks'])
@@ -418,3 +424,35 @@ def test_compute_turns_osp_dissociation_stress_drops_into_flags_under_keep(tmp_p
     out.mkdir()
     module.compute(ref, inclusion, out)
     assert [seen['action']['a'+str(i)] for i in range(6)]==(['flag','flag'] if policy=='keep' else ['drop','drop'])+['drop','drop','keep','keep']
+
+
+def test_contamination_runs_after_the_type_agent_on_the_cells_nothing_else_removes(tmp_path):
+    """#70: the type agent's coarse labels name the lineages (T cells are the soup's own lineage and are not
+    tested); candidates already removed, and the cells of a removed type cluster, are neither judged nor
+    background."""
+    import scipy.sparse as sp
+    from ecarsi.stages.crosssample import _contamination
+    rng = np.random.default_rng(0)
+    def cells(n, genes, extra=()):
+        X = np.zeros((n, 30))
+        X[:, list(genes)] = rng.poisson(5, (n, len(genes)))
+        if extra:
+            X[:, list(extra)] += rng.poisson(4, (n, len(extra)))
+        return X
+    X = np.vstack([cells(4000, range(10)), cells(1200, range(10, 20)), cells(5, range(10, 20), range(10)), cells(30, range(20, 30))])
+    r2 = ['t'] * 4000 + ['b'] * 1205 + ['junk'] * 30
+    data = an.AnnData(sp.csr_matrix(X), obs=pd.DataFrame({BASE: r2, 'msp_leiden_r1.0': [c[0] for c in r2]},
+                                                       index=[f'c{i}' for i in range(len(r2))]))
+    data.layers['counts'] = data.X.copy()
+    typed = {'t': {'action': 'keep', 'coarse_label': 'T cell '}, 'b': {'action': 'keep', 'coarse_label': 'B cell'},
+             'junk': {'action': 'remove', 'coarse_label': 'B cell'}}
+    candidates = [f'c{i}' for i in range(5200, 5205)] + ['c0', 'c5210']
+    outliers = pd.DataFrame({'decontX_candidate': True}, index=candidates)
+    removed = data.obs_names.isin(['c5204'])  # a doublet check already removed it
+    table, mask = _contamination(data, typed, outliers, removed, tmp_path)
+    assert set(data.obs_names[mask]) == {'c5200', 'c5201', 'c5202', 'c5203'}
+    assert 'c5204' not in table.index and 'c5210' not in table.index, 'removed cells are not judged'
+    assert table.loc['c0', 'status'] == 'not tested: dominant lineage of the soup' and table.loc['c0', 'lineage'] == 'T cell'
+    assert (tmp_path / 'contamination_check.csv').is_file()
+    none, empty = _contamination(data, typed, pd.DataFrame(), removed, tmp_path)
+    assert none is None and not empty.any()

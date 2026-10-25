@@ -31,7 +31,6 @@ from .deg import (
 from .fragments import (
     BIG_SIBLING_FRAC,
     BIG_SIBLING_N,
-    DOUBLET_MEDIAN_THRESH,
     DROP_PCT_THRESH,
     MIN_N_FOR_TEST,
     MT_MEDIAN_THRESH,
@@ -59,7 +58,6 @@ __all__ = [
     "CELL_OUTLIER_HARD_FLOOR",
     "CELL_OUTLIER_MAD_K",
     "CELL_OUTLIER_METRICS",
-    "DOUBLET_MEDIAN_THRESH",
     "DROP_PCT_THRESH",
     "MIN_DE_GROUP_SIZE",
     "MIN_N_FOR_TEST",

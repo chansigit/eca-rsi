@@ -249,7 +249,7 @@ def _section_qc(outdir, qc_summary, qc_stats):
         return ""
     parts = [
         '<h2 id="qc">QC summary</h2>',
-        '<p class="hint">Per-cell filtering: hard thresholds + MAD outliers + doublet detection. See "Ambient Contamination" below for DecontX, which is monitored separately.</p>',
+        '<p class="hint">Per-cell filtering: hard thresholds, per-cluster lower bounds and the mitochondrial rule. Scrublet doublets are flagged, not removed: cross-sample decides them. See "Ambient Contamination" below for DecontX, which is monitored separately.</p>',
         _kv_table(qc_summary, table_id="qc-summary"),
     ]
 

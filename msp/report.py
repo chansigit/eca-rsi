@@ -345,12 +345,12 @@ def _section_minor_sibling(outdir: str) -> str:
         '"big" ones, is checked against two kinds of criteria — hitting ANY ONE marks the '
         "whole fragment recommend_removal (dark red bold below; a candidate for msp.inspect "
         "to verify, not an automatic removal). (1) upstream: &gt;50% of the sibling's cells "
-        'already carry _qc_action="drop" from the per-sample annotation. (2) stats '
-        "(only run when the sibling has &ge;5 cells): one-sided Mann-Whitney U, sibling vs. "
-        "the pooled parent-core cells, p&lt;0.05, no multiple-testing correction, on "
-        "decontX_contamination / dissociation_score / doublet_score / pct_counts_mt — the "
-        "latter two also require the sibling's own median above an absolute floor (0.2 and "
-        "20% respectively). Siblings holding ≥25% of their own parent core's cell count, or "
+        'already carry _qc_action="drop" from the per-sample annotation. (2) doublet: '
+        "&ge;20 cells, at least half above their library's Scrublet threshold, and no gene of "
+        "their own against the other fragments. (3) mitochondrial (&ge;5 cells): one-sided "
+        "Mann-Whitney U against the sibling's own parent core, p&lt;0.05 and AUC &ge;0.7, median "
+        "pct_counts_mt above 20%. No decontX or dissociation test (#70). "
+        "Siblings holding ≥25% of their own parent core's cell count, or "
         '≥800 cells outright, are skipped as "big", not minor. '
         f"{n_removal}/{len(rows)} siblings recommend_removal, {n_tested} stats-tested.</p>"
     )
@@ -397,14 +397,13 @@ def _section_leiden_qc(outdir: str, leiden_violin_figs: list[str]) -> str:
 
     parts = [
         '<p class="hint">Same cells as Per-cluster QC above, aggregated by the primary '
-        "leiden clustering instead of standissect fragments. Includes the cell-level "
-        "doublet/ambient-RNA outlier test: a cell is an outlier for a metric "
-        "(doublet_score or decontX_contamination) only if it clears BOTH gates together — "
-        "cluster median + 3×MAD, AND an absolute floor of 0.5 (the MAD rule alone is too "
-        "permissive in near-clean clusters where MAD itself is tiny); recommend_removal is "
-        "the OR across both metrics. Red bar on each violin = that cluster's cutoff "
-        "(max of median+3×MAD and the floor); propose-only, see cell_outliers.csv for the "
-        "full per-cell table.</p>"
+        "leiden clustering instead of standissect fragments. Includes the cell-level doublet "
+        "checks (#70): doublet_score above the library's Scrublet threshold with raised RNA; "
+        "an over-clustering cluster half above the threshold with no gene of its own; and a "
+        "decontX candidate (cluster median + 3×MAD and above 0.5, the red bar on the decontX "
+        "violins) with a high doublet_score for its cluster and raised RNA. recommend_removal "
+        "is the OR of the three; decontX candidates alone are judged for contamination after "
+        "the type agent. See cell_outliers.csv for the full per-cell table.</p>"
     ]
     tabs = []
     for p in qc_paths:
@@ -417,7 +416,7 @@ def _section_leiden_qc(outdir: str, leiden_violin_figs: list[str]) -> str:
             body = "".join(
                 "<tr>" + "".join(f"<td>{html.escape(r.get(c, ''))}</td>" for c in head_cols) + "</tr>" for r in krows
             )
-            tab_parts += ["<h4>Cell-level doublet / ambient-RNA outliers</h4>", f"<table><tr>{head}</tr>{body}</table>"]
+            tab_parts += ["<h4>Cell-level doublets and decontX candidates</h4>", f"<table><tr>{head}</tr>{body}</table>"]
         key_figs = [fp for fp in leiden_violin_figs if os.path.basename(fp).endswith(f"_{key}.png")]
         if key_figs:
             tab_parts += ["<h4>Per-cluster cutoff violins</h4>", _grid(key_figs)]
@@ -547,7 +546,7 @@ def _section_deg(outdir: str, top_n: int = 10, preannotation_figs: list[str] | N
             '<p class="hint">Every cell proposed for removal before Cluster Annotations '
             "runs — the union of three sources: whole standissect fragments flagged by "
             "StanDissect Minor sibling fractals QC, individual cells flagged by the "
-            "cell-level doublet / ambient-RNA outlier test above, and cells osp itself "
+            "cell-level doublet checks above, and cells osp itself "
             'already proposed dropping per-sample (_qc_action=="drop", inherited from '
             "persample annotation — their cross-sample clustering here is evidence to "
             "weigh, not evidence to discard). Red = recommend_removal, grey = kept. "
@@ -564,7 +563,8 @@ def _section_deg(outdir: str, top_n: int = 10, preannotation_figs: list[str] | N
         "are transcriptionally close and get washed out by the global one-vs-rest. A (key, "
         'cluster) is marked <b style="color:#c0392b">[recommend_removal]</b> when EITHER its '
         "global or local view has more than 3 of its displayed top genes in the conservative "
-        "dissociation-stress panel (heat-shock and immediate-early genes; decision 0020) or, for a small "
+        "dissociation-stress panel (heat-shock and immediate-early genes; decision 0020; not at "
+        "cross-sample, where stress is not judged, #68) or, for a small "
         "cluster against its local siblings, mitochondrially encoded — the verdict is merged, so both the global and local rows for that cluster show "
         "it even if only one of the two actually crossed the threshold. Flagged only, nothing is "
         "removed from the data (see stress_clusters.csv for per-view hit genes).</p>"

@@ -137,7 +137,7 @@ def apply_decisions(obs, types, quality, own_labels, other_labels, lineage, pre_
 
 
 def compute_lineage(sub, name, labels, markers, outdir, *, batch_col, species,
-                    n_top_genes=3000, n_pcs=50, n_neighbors=15):
+                    n_top_genes=3000, n_pcs=50, n_neighbors=15, library_col=None):
     """One numerical unit up through UMAP/QC; persist the independent DEG plan."""
     from msp.api import integrate_adata
     from .foreign import score_foreign
@@ -150,7 +150,7 @@ def compute_lineage(sub, name, labels, markers, outdir, *, batch_col, species,
     expected = sub.obs_names.copy()
     integrate_adata(sub, batch_col, str(outdir), species=species, resolutions=(1., 2.),
         n_top_genes=n_top_genes, n_pcs=n_pcs, n_neighbors=n_neighbors,
-        meta_extra={'zmip_lineage': name, 'zmip_coarse_labels': list(labels)}, defer_deg=True)
+        meta_extra={'zmip_lineage': name, 'zmip_coarse_labels': list(labels)}, defer_deg=True, library_col=library_col)
     if not sub.obs_names.equals(expected):
         raise ValueError('Integration changed lineage membership without an exclusion ledger')
     columns = score_foreign(sub, markers, name, (TYPE_KEY, QUALITY_KEY), str(outdir), str(Path(outdir)/'figures'))

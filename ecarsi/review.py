@@ -62,9 +62,10 @@ KINDS: list[tuple[str, str, str]] = [
      "Irreversible. Each row is a cluster an agent deleted with medium/low confidence, or a lineage whose "
      "zoom-in removal exceeded the soft budget after a forced second look."),
     ("fragment_removed", "Cells removed by fragment QC",
-     "Small standissect fragments msp removed without an agent decision: one of four one-sided tests against their "
-     "parent cores (decontX, dissociation, doublet, mitochondrial) at p < 0.05 with AUC >= 0.7, or more than half "
-     "their cells dropped upstream. One line per round, stage and tests that hit (#27)."),
+     "Small standissect fragments msp removed without an agent decision: a doublet group (20 or more cells, half or "
+     "more above their library's Scrublet threshold, no gene of their own), a higher mitochondrial fraction than "
+     "their own parent core (p < 0.05, AUC >= 0.7), or more than half their cells dropped upstream (#70). One line "
+     "per round, stage and tests that hit (#27)."),
     ("stress_retained", "Stress, dissociation or dying cells kept",
      "An agent asked to remove them as stress, dissociation or dying; they stay, labelled in final.h5ad obs "
      "retained_state, because a removal of at least 10 cells lacked the evidence the code checks or the dataset's "
