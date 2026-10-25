@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.14 — 2026-10-25
+
+- **start-dataset accepts a spec with `organize.sample_map`.** `ecarsi.policies` imports pandas only where it reads
+  cells: start-dataset runs in the control image, which has none, and the first such spec (tabula-sapiens-clean
+  Lung) failed on the import. A test checks the map in a subprocess without pandas.
+
 ## 0.4.13 — 2026-10-24
 
 - **Doublets from Scrublet, contamination from decontX, no stress at cross-sample** (decision 0023; #70, first part of
