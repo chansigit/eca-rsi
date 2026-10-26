@@ -25,8 +25,10 @@ def prepare(input_root: Path, destination: Path):
     if not accepted:
         raise ValueError("no accepted ECA-PP source in the input")
     profiles = [profile_unit(record) for record in accepted]
+    from .organize_execute import shared_experiments
     prepared = {"schema_version": 1, "input_root": str(input_root), "records": records,
-                "profiles": profiles, "source_identity": digest(records)}
+                "profiles": profiles, "source_identity": digest(records),
+                "shared_experiments": shared_experiments(accepted, profiles) if len(accepted) > 1 else {}}
     save(destination, prepared)
     return prepared
 
@@ -76,7 +78,7 @@ def plan_tool(name, prepared_path, arguments_path, destination):
     """Metadata reads and scientific plan validation run only inside a Pool grant."""
     from .upstream import inspect_unit, normalize
     from ..plan import PLAN_SCHEMA, _validate, validate_sample_mapping
-    from .organize_execute import _conservation_audit, _experiment_audit, effective_mapping
+    from .organize_execute import _conservation_audit, _experiment_audit, effective_mapping, merge_problems
     from jsonschema import validate, ValidationError
     prepared, arguments = read(prepared_path), read(arguments_path)
     current = [inspect_unit(record) for record in prepared["records"]]
@@ -92,6 +94,8 @@ def plan_tool(name, prepared_path, arguments_path, destination):
                 result = {k: profile[k] for k in ("name", "species", "n_obs", "n_vars", "obs_columns")}
                 if profile.get("eca_pp_decision"):
                     result["eca_pp_decision"] = {k: v for k, v in profile["eca_pp_decision"].items() if k != "ladder"}
+                if prepared.get("shared_experiments"):  # one experiment split across sources: propose merges (#72)
+                    result["shared_experiments"] = prepared["shared_experiments"]
             else:
                 if column not in profile["obs_columns"]:  # name the real columns: a guess is never the way on
                     raise ValueError(f"{column!r} is not an obs column of {profile['name']}. Its obs columns are "
@@ -112,6 +116,9 @@ def plan_tool(name, prepared_path, arguments_path, destination):
             units = {r["name"]: r for r in current}
             conservation = _conservation_audit(units, plan)
             mapping = effective_mapping(plan, prepared["profiles"], stop=False)
+            problems = merge_problems(plan, units, mapping)
+            if problems:
+                raise ValueError("; ".join(problems))
             experiments = _experiment_audit(units, {**plan, "sample_mapping": mapping})
             result = {"accepted": True, "response": {"plan": plan},
                       "source_identity": prepared["source_identity"],

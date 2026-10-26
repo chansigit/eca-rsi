@@ -334,3 +334,55 @@ def test_organize_prepare_reads_counts_in_chunks_without_eager_layers(tmp_path, 
         handle["layers/counts/data"][-1] = float("nan")
     with pytest.raises(ValueError, match="non-finite"):
         prepare(tmp_path / "inputs", tmp_path / "bad.json")
+
+
+def split_library_inputs(root, shared_ids=False):
+    """Two files A and B holding the same two libraries L1, L2 split by cell type (obs 'library')."""
+    for name in ("A", "B"):
+        step = source(root, name)
+        a = ad.read_h5ad(step / "standardized.h5ad")
+        a.obs_names = [f"{'a' if shared_ids else name.lower()}{i}" for i in range(a.n_obs)]
+        a.obs["library"] = ["L1"] * 3 + ["L2"] * 3
+        a.write_h5ad(step / "standardized.h5ad")
+
+
+def test_organize_merges_a_library_split_into_files_by_cell_type(tmp_path):
+    """#72: prepare lists the column the files share, the plan's merges pool each library across the files, and
+    per-sample QC gets one experiment per library (05_Fuetal ran 34 slices of 12 libraries)."""
+    from ecarsi.stages.organize import prepare
+    from ecarsi.stages.organize_execute import execute_plan, merge_problems
+    root, out = tmp_path / "in", tmp_path / "out"
+    split_library_inputs(root)
+    prepared = prepare(root, tmp_path / "prepared.json")
+    assert prepared["shared_experiments"]["library"] == {"L1": {"A": "L1", "B": "L1"}, "L2": {"A": "L2", "B": "L2"}}
+    decision = {"sample_column": "library", "rationale": "the library of each cell"}
+    plan = {"analysis_units": [{"name": "test-unit", "members": [{"source": s, "obs_filter": None} for s in "AB"],
+                                "rationale": "one tissue split by cell type", "batch_key_hint": None}], "notes": "",
+            "sample_mapping": {s: decision for s in "AB"},
+            "merges": [{"sample_id": f"lib-{v}", "evidence": "the same library in both cell-type files",
+                        "members": [{"source": s, "value": v} for s in "AB"]} for v in ("L1", "L2")]}
+    units = {r["name"]: r for r in prepared["records"]}
+    mapping = {s: {**decision, "source": "agent"} for s in "AB"}
+    assert merge_problems(plan, units, mapping) == []
+    wrong = {**plan, "merges": [{"sample_id": "x", "evidence": "e", "members": [{"source": "A", "value": "L3"}, {"source": "B", "value": "L1"}]}]}
+    assert "no experiment 'L3'" in merge_problems(wrong, units, mapping)[0]
+    accepted = [r for r in prepared["records"] if r["state"] == "accepted"]
+    execute_plan(accepted, prepared["profiles"], plan, out, records=prepared["records"],
+                 input_identity=prepared["source_identity"], adapter_identity="test")
+    table = pd.read_csv(L.unit_dir(out, "test-unit") / L.INPUT / L.SAMPLE_MAPPING, index_col=0)
+    assert table[SAMPLE_KEY].value_counts().to_dict() == {"lib-L1": 6, "lib-L2": 6}
+
+
+def test_files_sharing_cell_ids_are_not_offered_or_merged(tmp_path):
+    """#72: two files with the same cell IDs are two libraries (or one file twice), never one library split."""
+    from ecarsi.stages.organize import prepare
+    from ecarsi.stages.organize_execute import merge_problems
+    root = tmp_path / "in"
+    split_library_inputs(root, shared_ids=True)
+    prepared = prepare(root, tmp_path / "prepared.json")
+    assert prepared["shared_experiments"] == {}
+    plan = {"analysis_units": [{"name": "u", "members": [{"source": s, "obs_filter": None} for s in "AB"]}],
+            "merges": [{"sample_id": "lib-L1", "evidence": "e", "members": [{"source": s, "value": "L1"} for s in "AB"]}]}
+    mapping = {s: {"sample_column": "library"} for s in "AB"}
+    problems = merge_problems(plan, {r["name"]: r for r in prepared["records"]}, mapping)
+    assert problems and "share cell IDs" in problems[0]

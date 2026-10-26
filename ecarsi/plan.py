@@ -55,6 +55,26 @@ PLAN_SCHEMA = {
         },
         "notes": {"type": "string"},
         "sample_mapping": {"type": "object"},
+        "merges": {  # one experiment split across sources, e.g. a library split by cell type into files (#72)
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "sample_id": {"type": "string"},
+                    "evidence": {"type": "string"},
+                    "members": {
+                        "type": "array",
+                        "minItems": 2,
+                        "items": {
+                            "type": "object",
+                            "properties": {"source": {"type": "string"}, "value": {"type": "string"}},
+                            "required": ["source", "value"],
+                        },
+                    },
+                },
+                "required": ["sample_id", "evidence", "members"],
+            },
+        },
     },
     "required": ["analysis_units", "notes"],
 }

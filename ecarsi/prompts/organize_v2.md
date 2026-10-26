@@ -10,6 +10,19 @@ Leave such sources out of `sample_mapping` (anything you write for them is not
 used), but keep every one of their experiments in a single analysis unit. Decide
 only the sources without `eca_pp_decision`, as follows.
 
+One experiment can also be split across sources: authors often split each library by
+cell type into separate files (chondrocytes in one, immune cells in another, the same
+libraries in each). A source profile's `shared_experiments` lists the obs columns whose
+values recur across sources with no cell ID shared between them, as
+`{column: {value: {source: that source's experiment}}}`. When such a column names the
+libraries or samples, return `merges`: one entry per experiment,
+`{"sample_id": a short name, "evidence": what shows it is one library, "members":
+[{"source": ..., "value": that source's experiment}]}`, with its sources in one analysis
+unit. Each source keeps its experiment column (ECA-PP's or yours); a merge only pools
+the pieces, so per-sample QC, Scrublet and decontX see the whole library. Do not merge
+two libraries of one donor. The host rejects a merge whose members share cell IDs or
+name a value that is not an experiment of their source.
+
 Choose a metadata column that identifies the original complete experimental
 sample or library for that source. A shared donor alone does not make multiple
 libraries or sample IDs one QC unit. The value must be an existing obs

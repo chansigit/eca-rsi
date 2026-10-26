@@ -153,6 +153,116 @@ def unit_batch_key(sources: list[str], mapping: dict, explicit: dict):
     return decision["batch"] or False
 
 
+def experiment_values(record: dict, decision: dict, obs=None):
+    """A source's experiment per cell under its decision: the sample column's values (ECA-PP's derived
+    column read from its evidence), "all" for a confirmed single experiment; None when cell IDs name them."""
+    import pandas as pd
+    from .h5ad import read_obs
+    from .upstream import load_evidence, normalize
+
+    if decision.get("derive_from_cell_id") is not None:
+        return None
+    obs = read_obs(record["h5ad"]) if obs is None else obs
+    col = decision.get("sample_column")
+    if col is None:
+        return pd.Series("all", index=obs.index)
+    values = load_evidence(record, obs)[1][col] if col.startswith("eca_pp_") else obs[col]
+    values = normalize(values)
+    if decision.get("missing_as") is not None:
+        values = values.fillna(decision["missing_as"])
+    return values.astype("string")
+
+
+SHARED_MAX_VALUES = 500  # a shared column with more values names cells or wells, not experiments
+
+
+def shared_experiments(records: list[dict], profiles: list[dict]) -> dict:
+    """#72: obs columns naming the same experiments in several sources, as when a library is split by cell
+    type into several files. For each column present in two or more sources, with values recurring across them
+    and no cell ID shared between those sources: {column: {value: {source: experiment}}}, the experiment being
+    that source's ECA-PP experiment holding exactly the value's cells (a source without one gets the value). A
+    column where some value does not line up with one experiment is left out. The planning agent reads this
+    to propose merges; the host checks every merge again."""
+    from .h5ad import read_obs
+    from .upstream import normalize
+
+    decisions = {p["name"]: p.get("eca_pp_decision") or {} for p in profiles}
+    obs, experiments = {}, {}
+    for record in records:
+        o = read_obs(record["h5ad"])
+        obs[record["name"]] = o
+        d = decisions.get(record["name"], {})
+        experiments[record["name"]] = experiment_values(record, d, o) if d.get("sample_column") else None
+    shared = {}
+    for column in sorted({c for o in obs.values() for c in o.columns}):
+        sources = [n for n, o in obs.items() if column in o.columns]
+        if len(sources) < 2:
+            continue
+        values = {n: normalize(obs[n][column]).astype("string") for n in sources}
+        if any(v.nunique() > SHARED_MAX_VALUES or v.nunique() == len(v) for v in values.values()):
+            continue
+        ids = [set(obs[n].index.astype(str)) for n in sources]
+        if any(ids[i] & ids[j] for i in range(len(ids)) for j in range(i + 1, len(ids))):
+            continue
+        common = {v for n in sources for v in values[n].dropna().unique()
+                  if sum(v in set(values[m].dropna()) for m in sources) >= 2}
+        if not common:
+            continue
+        table, ok = {}, True
+        for n in sources:
+            exp = experiments[n]
+            for value in common & set(values[n].dropna()):
+                if exp is None:
+                    table.setdefault(value, {})[n] = value
+                    continue
+                inside = set(exp[values[n].eq(value).fillna(False)].dropna())
+                if len(inside) != 1 or set(values[n][exp.eq(next(iter(inside))).fillna(False)].dropna()) != {value}:
+                    ok = False
+                    break
+                table.setdefault(value, {})[n] = next(iter(inside))
+            if not ok:
+                break
+        if ok:
+            shared[column] = {v: table[v] for v in sorted(table) if len(table[v]) >= 2}
+    return shared
+
+
+def merge_problems(plan: dict, units_by_name: dict, mapping: dict) -> list[str]:
+    """Why the host refuses the plan's cross-source merges (#72): each pools experiments of two or more
+    sources of one analysis unit, names each member by its source's experiment value, uses a member once, and
+    its members share no cell ID (one library split into files, not two libraries)."""
+    unit_of = {m["source"]: au["name"] for au in plan["analysis_units"] for m in au["members"]}
+    values, problems, used = {}, [], set()
+    for merge in plan.get("merges", []):
+        sid, members = merge["sample_id"], [(m["source"], str(m["value"])) for m in merge["members"]]
+        if not str(merge.get("evidence", "")).strip():
+            problems.append(f"merge {sid}: evidence required")
+        if len({s for s, _ in members}) != len(members):
+            problems.append(f"merge {sid}: one member per source")
+            continue
+        if len({unit_of.get(s) for s, _ in members}) != 1 or None in {unit_of.get(s) for s, _ in members}:
+            problems.append(f"merge {sid}: its sources must be members of one analysis unit")
+            continue
+        cells = []
+        for source, value in members:
+            if source not in values:
+                values[source] = experiment_values(units_by_name[source], mapping[source])
+            v = values[source]
+            if (source, value) in used:
+                problems.append(f"merge {sid}: {source}/{value} is already in another merge")
+            used.add((source, value))
+            if v is None:
+                problems.append(f"merge {sid}: {source} names its experiments by cell ID; merge it in the sample map")
+            elif not v.eq(value).any():
+                problems.append(f"merge {sid}: {source} has no experiment {value!r} (its experiments: "
+                                f"{sorted(v.dropna().unique())[:20]})")
+            else:
+                cells.append(set(v.index[v.eq(value).fillna(False)].astype(str)))
+        if any(cells[i] & cells[j] for i in range(len(cells)) for j in range(i + 1, len(cells))):
+            problems.append(f"merge {sid}: its members share cell IDs, so they are not one experiment split into files")
+    return problems
+
+
 def _experiment_audit(units_by_name: dict, plan: dict) -> dict:
     """Before writing, prove each source experiment lands in one analysis unit."""
     from .h5ad import read_obs
@@ -325,7 +435,7 @@ def execute_plan(units: list[dict], profiles: list[dict], plan: dict, out_root: 
             from ..sample_mapping import build_mapping, mapping_identity, normalize, SAMPLE_KEY
             explicit = sample_map or {}
             mapping_spec = {"sources": {src: effective["sample_mapping"][src] for src in src_totals}}
-            merges = [m for m in explicit.get("merges", [])
+            merges = [m for m in (explicit if "merges" in explicit else plan).get("merges", [])
                       if {member.get("source") for member in m.get("members", [])} & set(src_totals)]
             if merges:
                 mapping_spec["merges"] = merges
