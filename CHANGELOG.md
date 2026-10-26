@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.17 — 2026-10-25
+
+- **Zoom-in removes stress by its own rule; the agent may only keep** (#68 part 2, decision 0024). Every zoomed
+  lineage is over-clustered to a median of about 200 cells; a candidate has 6 or more stress-panel genes at
+  logFC >= 1.5 against the rest of the lineage, and its cells above the 95th percentile of the other cells' panel
+  score are stress cells (`zmip/stress.py`; `stress_cells.csv`, `stress_by_cluster.csv`). The host removes them at
+  apply (code `stress`) unless the agent keeps their 2.0 cluster with `keep_stress` and evidence; those stay
+  labelled and needs_review shows the evidence. An agent's own stress or dissociation removal of 10 or more cells
+  stays, labelled; the dying rule is unchanged. Replayed on finished lineages: PBMC68k T/NK loses 0.1 %, 05_Fuetal's
+  activated macrophages stay (88 cells go instead of 656), the heat-shock-led stress of its fibrochondrocytes and
+  mural cells and of Lung's myeloid and endothelial cells goes.
+
 ## 0.4.16 — 2026-10-25
 
 - **A whole-cluster quality drop needs the type phase to agree** (#71). Cross-sample inspect's drop of a cluster the
