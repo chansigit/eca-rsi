@@ -70,6 +70,7 @@ SCIENCE_ONLY = [
     "zmip/test_regressions.py",
     "zmip/test_resume_and_runtime.py",
     "zmip/test_scheduled.py",
+    "zmip/test_stress.py",
 ]
 if os.environ.get("ECA_TESTS") == "control":
     collect_ignore = SCIENCE_ONLY

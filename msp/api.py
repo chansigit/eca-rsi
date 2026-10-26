@@ -15,6 +15,7 @@ _NAMES = {
     "library_threshold": ("msp.integrate.doublets", "library_threshold"),
     "min_background": ("msp.integrate.doublets", "min_background"),
     "overcluster": ("msp.integrate.doublets", "overcluster"),
+    "is_stress": ("genesets", "is_stress"),  # the stress panel zoom-in tests a lineage on (#68)
     "load_and_merge": ("msp.integrate", "load_and_merge"),
     "compute_deg_task": ("msp.integrate.deg", "compute_deg_task"),
     "load_deg_input": ("msp.integrate.deg", "load_deg_input"),

@@ -136,6 +136,30 @@ def apply_decisions(obs, types, quality, own_labels, other_labels, lineage, pre_
     return out, rm, ra, decisions
 
 
+def write_stress(sub, outdir):
+    """The lineage's stress cells (#68) beside its evidence: stress_cells.csv per cell, stress_overclusters.csv per
+    over-cluster, stress_by_cluster.csv per 2.0 cluster (what the agent sees). Cells a numerical check already
+    removes are not tested."""
+    from msp.api import load_removal_mask
+    from .stress import stress_cells
+
+    cells, clusters = stress_cells(sub, ~load_removal_mask(str(outdir), sub))
+    cells.assign(stress_threshold=cells.attrs.get('threshold', np.nan)).rename_axis('cell').to_csv(Path(outdir)/'stress_cells.csv')
+    clusters.to_csv(Path(outdir)/'stress_overclusters.csv', index=False)
+    q = sub.obs[QUALITY_KEY].astype(str)
+    hit = cells.index[cells.stress.astype(bool)]
+    genes = clusters.set_index('overcluster').panel_genes.to_dict()
+    rows = []
+    for c, ids in q.groupby(q, observed=True).groups.items():
+        mine = cells.loc[cells.index.intersection(ids)]
+        own = mine[mine.stress.astype(bool)]
+        rows.append({'cluster': c, 'n_cells': len(ids), 'n_stress': len(own),
+                     'stress_overclusters': '|'.join(sorted(own.stress_overcluster.astype(str).unique())),
+                     'panel_genes': ' ; '.join(genes[o] for o in sorted(own.stress_overcluster.astype(str).unique()) if genes.get(o))})
+    pd.DataFrame(rows).sort_values('n_stress', ascending=False).to_csv(Path(outdir)/'stress_by_cluster.csv', index=False)
+    return len(hit)
+
+
 def compute_lineage(sub, name, labels, markers, outdir, *, batch_col, species,
                     n_top_genes=3000, n_pcs=50, n_neighbors=15, library_col=None):
     """One numerical unit up through UMAP/QC; persist the independent DEG plan."""
@@ -154,6 +178,7 @@ def compute_lineage(sub, name, labels, markers, outdir, *, batch_col, species,
     if not sub.obs_names.equals(expected):
         raise ValueError('Integration changed lineage membership without an exclusion ledger')
     columns = score_foreign(sub, markers, name, (TYPE_KEY, QUALITY_KEY), str(outdir), str(Path(outdir)/'figures'))
+    write_stress(sub, outdir)
     partitions(sub.obs).to_csv(Path(outdir)/'type_quality_intersections.csv')
     sub.obs[[TYPE_KEY, QUALITY_KEY]].rename_axis('cell').to_csv(Path(outdir)/'cell_partitions.csv.gz')
     sub.write_h5ad(Path(outdir)/'integrated.h5ad')

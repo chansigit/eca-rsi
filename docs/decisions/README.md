@@ -29,3 +29,4 @@ decision that is replaced keeps its page and says so at the top.
 | [0021](0021-hard-case-freezing.md) | Hard agent steps are frozen before their evidence is pruned |
 | [0022](0022-versions-per-child-workflow-and-brakes.md) | A running dataset moves to the current version at every child workflow; four brakes |
 | [0023](0023-doublets-contamination-and-stress-where-they-can-be-judged.md) | Doublets from Scrublet, contamination from decontX, stress within a lineage |
+| [0024](0024-zoom-in-stress-rule.md) | Zoom-in removes stress by its own rule; the agent may only keep |

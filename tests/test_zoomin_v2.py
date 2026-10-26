@@ -214,3 +214,55 @@ def test_an_unsupported_stress_removal_stays_labelled_through_merge(tmp_path, mo
     states=kept.obs['retained_state'].astype(str)
     assert set(states[states.ne('')].index)==set(retained.cell)
     kept.file.close()
+
+
+def test_the_host_removes_the_rules_stress_cells_unless_the_agent_keeps_them(tmp_path, monkeypatch):
+    """#68 (owner's option B): the zoom-in stress rule picks the cells; they go at apply with code stress, unless
+    the agent keeps their 2.0 cluster with keep_stress and evidence, and then they stay labelled. keep_stress on
+    a cluster without stress cells is refused. The fixture has no panel genes, so the rule is stubbed."""
+    import zmip.stress
+    from zmip.scheduled import QUALITY_KEY
+
+    picked = {}
+
+    def rule(ad, eligible=None):
+        q = ad.obs[QUALITY_KEY].astype(str)
+        target = q.value_counts().index[0]
+        hit = q.eq(target).to_numpy()
+        cells = pd.DataFrame({'stress_overcluster': '0', 'stress_score': np.where(hit, 2.0, 0.1), 'stress_candidate': hit, 'stress': hit},
+                             index=ad.obs_names)
+        cells.attrs.update(threshold=1.0, resolution=1.0)
+        clusters = pd.DataFrame([dict(overcluster='0', n_cells=int(hit.sum()), n_panel_genes=4, panel_genes='FOS:2.00|JUN:2.00|EGR1:2.00|IER2:2.00',
+                                      candidate=True, n_stress=int(hit.sum()))])
+        picked.update(cluster=target, cells=set(ad.obs_names[hit]))
+        return cells, clusters
+
+    monkeypatch.setattr(zmip.stress, 'stress_cells', rule)
+    built = lineage(tmp_path)
+    folder, evidence, types, quality = built['folder'], built['evidence'], built['types'], built['quality']
+    other = next(g['cluster_id'] for g in quality['clusters'] if g['cluster_id'] != picked['cluster'])
+
+    def submit(name, proposal):
+        state = immutable(tmp_path / f'{name}-state.json', dict(evidence=evidence, kind='lineage', types=types, types_complete=True,
+                          quality=None, read=['figures/test.png'], lookups=[{'key': QUALITY_KEY}], qc=True))
+        args = tmp_path / f'{name}-args.json'
+        save(args, {'proposal_json': json.dumps(proposal)})
+        out = folder(name)
+        tool('submit_quality', state['path'], str(args), out)
+        return json.loads((out / 'result.json').read_text())
+
+    def apply(name, accepted):
+        decision = immutable(tmp_path / f'{name}-decision.json', dict(accepted=True, evidence=evidence, types=types, quality=accepted))
+        out = folder(name + '-apply')
+        apply_lineage(evidence, decision, out)
+        return pd.read_csv(out / 'annotation_removed.csv'), pd.read_csv(out / 'annotation_retained.csv', dtype=str)
+
+    refused = submit('refused', {**quality, 'keep_stress': [{'cluster_id': other, 'evidence': 'activated cells'}]})
+    assert refused.get('is_error') and 'has no stress cells' in json.dumps(refused)
+
+    removed, retained = apply('rule', verified(submit('rule', quality)['state'])['quality'])
+    assert set(removed.cell) == picked['cells'] and removed.reasons.str.contains('"code": "stress"').all() and retained.empty
+
+    keep = {**quality, 'keep_stress': [{'cluster_id': picked['cluster'], 'evidence': 'FOS/JUN are this subtype\'s own activation program'}]}
+    removed, retained = apply('kept', verified(submit('kept', keep)['state'])['quality'])
+    assert removed.empty and set(retained.cell) == picked['cells'] and set(retained.state) == {'stress'}

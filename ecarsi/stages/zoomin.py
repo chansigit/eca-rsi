@@ -156,6 +156,74 @@ def lineage_policy(bundle):
     return stress_policy(verified(bundle['planning'])['spec'])
 
 
+STRESS_RULE = ('zoom-in removes stress by its own rule (#68, stress_cells.csv): the stress cells of the 2.0 clusters '
+               'not kept with keep_stress go; an agent removal for stress or dissociation does not')
+
+
+def stress_table(bundle):
+    """stress_by_cluster.csv of the lineage, {2.0 cluster: row}; None for evidence from before #68."""
+    import pandas as pd
+
+    if 'stress_by_cluster.csv' not in bundle['files']:
+        return None
+    table = pd.read_csv(artifact(bundle, 'stress_by_cluster.csv'), dtype={'cluster': str}, keep_default_na=False)
+    return {str(r['cluster']): r for r in table.to_dict('records')}
+
+
+def stress_reasons(bundle, data, keep=()):
+    """The host's stress removals of a lineage (#68): {cell: [reason]} for the stress cells of stress_cells.csv,
+    and {cell: 'stress'} for the ones that stay instead, labelled: all of them under the stress policy keep, and
+    those of the 2.0 clusters the agent kept with keep_stress. Evidence from before #68 has neither."""
+    import pandas as pd
+    from zmip.api import QUALITY_KEY
+
+    if 'stress_cells.csv' not in bundle['files']:
+        return {}, {}
+    table = pd.read_csv(artifact(bundle, 'stress_cells.csv'), dtype={'cell': str, 'stress_overcluster': str},
+                        keep_default_na=False).set_index('cell')
+    hit = table[table.stress.astype(str).str.lower().eq('true')]
+    q = data.obs[QUALITY_KEY].astype(str)
+    kept = {str(e['cluster_id']) for e in keep}
+    policy = lineage_policy(bundle)
+    removed, retained = {}, {}
+    for cell, row in hit.iterrows():
+        if policy == 'keep' or q.get(cell) in kept:
+            retained[cell] = 'stress'
+        else:
+            removed[cell] = [dict(code='stress', detail=dict(overcluster=row['stress_overcluster'], score=round(float(row['stress_score']), 4),
+                             threshold=round(float(row['stress_threshold']), 4)), evidence=bundle['files']['stress_cells.csv'])]
+    return removed, retained
+
+
+def keep_stress_problems(keep, bundle):
+    """Why the host refuses a proposal's keep_stress (#68, owner's option B: the rule sets the most that goes, the
+    agent may keep a cluster's stress cells on evidence that the panel genes are that cell type's own biology)."""
+    table = stress_table(bundle)
+    if not isinstance(keep, list):
+        return ['keep_stress must be a list of {"cluster_id", "evidence"}']
+    problems, seen = [], set()
+    for e in keep:
+        cid = str(e.get('cluster_id', '')) if isinstance(e, dict) else ''
+        if not cid or not isinstance(e.get('evidence'), str) or not e['evidence'].strip():
+            problems.append('keep_stress entries need a cluster_id and specific evidence')
+        elif cid in seen:
+            problems.append('keep_stress names cluster %s twice' % cid)
+        elif table is None or int(table.get(cid, {}).get('n_stress') or 0) == 0:
+            problems.append('keep_stress: 2.0 cluster %s has no stress cells in stress_by_cluster.csv' % cid)
+        seen.add(cid)
+    return problems
+
+
+def host_reasons(bundle, data, keep=()):
+    """numerical_reasons and stress_reasons together: what the host removes and what it keeps labelled."""
+    pre, retained = numerical_reasons(bundle, data)
+    stress, kept = stress_reasons(bundle, data, keep)
+    for cell, reasons in stress.items():
+        pre.setdefault(cell, []).extend(reasons)
+    retained.update({c: s for c, s in kept.items() if c not in pre})
+    return pre, retained
+
+
 def numerical_reasons(bundle, data):
     """Why the numerical pre-annotation removes each cell of a lineage, and {cell: state} of the cells the
     stress policy keep retains instead: those whose only reason is a fragment removed by its dissociation
@@ -270,6 +338,7 @@ def quality_guard(bundle, data, proposal, t, q):
     from zmip.api import TYPE_KEY, QUALITY_KEY
 
     policy, flags, mito = lineage_policy(bundle), stress_flags(bundle), stress_flags(bundle, 'mito')
+    rule = STRESS_RULE if stress_table(bundle) is not None else None
     targets = [
         (group['cluster_id'], entry, (q.eq(group['cluster_id']) & t.isin(entry['type_clusters'])).to_numpy())
         for group in proposal['clusters']
@@ -285,7 +354,8 @@ def quality_guard(bundle, data, proposal, t, q):
         marked = (QUALITY_KEY, cid) in mito or any((TYPE_KEY, c) in mito for c in entry['type_clusters'])
         same = t.isin(entry['type_clusters']).to_numpy()
         if guard_stress(
-            entry, policy, int(target.sum()), flagged, lambda: dying_evidence(data.obs, target, comparison_cells(data.obs, same, removing)), marked
+            entry, policy, int(target.sum()), flagged, lambda: dying_evidence(data.obs, target, comparison_cells(data.obs, same, removing)), marked,
+            rule,
         ):
             retained.append(dict(cluster=cid, type_clusters=entry['type_clusters'], **entry['host_adjustment']))
     return retained
@@ -299,7 +369,7 @@ def apply_lineage(evidence, decision, destination):
         raise ValueError('Lineage decision belongs to different evidence')
     data = data_from(bundle)
     own, other = lineage_labels(bundle)
-    pre, retained = numerical_reasons(bundle, data)
+    pre, retained = host_reasons(bundle, data, accepted['quality'].get('keep_stress', []))
     obs, removed, reassigned, _ = apply_decisions(data.obs, accepted['types'], accepted['quality'], own, other, bundle['lineage']['name'], pre)
     data.obs = obs
     t, q = data.obs[TYPE_KEY].astype(str), data.obs[QUALITY_KEY].astype(str)
@@ -498,6 +568,12 @@ def inline_context(bundle, kind):
             'Quality clusters (cluster_key %s) with their type intersections and cell counts; submit_quality decides '
             'each intersection exactly once: %s' % (QUALITY_KEY, json.dumps(table))
         )
+    stress = stress_table(bundle) if kind != 'plan' else None
+    if stress is not None:
+        hits = {c: dict(n_stress=int(r['n_stress']), n_cells=int(r['n_cells']), panel_genes=r['panel_genes'])
+                for c, r in stress.items() if int(r['n_stress'] or 0)}
+        lines.append('Stress cells the host removes at the end unless you keep them with keep_stress (stress_by_cluster.csv; '
+                     'the rule in the checklist), by 2.0 cluster: ' + (json.dumps(hits) if hits else 'none'))
     return '\n'.join(lines)
 
 
@@ -572,7 +648,7 @@ def agent_spec(spec, evidence, kind, parent):
                 ),
                 'submit_quality': (
                     schema({'proposal_json': {'type': 'string'}}),
-                    'Save {"cluster_key":"msp_leiden_r2.0","clusters":[{"cluster_id":"QC id","decisions":[{"type_clusters":["type ids"],"action":"keep|remove|reassign","confidence":"high|medium|low","evidence":"specific evidence","rationale":"reason"}]}]}. Each QC group must cover its present 1.0 intersections exactly once. remove needs remove_reason (doublet|low-quality|ambient|stress|dissociation|dying|batch|other). reassign needs reassign_to and fine_label. After a budget warning add removal_review explaining evidence and scope. An accepted quality proposal completes the session.',
+                    'Save {"cluster_key":"msp_leiden_r2.0","clusters":[{"cluster_id":"QC id","decisions":[{"type_clusters":["type ids"],"action":"keep|remove|reassign","confidence":"high|medium|low","evidence":"specific evidence","rationale":"reason"}]}]}. Each QC group must cover its present 1.0 intersections exactly once. remove needs remove_reason (doublet|low-quality|ambient|stress|dissociation|dying|batch|other). reassign needs reassign_to and fine_label. Optional "keep_stress":[{"cluster_id":"QC id","evidence":"why its stress cells are this cell type\'s own biology"}] keeps the host\'s stress cells of those clusters. After a budget warning add removal_review explaining evidence and scope. An accepted quality proposal completes the session.',
                     False,
                 ),
             }
@@ -883,12 +959,12 @@ def submit_quality(state, args, bundle):
     lineage = bundle['lineage']['name']
     own_markers = verified(bundle['shared'])['markers'].get(lineage, []) if bundle.get('shared') else []
     core = own_marker_positivity(data, own_markers)
-    problems = reassign_problems(proposal["clusters"], data, own_markers, core)
+    problems = reassign_problems(proposal["clusters"], data, own_markers, core) + keep_stress_problems(proposal.get('keep_stress', []), bundle)
     if problems:
         raise ValueError('\n'.join(problems))
     t, q = data.obs[TYPE_KEY].astype(str), data.obs[QUALITY_KEY].astype(str)
     retained = quality_guard(bundle, data, proposal, t, q)
-    pre, _ = numerical_reasons(bundle, data)
+    pre, _ = host_reasons(bundle, data, proposal.get('keep_stress', []))
     _, removed, _, _ = apply_decisions(data.obs, state['types'], proposal, own, other, lineage, pre)
     fraction = len(set(removed.cell) - set(pre)) / len(data)
     if fraction > REMOVE_BUDGET:

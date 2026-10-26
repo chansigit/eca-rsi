@@ -26,6 +26,7 @@ _NAMES = {
     "partitions": ("zmip.scheduled", "partitions"),
     "validate_quality": ("zmip.scheduled", "validate_quality"),
     "validate_types": ("zmip.scheduled", "validate_types"),
+    "stress_cells": ("zmip.stress", "stress_cells"),
 }
 __all__ = sorted(_NAMES)
 

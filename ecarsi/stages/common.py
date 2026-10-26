@@ -252,11 +252,12 @@ def comparison_cells(obs, same_identity, removing):
     return near if near.sum() >= CHECK_MIN_CELLS else ~removing
 
 
-def guard_stress(entry, policy, n_cells, flagged, dying_check, mito=False):
+def guard_stress(entry, policy, n_cells, flagged, dying_check, mito=False, rule=None):
     """Apply the stress policy to one removal in place; True when it became a keep. `flagged`: the stress-gene
     rule marks the target's cluster; `mito`: the mitochondrial rule does, which supports a dying removal as
-    `dying_check()` -> (supported, note) does. The tool reply and needs_review read host_adjustment;
-    requested_* keep what the agent asked for."""
+    `dying_check()` -> (supported, note) does. `rule`: a host rule decides stress and dissociation itself (zoom-in,
+    #68), so no agent removal of those stands; the text says why. The tool reply and needs_review read
+    host_adjustment; requested_* keep what the agent asked for."""
     state = entry.get('remove_reason')
     if entry.get('action') != 'remove' or state not in STRESS_STATES:
         return False
@@ -267,6 +268,8 @@ def guard_stress(entry, policy, n_cells, flagged, dying_check, mito=False):
     elif state == 'dying':
         supported, note = ((True, 'stress_clusters.csv marks the cluster mito (more than 3 of its top 10 genes against '
                             'its local siblings are mitochondrial genes)') if mito else dying_check())
+    elif rule:
+        supported, note = False, rule
     else:
         supported, note = flagged, ('stress_clusters.csv marks the cluster' if flagged else
                                     'stress_clusters.csv does not mark the cluster (more than 3 of its top 10 DEG genes are stress genes)')

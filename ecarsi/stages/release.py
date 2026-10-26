@@ -244,6 +244,9 @@ def stress_retained_items(ledger, decisions):
                 if adjustment.get('policy') == STRESS_HOST_POLICY:
                     where = (entry['scope'] + ' ' if entry['scope'] else '') + 'cluster ' + str(group.get('cluster_id', ''))
                     notes.setdefault((entry['round'], entry['stage'], adjustment['state']), []).append(where + ': ' + adjustment['evidence'])
+        for kept in value.get('quality', {}).get('keep_stress', []):  # zoom-in's rule overruled by the agent (#68)
+            where = (entry['scope'] + ' ' if entry['scope'] else '') + 'cluster ' + str(kept['cluster_id'])
+            notes.setdefault((entry['round'], entry['stage'], 'stress'), []).append(where + ': kept by the agent (keep_stress): ' + kept['evidence'])
     items = []
     kept = ledger[ledger.final_status.eq('kept') & ledger.retained_stage.ne('')]
     for (name, state), rows in kept.groupby(['retained_stage', 'retained_state']):
