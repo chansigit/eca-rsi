@@ -280,17 +280,33 @@ def guard_stress(entry, policy, n_cells, flagged, dying_check, mito=False):
     return True
 
 
-def guard_retained_drops(proposal, retained):
-    """#30: cross-sample inspect may not drop a cluster the type phase kept under the stress policy: its drops
-    become flags, which needs_review lists. In place, like msp's batch guard; the clusters adjusted."""
-    adjusted = set()
-    for entry in [*proposal['clusters'], *proposal.get('cell_actions', [])]:
-        if str(entry['cluster']) in retained and entry.get('action') == 'drop':
+TYPE_KEPT_POLICY = 'type_kept_v1'
+KEPT_BY = {STRESS_HOST_POLICY: 'The type phase kept this cluster under the stress policy (decision 0017)',
+           TYPE_KEPT_POLICY: 'The type phase kept this cluster'}
+
+
+def type_kept(type_clusters):
+    """{cluster: policy} of the clusters an accepted type proposal keeps: under the stress policy when the host
+    turned the agent's removal into a keep (#30), else by the agent's own keep (#71)."""
+    return {str(e['cluster_id']): STRESS_HOST_POLICY if e.get('host_adjustment', {}).get('policy') == STRESS_HOST_POLICY
+            else TYPE_KEPT_POLICY for e in type_clusters if e['action'] != 'remove'}
+
+
+def guard_retained_drops(proposal, kept):
+    """Cross-sample inspect may not drop a whole cluster the type phase kept (#71): the two phases disagree, so the
+    drop becomes a flag, which needs_review lists; where both remove it, it goes. Cells it drops by a QC metric
+    inside a kept cluster (cell_actions) carry their reason and go, except in a cluster kept under the stress
+    policy (#30). `kept` is type_kept(). In place, like msp's batch guard; {cluster: policy} adjusted."""
+    adjusted = {}
+    for entry, scope in [*((e, 'cluster') for e in proposal['clusters']), *((e, 'cells') for e in proposal.get('cell_actions', []))]:
+        policy = kept.get(str(entry['cluster']))
+        if scope == 'cells' and policy != STRESS_HOST_POLICY:
+            continue
+        if policy and entry.get('action') == 'drop':
             entry.update(requested_action='drop', action='flag', review_required=True, host_adjustment=dict(
-                policy=STRESS_HOST_POLICY, reason='The type phase kept this cluster under the stress policy (decision 0017); '
-                                                 'quality flags it for review instead of dropping it.'))
-            adjusted.add(str(entry['cluster']))
-    return sorted(adjusted)
+                policy=policy, reason=KEPT_BY[policy] + '; quality flags it for review instead of dropping it.'))
+            adjusted[str(entry['cluster'])] = policy
+    return dict(sorted(adjusted.items()))
 
 
 FRAGMENT_TESTS = ('decontX', 'dissociation', 'doublet', 'mt')  # msp minor-sibling QC, columns <test>_significant; since #70 msp

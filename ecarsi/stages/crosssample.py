@@ -24,6 +24,7 @@ from .common import BASE, artifact, assemble, check_bundle, deg, deg_batch, publ
 from .common import save_gene_summary
 from . import tools
 from .common import (
+    KEPT_BY,
     STRESS_HOST_POLICY,
     comparison_cells,
     dying_evidence,
@@ -35,6 +36,7 @@ from .common import (
     soft_fragments,
     stress_flags,
     stress_policy,
+    type_kept,
 )
 from ..files import digest, read, save
 from ..sample_mapping import SAMPLE_KEY
@@ -709,10 +711,7 @@ def submit(state, args, bundle):
                 problems = validate_inspection(proposal, clusters, data.obs)
                 if not problems:
                     guard_batch_actions(proposal)
-                    held = guard_retained_drops(
-                        proposal,
-                        {str(e['cluster_id']) for e in accepted['proposal']['clusters'] if e.get('host_adjustment', {}).get('policy') == STRESS_HOST_POLICY},
-                    )
+                    held = guard_retained_drops(proposal, type_kept(accepted['proposal']['clusters']))
         if problems:
             raise ValueError('; '.join(problems))
     response.update(accepted=True, proposal=proposal, evidence=state['evidence'], types=state['types'])
@@ -720,13 +719,8 @@ def submit(state, args, bundle):
         response['host_adjustments'] = [{'cluster': c, **proposed[c]['host_adjustment']} for c in converted]
     if held:
         response['host_adjustments'] = [
-            {
-                'cluster': c,
-                'action': 'flag',
-                'policy': STRESS_HOST_POLICY,
-                'reason': 'kept by the type phase under the stress policy: dropped cells are flagged',
-            }
-            for c in held
+            {'cluster': c, 'action': 'flag', 'policy': policy, 'reason': KEPT_BY[policy] + ': dropped cells are flagged'}
+            for c, policy in held.items()
         ]
     return response
 
