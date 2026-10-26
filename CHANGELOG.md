@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.16 — 2026-10-25
+
+- **A whole-cluster quality drop needs the type phase to agree** (#71). Cross-sample inspect's drop of a cluster the
+  type phase kept becomes a flag for review (`host_adjustment` policy `type_kept_v1`; needs_review lists it), as
+  #30 already did for clusters kept under the stress policy. A cluster both phases remove still goes, and so do the
+  cells inspect drops by a QC metric inside a kept cluster (`cell_actions`), except in a stress-kept cluster. Both
+  cross-sample prompts say that cluster size or over-clustering is no removal reason. Replayed on every finished
+  cross-sample of pbmc68k, Lung, 05_Fuetal and the gates, the rule changes one decision: pbmc68k round 1 cluster
+  25, four normal CD4 T cells dropped for being four.
+
 ## 0.4.15 — 2026-10-25
 
 - **OSP QC of a sample of 1-3 cells completes again.** The QC overview JSON writes null for what so few cells cannot
