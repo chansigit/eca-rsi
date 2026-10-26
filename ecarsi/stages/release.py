@@ -5,7 +5,7 @@ from pathlib import Path
 import shutil
 
 from ..files import reference, verified
-from .common import RETAINED, STRESS_HOST_POLICY, artifact, sealed
+from .common import REMOVAL_CHECK_POLICY, RETAINED, STRESS_HOST_POLICY, STRESS_STATES, artifact, sealed
 from ..files import lock, read, save
 from ..contracts import check
 from ..sample_mapping import BLANK_REASON
@@ -232,17 +232,18 @@ def local_link(root, entry):
 
 
 def stress_retained_items(ledger, decisions):
-    """needs_review 'stress_retained': released cells the stress policy kept, by the stage that kept them, their
+    """needs_review 'stress_retained' (the stress policy, decision 0017) and 'removal_retained' (an agent's removal
+    its code check did not support, decision 0025): released cells kept so, by the stage that kept them, their
     state and their coarse label there, with the code's evidence notes of that round and stage."""
     from ..review import Item
     notes = {}
     for entry in decisions:
         value = entry['value']
-        for group in value.get('clusters', []) + value.get('quality', {}).get('clusters', []):
+        for group in value.get('clusters', []) + value.get('quality', {}).get('clusters', []) + value.get('cell_actions', []):
             for decision in group.get('decisions', [group]):
                 adjustment = decision.get('host_adjustment', {})
-                if adjustment.get('policy') == STRESS_HOST_POLICY:
-                    where = (entry['scope'] + ' ' if entry['scope'] else '') + 'cluster ' + str(group.get('cluster_id', ''))
+                if adjustment.get('policy') in (STRESS_HOST_POLICY, REMOVAL_CHECK_POLICY):
+                    where = (entry['scope'] + ' ' if entry['scope'] else '') + 'cluster ' + str(group.get('cluster_id', group.get('cluster', '')))
                     notes.setdefault((entry['round'], entry['stage'], adjustment['state']), []).append(where + ': ' + adjustment['evidence'])
         for kept in value.get('quality', {}).get('keep_stress', []):  # zoom-in's rule overruled by the agent (#68)
             where = (entry['scope'] + ' ' if entry['scope'] else '') + 'cluster ' + str(kept['cluster_id'])
@@ -253,7 +254,8 @@ def stress_retained_items(ledger, decisions):
         number, step = int(name[5:7]), name.split('.', 1)[1]
         why = notes.get((number, step, state), [])
         for label, n in rows[name + '_coarse'].value_counts().items():
-            items.append(Item('stress_retained', number, step, label=str(label), n_cells=int(n), action='keep',
+            items.append(Item('stress_retained' if state in STRESS_STATES else 'removal_retained', number, step,
+                              label=str(label), n_cells=int(n), action='keep',
                               note=state + ('; ' + ' | '.join(why[:3]) if why else '')))
     return items
 

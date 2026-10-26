@@ -16,6 +16,8 @@ Sections, most consequential first:
                   by the tests that hit (#27)
   stress_retained stress, dissociation or dying cells kept by the stress
                   policy (decision 0017), labelled in obs retained_state
+  removal_retained cells an agent asked to remove that the code check of its reason
+                  did not support (decision 0025), labelled in obs retained_state
   sample_excluded whole samples the inclusion agent kept out of integration
   reassigned      clusters a zoom-in moved to another lineage (a cluster that
                   keeps moving every round is a labelling problem upstream)
@@ -71,6 +73,13 @@ KINDS: list[tuple[str, str, str]] = [
      "retained_state, because a removal of at least 10 cells lacked the evidence the code checks or the dataset's "
      "stress_policy is keep (decision 0017). Grouped by the stage that kept them and their coarse label there; "
      "decisions.json holds each decision's host_adjustment."),
+    ("removal_retained", "Removals the code check did not support",
+     "An agent asked to remove at least 10 cells as doublet, low-quality, ambient or other, and the code check of "
+     "that reason did not support it (decision 0025): a doublet has half of its cells above their library's Scrublet "
+     "threshold and no gene of its own, or in a lineage another lineage's markers on top of its own; a low-quality "
+     "group has clearly fewer genes or counts or more mitochondrial reads than the cells nothing removes and no gene "
+     "of its own; ambient and other name nothing to check. They stay, labelled in final.h5ad obs retained_state "
+     "with the reason; decisions.json holds each decision's host_adjustment with the check's numbers."),
     ("sample_excluded", "Samples excluded from integration",
      "Whole samples the inclusion agent kept out, or that OSP QC emptied (step persample). "
      "They stay on disk untouched (persample/)."),
@@ -370,7 +379,7 @@ def to_markdown(items: list[Item], unit_name: str, n_rounds: int) -> str:
 
 
 # colour of a category's card: bad = irreversible, warn = changed the input set or labels, info = advisory
-KIND_TONE = {"degraded": "warn", "convergence": "bad", "removed": "bad", "stress_retained": "warn", "sample_excluded": "warn", "reassigned": "warn",
+KIND_TONE = {"degraded": "warn", "convergence": "bad", "removed": "bad", "stress_retained": "warn", "removal_retained": "warn", "sample_excluded": "warn", "reassigned": "warn",
              "policy_excluded": "warn", "upstream_review": "info", "inspect_flag": "info", "plan_warning": "info"}
 
 

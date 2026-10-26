@@ -224,24 +224,30 @@ def stress_flags(bundle, column='stress'):
     return set(zip(hit.key, hit.cluster))
 
 
+def clearly(obs, target, comparison, column, sign=1):
+    """(True, note) when the target cells are clearly above the comparison cells on an obs column (sign -1:
+    clearly below): one-sided Mann-Whitney with AUC >= 0.7 and p < 0.05, the standard of every code check of an
+    agent's removal; False also with fewer than CHECK_MIN_CELLS measured cells on either side."""
+    from scipy.stats import mannwhitneyu
+    if column not in obs:
+        return False, column + ' missing'
+    a = sign * obs.loc[target, column].astype(float).dropna().to_numpy()
+    b = sign * obs.loc[comparison, column].astype(float).dropna().to_numpy()
+    if min(len(a), len(b)) < CHECK_MIN_CELLS:
+        return False, column + ': too few measured cells'
+    u, p = mannwhitneyu(a, b, alternative='greater')
+    auc = u / (len(a) * len(b))
+    return bool(auc >= DYING_AUC and p < DYING_P), f'{column} AUC {auc:.2f} p {p:.2g}'
+
+
 def dying_evidence(obs, target, comparison):
     """(supported, note): the target cells have a clearly higher mitochondrial fraction or clearly fewer
-    genes than the comparison cells, one-sided Mann-Whitney with AUC >= 0.7 and p < 0.05."""
-    from scipy.stats import mannwhitneyu
+    genes than the comparison cells."""
     notes = []
     for column, sign in (('pct_counts_mt', 1), ('n_genes_by_counts', -1)):
-        if column not in obs:
-            notes.append(column + ' missing')
-            continue
-        a = sign * obs.loc[target, column].astype(float).dropna().to_numpy()
-        b = sign * obs.loc[comparison, column].astype(float).dropna().to_numpy()
-        if min(len(a), len(b)) < CHECK_MIN_CELLS:
-            notes.append(column + ': too few measured cells')
-            continue
-        u, p = mannwhitneyu(a, b, alternative='greater')
-        auc = u / (len(a) * len(b))
-        notes.append(f'{column} AUC {auc:.2f} p {p:.2g}')
-        if auc >= DYING_AUC and p < DYING_P:
+        supported, note = clearly(obs, target, comparison, column, sign)
+        notes.append(note)
+        if supported:
             return True, '; '.join(notes)
     return False, '; '.join(notes)
 
@@ -309,6 +315,108 @@ def guard_retained_drops(proposal, kept):
             entry.update(requested_action='drop', action='flag', review_required=True, host_adjustment=dict(
                 policy=policy, reason=KEPT_BY[policy] + '; quality flags it for review instead of dropping it.'))
             adjusted[str(entry['cluster'])] = policy
+    return dict(sorted(adjusted.items()))
+
+
+# Every other removal an agent asks for (decision 0025): one of at least CHECK_MIN_CELLS cells stands only when
+# the code check of its reason supports it; otherwise its cells stay with their identity labels, obs
+# retained_state names the reason and needs_review lists them (removal_retained). Stress, dissociation and dying
+# have their checks above; batch is msp's batch guard; ambient (decontX's contamination check, decision 0023)
+# and other name nothing a check could support.
+REMOVAL_CHECK_POLICY = 'removal_check_v1'
+LOW_QUALITY_TESTS = (('n_genes_by_counts', -1), ('total_counts', -1), ('pct_counts_mt', 1))
+DOUBLET_SHARE = 0.5  # msp's doublet cluster: half of its cells above their library's Scrublet threshold
+OWN_MARKER_SHARE = 0.5  # a doublet keeps half of its lineage's own-marker positivity (zoom-in's reassign rule)
+VERDICT_REASONS = {'artifact-doublet': 'doublet', 'artifact-lowquality': 'low-quality', 'artifact-ambient': 'ambient'}
+QC_CELL_METRICS = ('pct_counts_mt', 'n_genes_by_counts', 'total_counts', 'log1p_n_genes_by_counts', 'log1p_total_counts',
+                   'pct_counts_in_top_20_genes', 'pct_counts_malat1', 'pct_counts_ribo', 'pct_counts_hb')
+_TARGET = '__removal__'
+
+
+def own_genes(counts, labels, target):
+    """Genes detected in at least 30 % of the target cells and at most 5 % of every other group of `labels`
+    (msp own_gene_counts): a cell type has some; a defect, or a doublet of two known types, has none."""
+    import numpy as np
+    from msp.api import own_gene_counts
+    groups = np.where(np.asarray(target, dtype=bool), _TARGET, np.asarray(labels).astype(str))
+    # ponytail: binarises the whole matrix per removal; per-group detection counts once if a stage gets slow
+    return own_gene_counts(counts, groups, [_TARGET], min_cells=CHECK_MIN_CELLS).get(_TARGET, 0)
+
+
+def removal_evidence(reason, obs, target, rest, counts, labels, foreign=None):
+    """(supported, note) for an agent's removal of the target cells for `reason`, against `rest`, the cells
+    nothing removes; the target's own genes are counted against the groups of `labels` (own_genes). foreign
+    (zoom-in only): (the lineage's foreign-score columns, the target's own-marker positivity, the lineage's).
+    low-quality: clearly fewer genes or counts, or a clearly higher mitochondrial fraction, and no gene of its own.
+    doublet: half or more of the cells above their library's Scrublet threshold and no gene of its own (msp's
+    doublet cluster); or, in a lineage, another lineage's markers clearly higher while the cells keep half of
+    the lineage's own-marker positivity (the doublet of zoom-in's reassign rule). Anything else: unsupported."""
+    from msp.api import doublet_above
+    if reason not in ('low-quality', 'doublet'):
+        return False, f'no code check can support a removal as {reason}'
+    n_own = own_genes(counts, labels, target)
+    own = f'{n_own} genes of its own'
+    if reason == 'low-quality':
+        hits = [clearly(obs, target, rest, column, sign) for column, sign in LOW_QUALITY_TESTS]
+        return any(ok for ok, _ in hits) and n_own == 0, '; '.join([note for _, note in hits] + [own])
+    share = float(doublet_above(obs.loc[target]).mean())
+    notes = [f'{share:.0%} above their library Scrublet threshold', own]
+    if share >= DOUBLET_SHARE and n_own == 0:
+        return True, '; '.join(notes)
+    if foreign:
+        columns, mine, lineage = foreign
+        hits = [note for ok, note in (clearly(obs, target, rest, column) for column in columns) if ok]
+        keeps = mine is not None and bool(lineage) and mine >= OWN_MARKER_SHARE * lineage
+        share_of = 'unknown' if mine is None or not lineage else f'{mine / lineage:.0%}'
+        notes += [', '.join(hits) if hits else 'no other lineage clearly higher', f"{share_of} of the lineage's own-marker positivity"]
+        if hits and keeps:
+            return True, '; '.join(notes)
+    return False, '; '.join(notes)
+
+
+def guard_removal(entry, n_cells, check):
+    """Decision 0025 on one removal, in place, after guard_stress; True when it became a keep. check() ->
+    (supported, note) runs for a removal of at least CHECK_MIN_CELLS cells whose reason has no check of its own."""
+    reason = entry.get('remove_reason')
+    if entry.get('action') != 'remove' or reason in STRESS_STATES or n_cells < CHECK_MIN_CELLS:
+        return False
+    supported, note = check()
+    if supported:
+        entry['host_evidence'] = note
+        return False
+    entry.update(requested_action='remove', requested_remove_reason=reason, action='keep', remove_reason=None,
+                 review_required=True, host_adjustment=dict(policy=REMOVAL_CHECK_POLICY, state=reason, n_cells=int(n_cells),
+                 evidence=note, reason=f'The {reason} removal is not supported by the code check; its cells stay, labelled.'))
+    return True
+
+
+def guard_unchecked_drops(proposal, check):
+    """Decision 0025 on cross-sample inspect, after guard_retained_drops, in place. A whole-cluster drop stands
+    only when the check of its verdict's reason supports it (VERDICT_REASONS; ambiguous and real name none),
+    else it becomes a flag; a cell rule drops only on a QC metric (QC_CELL_METRICS): Scrublet and decontX scores
+    are msp's doublet and contamination checks (decision 0023). check(cluster, reason) -> (n_cells, supported,
+    note). Returns the adjusted entries' {cluster: host_adjustment}."""
+    adjusted = {}
+    for entry in proposal['clusters']:
+        if entry.get('action') != 'drop':
+            continue
+        reason = VERDICT_REASONS.get(entry.get('verdict'), entry.get('verdict'))
+        n_cells, supported, note = check(str(entry['cluster']), reason)
+        if n_cells < CHECK_MIN_CELLS:
+            continue
+        if supported:
+            entry['host_evidence'] = note
+            continue
+        entry.update(requested_action='drop', action='flag', review_required=True, host_adjustment=dict(
+            policy=REMOVAL_CHECK_POLICY, state=reason, n_cells=int(n_cells), evidence=note,
+            reason=f'The {reason} drop is not supported by the code check; its cells stay, flagged for review.'))
+        adjusted[str(entry['cluster'])] = entry['host_adjustment']
+    for entry in proposal.get('cell_actions', []):
+        if entry.get('action') == 'drop' and entry.get('metric') not in QC_CELL_METRICS:
+            entry.update(requested_action='drop', action='flag', review_required=True, host_adjustment=dict(
+                policy=REMOVAL_CHECK_POLICY, state=entry.get('reason', 'other'), evidence=f"cell rule on {entry.get('metric')}",
+                reason='A cell rule drops only on a QC metric; doublet and contamination scores are the code checks of decision 0023.'))
+            adjusted.setdefault(str(entry['cluster']), entry['host_adjustment'])
     return dict(sorted(adjusted.items()))
 
 

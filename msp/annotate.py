@@ -44,16 +44,17 @@ _CLUSTER_SCHEMA_DOC = """{
   "coarse_label": "<lineage-level label in English, e.g. 'Fibroblast' / 'Macrophage' / 'Endothelial'>",
   "fine_label": "<subtype-level label in English, e.g. 'CTHRC1+ matrix fibroblast'; for removed clusters describe what it is, e.g. 'Fibroblast-immune doublet'>",
   "merge_target": null | "<another base cluster id this one is part of — same population, not a distinct entity>",
-  "action": "keep" | "remove",
-  "remove_reason": null | "doublet" | "low-quality" | "ambient" | "stress" | "dissociation" | "dying" | "batch" | "other",
-  "confidence": "high" | "medium" | "low",
   "evidence": {
     "distinctness": "<step 1: is it distinct from its r1.0 parent / r2.0 siblings? what separates it (local DEG), or nothing?>",
     "markers": "<step 2: the positive markers that fix the identity, verified with check_genes/check_deg>",
     "merge": "<step 3: why merge / why keep separate>"
   },
-  "rationale": "<one or two sentences tying evidence to the labels and the merge/remove decision>"
-}"""
+  "rationale": "<one or two sentences tying evidence to the labels and the merge/remove decision>",
+  "action": "keep" | "remove",
+  "remove_reason": null | "doublet" | "low-quality" | "ambient" | "stress" | "dissociation" | "dying" | "batch" | "other",
+  "confidence": "high" | "medium" | "low"
+}
+Write the evidence and the rationale first and decide the action from them."""
 
 
 def _validate_cluster(e, clusters):

@@ -57,6 +57,7 @@ SCIENCE_ONLY = [
     "test_release_links.py",
     "test_release_review_categories.py",
     "test_release_review_sample_excluded.py",
+    "test_removal_check.py",
     "test_sample_map_derive.py",
     "test_sample_map_spec.py",
     "test_stress_policy.py",

@@ -456,3 +456,25 @@ def test_contamination_runs_after_the_type_agent_on_the_cells_nothing_else_remov
     assert (tmp_path / 'contamination_check.csv').is_file()
     none, empty = _contamination(data, typed, pd.DataFrame(), removed, tmp_path)
     assert none is None and not empty.any()
+
+
+def test_a_quality_drop_or_cell_rule_the_code_cannot_support_stays_labelled(tmp_path,monkeypatch):
+    """Decision 0025 at cross-sample: guard_unchecked_drops turns a drop its verdict's check does not support, and
+    a cell rule on a score that is not a QC metric, into flags at submission; finalize labels their surviving
+    cells with the reason in retained_state."""
+    import ecarsi.stages.common as common
+    monkeypatch.setattr(common,'CHECK_MIN_CELLS',3)
+    source,evidence=finalize_fixture(tmp_path,monkeypatch,'remove')
+    types=immutable(tmp_path/'types.json',dict(accepted=True,evidence=evidence,proposal={'clusters':[keep_entry('0'),keep_entry('1')]}))
+    quality=dict(clusters=[dict(cluster=c,verdict=v,action=a,confidence='high',
+        tests={k:'test evidence' for k in ('markers','qc','composition','geometry','stability')},rationale='test evidence')
+        for c,v,a in (('0','real','keep'),('1','artifact-ambient','drop'))],
+        cell_actions=[dict(cluster='0',metric='doublet_score',op='>',value=.05,action='drop',reason='doublet',note='rule')])
+    adjusted=common.guard_unchecked_drops(quality,lambda cluster,reason:(4,False,'no code check'))
+    assert set(adjusted)=={'0','1'} and quality['clusters'][1]['action']=='flag' and quality['cell_actions'][0]['action']=='flag'
+    quality_ref=immutable(tmp_path/'quality.json',dict(accepted=True,evidence=evidence,types=types,proposal=quality))
+    out = tmp_path / 'out'
+    out.mkdir()
+    finalize(evidence, types, quality_ref, out)
+    stored=an.read_h5ad(out/'annotated.h5ad').obs['retained_state'].astype(str)
+    assert stored[['c5','c6','c7']].eq('ambient').all() and stored['c3']=='doublet'

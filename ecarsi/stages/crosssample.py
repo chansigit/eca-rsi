@@ -25,13 +25,17 @@ from .common import save_gene_summary
 from . import tools
 from .common import (
     KEPT_BY,
+    REMOVAL_CHECK_POLICY,
     STRESS_HOST_POLICY,
     comparison_cells,
     dying_evidence,
     fragment_reasons,
     fragment_table,
+    guard_removal,
     guard_retained_drops,
     guard_stress,
+    guard_unchecked_drops,
+    removal_evidence,
     mark_retained,
     soft_fragments,
     stress_flags,
@@ -618,7 +622,7 @@ def submit(state, args, bundle):
     proposal = amended(args, state, 'submit_decision')
     response = {}
     converted = []
-    held = []
+    held, unchecked = {}, {}
     if phase == 'inclusion':
         from .inclusion import validate_inclusion
 
@@ -712,26 +716,51 @@ def submit(state, args, bundle):
                 if not problems:
                     guard_batch_actions(proposal)
                     held = guard_retained_drops(proposal, type_kept(accepted['proposal']['clusters']))
+                    unchecked = guard_unchecked_drops(proposal, _drop_check(bundle, data, proposal, accepted['proposal']['clusters']))
         if problems:
             raise ValueError('; '.join(problems))
     response.update(accepted=True, proposal=proposal, evidence=state['evidence'], types=state['types'])
     if converted:
         response['host_adjustments'] = [{'cluster': c, **proposed[c]['host_adjustment']} for c in converted]
-    if held:
+    if held or unchecked:
         response['host_adjustments'] = [
             {'cluster': c, 'action': 'flag', 'policy': policy, 'reason': KEPT_BY[policy] + ': dropped cells are flagged'}
             for c, policy in held.items()
-        ]
+        ] + [{'cluster': c, 'action': 'flag', **adjustment} for c, adjustment in unchecked.items()]
     return response
 
 
+def _drop_check(bundle, data, proposal, typed):
+    """check(cluster, reason) for guard_unchecked_drops (decision 0025): a dropped cluster's cells that nothing
+    removes before inspect against the cells nothing removes (pre-annotation, the type phase, this proposal's
+    drops); its own genes against the other clusters."""
+    from msp.api import load_removal_mask
+
+    base = data.obs[BASE].astype(str)
+    pre = load_removal_mask(artifact(bundle, 'preannotation_removal.csv').parent, data)
+    gone = base.isin([str(e['cluster_id']) for e in typed if e['action'] == 'remove'] + [str(e['cluster']) for e in proposal['clusters'] if e['action'] == 'drop'])
+    rest = ~pre & ~gone.to_numpy()
+    counts = data.layers['counts'] if 'counts' in data.layers else data.X
+
+    def check(cluster, reason):
+        target = base.eq(cluster).to_numpy() & ~pre
+        return (int(target.sum()), *removal_evidence(reason, data.obs, target, rest, counts, base))
+
+    return check
+
+
 def _stress_guard(bundle, data, entries, proposed):
-    """Decision 0017 on the type removals of this submission, in place; the clusters that stay. The dying check
-    compares a cluster with the clusters of its coarse label that no entry removes."""
+    """Decisions 0017 and 0025 on the type removals of this submission, in place; the clusters that stay. The dying
+    check compares a cluster with the clusters of its coarse label that no entry removes; any other removal's
+    check compares its cells that pre-annotation leaves with the cells nothing removes."""
+    from msp.api import load_removal_mask
+
     policy = stress_policy(verified(bundle['inspected'])['spec'])
     flags, mito = stress_flags(bundle), stress_flags(bundle, 'mito')
     base = data.obs[BASE].astype(str)
     removing = base.isin([c for c, e in entries.items() if e['action'] == 'remove']).to_numpy()
+    pre = load_removal_mask(artifact(bundle, 'preannotation_removal.csv').parent, data)
+    counts = data.layers['counts'] if 'counts' in data.layers else data.X
     converted = []
     for cid, e in proposed.items():
         target = (base == cid).to_numpy()
@@ -743,6 +772,8 @@ def _stress_guard(bundle, data, entries, proposed):
             (BASE, cid) in flags,
             lambda: dying_evidence(data.obs, target, comparison_cells(data.obs, same, removing)),
             (BASE, cid) in mito,
+        ) or guard_removal(
+            e, int(target.sum()), lambda: removal_evidence(e['remove_reason'], data.obs, target & ~pre, ~removing & ~pre, counts, base)
         ):
             converted.append(cid)
     for cid in converted:  # a kept cluster cannot merge into a removed one
@@ -828,8 +859,16 @@ def finalize(evidence_ref, types_ref, quality_ref, destination):
     reasons = {c: [] for c in archive.cell}
     quality_entries = {str(e['cluster']): e for e in quality['proposal']['clusters']}
     for cid, e in typed_entries.items():
-        if e.get('host_adjustment', {}).get('policy') == STRESS_HOST_POLICY:
+        if e.get('host_adjustment', {}).get('policy') in (STRESS_HOST_POLICY, REMOVAL_CHECK_POLICY):
             retained.update({c: e['host_adjustment']['state'] for c in data.obs_names[data.obs[BASE].astype(str).eq(cid)]})
+    from msp.api import INSPECTION_OPS
+
+    for e in [*quality['proposal']['clusters'], *quality['proposal'].get('cell_actions', [])]:  # drops decision 0025 flagged
+        if e.get('host_adjustment', {}).get('policy') == REMOVAL_CHECK_POLICY:
+            hit = data.obs[BASE].astype(str).eq(str(e['cluster'])).to_numpy()
+            if 'metric' in e:
+                hit &= INSPECTION_OPS[e['op']](data.obs[e['metric']].to_numpy(dtype=float), float(e['value']))
+            retained.update({c: e['host_adjustment']['state'] for c in data.obs_names[hit] if c not in retained})
     for cid in reasons:
         row = data.obs.loc[cid]
         group = str(row[BASE])

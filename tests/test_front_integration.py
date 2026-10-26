@@ -27,13 +27,13 @@ def matrix(n=6):
     return a
 
 
-def source(root, name="A", *, status="ok", code=0, species="mouse", n=6, write_h5=True):
+def source(root, name="A", *, status="ok", code=0, species="mouse", n=6, write_h5=True, step_name="standardize"):
     step = root / name / "standardize"
     step.mkdir(parents=True)
     a = matrix(n)
     if write_h5:
         a.write_h5ad(step / "standardized.h5ad")
-    result = {"schema_version": 2, "step": "standardize", "step_version": "0.2.0",
+    result = {"schema_version": 2, "step": step_name, "step_version": "0.2.0",
               "status": status, "exit_code": code, "species": {"resolved": species},
               "metrics": {"n_cells": n, "n_vars": 4}, "reasons": ["review me"] if status == "needs_review" else [],
               "output": "/before/move/standardized.h5ad" if write_h5 else None}
@@ -104,6 +104,18 @@ def test_review_survives_and_a_rejected_source_is_skipped(tmp_path):
     assert [r["state"] for r in gm["source_inventory"]] == ["accepted", "rejected"]
     um = read_json(L.input_manifest(L.unit_dir(out, "test-unit")))
     assert um["upstream"]["A"]["standardize"]["reasons"] == ["review me"]
+
+
+def test_a_subset_product_of_eca_pp_is_accepted_like_a_standardized_one(tmp_path):
+    """ECA-PP 0.5.6 subset writes a standardize-form product of part of another (step "subset"); another step
+    name is still refused."""
+    root, out = tmp_path / "in", tmp_path / "out"
+    source(root, step_name="subset")
+    organize(root, out, plan_file(tmp_path / "p.json"))
+    assert [r["state"] for r in read_json(L.organize_manifest(out))["source_inventory"]] == ["accepted"]
+    source(tmp_path / "in2", step_name="probe")
+    with pytest.raises(ValueError, match="unsupported result schema/step"):
+        organize(tmp_path / "in2", tmp_path / "out2", plan_file(tmp_path / "p2.json"))
 
 
 @pytest.mark.parametrize("problem", ["counts", "negative", "dimensions", "species", "schema"])

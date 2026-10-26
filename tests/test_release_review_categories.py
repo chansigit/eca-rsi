@@ -50,8 +50,9 @@ def release_inputs(tmp_path):
              value=dict(types=dict(clusters=[]), quality=dict(clusters=[dict(cluster_id="1", decisions=[
                  dict(action="reassign", reassign_to="B", type_clusters=["0"], fine_label="x", confidence="medium")])]))),
     ]
-    ledger = pd.DataFrame({"final_status": ["kept"], "retained_stage": ["round01.cross-sample"],
-                           "retained_state": ["stress"], "round01.cross-sample_coarse": ["Chondrocyte"]})
+    ledger = pd.DataFrame({"final_status": ["kept", "kept"], "retained_stage": ["round01.cross-sample", "round01.zoom-in"],
+                           "retained_state": ["stress", "other"], "round01.cross-sample_coarse": ["Chondrocyte", ""],
+                           "round01.zoom-in_coarse": ["", "Endothelial"]})
     return unit, pd.DataFrame(rows), decisions, unit_dir, ledger
 
 

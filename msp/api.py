@@ -15,6 +15,8 @@ _NAMES = {
     "library_threshold": ("msp.integrate.doublets", "library_threshold"),
     "min_background": ("msp.integrate.doublets", "min_background"),
     "overcluster": ("msp.integrate.doublets", "overcluster"),
+    "doublet_above": ("msp.integrate.doublets", "doublet_above"),  # the checks of an agent's removal (0025)
+    "own_gene_counts": ("msp.integrate.doublets", "own_gene_counts"),
     "is_stress": ("genesets", "is_stress"),  # the stress panel zoom-in tests a lineage on (#68)
     "load_and_merge": ("msp.integrate", "load_and_merge"),
     "compute_deg_task": ("msp.integrate.deg", "compute_deg_task"),

@@ -65,20 +65,22 @@ def _subcluster_once(ad, key, cluster, resolution, new_key, remove_mask, *, comp
 
 _PROPOSAL_SCHEMA_DOC = """{
   "clusters": [
-    {"cluster": "<id>", "verdict": "real|artifact-doublet|artifact-lowquality|artifact-batch|artifact-ambient|ambiguous",
-     "action": "keep|flag|drop", "confidence": "high|medium|low",
+    {"cluster": "<id>",
      "tests": {"markers": "<test a finding>", "qc": "<test b>", "composition": "<test c>",
                "geometry": "<test d>", "stability": "<test e>"},
-     "rationale": "<one or two sentences tying the tests to the verdict>"}
+     "rationale": "<one or two sentences tying the tests to the verdict>",
+     "verdict": "real|artifact-doublet|artifact-lowquality|artifact-batch|artifact-ambient|ambiguous",
+     "action": "keep|flag|drop", "confidence": "high|medium|low"}
     // must cover EVERY cluster of the current clustering (incl. subcluster ids like "5,0")
   ],
   "cell_actions": [
     // optional finer-than-cluster records: only cells of that cluster matching metric op value
     {"cluster": "<id>", "metric": "<numeric obs column>", "op": ">|>=|<|<=", "value": 0.3,
-     "action": "drop|flag", "reason": "doublet|ambient|debris|low-quality|other", "note": "<free text>"}
+     "note": "<free text>", "reason": "doublet|ambient|debris|low-quality|other", "action": "drop|flag"}
   ],
   "overall": "<overall assessment of the integration>"
 }
+Write the tests and the rationale first and decide verdict and action from them.
 Host policy: artifact-batch/drop is adjusted to flag without another agent turn;
 requested_action and host_adjustment record the original request and policy.
 """

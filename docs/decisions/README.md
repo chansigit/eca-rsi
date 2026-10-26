@@ -30,3 +30,4 @@ decision that is replaced keeps its page and says so at the top.
 | [0022](0022-versions-per-child-workflow-and-brakes.md) | A running dataset moves to the current version at every child workflow; four brakes |
 | [0023](0023-doublets-contamination-and-stress-where-they-can-be-judged.md) | Doublets from Scrublet, contamination from decontX, stress within a lineage |
 | [0024](0024-zoom-in-stress-rule.md) | Zoom-in removes stress by its own rule; the agent may only keep |
+| [0025](0025-removals-need-a-code-check.md) | An agent's removal stands only when a code check supports its reason |

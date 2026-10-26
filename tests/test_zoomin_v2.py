@@ -1,6 +1,8 @@
 """Scientific fixture checks; these proposals are fixtures, not live acceptance."""
 import json
 
+import pytest
+
 import anndata as an
 import numpy as np
 import pandas as pd
@@ -165,11 +167,12 @@ def test_zoom_handoffs_and_exact_global_conservation(tmp_path):
 
 
 
-def test_an_unsupported_stress_removal_stays_labelled_through_merge(tmp_path, monkeypatch):
-    """Decision 0017: a stress removal of at least 10 cells whose cluster the stress-gene rule does not mark
-    (the fixture has no stress genes) stays; its cells carry retained_state into annotated_zmip.h5ad, and the
-    tool reply says so. A smaller one stands on the agent's reason. The fixture's clusters hold at most 8
-    cells, so the floor is 5 here."""
+@pytest.mark.parametrize('reason', ['stress', 'other'])
+def test_an_unsupported_removal_stays_labelled_through_merge(tmp_path, monkeypatch, reason):
+    """Decisions 0017 and 0025: a stress removal of at least 10 cells whose cluster the stress-gene rule does not
+    mark (the fixture has no stress genes), or one as other, which no check can support, stays; its cells carry
+    retained_state into annotated_zmip.h5ad, and the tool reply says so. A smaller one stands on the agent's
+    reason. The fixture's clusters hold at most 8 cells, so the floor is 5 here."""
     import copy
     import ecarsi.stages.common as common
     monkeypatch.setattr(common,'CHECK_MIN_CELLS',5)
@@ -187,7 +190,7 @@ def test_an_unsupported_stress_removal_stays_labelled_through_merge(tmp_path, mo
         row = table.loc[group['cluster_id']]
         present = list(row.index[row.gt(0)])
         group['decisions']=[dict(type_clusters=[t],action='remove' if (group['cluster_id'],t) in (big,small) else 'keep',
-            **({'remove_reason':'stress'} if (group['cluster_id'],t) in (big,small) else {}),
+            **({'remove_reason':reason} if (group['cluster_id'],t) in (big,small) else {}),
             confidence='high',evidence='fixture',rationale='fixture') for t in present]
     state=immutable(tmp_path/'stress-state.json',dict(evidence=evidence,kind='lineage',types=types,types_complete=True,
         quality=None,read=['figures/test.png'],lookups=[{'key':QUALITY_KEY}],qc=True))
@@ -197,17 +200,17 @@ def test_an_unsupported_stress_removal_stays_labelled_through_merge(tmp_path, mo
     tool('submit_quality', state['path'], str(args), out)
     reply = json.loads((out / 'result.json').read_text())
     assert not reply.get('is_error'), reply
-    assert 'Kept under the stress policy' in reply['content']
+    assert 'Kept, labelled, by the code checks' in reply['content']
     accepted=verified(reply['state'])['quality']
     decided={(g['cluster_id'],e['type_clusters'][0]):e for g in accepted['clusters'] for e in g['decisions']}
-    assert decided[big]['action']=='keep' and decided[big]['host_adjustment']['state']=='stress'
+    assert decided[big]['action']=='keep' and decided[big]['host_adjustment']['state']==reason
     assert decided[small]['action']=='remove'
     decision=immutable(tmp_path/'stress-decision.json',dict(accepted=True,evidence=evidence,types=types,quality=accepted))
     applied = folder('stress-apply')
     apply_lineage(evidence, decision, applied)
     target=set(ad.obs_names[ad.obs[QUALITY_KEY].astype(str).eq(big[0])&ad.obs[TYPE_KEY].astype(str).eq(big[1])])
     retained=pd.read_csv(applied/'annotation_retained.csv',dtype=str)
-    assert set(retained.cell)<=target and set(retained.state)=={'stress'} and len(retained)
+    assert set(retained.cell)<=target and set(retained.state)=={reason} and len(retained)
     merged = folder('stress-merge')
     merge(built['prepared'], built['plan'], [reference(applied / 'final.json')], merged)
     kept=an.read_h5ad(merged/'annotated_zmip.h5ad',backed='r')

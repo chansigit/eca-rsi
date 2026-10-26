@@ -58,8 +58,11 @@ def discover(root: Path) -> tuple[list[dict], list[Path]]:
     return units, sorted(p for p in files if p.suffix == ".h5ad" and p not in claimed)
 
 
-def result_state(result: dict, step: str) -> str:
-    if result.get("schema_version") != 2 or result.get("step") != step:
+STANDARD_FORM_STEPS = ("standardize", "subset")  # ECA-PP 0.5.6 subset writes a standardize-form product of a part of one
+
+
+def result_state(result: dict, step: str | tuple[str, ...]) -> str:
+    if result.get("schema_version") != 2 or result.get("step") not in ((step,) if isinstance(step, str) else step):
         raise ValueError(f"unsupported result schema/step: {result.get('schema_version')}/{result.get('step')}")
     if not result.get("step_version"):
         raise ValueError("result lacks step_version")
@@ -196,7 +199,7 @@ def inspect_unit(unit: dict) -> dict:
     from .h5ad import open_counts
 
     result = read_json(Path(unit["standardize_result"]))
-    state = result_state(result, "standardize")
+    state = result_state(result, STANDARD_FORM_STEPS)
     record = {**unit, "state": state, "standardize": result, "files": {
         "standardize_result": file_identity(Path(unit["standardize_result"]))}}
     h5 = Path(unit["h5ad"])
