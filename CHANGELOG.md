@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.18 — 2026-10-26
+
+- **An agent's removal stands only when a code check supports its reason** (decision 0025). A removal of 10 or
+  more cells as low-quality needs clearly fewer genes or counts, or a clearly higher mitochondrial fraction, than
+  the cells nothing removes and no gene of its own; as doublet, half its cells above their library's Scrublet
+  threshold and no gene of its own, or in a lineage another lineage's markers on top of its own; ambient and other
+  are never removed. Unsupported removals stay, labelled in obs `retained_state`, under the needs_review kind
+  `removal_retained`; at cross-sample an unsupported drop becomes a flag and a cell rule drops only on a QC metric,
+  not on `doublet_score` or `decontX_contamination`. Every submission schema asks for the evidence before the
+  action. Replayed on the released 05_Fuetal, Lung and PBMC68k: 1,074, 774 and 458 removed cells would have stayed,
+  among them 05_Fuetal's 259 removed as other with draft evidence and 325 Lung macrophages and T cells removed as
+  doublets from the epithelial lineage.
+- **Organize pools a library split into files by cell type** (#72): prepare lists obs columns whose values recur
+  across sources without shared cell IDs, the planning agent may return merges for them, and the plan check refuses
+  unsafe merges. On 05_Fuetal the hint finds exactly its 12 libraries.
+- Organize accepts ECA-PP 0.5.6 subset products (result step `subset`) as standardize-form input.
+
 ## 0.4.17 — 2026-10-25
 
 - **Zoom-in removes stress by its own rule; the agent may only keep** (#68 part 2, decision 0024). Every zoomed
