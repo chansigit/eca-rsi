@@ -288,6 +288,30 @@ def test_a_version_runs_in_the_image_it_was_published_with(tmp_path, monkeypatch
     assert "--runtime" not in worker_command(root, profile, ["python"], tmp_path, [0], 100, False)
 
 
+def test_a_resume_from_the_current_versions_code_stays_on_its_queue(tmp_path, monkeypatch):
+    """resume-dataset and restart-from run from the current version once fell back to the queue the run was started
+    on, a retired version's, where it waited for ever (2026-10-26)."""
+    import json
+    import ecarsi
+
+    versions = tmp_path / "versions"
+    for name, published in (("aaa", "2026-10-08T10:00:00-0700"), ("bbb", "2026-10-08T12:00:00-0700")):
+        (versions / name).mkdir(parents=True)
+        (versions / name / "version.json").write_text(json.dumps(dict(name=name, published=published)))
+    mine = lambda name: dict(json.loads((versions / name / "version.json").read_text()), root=str(versions / name))
+    (versions / "current").symlink_to("aaa")
+    monkeypatch.setattr(ecarsi, "version", lambda: mine("aaa"))
+    assert ecarsi.resume_queue() == "ecarsi-aaa"   # this version is current
+    monkeypatch.setattr(ecarsi, "version", lambda: mine("bbb"))
+    assert ecarsi.resume_queue() == "ecarsi-bbb"   # a candidate newer than current keeps its own
+    (versions / "current").unlink()
+    (versions / "current").symlink_to("bbb")
+    monkeypatch.setattr(ecarsi, "version", lambda: mine("aaa"))
+    assert ecarsi.resume_queue() == "ecarsi-bbb"   # an older version's code moves the run to current
+    monkeypatch.setattr(ecarsi, "version", lambda: None)
+    assert ecarsi.resume_queue() is None           # a checkout: the queue the run was started on
+
+
 def test_current_queue_never_moves_backwards(tmp_path, monkeypatch):
     """A gate runs on a candidate newer than current and must stay there (0022)."""
     import json

@@ -550,10 +550,10 @@ async def main():
     connection = parser.add_mutually_exclusive_group(required=True)
     connection.add_argument("--temporal", help="explicit Temporal Service host:port")
     connection.add_argument("--service-root", type=Path, help="shared Temporal service discovery directory")
-    from .. import current_queue, task_queue, version
+    from .. import resume_queue, task_queue, version
     queue = task_queue()  # this code serves and starts only its own queue; children move to the current version (0022)
-    parser.add_argument("--task-queue", help="default %s; resume-dataset defaults to the current version's queue, "
-                        "else the queue of the run it resumes" % queue)
+    parser.add_argument("--task-queue", help="default %s; resume-dataset and restart-from default to the current "
+                        "version's queue (ecarsi.resume_queue), from a checkout to the queue of the run they resume" % queue)
     commands = parser.add_subparsers(dest="command", required=True)
     p = commands.add_parser("worker")
     p.add_argument("--workflow-slots", type=int, help="concurrent workflow activations; default 2 to keep polling responsive and bound Python history replay; activities and Pool tasks remain concurrent")
@@ -599,7 +599,7 @@ async def main():
     if args.task_queue is None and args.command not in ("resume-dataset", "restart-from"):
         args.task_queue = queue
     if args.task_queue is None and args.command in ("resume-dataset", "restart-from"):
-        args.task_queue = current_queue()  # None for a checkout: the queue the run was started on
+        args.task_queue = resume_queue()
     if args.command == "worker" and version() and args.task_queue != queue:
         parser.error(f"version {version()['name']} serves only its own queue {queue}, not {args.task_queue}")
     if args.command == 'worker' and args.service_root:

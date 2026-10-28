@@ -51,3 +51,11 @@ def current_queue() -> str | None:
     if name == v["name"] or published <= v.get("published", ""):
         return None
     return "ecarsi-" + name
+
+
+def resume_queue() -> str | None:
+    """The queue resume-dataset and restart-from start a dataset's new run on: the current version's when it is
+    newer than this code, else this version's own (current_queue() is None when this version is current); None for
+    a checkout or an image snapshot, which means the queue the run was started on. That one may belong to a retired
+    version, where the run waits at its first task forever (2026-10-26: three restarts on 0.4.17's and 0.4.13's)."""
+    return current_queue() or (task_queue() if version() else None)
