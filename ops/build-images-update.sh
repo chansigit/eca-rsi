@@ -2,7 +2,8 @@
 # Update the two images in place of a full rebuild: start from the current pair, replace /opt/eca-rsi with a fresh
 # snapshot of the repository (ecarsi and, since decision 0018, the kernels and harness_bridge), take out the wheels
 # those packages were installed from, (optionally) swap third-party wheels, then pack by hand.
-# usage: FROM=20261001-2 STAMP=20261001-3 WHEELS=<dir of wheels to install> build-images-update.sh
+# usage: FROM=20261001-2 STAMP=20261001-3 WHEELS=<dir of wheels to install> HQ_BIN=<hq binary> build-images-update.sh
+#   HQ_BIN: a HyperQueue binary for /opt/rsi-bin/hq in both images (server and workers must run one version)
 # Settings: ~/.config/ecarsi/deployment.env (the images' directory, DEV_WORKTREE, HOSTPY, BUILD_DIR).
 set -euo pipefail
 export LC_ALL=C LANG=C
@@ -10,6 +11,8 @@ set -a; . "$HOME/.config/ecarsi/deployment.env"; set +a
 IMAGES=$(dirname "$IMG")
 : "${FROM:?stamp of the images to start from}" "${STAMP:?stamp of the new images}"
 WHEELS=${WHEELS:-}
+HQ_BIN=${HQ_BIN:-}
+[ -z "$HQ_BIN" ] || [ -x "$HQ_BIN" ] || { echo "HQ_BIN is not an executable: $HQ_BIN"; exit 2; }
 REPO=$DEV_WORKTREE
 HP=$HOSTPY
 WORK=$BUILD_DIR/images-$STAMP
@@ -56,6 +59,7 @@ for name in control science; do
       for site in ${sites[@]+"${sites[@]}"}; do "$HP" -m pip install -q --no-deps --no-compile --target "$site" "$whl"; done
     done
   fi
+  if [ -n "$HQ_BIN" ]; then mv "sb-$name/opt/rsi-bin/hq" "replaced/$name-hq"; install -m 755 "$HQ_BIN" "sb-$name/opt/rsi-bin/hq"; fi
   echo "$(date +%T) pack $name"
   /usr/libexec/apptainer/bin/mksquashfs "sb-$name" "$name.sqfs" -noappend -all-root -processors 4 >/dev/null
   apptainer sif new "$IMAGES/rsi-$name-$STAMP.sif"
@@ -72,7 +76,9 @@ dup = {}
 for d in m.distributions():
     dup.setdefault(d.metadata['Name'].lower().replace('_','-'), []).append(d.version)
 dups = {k: x for k, x in dup.items() if len(set(x)) > 1}
-print('$name', json.load(open('/opt/eca-rsi/BUILD.json'))['eca_rsi_commit'], v, 'duplicates:', dups or 'none', 'ecarsi:', ecarsi.__file__)
+import subprocess
+print('$name', json.load(open('/opt/eca-rsi/BUILD.json'))['eca_rsi_commit'], v, 'duplicates:', dups or 'none', 'ecarsi:', ecarsi.__file__,
+      subprocess.run(['/opt/rsi-bin/hq', '--version'], capture_output=True, text=True).stdout.strip())
 if dups: raise SystemExit('two versions of one distribution: a wheel did not replace the old one')
 import importlib
 # decision 0018: the repository's packages come from the snapshot, never from an installed copy

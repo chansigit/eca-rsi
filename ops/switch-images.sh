@@ -4,6 +4,7 @@
 # Settings: ~/.config/ecarsi/deployment.env; this script rewrites its IMG and SCIENCE_IMG lines.
 # usage: switch-images.sh <stamp> <science sha256> <host:job> ...
 # A worker with a CPU slice (the plane node) is re-added by hand: warm_pool add-worker <host> --job-id <id> --cpus ... --memory-mb ...
+# START: the components to start (default all; leave out pruner while restart-from iterates); PERISCOPE=0: do not (re)start it.
 set -e -o pipefail
 OPS=$(cd "$(dirname "$0")" && pwd)
 STAMP=$1; SHA=$2; shift 2
@@ -34,8 +35,8 @@ apptainer exec --cleanenv --bind "$BINDS" --env PYTHONSAFEPATH=1 --env PYTHONPAT
 echo "== repoint deployment.env"
 sed -i -E "s#rsi-(control|science)-[0-9]{8}-[0-9]+\.sif#rsi-\1-$STAMP.sif#g" "$ENVFILE"
 grep -ho "rsi-[a-z]*-[0-9-]*\.sif" "$ENVFILE" | sort -u | tr '\n' ' '; echo
-echo "== start"; bash $OPS/control-plane.sh start temporal hq scheduler bridge runners coordinators fleet-status pruner 2>&1 | grep -E "eca-rsi:|running|stopped"
-bash $OPS/restart-periscope.sh
+echo "== start"; bash $OPS/control-plane.sh start ${START:-temporal hq scheduler bridge runners coordinators fleet-status pruner} 2>&1 | grep -E "eca-rsi:|running|stopped"
+[ "${PERISCOPE:-1}" = 0 ] || bash $OPS/restart-periscope.sh
 echo "== workers"
 HC=$BASE/image-code
 for hj in "$@"; do h=${hj%%:*}; j=${hj##*:}
