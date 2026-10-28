@@ -4,7 +4,7 @@
 
 ECA-RSI coordinates sample-level QC, cross-sample integration, and lineage-level refinement. The workflow starts from [ECA-PP](https://github.com/chansigit/eca-pp) outputs. It runs dedicated analysis packages. It repeats integration and refinement on the surviving cells until the process meets a numerical stopping rule. Each analysis unit receives an annotated H5AD, reports, a cell ledger, and unresolved questions for review.
 
-The `ecarsi` Python package (0.4.18) provides the implementation, with its analysis kernels in the same repository. It runs from two Apptainer images and installs nothing on the host. New to the code: read [docs/OVERVIEW.md](docs/OVERVIEW.md). To deploy: [INSTALL.md](INSTALL.md).
+The `ecarsi` Python package (0.4.19) provides the implementation, with its analysis kernels in the same repository. It runs from two Apptainer images and installs nothing on the host. New to the code: read [docs/OVERVIEW.md](docs/OVERVIEW.md). To deploy: [INSTALL.md](INSTALL.md).
 
 ## Install
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.19 — 2026-10-28
+
+- **restart-from and resume-dataset stay on the current version.** Run from the current version's own code they
+  fell back to the queue the dataset was started on; when that version was retired, no coordinator polled it and
+  the run waited at its first task without an error (05_Fuetal and Lung on 0.4.17's queue, PBMC68k on 0.4.13's,
+  22 hours on 2026-10-26). They now default to the current version's queue (`ecarsi.resume_queue`).
+
 ## 0.4.18 — 2026-10-26
 
 - **An agent's removal stands only when a code check supports its reason** (decision 0025). A removal of 10 or
