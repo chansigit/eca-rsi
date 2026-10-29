@@ -4,6 +4,8 @@
 # Settings: ~/.config/ecarsi/deployment.env; this script rewrites its IMG and SCIENCE_IMG lines.
 # usage: switch-images.sh <stamp> <science sha256> <host:job> ...
 # A worker with a CPU slice (the plane node) is re-added by hand: warm_pool add-worker <host> --job-id <id> --cpus ... --memory-mb ...
+# A version runs only on workers of the compute image it records (INSTALL.md A.11): publish one on the new pair first
+# (VERSION_IMG=... VERSION_SCIENCE_IMG=... publish-version.sh), then switch, gate it and make it current.
 # START: the components to start (default all; leave out pruner while restart-from iterates); PERISCOPE=0: do not (re)start it.
 set -e -o pipefail
 OPS=$(cd "$(dirname "$0")" && pwd)
@@ -12,6 +14,9 @@ ENVFILE=$HOME/.config/ecarsi/deployment.env
 set -a; . "$ENVFILE"; set +a
 CTL=$(dirname "$IMG")/rsi-control-$STAMP.sif; SCI=$(dirname "$SCIENCE_IMG")/rsi-science-$STAMP.sif
 [ -f "$CTL" ] && [ -f "$SCI" ] || { echo "missing images for $STAMP"; exit 2; }
+grep -qs "\"science_image\": \"$SCI\"" "$CODE_HOME"/versions/*/version.json || {  # 2026-10-28: 0.4.19 on the old pair, no worker
+  echo "no published version records $SCI: its requests would find no worker after the switch;"
+  echo "publish one first: VERSION_IMG=$CTL VERSION_SCIENCE_IMG=$SCI bash $OPS/publish-version.sh"; exit 2; }
 n=$(bash $OPS/run.sh control $OPS/count-wf.py 2>&1 | grep -oE 'running executions: [0-9]+'); echo "$n"; [ "$n" = "running executions: 0" ]
 echo "== stop worker supervisors"
 for d in $POOL/worker-state/*/; do

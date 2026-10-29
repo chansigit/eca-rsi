@@ -21,7 +21,7 @@ See [README.md](README.md) to learn what the system does and how to read its res
 | control image | `rsi-control-<stamp>.sif` (~250 MB) | the control Python environment (`/opt/rsi-control`), Temporal 1.32.0 and PostgreSQL 16.15 (`/opt/rsi-services/{temporal,postgres}`), HyperQueue (`/opt/rsi-bin/hq`), and a snapshot of eca-rsi (`/opt/eca-rsi`, with `BUILD.json`) |
 | compute image | `rsi-science-<stamp>.sif` (~3.9 GB) | the numerical stack (`/opt/rsi-python`, Python 3.12.14), `/opt/rsi-control`, HyperQueue, and the same eca-rsi snapshot, which carries the kernels (decision 0018). Workers and Periscope run here |
 
-Keep the images on a non-purged filesystem, for example `$GROUP_HOME/<user>/eca/images/`. Use one `<stamp>` for a pair. The HyperQueue binary is the owner's patched build (branch `local` of `chansigit/hyperqueue`).
+Keep the images on a non-purged filesystem, for example `$GROUP_HOME/<user>/eca/images/`. Use one `<stamp>` for a pair. The HyperQueue binary is the upstream release v0.27.0 (`HQ_BIN=` of `ops/build-images-update.sh`, images 20261028-1); it contains the fix of the priority panic `It4innovations/hyperqueue#1135`, for which the owner's patched build (branch `local` of `chansigit/hyperqueue`) ran until then.
 
 The files `container/control-requirements.lock` and `container/science-requirements.lock` define the pinned Python environments of the two images (`/opt/rsi-control`, `/opt/rsi-python`). The package versions inside the images are:
 
@@ -213,7 +213,7 @@ Every worker must show `RUNNING` with the same `runtime/<digest>` resource. Peri
 
 ### A.9 Switch to a new image pair
 
-Switch only when the report shows `running executions: 0`. The script `ops/switch-images.sh <stamp> <compute image sha256> <host:jobid>...` executes these steps in order:
+First publish a version on the new pair (`VERSION_IMG=<control .sif> VERSION_SCIENCE_IMG=<compute .sif> bash ops/publish-version.sh`): a version's requests go only to workers of the compute image it records (A.11), so after the switch the current version has no worker until a version of the new pair is current; the script refuses while none is published. Switch only when the report shows `running executions: 0`. The script `ops/switch-images.sh <stamp> <compute image sha256> <host:jobid>...` executes these steps in order:
 
 1. Stop every worker supervisor. Send SIGTERM to the `pid` in `pool/worker-state/*/worker.json`.
 2. Stop the plane.
@@ -222,7 +222,7 @@ Switch only when the report shows `running executions: 0`. The script `ops/switc
 5. Start the plane and Periscope.
 6. Re-add the workers.
 
-Then run the release gate on the new pair, in the background: `bash ops/runpy.sh ops/gate.py start`, then `bash ops/runpy.sh ops/gate.py wait <run_id>`. It runs `gate-dataset.json` end to end and checks that every unit is released, that no step degraded, that every zoomed lineage has its report and that the display zone and work archive exist. Keep the previous pair until the gate passes; if it fails, switch back.
+Then run the release gate on the new pair, in the background: `bash ops/runpy.sh ops/gate.py start`, then `bash ops/runpy.sh ops/gate.py wait <run_id>`. It runs `gate-dataset.json` end to end and checks that every unit is released, that no step degraded, that every zoomed lineage has its report and that the display zone and work archive exist. Run it on the version of the new pair (`VERSION=<name>`), then make that version current (A.10 from step 4). Keep the previous pair until the gate passes; if it fails, switch back.
 
 ### A.10 Ship a code change as a version
 
