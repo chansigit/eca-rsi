@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.20 — 2026-10-28
+
+- **The code of 0.4.19 on the image pair 20261028-1**, whose HyperQueue is the upstream release v0.27.0 (it contains
+  the fix of the priority panic #1135; the owner's patched fork ran until then). A version runs only on workers of
+  the compute image it records, so after the switch 0.4.19 (published on 20261006-2) had no worker.
+- **`ops/switch-images.sh` refuses until a published version records the new compute image**; INSTALL.md A.9
+  publishes a version on the new pair first and gates that one.
+
 ## 0.4.19 — 2026-10-28
 
 - **restart-from and resume-dataset stay on the current version.** Run from the current version's own code they
