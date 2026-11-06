@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.4.22 — 2026-11-06
+
+The cross-sample (MSP) review with the owner, #73; decision 0025 amended.
+
+- **The checks of an agent's removal count and test the whole cluster**, the cells msp's rule list P (fragments,
+  doublet checks) already holds included, at cross-sample and zoom-in. With P left out, an agent's doublet drop
+  almost never passed (the high-scoring cells were mostly in P), and a cluster with fewer than 10 cells outside P
+  could not be tested.
+- **Two phases at cross-sample.** A removal of 10 or more cells stands when either phase asks for it and the check
+  of its reason passes; #71's guard (a quality drop of a cluster the type phase kept becomes a flag) now holds only
+  below 10 cells. Below 10 cells, where nothing is checked, a removal stands only when both phases ask for it: a
+  small type removal that quality does not drop stays, flagged and labelled (`removal_retained`).
+- **Quality cell rules need their line among the cluster's outliers.** A rule drops only for low quality, on
+  `pct_counts_mt` cut above or genes or counts cut below, with its line beyond the cluster's median by 5 MADs (osp's
+  multiple; log1p for genes and counts; the whole cluster, not per sample), and, over 10 cut cells, no gene of
+  their own; every other rule's drop is a flag. Since 0.4.18, 41 drop rules had removed 2,282 cells at lines from
+  13 % to 35 % mitochondrial reads, up to 39 % of a cluster.
+- **A sample exclusion names its reason.** `low-quality` is checked when the inclusion agent submits: clearly fewer
+  genes or counts, or a clearly higher mitochondrial fraction, than the included samples' cells, and no gene of its
+  own; otherwise the sample is included and needs_review lists it. `not-this-dataset` cannot be checked and stands.
+- **No cross-sample refinement.** The quality agent never asked for a split (0 of 145 sessions read; no split in
+  1,251 published stages). The workflow is a straight line; a spec's `max_refinements` is accepted and ignored;
+  zoom-in keeps its own refinement tool.
+
 ## 0.4.21 — 2026-11-05
 
 - **OSP removes cells only by its QC rules; its annotation agent only flags** (decision 0026). Until now every
