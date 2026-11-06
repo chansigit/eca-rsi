@@ -20,22 +20,28 @@ from .contract import (
     proposal as parse_proposal,
     schema,
 )
-from .common import BASE, artifact, assemble, check_bundle, deg, deg_batch, publish_bundle, sealed
+from .common import BASE, artifact, assemble, check_bundle, deg, deg_batch, sealed
 from .common import save_gene_summary
 from . import tools
 from .common import (
+    CHECK_MIN_CELLS,
     KEPT_BY,
+    LOW_QUALITY_TESTS,
     REMOVAL_CHECK_POLICY,
     STRESS_HOST_POLICY,
+    cell_rule_evidence,
+    clearly,
     comparison_cells,
     dying_evidence,
     fragment_reasons,
     fragment_table,
     guard_removal,
     guard_retained_drops,
+    guard_small_type_removals,
     guard_stress,
     guard_unchecked_drops,
     removal_evidence,
+    small_type_removals,
     mark_retained,
     soft_fragments,
     stress_flags,
@@ -317,8 +323,6 @@ def integrate(data, inspected_ref, inclusion_ref, destination, inputs):
         n_input=inspected['n_input'],
         n_selected=len(data),
         backend=backend,
-        type_entries={},
-        quality_entries={},
         type_scope=sorted(data.obs[BASE].astype(str).unique()),
     )
 
@@ -327,62 +331,6 @@ def _data(bundle):
     import anndata as an
 
     return an.read_h5ad(artifact(bundle, 'integrated.h5ad'))
-
-
-def refine(evidence_ref, types_ref, decision_ref, destination):
-    from msp.api import subcluster_once
-    from msp.api import load_removal_mask
-    from msp.api import prepare_deg, save_deg_input
-    from msp.api import qc_outputs
-    from msp.api import save_single_umap, slug
-
-    bundle, typed, decision = verified(evidence_ref), verified(types_ref), verified(decision_ref)
-    if (
-        decision.get('accepted') is not True
-        or not decision.get('refinement')
-        or decision['evidence'] != evidence_ref
-        or decision['types'] != types_ref
-        or typed.get('accepted') is not True
-        or typed['evidence'] != evidence_ref
-    ):
-        raise ValueError('Refinement requires a validated request and matching accepted types')
-    data = _data(bundle)
-    request = decision['refinement']
-    parent = request['cluster']
-    mask = load_removal_mask(artifact(bundle, 'preannotation_removal.csv').parent, data)
-    version = bundle['version'] + 1
-    if version > verified(bundle['inspected'])['spec']['max_refinements']:
-        raise ValueError('Refinement exceeds the configured limit')
-    key = 'cross_sub_' + str(version)
-    n, message = subcluster_once(data, BASE, parent, request['resolution'], key, mask, compute_markers=False)
-    if n < 2:
-        raise ValueError(message + '; no new evidence version published')
-    affected = set(data.obs.loc[data.obs[BASE].astype(str).eq(parent), key].astype(str))
-    entries = {str(e['cluster_id']): e for e in typed['proposal']['clusters']}
-    # Recheck merge partners too: their references cannot point at a retired parent.
-    from msp.api import components
-
-    affected.update(c for c in components(entries)[parent] if c != parent)
-    preserved = {c: e for c, e in entries.items() if c != parent and c not in affected}
-    data.obs['cross_base_v' + str(bundle['version'])] = data.obs[BASE].copy()
-    data.obs[BASE] = data.obs.pop(key).cat.remove_unused_categories()
-    eligible = data[~mask]
-    keys = read(artifact(bundle, 'deg_plan.json'))['keys']
-    labels = {k: (eligible.obs[k].cat.codes.to_numpy(), list(eligible.obs[k].cat.categories)) for k in keys}
-    values, plan = prepare_deg(eligible.X, list(data.var_names), labels, dict(data.uns.get('log1p', {})), eligible.obsm['X_pca_harmony'], keys)
-    values.obs_names = eligible.obs_names.copy()
-    save_deg_input(values, destination / 'deg_input')
-    save(destination / 'deg_plan.json', {**plan, 'keys': keys, 'top_n_de': 50})
-    data.write_h5ad(destination / 'integrated.h5ad')
-    save_gene_summary(data, [BASE], destination)
-    figures = destination / 'figures'
-    figures.mkdir()
-    qc_outputs(data, data.uns['msp']['batch_col'], 'standissect_product', str(destination), str(figures), keys, [1.0, 2.0])
-    save_single_umap(data, BASE, str(figures / ('umap_' + slug(BASE) + '.png')), repel=True)
-    tasks = [dict(plan_index=i, cluster=c) for i, item in enumerate(plan['plan']) for c in [None, *[c for c in item['valid'] if item['top3'].get(c)]]]
-    metadata = {k: v for k, v in bundle.items() if k not in {'files', 'prepared', 'comparisons'}}
-    metadata.update(version=version, tasks=tasks, type_entries=preserved, type_scope=sorted(affected), prior_types=types_ref, refinement=decision_ref)
-    publish_bundle(destination, 'prepared.json', evidence_ref, **metadata)
 
 
 def _proposal_schema(phase):
@@ -399,12 +347,7 @@ def _proposal_schema(phase):
         )
     from msp.api import INSPECTION_SCHEMA_DOC
 
-    return (
-        INSPECTION_SCHEMA_DOC + '\nInstead of a final proposal, you may submit '
-        '{"refinement": {"cluster": "id", "resolution": 1.0, "reason": "evidence and why a split is necessary"}}. '
-        'The coordinator schedules this split, fresh DEG, and targeted type review before restarting quality. '
-        'Do not claim a split was performed by submitting this request.'
-    )
+    return INSPECTION_SCHEMA_DOC
 
 
 def inline_context(bundle):
@@ -457,8 +400,6 @@ def agent_spec(spec, evidence_ref, phase, parent, types_ref=None):
         prompt += '\nContext: ' + json.dumps(spec['config']) + '\nEvidence version: ' + evidence_ref['sha256']
         prompt += '\nStress policy: ' + stress_policy(spec)
         prompt += '\nAssigned type clusters: ' + json.dumps(bundle['type_scope']) + '\nBase key: ' + BASE
-        if bundle.get('type_entries'):
-            prompt += '\nUse type_context for preserved type entries outside your assignment; do not resubmit them.'
         if types_ref:
             prompt += '\nRead the accepted type labels with type_context before assessing quality.'
         prompt += '\n\n' + inline_context(bundle)
@@ -586,7 +527,7 @@ def answer(name, state, args, bundle, destination):
         state['inventories'] = sorted(set(state.get('inventories', [])) | {e['sample'] for e in page})
         return dict(content=page, next_offset=nxt)
     if name == 'type_context':
-        entries = verified(state['types'])['proposal']['clusters'] if state['types'] else list(bundle['type_entries'].values())
+        entries = verified(state['types'])['proposal']['clusters'] if state['types'] else []
         state['type_read'] = sorted(set(state.get('type_read', [])) | {str(e['cluster_id']) for e in entries})
         return dict(content=entries, next_offset=None)
     if name in {'deg_lookup', 'deg_sql'}:
@@ -647,6 +588,7 @@ def submit(state, args, bundle):
                 'Read the full annotation proposal (read_evidence on <sample>/annotation_proposal.json) of each sample you exclude before inclusion: '
                 + str(unread)
             )
+        unchecked = _exclusion_check(proposal, bundle)
     else:
         data = _data(bundle)
         clusters = sorted(data.obs[BASE].astype(str).unique())
@@ -672,7 +614,7 @@ def submit(state, args, bundle):
             proposed = {str(e['cluster_id']): guard_batch_annotation(e) for e in proposal['clusters']}
             if set(proposed) != set(bundle['type_scope']) or len(proposed) != len(proposal['clusters']):
                 raise ValueError('Cover each assigned type cluster exactly once')
-            entries = {**bundle['type_entries'], **proposed}
+            entries = proposed
             problems = validate_annotation(entries, clusters)
             problems += check_coarse_boundaries(entries, load_paga_neighbors(artifact(bundle, 'deg.sqlite').parent, BASE), proposal.get('boundary_reviews', []))
             if not problems:
@@ -696,32 +638,23 @@ def submit(state, args, bundle):
                 raise ValueError('Type evidence is incompatible')
             if set(state.get('type_read', [])) != set(clusters):
                 raise ValueError('Read accepted type context for every cluster before assessing quality')
-            if 'refinement' in proposal:
-                import math
-
-                request = proposal['refinement']
-                if set(request) != {'cluster', 'resolution', 'reason'} or request['cluster'] not in clusters:
-                    raise ValueError('Refinement must name a current cluster and explain the split')
-                if type(request['resolution']) not in (int, float) or not math.isfinite(request['resolution']) or request['resolution'] <= 0:
-                    raise ValueError('Resolution must be finite and positive')
-                if not isinstance(request['reason'], str) or not request['reason'].strip():
-                    raise ValueError('Explain the refinement evidence')
-                if bundle['version'] >= verified(bundle['inspected'])['spec']['max_refinements']:
-                    raise ValueError('Refinement limit reached; submit an uncertain quality assessment using available evidence')
-                response['refinement'] = request
-                problems = []
-            else:
-                problems = validate_inspection(proposal, clusters, data.obs)
-                if not problems:
-                    guard_batch_actions(proposal)
-                    held = guard_retained_drops(proposal, type_kept(accepted['proposal']['clusters']))
-                    unchecked = guard_unchecked_drops(proposal, _drop_check(bundle, data, proposal, accepted['proposal']['clusters']))
+            problems = validate_inspection(proposal, clusters, data.obs)
+            if not problems:
+                typed = accepted['proposal']['clusters']
+                sizes = data.obs[BASE].astype(str).value_counts().to_dict()
+                guard_batch_actions(proposal)
+                held = guard_retained_drops(proposal, type_kept(typed), sizes)
+                unchecked = guard_small_type_removals(proposal, typed, sizes)
+                check, cell_check = _drop_check(bundle, data, proposal, typed)
+                unchecked.update({c: a for c, a in guard_unchecked_drops(proposal, check, cell_check).items() if c not in unchecked})
         if problems:
             raise ValueError('; '.join(problems))
     response.update(accepted=True, proposal=proposal, evidence=state['evidence'], types=state['types'])
     if converted:
         response['host_adjustments'] = [{'cluster': c, **proposed[c]['host_adjustment']} for c in converted]
-    if held or unchecked:
+    if phase == 'inclusion' and unchecked:
+        response['host_adjustments'] = [{'sample': c, 'include': True, **adjustment} for c, adjustment in unchecked.items()]
+    elif held or unchecked:
         response['host_adjustments'] = [
             {'cluster': c, 'action': 'flag', 'policy': policy, 'reason': KEPT_BY[policy] + ': dropped cells are flagged'}
             for c, policy in held.items()
@@ -729,10 +662,78 @@ def submit(state, args, bundle):
     return response
 
 
+def _detection(path):
+    """{gene: share of a sample's cells in which it is detected}, from its counts."""
+    import numpy as np
+    import pandas as pd
+    from .h5ad import open_counts
+
+    sample = open_counts(path)
+    try:
+        hit = sample.rows(np.arange(sample.n_obs)) > 0
+        return pd.Series(np.asarray(hit.sum(axis=0)).ravel() / sample.n_obs, index=sample.var_names)
+    finally:
+        sample.file.close()
+
+
+def _exclusion_check(proposal, bundle):
+    """Decision 0025 on the inclusion agent's sample exclusions (owner, 2026-11-06), in place. An exclusion as
+    low-quality of CHECK_MIN_CELLS cells or more stands only when the sample's cells have clearly fewer genes or
+    counts, or a clearly higher mitochondrial fraction, than the cells of the samples it includes (`clearly`), and
+    the sample has no gene of its own against them (detected in OWN_GENE_IN of its cells and at most OWN_GENE_OUT
+    of every included sample's); otherwise the sample is included and needs_review lists it (removal_retained).
+    An exclusion as not of this dataset stands: no code can check it. Returns {sample: host_adjustment}."""
+    import numpy as np
+    import pandas as pd
+    from msp.api import OWN_GENE_IN, OWN_GENE_OUT
+    from .h5ad import read_obs
+
+    sizes = {s['sample']: s['n_cells'] for s in bundle['samples']}
+    asked = [s for s in proposal['samples'] if not s['include'] and s['exclude_reason'] == 'low-quality' and sizes[s['sample']] >= CHECK_MIN_CELLS]
+    if not asked:
+        return {}
+    peers = [s['sample'] for s in proposal['samples'] if s['include']]
+    paths = {s['sample']: artifact(check_bundle(s['bundle']), 'clustered.h5ad') for s in bundle['samples']}
+    columns = [column for column, _ in LOW_QUALITY_TESTS]
+
+    def qc(name):
+        obs = read_obs(paths[name])
+        return obs[[c for c in columns if c in obs]]
+
+    peer_obs = pd.concat([qc(n) for n in peers]) if peers else pd.DataFrame(columns=columns)
+    detected, adjusted = {}, {}
+    for entry in asked:
+        name = entry['sample']
+        mine = qc(name)
+        obs = pd.concat([mine, peer_obs])
+        target = np.arange(len(obs)) < len(mine)
+        hits = [clearly(obs, target, ~target, column, sign) for column, sign in LOW_QUALITY_TESTS]
+        notes, supported = [note for _, note in hits], any(ok for ok, _ in hits)
+        if supported:
+            others = [n for n in peers if sizes[n] >= CHECK_MIN_CELLS]
+            for n in [name, *others]:
+                if n not in detected:
+                    detected[n] = _detection(paths[n])
+            frac = pd.concat([detected[n].rename(n) for n in [name, *others]], axis=1).fillna(0.0)
+            outside = frac[others].max(axis=1) if others else 0.0
+            n_own = int(((frac[name] >= OWN_GENE_IN) & (outside <= OWN_GENE_OUT)).sum())
+            notes.append(f'{n_own} genes of its own')
+            supported = n_own == 0
+        note = '; '.join(notes) + ' against the included samples'
+        if supported:
+            entry['host_evidence'] = note
+            continue
+        entry.update(requested_include=False, include=True, review_required=True, host_adjustment=dict(
+            policy=REMOVAL_CHECK_POLICY, state='low-quality', n_cells=int(sizes[name]), evidence=note,
+            reason='The low-quality exclusion is not supported by the code check; the sample is included.'))
+        adjusted[name] = entry['host_adjustment']
+    return adjusted
+
+
 def _drop_check(bundle, data, proposal, typed):
-    """check(cluster, reason) for guard_unchecked_drops (decision 0025): a dropped cluster's cells that nothing
-    removes before inspect against the cells nothing removes (pre-annotation, the type phase, this proposal's
-    drops); its own genes against the other clusters."""
+    """(check(cluster, reason), cell_check(rule)) for guard_unchecked_drops (decision 0025): a dropped cluster's
+    cells, the rule list P's included, against the cells nothing removes (P, the type phase, this proposal's
+    drops); its own genes against the other clusters. A cell rule: cell_rule_evidence over its whole cluster."""
     from msp.api import load_removal_mask
 
     base = data.obs[BASE].astype(str)
@@ -742,16 +743,16 @@ def _drop_check(bundle, data, proposal, typed):
     counts = data.layers['counts'] if 'counts' in data.layers else data.X
 
     def check(cluster, reason):
-        target = base.eq(cluster).to_numpy() & ~pre
+        target = base.eq(cluster).to_numpy()
         return (int(target.sum()), *removal_evidence(reason, data.obs, target, rest, counts, base))
 
-    return check
+    return check, lambda rule: cell_rule_evidence(rule, data.obs, base.eq(str(rule['cluster'])).to_numpy(), counts)
 
 
 def _stress_guard(bundle, data, entries, proposed):
     """Decisions 0017 and 0025 on the type removals of this submission, in place; the clusters that stay. The dying
     check compares a cluster with the clusters of its coarse label that no entry removes; any other removal's
-    check compares its cells that pre-annotation leaves with the cells nothing removes."""
+    check compares the whole cluster, the rule list P's cells included, with the cells nothing removes."""
     from msp.api import load_removal_mask
 
     policy = stress_policy(verified(bundle['inspected'])['spec'])
@@ -772,7 +773,7 @@ def _stress_guard(bundle, data, entries, proposed):
             lambda: dying_evidence(data.obs, target, comparison_cells(data.obs, same, removing)),
             (BASE, cid) in mito,
         ) or guard_removal(
-            e, int(target.sum()), lambda: removal_evidence(e['remove_reason'], data.obs, target & ~pre, ~removing & ~pre, counts, base)
+            e, int(target.sum()), lambda: removal_evidence(e['remove_reason'], data.obs, target, ~removing & ~pre, counts, base)
         ):
             converted.append(cid)
     for cid in converted:  # a kept cluster cannot merge into a removed one
@@ -807,6 +808,29 @@ def _contamination(data, typed_entries, outliers, removed, destination):
     return table, data.obs_names.isin(hit)
 
 
+def _keep_small_removals(typed, quality, sizes):
+    """The accepted type record with each removal of small_type_removals() kept: the quality phase did not drop it,
+    and its submission carries the host_adjustment that labels the cells (guard_small_type_removals). A kept
+    cluster cannot merge into a removed one."""
+    import copy
+
+    small = small_type_removals(typed['proposal']['clusters'], quality['clusters'], sizes)
+    if not small:
+        return typed
+    typed = copy.deepcopy(typed)
+    entries = {str(e['cluster_id']): e for e in typed['proposal']['clusters']}
+    adjustments = {str(e['cluster']): e.get('host_adjustment') for e in quality['clusters']}
+    for cid in small:
+        e = entries[cid]
+        e.update(requested_action='remove', requested_remove_reason=e['remove_reason'], action='keep', remove_reason=None,
+                 review_required=True, host_adjustment=adjustments[cid])
+    for cid in small:
+        e = entries[cid]
+        if e['merge_target'] is not None and entries[str(e['merge_target'])]['action'] == 'remove':
+            e['requested_merge_target'], e['merge_target'] = e['merge_target'], None
+    return typed
+
+
 def finalize(evidence_ref, types_ref, quality_ref, destination):
     import pandas as pd
     from msp.api import apply_annotation, plot_annotated, validate_annotation
@@ -825,6 +849,7 @@ def finalize(evidence_ref, types_ref, quality_ref, destination):
     problems += validate_inspection(quality['proposal'], clusters, data.obs)
     if problems:
         raise ValueError('; '.join(problems))
+    typed = _keep_small_removals(typed, quality['proposal'], data.obs[BASE].astype(str).value_counts().to_dict())
     apply_inspection(data, BASE, quality['proposal'])
     pre = load_removal_mask(artifact(bundle, 'preannotation_removal.csv').parent, data)
     # Preserve distinct numerical and inherited sources instead of a generic "filtered" reason.
@@ -987,8 +1012,6 @@ def main():
         compute(ref(0), ref(1), dest)
     elif a.operation == 'compute-round':
         compute_round(ref(0), dest)
-    elif a.operation == 'refine':
-        refine(ref(0), ref(1), ref(2), dest)
     elif a.operation == 'deg':
         deg(ref(0), int(a.args[1]), dest)
     elif a.operation == 'deg-batch':

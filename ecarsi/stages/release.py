@@ -127,6 +127,9 @@ def collect(unit_ref, *, complete=True):
             stage(name, prefix, current, gone, alive, number, ref, bundle)
             for filename in ('annotation_proposal.json', 'inspection_proposal.json', 'zmip_plan.json'):
                 decision(bundle, filename, number, kind.replace('_', '-'))
+            inclusion = verified(bundle['evidence']).get('inclusion') if kind == 'cross_sample' and bundle.get('evidence') else None
+            if inclusion:  # round one's sample inclusion: the exclusions its code check turned down (#73)
+                decisions.append(dict(round=number, stage='cross-sample', scope='', source=inclusion, value=verified(inclusion)))
             for lineage_ref in bundle.get('lineages', []):
                 lineage = verified(lineage_ref)
                 decision(lineage, 'annotation_proposal.json', number, 'zoom-in', lineage['lineage']['name'])
@@ -347,6 +350,13 @@ def review_items(unit, exclusions, decisions, root=None, ledger=None):
         quality = prop.get('quality', prop if 'inspection' in Path(entry['source']['path']).name else {})
         items += reassign_items(entry, quality)
         items += flag_items(entry, quality)
+        for sample in prop.get('proposal', {}).get('samples', []) if 'accepted' in prop else []:
+            adjustment = sample.get('host_adjustment') or {}
+            if adjustment.get('policy') == REMOVAL_CHECK_POLICY:
+                items.append(Item('removal_retained', entry['round'], entry['stage'], sample['sample'],
+                    n_cells=adjustment.get('n_cells'), action='include',
+                    note=f"sample exclusion as {adjustment['state']} not supported: {adjustment['evidence']}",
+                    link=entry['source'].get('link', entry['source']['path'])))
         for warning in prop.get('host_warnings', []):
             items.append(Item('plan_warning', entry['round'], entry['stage'], entry['scope'],
                 note=str(warning), link=entry['source'].get('link', entry['source']['path'])))

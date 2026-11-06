@@ -25,6 +25,18 @@ Decide, sample by sample, whether it enters harmony integration.
 - **Different biology is not low quality.** A sample with a different
   composition (more immune cells, a rare population, disease vs normal)
   must NOT be excluded for that.
+- **Two reasons only**, named in `exclude_reason`:
+  - `low-quality`: the code checks it against the samples you include.
+    The sample is excluded only when its cells have clearly fewer genes or
+    counts, or a clearly higher mitochondrial fraction, than theirs, and it
+    has no gene of its own; otherwise it is included and listed for review.
+  - `not-this-dataset`: wrong tissue or species, a duplicate upload, a
+    control or technical sample. No code can check it; it is listed for
+    review.
+- **Not reasons:** batch differences, a different composition or treatment,
+  and few cells (in absolute terms or against the other batches). Small
+  samples are handled downstream; a poorly corrected batch is the quality
+  review's to flag.
 - **When in doubt, include.** Cells marked drop/flag by osp's annotation
   still enter integration on purpose — suspicious cells may cluster with
   counterparts from other samples, and cluster-level review happens after
@@ -36,8 +48,9 @@ Decide, sample by sample, whether it enters harmony integration.
 
 Return ONLY the structured result:
 
-- `samples`: one entry per sample — `{sample, include, reason}`; `reason`
-  is one or two sentences citing what you saw (figures and numbers), for
-  the audit trail. Every sample must appear exactly once.
+- `samples`: one entry per sample — `{sample, include, reason}`, and
+  `exclude_reason` (`low-quality` or `not-this-dataset`) for each sample you
+  exclude; `reason` is one or two sentences citing what you saw (figures and
+  numbers), for the audit trail. Every sample must appear exactly once.
 - `notes`: anything integration should know (borderline calls, samples
   included despite doubts, patterns seen across samples).

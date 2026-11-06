@@ -301,21 +301,50 @@ def type_kept(type_clusters):
             else TYPE_KEPT_POLICY for e in type_clusters if e['action'] != 'remove'}
 
 
-def guard_retained_drops(proposal, kept):
-    """Cross-sample inspect may not drop a whole cluster the type phase kept (#71): the two phases disagree, so the
-    drop becomes a flag, which needs_review lists; where both remove it, it goes. Cells it drops by a QC metric
-    inside a kept cluster (cell_actions) carry their reason and go, except in a cluster kept under the stress
-    policy (#30). `kept` is type_kept(). In place, like msp's batch guard; {cluster: policy} adjusted."""
+def guard_retained_drops(proposal, kept, sizes):
+    """Cross-sample inspect may not drop a cluster the type phase kept under the stress policy (#30), nor one of
+    fewer than CHECK_MIN_CELLS cells the type phase kept (#71: a removal that small, which no check judges, stands
+    only when both phases ask for it): the drop becomes a flag, which needs_review lists. A larger cluster the type
+    phase kept goes when the check of the quality verdict supports the drop (guard_unchecked_drops). Cells a cell
+    rule drops inside a cluster kept under the stress policy are flagged too. `kept` is type_kept(), `sizes` the
+    whole clusters' cells. In place, like msp's batch guard; {cluster: policy} adjusted."""
     adjusted = {}
     for entry, scope in [*((e, 'cluster') for e in proposal['clusters']), *((e, 'cells') for e in proposal.get('cell_actions', []))]:
         policy = kept.get(str(entry['cluster']))
-        if scope == 'cells' and policy != STRESS_HOST_POLICY:
+        if policy == TYPE_KEPT_POLICY and (scope == 'cells' or sizes.get(str(entry['cluster']), 0) >= CHECK_MIN_CELLS):
             continue
         if policy and entry.get('action') == 'drop':
             entry.update(requested_action='drop', action='flag', review_required=True, host_adjustment=dict(
                 policy=policy, reason=KEPT_BY[policy] + '; quality flags it for review instead of dropping it.'))
             adjusted[str(entry['cluster'])] = policy
     return dict(sorted(adjusted.items()))
+
+
+def small_type_removals(type_clusters, quality_clusters, sizes):
+    """The clusters of fewer than CHECK_MIN_CELLS cells the type phase removes and the quality phase does not drop:
+    no check judges a removal that small, so it stands only when both phases ask for it (owner, 2026-11-06)."""
+    drops = {str(e['cluster']) for e in quality_clusters if e.get('action') == 'drop'}
+    return sorted(str(e['cluster_id']) for e in type_clusters if e['action'] == 'remove'
+                  and sizes.get(str(e['cluster_id']), 0) < CHECK_MIN_CELLS and str(e['cluster_id']) not in drops)
+
+
+def guard_small_type_removals(proposal, type_clusters, sizes):
+    """In place on a quality proposal: each cluster of small_type_removals() becomes a flag whose host_adjustment
+    records the type phase's removal; finalize keeps its cells, labelled with that reason (retained_state), and
+    needs_review lists them (removal_retained). Returns {cluster: host_adjustment}."""
+    removals = {str(e['cluster_id']): e for e in type_clusters}
+    small = set(small_type_removals(type_clusters, proposal['clusters'], sizes))
+    adjusted = {}
+    for entry in proposal['clusters']:
+        cluster = str(entry['cluster'])
+        if cluster in small:
+            n = int(sizes.get(cluster, 0))
+            entry.update(requested_action=entry['action'], action='flag', review_required=True, host_adjustment=dict(
+                policy=REMOVAL_CHECK_POLICY, state=removals[cluster]['remove_reason'], n_cells=n,
+                evidence=f'the type phase removes these {n} cells, fewer than the {CHECK_MIN_CELLS} a check needs, and quality does not drop them',
+                reason='A removal of fewer than 10 cells stands only when both phases ask for it; its cells stay, labelled.'))
+            adjusted[cluster] = entry['host_adjustment']
+    return adjusted
 
 
 # Every other removal an agent asks for (decision 0025): one of at least CHECK_MIN_CELLS cells stands only when
@@ -328,8 +357,12 @@ LOW_QUALITY_TESTS = (('n_genes_by_counts', -1), ('total_counts', -1), ('pct_coun
 DOUBLET_SHARE = 0.5  # msp's doublet cluster: half of its cells above their library's Scrublet threshold
 OWN_MARKER_SHARE = 0.5  # a doublet keeps half of its lineage's own-marker positivity (zoom-in's reassign rule)
 VERDICT_REASONS = {'artifact-doublet': 'doublet', 'artifact-lowquality': 'low-quality', 'artifact-ambient': 'ambient'}
-QC_CELL_METRICS = ('pct_counts_mt', 'n_genes_by_counts', 'total_counts', 'log1p_n_genes_by_counts', 'log1p_total_counts',
-                   'pct_counts_in_top_20_genes', 'pct_counts_malat1', 'pct_counts_ribo', 'pct_counts_hb')
+# A cell rule drops only on these QC metrics, on the bad side (+1: above the line, -1: below it), and only beyond the
+# outliers of its cluster: OUTLIER_MADS times the cluster's MAD from its median, on the log1p scale for genes and
+# counts (owner, 2026-11-06). OUTLIER_MADS is osp's nmads and mt_nmads.
+CELL_RULE_SIDES = {'pct_counts_mt': 1, 'n_genes_by_counts': -1, 'total_counts': -1, 'log1p_n_genes_by_counts': -1,
+                   'log1p_total_counts': -1}
+OUTLIER_MADS = 5
 _TARGET = '__removal__'
 
 
@@ -390,12 +423,12 @@ def guard_removal(entry, n_cells, check):
     return True
 
 
-def guard_unchecked_drops(proposal, check):
+def guard_unchecked_drops(proposal, check, cell_check):
     """Decision 0025 on cross-sample inspect, after guard_retained_drops, in place. A whole-cluster drop stands
     only when the check of its verdict's reason supports it (VERDICT_REASONS; ambiguous and real name none),
-    else it becomes a flag; a cell rule drops only on a QC metric (QC_CELL_METRICS): Scrublet and decontX scores
-    are msp's doublet and contamination checks (decision 0023). check(cluster, reason) -> (n_cells, supported,
-    note). Returns the adjusted entries' {cluster: host_adjustment}."""
+    else it becomes a flag; so does a cell rule's drop that cell_check does not support (cell_rule_evidence).
+    check(cluster, reason) and cell_check(rule) -> (n_cells, supported, note). Returns the adjusted entries'
+    {cluster: host_adjustment}."""
     adjusted = {}
     for entry in proposal['clusters']:
         if entry.get('action') != 'drop':
@@ -412,12 +445,55 @@ def guard_unchecked_drops(proposal, check):
             reason=f'The {reason} drop is not supported by the code check; its cells stay, flagged for review.'))
         adjusted[str(entry['cluster'])] = entry['host_adjustment']
     for entry in proposal.get('cell_actions', []):
-        if entry.get('action') == 'drop' and entry.get('metric') not in QC_CELL_METRICS:
-            entry.update(requested_action='drop', action='flag', review_required=True, host_adjustment=dict(
-                policy=REMOVAL_CHECK_POLICY, state=entry.get('reason', 'other'), evidence=f"cell rule on {entry.get('metric')}",
-                reason='A cell rule drops only on a QC metric; doublet and contamination scores are the code checks of decision 0023.'))
-            adjusted.setdefault(str(entry['cluster']), entry['host_adjustment'])
+        if entry.get('action') != 'drop':
+            continue
+        n_cells, supported, note = cell_check(entry)
+        if supported:
+            entry['host_evidence'] = note
+            continue
+        entry.update(requested_action='drop', action='flag', review_required=True, host_adjustment=dict(
+            policy=REMOVAL_CHECK_POLICY, state=entry.get('reason', 'other'), n_cells=int(n_cells), evidence=note,
+            reason='The cell rule is not supported by the code check; its cells stay, flagged for review.'))
+        adjusted.setdefault(str(entry['cluster']), entry['host_adjustment'])
     return dict(sorted(adjusted.items()))
+
+
+def cell_rule_evidence(rule, obs, cluster, counts):
+    """(n_cells, supported, note) for a cell rule's drop over the cells of `cluster` (a mask): it stands only for
+    low quality, on a metric of CELL_RULE_SIDES cut on its bad side, with the line beyond the cluster's median by
+    OUTLIER_MADS MADs (log1p scale for genes and counts; a cluster whose MAD is 0 has no outliers to cut), and,
+    over CHECK_MIN_CELLS cells or more, no gene of the cut cells' own against the rest of the cluster. The median
+    and MAD are the whole cluster's, cells on the rule list P included, and not per sample (owner, 2026-11-06)."""
+    import numpy as np
+    from msp.api import INSPECTION_OPS
+    metric, side, value = rule['metric'], CELL_RULE_SIDES.get(rule['metric']), float(rule['value'])
+    x = obs[metric].to_numpy(dtype=float) if metric in obs else np.full(len(obs), np.nan)
+    with np.errstate(invalid='ignore'):
+        hit = np.asarray(cluster, dtype=bool) & INSPECTION_OPS[rule['op']](x, value)  # as msp applies it: NaN never matches
+    n_cells = int(hit.sum())
+    if rule.get('reason') != 'low-quality' or side is None:
+        return n_cells, False, ('a cell rule drops only for low quality, on ' + ', '.join(CELL_RULE_SIDES)
+                                + f'; this one is {rule.get("reason")} on {metric}')
+    if (side > 0) != (rule['op'] in ('>', '>=')):
+        return n_cells, False, f'{metric} is cut only on its {"high" if side > 0 else "low"} side'
+    log = side < 0 and not metric.startswith('log1p_')
+    values = x[np.asarray(cluster, dtype=bool)]
+    values = values[np.isfinite(values)]
+    if log:
+        values, value = np.log1p(values), float(np.log1p(value))
+    median = float(np.median(values)) if len(values) else float('nan')
+    mad = float(np.median(np.abs(values - median))) if len(values) else 0.0
+    bound = median + side * OUTLIER_MADS * mad
+    scale = 'log1p ' if log else ''
+    note = (f'{n_cells} cells; {scale}{metric} line {value:.3g}, cluster median {median:.3g}, MAD {mad:.3g}, '
+            f'outliers {"above" if side > 0 else "below"} {bound:.3g}')
+    if not mad > 0 or side * (value - bound) < 0:
+        return n_cells, False, note + ': the line cuts into the body of the cluster'
+    if n_cells < CHECK_MIN_CELLS:
+        return n_cells, True, note
+    inside = np.flatnonzero(np.asarray(cluster, dtype=bool))
+    n_own = own_genes(counts[inside], np.full(len(inside), 'rest'), hit[inside])
+    return n_cells, n_own == 0, note + f'; {n_own} genes of their own against the rest of the cluster'
 
 
 FRAGMENT_TESTS = ('decontX', 'dissociation', 'doublet', 'mt')  # msp minor-sibling QC, columns <test>_significant; since #70 msp

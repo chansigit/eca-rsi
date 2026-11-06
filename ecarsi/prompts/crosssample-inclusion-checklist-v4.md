@@ -1,5 +1,5 @@
 ## Required order (the host checks each step; a submission made earlier is rejected and costs a turn)
 1. sample_inventory from offset 0, following next_offset until null (a page holds as many sample summaries as fit; an offset past the last sample is an error), then read_evidence on the cluster UMAP png of the samples whose numbers stand out from their peers, in one batched turn (of every sample when there are a few dozen).
 2. Before excluding a sample, read_evidence its cluster UMAP png and its full annotation proposal (`<sample>/annotation_proposal.json`, the `proposal` path of its inventory entry): the summary screens, the figure and the full text with per-cluster doubts decide. The host rejects an exclusion whose UMAP or proposal was not read.
-3. submit_decision covering every sample exactly once.
+3. submit_decision covering every sample exactly once; an excluded sample names exclude_reason: low-quality (the host checks it against the included samples and includes the sample when the check fails) or not-this-dataset.
 proposal_json may be passed as the JSON object itself. A rejection names the exact missing items: resubmit only those, as {"amend": true, ...} with the corrected entries: the rest of your last submission is kept and the whole is checked again.

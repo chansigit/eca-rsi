@@ -235,3 +235,21 @@ def test_a_restart_pins_the_program_files_as_they_are_now(tmp_path):
     assert fresh['tools'][0]['inputs'][0] == reference(program) and fresh['tools'][0]['inputs'][0]['sha256'] != spec['tools'][0]['inputs'][0]['sha256']
     assert fresh['tools'][0]['inputs'][1] == reference(evidence) and fresh['tools'][0]['inputs'][2] == 'not-a-reference'
     assert spec['tools'][0]['inputs'][0]['sha256'] != fresh['tools'][0]['inputs'][0]['sha256'] and 'tools' in spec  # the original spec is untouched
+
+
+def test_release_lists_a_sample_exclusion_the_code_check_turned_down(tmp_path):
+    """#73: the inclusion record of round one's cross-sample names the samples included against the agent's
+    low-quality exclusion; needs_review lists them as removal_retained."""
+    import pandas as pd
+    from ecarsi.stages.release import review_items
+    save(tmp_path / 'per-sample.json', {})
+    save(tmp_path / 'decision.json', dict(accepted=True, proposal=dict(notes='', samples=[
+        dict(sample='a', include=True, reason='fine'),
+        dict(sample='b', include=True, requested_include=False, exclude_reason='low-quality', reason='shattered', host_adjustment=dict(
+            policy='removal_check_v1', state='low-quality', n_cells=812, evidence='n_genes_by_counts AUC 0.55 p 0.2'))])))
+    unit = dict(per_sample=reference(tmp_path / 'per-sample.json'), rounds=[], forced_release=False)
+    exclusions = pd.DataFrame(columns=['round', 'release_stage', 'reason', 'cell_uid'])
+    source = reference(tmp_path / 'decision.json')
+    items = review_items(unit, exclusions, [dict(round=1, stage='cross-sample', scope='', source=source, value=read(tmp_path / 'decision.json'))])
+    assert [(i.kind, i.scope, i.n_cells, i.action) for i in items] == [('removal_retained', 'b', 812, 'include')]
+    assert 'AUC 0.55' in items[0].note

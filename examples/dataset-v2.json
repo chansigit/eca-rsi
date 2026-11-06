@@ -74,7 +74,6 @@
       "timeout_seconds": 600
     },
     "max_in_flight_deg": 16,
-    "max_refinements": 2,
     "config": {
       "tissue": "prostate",
       "n_top_genes": 3000,

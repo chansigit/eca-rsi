@@ -5,14 +5,15 @@ Temporal coordinates the operations. Warm pool workers run the MSP kernels and t
 ## Steps
 
 1. `inspect`: Verify the published input.
-2. Sample inclusion (round 1, more than one sample): An agent session decides which samples take part. A single sample skips the session (`include-single`).
+2. Sample inclusion (round 1, more than one sample): An agent session decides which samples take part. An excluded sample names `exclude_reason`: `low-quality`, which the code checks against the included samples when the agent submits (the sample is included unless its cells are clearly worse and it has no gene of its own), or `not-this-dataset`, which no code can check. A single sample skips the session (`include-single`).
 3. `compute`: Run merge, normalization, HVG, PCA, Harmony, neighbors, Leiden, UMAP, and numerical QC in one task. For round ≥ 2, run `compute-round` on the previous survivors instead.
 4. DEG: Compute global DEG per resolution. Compute local DEG per target against its pooled PAGA neighbors. Comparisons map shared frozen expression buffers. Each pool request (`deg-batch`) runs eight comparisons up to 50,000 cells and fewer above (one from 400,000); `max_in_flight_deg` is multiplied by the same factor. The timeout of the request is twice the per-comparison budget.
 5. `assemble`: Publish the evidence bundle and a read-only SQLite DEG database.
 6. Type annotation: An agent session labels the clusters.
-7. Quality review: An agent session decides removals, merges, and subclustering.
-8. `refine` (optional): The quality review can request subclustering. The coordinator recomputes the affected clusters and their DEG. The coordinator asks type review for the affected clusters and merge partners. The coordinator then restarts quality. Repeat this process up to `max_refinements` times.
-9. `finalize`: Apply the decisions, plot, write the report, and publish.
+7. Quality review: An agent session judges every cluster (keep, flag or drop) and may add cell rules. Removals follow [decision 0025](../decisions/0025-removals-need-a-code-check.md): one of 10 or more cells stands when either phase asks for it and the code check of its reason passes; one of fewer cells only when both phases ask for it.
+8. `finalize`: Apply the decisions, plot, write the report, and publish.
+
+There is no refinement loop: the quality agent never asked for one (0 of 145 sessions read, 0 splits in 1,251 published stages). A cluster too coarse or mixed is flagged, and zoom-in reclusters each lineage (#73). A spec may still carry `max_refinements`; it is accepted and ignored.
 
 Datasets advance independently. A model wait holds no compute grant. Failed operations keep their receipts and completed siblings. They never become publications.
 
@@ -29,7 +30,7 @@ Datasets advance independently. A model wait holds no compute grant. Failed oper
   "deg_budget": {"cpus": 1, "memory_mb": 4096, "timeout_seconds": 1800},
   "tool_budget": {"cpus": 1, "memory_mb": 8192, "timeout_seconds": 600},
   "finalize_budget": {"cpus": 2, "memory_mb": 16384, "timeout_seconds": 1800},
-  "max_in_flight_deg": 16, "max_refinements": 2,
+  "max_in_flight_deg": 16,
   "config": {
     "batch_col": "eca_sample_id", "species": "human", "tissue": "prostate",
     "n_top_genes": 3000, "n_pcs": 30, "n_neighbors": 15,

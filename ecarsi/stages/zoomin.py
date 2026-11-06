@@ -335,9 +335,9 @@ def reassign_problem(n_cells, share, core, target, previous):
 def quality_guard(bundle, data, proposal, t, q, pre, own_markers, core):
     """Decisions 0017 and 0025 on the removals of a quality proposal, in place; what stayed, for the tool reply.
     The stress-gene rule looks at the 2.0 cluster and the decision's 1.0 types; the dying check compares the
-    target with the rest of its 1.0 types that no decision removes; any other removal's check compares its cells
-    that the host's own removals (`pre`) leave with the lineage's cells nothing removes, its own genes against
-    the 1.0 types, and its other lineages' markers with the lineage's own (`own_markers`, positivity `core`)."""
+    target with the rest of its 1.0 types that no decision removes; any other removal's check compares all its
+    cells, the host's own removals (`pre`) included (#73), with the lineage's cells nothing removes, its own genes
+    against the 1.0 types, and its other lineages' markers with the lineage's own (`own_markers`, positivity `core`)."""
     import numpy as np
     from zmip.api import TYPE_KEY, QUALITY_KEY
 
@@ -361,14 +361,13 @@ def quality_guard(bundle, data, proposal, t, q, pre, own_markers, core):
         flagged = (QUALITY_KEY, cid) in flags or any((TYPE_KEY, c) in flags for c in entry['type_clusters'])
         marked = (QUALITY_KEY, cid) in mito or any((TYPE_KEY, c) in mito for c in entry['type_clusters'])
         same = t.isin(entry['type_clusters']).to_numpy()
-        mine = target & ~hosted
         if guard_stress(
             entry, policy, int(target.sum()), flagged, lambda: dying_evidence(data.obs, target, comparison_cells(data.obs, same, removing)), marked,
             rule,
         ) or guard_removal(
             entry, int(target.sum()), lambda: removal_evidence(
-                entry['remove_reason'], data.obs, mine, rest, counts, t,
-                (foreign, own_marker_positivity(data, own_markers, data.obs_names[mine]), core)),
+                entry['remove_reason'], data.obs, target, rest, counts, t,
+                (foreign, own_marker_positivity(data, own_markers, data.obs_names[target]), core)),
         ):
             retained.append(dict(cluster=cid, type_clusters=entry['type_clusters'], **entry['host_adjustment']))
     return retained

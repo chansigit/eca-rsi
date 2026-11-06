@@ -88,7 +88,7 @@ def test_inclusion_batches_inventories_and_figures_and_requires_the_umap_of_an_e
     args = immutable(tmp_path / 'decision.json', dict(proposal_json=json.dumps({'notes': 'Reviewed all samples', 'samples': [
         dict(sample=f's{i}', include=True, reason='Reviewed evidence') for i in range(3)]})))
     exclude = immutable(tmp_path / 'exclude.json', dict(proposal_json=json.dumps({'notes': 'One sample is broken', 'samples': [
-        dict(sample=f's{i}', include=i != 1, reason='Reviewed evidence') for i in range(3)]})))
+        dict(sample=f's{i}', include=i != 1, reason='Reviewed evidence', **({} if i != 1 else {'exclude_reason': 'not-this-dataset'})) for i in range(3)]})))
     reject = tmp_path / 'reject'
     reject.mkdir()
     tool('submit_decision', figure['state']['path'], exclude['path'], reject)
@@ -254,7 +254,7 @@ def test_inventory_pages_summaries_by_bytes_and_an_exclusion_needs_the_full_prop
     state = immutable(tmp_path / 'state.json', dict(evidence=evidence, phase='inclusion', types=None,
         inventories=['s0', 's1', 's2'], read=[f's{i}/figures/umap_clusters.png' for i in range(3)], lookups=[], qc=False))
     decision = immutable(tmp_path / 'decision.json', dict(proposal_json=json.dumps({'notes': 'n', 'samples': [
-        dict(sample='s0', include=True, reason='fine'), dict(sample='s1', include=False, reason='doublets'),
+        dict(sample='s0', include=True, reason='fine'), dict(sample='s1', include=False, reason='doublets', exclude_reason='not-this-dataset'),
         dict(sample='s2', include=True, reason='fine')]})))
     reject = tmp_path / 'reject'
     reject.mkdir()

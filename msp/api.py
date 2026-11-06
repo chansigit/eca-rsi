@@ -17,6 +17,8 @@ _NAMES = {
     "overcluster": ("msp.integrate.doublets", "overcluster"),
     "doublet_above": ("msp.integrate.doublets", "doublet_above"),  # the checks of an agent's removal (0025)
     "own_gene_counts": ("msp.integrate.doublets", "own_gene_counts"),
+    "OWN_GENE_IN": ("msp.integrate.doublets", "OWN_GENE_IN"),  # a sample's own genes (#73)
+    "OWN_GENE_OUT": ("msp.integrate.doublets", "OWN_GENE_OUT"),
     "is_stress": ("genesets", "is_stress"),  # the stress panel zoom-in tests a lineage on (#68)
     "load_and_merge": ("msp.integrate", "load_and_merge"),
     "compute_deg_task": ("msp.integrate.deg", "compute_deg_task"),

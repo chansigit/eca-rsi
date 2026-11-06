@@ -41,3 +41,28 @@ rules) and 458 of PBMC68k (418 monocytes removed as ambient, 40 without a clearl
 the rest. Genes two lineages share (MHC class II in activated endothelium) can raise a foreign score, so a doublet
 check can pass a real population; the AUC standard comes from the dying check. Evidence bundles from before this
 version carry no change: the checks run when a proposal is submitted.
+
+**Amended 2026-11-06 by the owner (#73).**
+- *Whole clusters.* The checks of the type and quality phases, and of zoom-in, count and test the whole target,
+  the cells the rule list P (fragments, doublet checks) already holds included: P is only a list until finalize,
+  so testing the whole cluster is testing before the rules. With P left out, an agent's doublet drop almost never
+  passed (the high-scoring cells were mostly in P), and a cluster of 10 or more cells with fewer outside P could
+  not be tested at all. The reference stays the cells nothing removes.
+- *Two phases at cross-sample.* A removal of 10 or more cells stands when either phase asks for it and the check
+  passes (type by its reason, quality by its verdict); #71's rule, which turned every quality drop of a cluster the
+  type phase kept into a flag, now holds only below 10 cells. Below 10 cells, where nothing is checked, a removal
+  stands only when both phases ask for it; otherwise its cells stay, labelled, and needs_review lists them. A
+  cluster kept under the stress policy keep cannot be dropped by quality.
+- *Cell rules.* A quality cell rule drops only for low quality, on the mitochondrial fraction cut above its line
+  or the genes or counts cut below it, and only when the line lies among the cluster's outliers: beyond its median
+  by 5 MADs (osp's multiple; log1p scale for genes and counts; the whole cluster's cells, not per sample); when it
+  cuts 10 or more cells, they have no gene of their own against the rest of the cluster. Every other cell-rule
+  drop is a flag. Since 0.4.18, 41 drop rules had removed 2,282 cells at lines from 13 % to 35 % mitochondrial
+  reads, up to 39 % of a cluster, with nothing checking the line; the 0025 check passes any line, because it
+  compares cells chosen by that line on that metric.
+- *Sample exclusion.* The inclusion agent names one of two reasons. `low-quality` stands only when the sample's
+  cells have clearly fewer genes or counts, or a clearly higher mitochondrial fraction, than those of the included
+  samples, and it has no gene of its own against them; otherwise the sample is included and needs_review lists it
+  (`removal_retained`). `not-this-dataset` (wrong tissue or species, a duplicate upload, a control or technical
+  sample) cannot be checked and stands. Batch, composition, treatment and few cells are not reasons. A sample under
+  10 cells is not checked.

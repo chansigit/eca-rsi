@@ -115,8 +115,10 @@ def test_overlapping_removals_count_once_and_mismatched_decisions_fail(tmp_path,
         action='keep' if c=='0' else 'remove',remove_reason='low-quality',confidence='high',
         evidence={k:'test evidence' for k in ('distinctness','markers','merge')},rationale='test evidence') for c in ('0','1')]
     types=immutable(tmp_path/'types.json',dict(accepted=True,evidence=evidence,proposal={'clusters':entries}))
-    quality=dict(clusters=[dict(cluster=c,verdict='real',action='keep',confidence='high',
-        tests={k:'test evidence' for k in ('markers','qc','composition','geometry','stability')},rationale='test evidence') for c in ('0','1')],
+    # quality drops cluster 1 too: a removal of fewer than 10 cells stands only when both phases ask for it (#73)
+    quality=dict(clusters=[dict(cluster=c,verdict=v,action=a,confidence='high',
+        tests={k:'test evidence' for k in ('markers','qc','composition','geometry','stability')},rationale='test evidence')
+        for c,v,a in (('0','real','keep'),('1','artifact-lowquality','drop'))],
         cell_actions=[dict(cluster='0',metric='doublet_score',op='>',value=.5,action='drop',reason='doublet',note='specific test')])
     quality_ref=immutable(tmp_path/'quality.json',dict(accepted=True,evidence=evidence,types=types,proposal=quality))
     out = tmp_path / 'out'
@@ -130,7 +132,7 @@ def test_overlapping_removals_count_once_and_mismatched_decisions_fail(tmp_path,
     assert len(json.loads(ledger.loc['c0','reason']))==2
     assert ledger.loc['c1','source_cell_id']=='orig1'
     # a type removal records its confidence, which needs_review's 'removed' reads
-    assert {'code':'low-quality','confidence':'high'}.items()<=json.loads(ledger.loc['c3','reason'])[0].items()
+    assert {'code':'low-quality','confidence':'high'}.items()<=json.loads(ledger.loc['c3','reason'])[-1].items()
     assert set(stored.obs['retained_state'].astype(str))=={''}
     other=immutable(tmp_path/'bad.json',dict(accepted=True,evidence=input_ref,types=types,proposal=quality))
     with pytest.raises(ValueError, match='accepted evidence'):
@@ -138,7 +140,7 @@ def test_overlapping_removals_count_once_and_mismatched_decisions_fail(tmp_path,
 
 
 def test_compute_comparisons_and_sql_handoff(tmp_path):
-    from ecarsi.stages.crosssample import inspect_input,compute,tool,refine
+    from ecarsi.stages.crosssample import inspect_input,compute,tool
     from ecarsi.stages.common import deg,deg_batch,assemble
 
     rng = np.random.default_rng(2024)
@@ -216,18 +218,7 @@ def test_compute_comparisons_and_sql_handoff(tmp_path):
     assert (published/'report.html').is_file()
     final = verified(reference(published / 'final.json'))
     assert final['n_input'] == 150 and final['n_survived'] + final['n_removed'] == 150
-    typed=immutable(tmp_path/'types.json',dict(accepted=True,evidence=evidence,proposal={'clusters':[
-        dict(cluster_id=c,merge_target=None,action='keep') for c in clusters]}))
-    request=immutable(tmp_path/'refinement.json',dict(accepted=True,evidence=evidence,types=typed,
-        refinement=dict(cluster=clusters[0],resolution=5.,reason='test refinement')))
-    refined = tmp_path / 'refined'
-    refined.mkdir()
-    refine(evidence, typed, request, refined)
-    refined_bundle=verified(reference(refined/'prepared.json'))
-    assert refined_bundle['version']==1 and clusters[0] not in refined_bundle['type_scope']
-    assert all(c.startswith(clusters[0]+',') for c in refined_bundle['type_scope'])
-    assert set(refined_bundle['type_entries'])==set(clusters)-{clusters[0]}
-    assert reference(computed/'integrated.h5ad')==verified(evidence)['files']['integrated.h5ad']
+    assert verified(evidence)['type_scope'] == clusters and 'type_entries' not in verified(evidence)
 
 
 @pytest.mark.parametrize('batch_col,batches,harmony_runs', [
@@ -474,7 +465,7 @@ def test_a_quality_drop_or_cell_rule_the_code_cannot_support_stays_labelled(tmp_
         tests={k:'test evidence' for k in ('markers','qc','composition','geometry','stability')},rationale='test evidence')
         for c,v,a in (('0','real','keep'),('1','artifact-ambient','drop'))],
         cell_actions=[dict(cluster='0',metric='doublet_score',op='>',value=.05,action='drop',reason='doublet',note='rule')])
-    adjusted=common.guard_unchecked_drops(quality,lambda cluster,reason:(4,False,'no code check'))
+    adjusted=common.guard_unchecked_drops(quality,lambda cluster,reason:(4,False,'no code check'),lambda rule:(4,False,'not a QC metric'))
     assert set(adjusted)=={'0','1'} and quality['clusters'][1]['action']=='flag' and quality['cell_actions'][0]['action']=='flag'
     quality_ref=immutable(tmp_path/'quality.json',dict(accepted=True,evidence=evidence,types=types,proposal=quality))
     out = tmp_path / 'out'
@@ -482,3 +473,86 @@ def test_a_quality_drop_or_cell_rule_the_code_cannot_support_stays_labelled(tmp_
     finalize(evidence, types, quality_ref, out)
     stored=an.read_h5ad(out/'annotated.h5ad').obs['retained_state'].astype(str)
     assert stored[['c5','c6','c7']].eq('ambient').all() and stored['c3']=='doublet'
+
+
+def test_removal_checks_count_and_test_the_whole_cluster(tmp_path):
+    """#73: the rule list P is only a list until finalize, so the check of an agent's drop counts and tests the
+    whole cluster, its P cells included; the reference stays the cells nothing removes. Cluster 12: 100 cells,
+    60 above their library's Scrublet threshold and 40 of those already in P (a third above outside P)."""
+    from ecarsi.stages.crosssample import _drop_check
+    rng = np.random.default_rng(1)
+    source = tmp_path / 'source'
+    source.mkdir()
+    base = ['9'] * 15 + ['12'] * 100 + ['0'] * 200
+    counts = np.zeros((315, 30), dtype='float32')
+    counts[:, :20] = rng.poisson(4, (315, 20))
+    cells = ['c' + str(i) for i in range(315)]
+    obs = pd.DataFrame({BASE: pd.Categorical(base), 'doublet_score': [.1] * 15 + [.9] * 60 + [.1] * 240,
+                        'osp_doublet_threshold': .5, 'n_genes_by_counts': (counts > 0).sum(1), 'total_counts': counts.sum(1),
+                        'pct_counts_mt': 2.}, index=cells)
+    data = an.AnnData(counts, obs=obs)
+    data.layers['counts'] = counts.copy()
+    pre = [i < 8 for i in range(15)] + [i < 40 for i in range(100)] + [False] * 200
+    pd.DataFrame({'cell': cells, 'recommend_removal': pre}).to_csv(source / 'preannotation_removal.csv', index=False)
+    bundle = verified(sealed(source, source / 'evidence.json'))
+    check, _ = _drop_check(bundle, data, {'clusters': []}, [])
+    assert check('9', 'doublet')[0] == 15
+    n, supported, note = check('12', 'doublet')
+    assert (n, supported) == (100, True) and '60% above' in note
+
+
+def test_a_type_removal_under_ten_cells_the_quality_phase_keeps_stays_labelled(tmp_path,monkeypatch):
+    """#73: no check judges a removal of fewer than 10 cells, so it stands only when both phases ask for it. The type
+    phase removes cluster 1 (4 cells) as doublets, quality keeps it: submission flags it, finalize keeps its cells
+    with retained_state 'doublet' and records the request in the type entry."""
+    from ecarsi.stages.common import guard_small_type_removals
+    source,evidence=finalize_fixture(tmp_path,monkeypatch,'remove')
+    entries=[keep_entry('0'),keep_entry('1',action='remove',remove_reason='doublet',fine_label='Doublet',merge_target='0')]
+    types=immutable(tmp_path/'types.json',dict(accepted=True,evidence=evidence,proposal={'clusters':entries}))
+    quality=dict(clusters=[dict(cluster=c,verdict='real',action='keep',confidence='high',
+        tests={k:'test evidence' for k in ('markers','qc','composition','geometry','stability')},rationale='test evidence') for c in ('0','1')],cell_actions=[])
+    assert set(guard_small_type_removals(quality,entries,{'0':4,'1':4}))=={'1'}
+    quality_ref=immutable(tmp_path/'quality.json',dict(accepted=True,evidence=evidence,types=types,proposal=quality))
+    out = tmp_path / 'out'
+    out.mkdir()
+    finalize(evidence, types, quality_ref, out)
+    stored=an.read_h5ad(out/'annotated.h5ad').obs
+    assert {'c4','c5','c6','c7'}<=set(stored.index) and stored.loc[['c4','c5','c6','c7'],'retained_state'].astype(str).eq('doublet').all()
+    saved=read(out/'annotation_proposal.json')['clusters'][1]
+    assert saved['action']=='keep' and saved['requested_remove_reason']=='doublet' and saved['merge_target']=='0'
+    assert verified(types)['proposal']['clusters'][1]['action']=='remove'  # the accepted record is not touched
+
+
+def clustered_sample(tmp_path, name, depth, own=(), rng=np.random.default_rng(3)):
+    """A sample bundle of 60 cells expressing genes 0-19 at `depth`, and `own` genes nobody else does."""
+    folder = tmp_path / name
+    folder.mkdir()
+    counts = np.zeros((60, 40), dtype='float32')
+    counts[:, :20] = rng.poisson(depth, (60, 20))
+    counts[:, list(own)] = rng.poisson(4, (60, len(own)))
+    obs = pd.DataFrame({'n_genes_by_counts': (counts > 0).sum(1).astype(float), 'total_counts': counts.sum(1),
+                        'pct_counts_mt': rng.normal(2, .2, 60)}, index=[name + str(i) for i in range(60)])
+    data = an.AnnData(counts, obs=obs)
+    data.layers['counts'] = counts.copy()
+    data.write_h5ad(folder / 'clustered.h5ad')
+    return dict(sample=name, n_cells=60, bundle=sealed(folder, folder / 'final.json', sample=name))
+
+
+def test_a_sample_excluded_as_low_quality_needs_the_code_check(tmp_path):
+    """#73 problem 4: an exclusion as low-quality stands only when the sample's cells are clearly worse than those of
+    the included samples and it has no gene of its own; otherwise the sample is included, with the request on
+    record. not-this-dataset cannot be checked and stands."""
+    from ecarsi.stages.crosssample import _exclusion_check
+    samples = [clustered_sample(tmp_path, 'good1', 5), clustered_sample(tmp_path, 'good2', 5), clustered_sample(tmp_path, 'shallow', .3),
+               clustered_sample(tmp_path, 'sorted', .3, own=range(30, 36)), clustered_sample(tmp_path, 'fine', 5),
+               clustered_sample(tmp_path, 'mouse', 5)]
+    rows = [dict(sample=s['sample'], include=s['sample'].startswith('good'), reason='fixture') for s in samples]
+    for row, reason in zip(rows[2:], ('low-quality', 'low-quality', 'low-quality', 'not-this-dataset')):
+        row['exclude_reason'] = reason
+    adjusted = _exclusion_check({'samples': rows, 'notes': ''}, dict(samples=samples))
+    assert set(adjusted) == {'sorted', 'fine'}
+    by = {r['sample']: r for r in rows}
+    assert not by['shallow']['include'] and '0 genes of its own' in by['shallow']['host_evidence']
+    assert by['sorted']['include'] and by['sorted']['requested_include'] is False and '6 genes of its own' in adjusted['sorted']['evidence']
+    assert by['fine']['include'] and adjusted['fine']['n_cells'] == 60 and adjusted['fine']['policy'] == 'removal_check_v1'
+    assert not by['mouse']['include'] and 'host_adjustment' not in by['mouse']

@@ -50,26 +50,32 @@ def test_a_removal_stands_on_the_stress_gene_rule_or_the_dying_check_and_stays_o
         assert not guard_stress(other, 'remove', 50, False, None) and 'host_adjustment' not in other
 
 
-def test_quality_flags_instead_of_dropping_a_cluster_the_type_phase_kept():
-    """#71 (#30 for the stress policy): cross-sample inspect may not drop a cluster the type phase kept. pbmc68k
-    round 1 lost a normal 4-cell CD4 T cluster the type agent had kept, dropped by quality for its size."""
+def test_quality_flags_instead_of_dropping_a_small_cluster_the_type_phase_kept():
+    """#71 (#30 for the stress policy): cross-sample inspect may not drop a cluster of fewer than 10 cells the type
+    phase kept, nor one it kept under the stress policy. pbmc68k round 1 lost a normal 4-cell CD4 T cluster the
+    type agent had kept, dropped by quality for its size. A larger cluster goes on the quality verdict's check
+    (#73), outside this guard."""
     types = [{'cluster_id': '3', 'action': 'keep', 'host_adjustment': {'policy': 'stress_policy_v1'}},
              {'cluster_id': '4', 'action': 'remove'}, {'cluster_id': '5', 'action': 'keep'}, {'cluster_id': '25', 'action': 'keep'}]
     kept = type_kept(types)
     assert kept == {'3': 'stress_policy_v1', '5': 'type_kept_v1', '25': 'type_kept_v1'}
     proposal = {'clusters': [{'cluster': '3', 'action': 'drop'}, {'cluster': '4', 'action': 'drop'}, {'cluster': '5', 'action': 'keep'},
-                             {'cluster': '25', 'action': 'drop', 'verdict': 'artifact-lowquality'}],
+                             {'cluster': '25', 'action': 'drop', 'verdict': 'artifact-lowquality'},
+                             {'cluster': '26', 'action': 'drop', 'verdict': 'artifact-lowquality'}],
                 'cell_actions': [{'cluster': '4', 'action': 'drop', 'metric': 'pct_counts_mt', 'op': '>', 'value': 20},
                                  {'cluster': '5', 'action': 'drop', 'metric': 'pct_counts_mt', 'op': '>', 'value': 20}]}
     proposal['cell_actions'].append({'cluster': '3', 'action': 'drop', 'metric': 'pct_counts_mt', 'op': '>', 'value': 20})
-    assert guard_retained_drops(proposal, kept) == {'25': 'type_kept_v1', '3': 'stress_policy_v1'}
-    three, four, _, small = proposal['clusters']
+    kept['26'] = 'type_kept_v1'
+    sizes = {'3': 50, '4': 50, '5': 50, '25': 4, '26': 60}
+    assert guard_retained_drops(proposal, kept, sizes) == {'25': 'type_kept_v1', '3': 'stress_policy_v1'}
+    three, four, _, small, large = proposal['clusters']
+    assert large['action'] == 'drop'  # 60 cells: the check of its verdict decides
     assert three['action'] == 'flag' and three['requested_action'] == 'drop' and three['host_adjustment']['policy'] == 'stress_policy_v1'
     assert small['action'] == 'flag' and small['review_required'] and small['host_adjustment']['policy'] == 'type_kept_v1'
     assert four['action'] == 'drop' and proposal['cell_actions'][0]['action'] == 'drop'  # the type phase removed 4
     # cells dropped by a QC metric carry their reason: they go in a kept cluster, not in a stress-kept one
     assert proposal['cell_actions'][1]['action'] == 'drop' and proposal['cell_actions'][2]['action'] == 'flag'
-    assert guard_retained_drops(proposal, {}) == {}
+    assert guard_retained_drops(proposal, {}, sizes) == {}
 
 
 def test_keep_retains_every_stress_dissociation_or_dying_removal():

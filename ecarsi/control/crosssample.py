@@ -2,7 +2,6 @@
 from pathlib import Path
 
 from temporalio import activity, workflow
-from temporalio.exceptions import ApplicationError
 
 from ..contracts import check
 from .common import HISTORY_LIMIT, await_pool, call, deg_batches, handoff, run_degs, stage_with_waits
@@ -14,8 +13,9 @@ def validate_spec(spec, *, resume=False):
     from ..agent import root_path
     required = {'run_id', 'dataset_id', 'input', 'output_root', 'pool_root', 'bridge_root',
                 'inspect_budget', 'compute_budget', 'deg_budget', 'tool_budget', 'finalize_budget',
-                'config', 'max_in_flight_deg', 'max_refinements'}
-    if not isinstance(spec, dict) or set(spec) - {'previous_round', 'depends_on'} != required:
+                'config', 'max_in_flight_deg'}
+    # max_refinements: cross-sample refinement was removed (#73); older specs still carry it, accepted and ignored
+    if not isinstance(spec, dict) or set(spec) - {'previous_round', 'depends_on', 'max_refinements'} != required:
         raise ValueError('Cross-sample needs explicit published input, services and operation budgets')
     identifier(spec['run_id'])
     if 'depends_on' in spec:
@@ -52,8 +52,6 @@ def validate_spec(spec, *, resume=False):
             raise ValueError('Budgets must specify positive CPU, MiB and timeout integers')
     if type(spec['max_in_flight_deg']) is not int or spec['max_in_flight_deg'] < 1:
         raise ValueError('max_in_flight_deg must be positive')
-    if type(spec['max_refinements']) is not int or spec['max_refinements'] < 0:
-        raise ValueError('max_refinements must be nonnegative')
     cfg = spec['config']
     if set(cfg) - {'stress_policy'} != {'batch_col', 'species', 'tissue', 'n_top_genes', 'n_pcs', 'n_neighbors',
                                         'compute_backend', 'gpu_min_cells', 'gpu_memory_mb'}:
@@ -131,13 +129,12 @@ def crosssample_step(action, args):
         budget, output = spec['inspect_budget'], 'inspected.json'
     elif action == 'include-single':
         budget, output = spec['inspect_budget'], 'decision.json'
-    elif action in {'compute', 'compute-round', 'refine'}:
+    elif action in {'compute', 'compute-round'}:
         budget, output = spec['compute_budget'], 'prepared.json'
         cfg = spec['config']
-        if action in {'compute', 'compute-round'}:
-            cells = verified(refs[0])['n_input']
-            if cfg['compute_backend'] == 'rapids' or cfg['compute_backend'] == 'auto' and cells >= cfg['gpu_min_cells']:
-                accelerator = {'gpu': {'mode': 'required' if cfg['compute_backend'] == 'rapids' else 'preferred', 'memory_mb': cfg['gpu_memory_mb']}}
+        cells = verified(refs[0])['n_input']
+        if cfg['compute_backend'] == 'rapids' or cfg['compute_backend'] == 'auto' and cells >= cfg['gpu_min_cells']:
+            accelerator = {'gpu': {'mode': 'required' if cfg['compute_backend'] == 'rapids' else 'preferred', 'memory_mb': cfg['gpu_memory_mb']}}
     elif action == 'deg':
         command += [str(payload['index'])]
         budget, output = spec['deg_budget'], 'result.json'
@@ -234,30 +231,22 @@ class CrosssampleWorkflow:
         if not bundle.get('previous_round'):
             self._stage = 'integrating'
             prepared, parent = await run_operation('compute', [inspected, inclusion], [inclusion_parent])
-        for refinement in range(spec['max_refinements'] + 1):
-            self._stage = 'DEG comparisons'
-            plan = await call(crosssample_step, 'read', [prepared])
-            n = len(plan['tasks'])
-            batches, factor = deg_batches(n, plan.get('n_selected') or plan.get('n_input') or 0)
-            start = lambda k: run_operation('deg-batch', [prepared], [parent], indices=batches[k])
-            ordered = await run_degs(len(batches), start, lambda: self._deg_limit * factor)
-            if workflow.info().get_current_history_length() > history_limit:
-                # Nothing is in flight here. A fresh execution re-drives inspection, inclusion and every
-                # comparison from their saved results in a few events each, then carries on.
-                workflow.continue_as_new(args=[spec, dict(deg_limit=self._deg_limit)])
-            evidence, evidence_parent = await run_operation('assemble', [prepared] + [r[0] for r in ordered],
-                [parent] + [r[1] for r in ordered])
-            types, type_parent = await judge('type', evidence, evidence_parent)
-            quality, quality_parent = await judge('quality', evidence, type_parent, types)
-            decision = await call(crosssample_step, 'read', [quality])
-            if decision.get('refinement'):
-                if refinement == spec['max_refinements']:
-                    raise ApplicationError('Cross-sample refinement limit reached; evidence retained for review', non_retryable=True)
-                self._stage = 'refining clustering'
-                prepared, parent = await run_operation('refine', [evidence, types, quality], [quality_parent])
-                continue
-            self._stage = 'finalizing'
-            result, _ = await run_operation('finalize', [evidence, types, quality], [quality_parent])
-            publication = await call(crosssample_step, 'publish', [spec, result])
-            self._stage = 'complete'
-            return publication
+        self._stage = 'DEG comparisons'
+        plan = await call(crosssample_step, 'read', [prepared])
+        n = len(plan['tasks'])
+        batches, factor = deg_batches(n, plan.get('n_selected') or plan.get('n_input') or 0)
+        start = lambda k: run_operation('deg-batch', [prepared], [parent], indices=batches[k])
+        ordered = await run_degs(len(batches), start, lambda: self._deg_limit * factor)
+        if workflow.info().get_current_history_length() > history_limit:
+            # Nothing is in flight here. A fresh execution re-drives inspection, inclusion and every
+            # comparison from their saved results in a few events each, then carries on.
+            workflow.continue_as_new(args=[spec, dict(deg_limit=self._deg_limit)])
+        evidence, evidence_parent = await run_operation('assemble', [prepared] + [r[0] for r in ordered],
+            [parent] + [r[1] for r in ordered])
+        types, type_parent = await judge('type', evidence, evidence_parent)
+        quality, quality_parent = await judge('quality', evidence, type_parent, types)
+        self._stage = 'finalizing'
+        result, _ = await run_operation('finalize', [evidence, types, quality], [quality_parent])
+        publication = await call(crosssample_step, 'publish', [spec, result])
+        self._stage = 'complete'
+        return publication

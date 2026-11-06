@@ -1,6 +1,6 @@
 """msp.inspect — the host side of cross-sample inspection: the proposal schema, its validation, the batch guard
 and the mapping of verdicts onto obs["_msp_action"] (keep/flag/drop) in integrated.h5ad, plus the subcluster
-operation the agent may call. The agent session runs in eca-rsi (ecarsi/stages/crosssample.py, through msp.api);
+operation zoom-in's agent may call (cross-sample has no refinement since #73). The agent session runs in eca-rsi (ecarsi/stages/crosssample.py, through msp.api);
 the standalone agent flow was removed with #28.
 
 Verdicts are proposals only: msp.annotate applies the drops. Cells flagged or dropped per sample
@@ -71,12 +71,15 @@ _PROPOSAL_SCHEMA_DOC = """{
      "rationale": "<one or two sentences tying the tests to the verdict>",
      "verdict": "real|artifact-doublet|artifact-lowquality|artifact-batch|artifact-ambient|ambiguous",
      "action": "keep|flag|drop", "confidence": "high|medium|low"}
-    // must cover EVERY cluster of the current clustering (incl. subcluster ids like "5,0")
+    // must cover EVERY cluster of the current clustering
   ],
   "cell_actions": [
     // optional finer-than-cluster records: only cells of that cluster matching metric op value
     {"cluster": "<id>", "metric": "<numeric obs column>", "op": ">|>=|<|<=", "value": 0.3,
      "note": "<free text>", "reason": "doublet|ambient|debris|low-quality|other", "action": "drop|flag"}
+    // a drop stands only for low-quality on pct_counts_mt (cut above the line) or n_genes_by_counts /
+    // total_counts and their log1p_ columns (cut below it), with the line among the cluster's outliers:
+    // beyond its median by 5 MADs (log1p scale for genes and counts); anything else is flagged
   ],
   "overall": "<overall assessment of the integration>"
 }
