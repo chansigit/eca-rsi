@@ -116,7 +116,7 @@ inherited-drop rules also contribute to the final preannotation candidate set.
 | Rule | Current implementation |
 | --- | --- |
 | Large fragments | Skip this test at ≥25% of their own parent core's size, or ≥800 cells. |
-| Inherited OSP decisions | Propose the fragment if >50% of its cells have `_qc_action == "drop"`, including fragments too small for statistical testing. |
+| Inherited OSP decisions | Propose the fragment if >50% of its cells have `_qc_action == "drop"`, including fragments too small for statistical testing. Idle since decision 0026: eca-rsi passes no OSP drop. |
 | Statistical comparison | One-sided Mann–Whitney U, p < 0.05, with at least five finite measurements in each comparison group; no multiple-testing correction. |
 | Contamination and stress | Test available `decontX_contamination` and `dissociation_score` values for an upward shift. |
 | Doublets and mitochondrial counts | Require the upward shift plus a fragment median above 0.2 for `doublet_score`, or above 20 for `pct_counts_mt`. |
@@ -151,7 +151,7 @@ and then inherits only preannotation removals.
 ## Removal and marker evidence
 
 Preannotation candidates combine minor-fragment QC, cell-level outliers, and
-inherited OSP `_qc_action == "drop"`. Annotation removes their union with
+inherited OSP `_qc_action == "drop"` (none since decision 0026). Annotation removes their union with
 inspection `_msp_action == "drop"` and annotation `action == "remove"`;
 keep decisions cannot subtract from that union. Global/local marker tables
 and inspection's live DEG exclude preannotation candidates; annotation's live

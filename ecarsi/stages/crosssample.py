@@ -229,11 +229,10 @@ def compute(inspected_ref, inclusion_ref, destination):
     data.obs[DOUBLET_THRESHOLD] = data.obs_names.map(thresholds).astype(float)
     if len(data) + len(excluded) != len(origin):
         raise ValueError('Sample selection lost cells')
-    if stress_policy(inspected['spec']) == 'keep' and '_qc_action' in data.obs:
-        # OSP advice to drop dissociation-stressed cells becomes a flag: the cells are kept and labelled (0017)
-        soft = data.obs.index.intersection([c for c, r in osp_reasons.items() if all(x['action'].get('reason') == 'dissociation-stress' for x in r)])
-        action = data.obs['_qc_action'].astype(str)
-        action[soft] = 'flag'
+    if '_qc_action' in data.obs:
+        # OSP removes cells only by its QC rules (decision 0026): its agent's drop advice, in outputs from before
+        # 0.4.21, is a flag here, and cross-sample's own checks judge those cells like any other
+        action = data.obs['_qc_action'].astype(str).replace('drop', 'flag')
         data.obs['_qc_action'] = pd.Categorical(action, categories=['keep', 'flag', 'drop'])
     integrate(data, inspected_ref, inclusion_ref, destination, inputs)
 
@@ -837,19 +836,16 @@ def finalize(evidence_ref, types_ref, quality_ref, destination):
         if 'cell_outliers.csv' in bundle['files']
         else pd.DataFrame()
     )
-    osp_reasons = pd.read_csv(artifact(bundle, 'osp_removal_proposals.csv.gz'), dtype=str, keep_default_na=False).set_index('cell')['reasons'].to_dict()
     retained = {}
     if stress_policy(verified(bundle['inspected'])['spec']) == 'keep':
-        # Fragments removed only by their dissociation or mitochondrial test stay, labelled (decision 0017);
-        # compute() already turned OSP's dissociation-stress drops into flags.
+        # Fragments removed only by their dissociation or mitochondrial test stay, labelled (decision 0017).
         soft = soft_fragments(fragments)
         bad_frag -= set(soft)
         product = data.obs['standissect_product'].astype(str) if 'standissect_product' in data.obs else pd.Series('', index=data.obs_names)
         flagged = outliers.index[outliers.recommend_removal.astype(str).str.lower().eq('true')] if 'recommend_removal' in outliers else []
-        stay = (product.isin(list(soft)) & ~data.obs_names.isin(flagged) & ~data.obs['_qc_action'].astype(str).eq('drop')).to_numpy()
+        stay = (product.isin(list(soft)) & ~data.obs_names.isin(flagged)).to_numpy()
         pre = pre & ~stay
         retained.update(product[stay].map(soft).to_dict())
-        retained.update({c: 'dissociation' for c in data.obs_names.intersection(list(osp_reasons)) if str(data.obs.at[c, '_qc_action']) != 'drop'})
     inspect_drop = data.obs['_msp_action'].astype(str).eq('drop').to_numpy()
     typed_entries = {str(e['cluster_id']): e for e in typed['proposal']['clusters']}
     contamination, contaminated = _contamination(data, typed_entries, outliers, pre | inspect_drop, destination)
@@ -882,10 +878,6 @@ def finalize(evidence_ref, types_ref, quality_ref, destination):
         if contamination is not None and cid in contamination.index and contamination.at[cid, 'contamination']:
             r.append({'code': 'contamination', 'detail': contamination.loc[cid].astype(str).to_dict(),
                       'evidence': reference(destination / 'contamination_check.csv')})
-        if str(row.get('_qc_action')) == 'drop':
-            if cid not in osp_reasons:
-                raise ValueError('OSP drop lacks its original decision: ' + cid)
-            r.append({'code': 'osp_proposal', 'detail': json.loads(osp_reasons[cid])})
         if str(row['_msp_action']) == 'drop':
             from msp.api import INSPECTION_OPS
 

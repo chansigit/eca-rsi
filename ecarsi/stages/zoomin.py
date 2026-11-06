@@ -230,9 +230,8 @@ def host_reasons(bundle, data, keep=()):
 def numerical_reasons(bundle, data):
     """Why the numerical pre-annotation removes each cell of a lineage, and {cell: state} of the cells the
     stress policy keep retains instead: those whose only reason is a fragment removed by its dissociation
-    or mitochondrial test (decision 0017). Cross-sample's list also has osp_proposal: OSP's drop advice is
-    applied there, in round 1, so no such cell reaches a lineage; one that did would have no reason here
-    and fail loudly rather than be recorded vaguely."""
+    or mitochondrial test (decision 0017). No reason here comes from OSP's agent: its advice is a flag
+    (decision 0026); a cell removed for a reason not listed here fails loudly rather than be recorded vaguely."""
     import pandas as pd
     from msp.api import load_removal_mask
 

@@ -138,10 +138,10 @@ Supported action reasons are `doublet`, `ambient`, `debris`,
 `dissociation-stress`, `low-quality`, and `other`.
 
 Annotation maps accepted labels to `obs["_ann_coarse"]` and
-`obs["_ann_fine"]`, and actions to `obs["_qc_action"]` (`keep`, `flag`,
-or `drop`). Cells with no matching action get `keep`; `drop` takes precedence
-over `flag` when both match. These are proposed decisions: annotation does
-not remove cells, rerun QC, or recluster after proposed drops.
+`obs["_ann_fine"]`, and actions to `obs["_qc_action"]` (`keep` or `flag`; outputs from before
+decision 0026 may also hold `drop`). Cells with no matching action get `keep`.
+The only action is `flag`: annotation does not remove cells or rerun QC, and
+OSP removes cells only by its QC rules.
 
 ## Reruns and completion
 

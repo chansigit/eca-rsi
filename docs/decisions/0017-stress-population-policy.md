@@ -33,7 +33,7 @@ applied in cross-sample round 1.
   same cells.
 - **Under `keep`**, every stress, dissociation or dying removal stays; so do fragments whose only hits are the
   dissociation and mitochondrial tests, and cells whose OSP drop advice is all `dissociation-stress` (cross-sample
-  compute turns it into a flag).
+  compute turns it into a flag). Since 0026 OSP's agent only flags, so its advice removes nothing under either policy.
 - **Kept cells are labelled, not relabelled.** obs `retained_state` (`''`, stress, dissociation or dying) travels
   through the rounds into `final.h5ad`; a cell keeps the state it was first retained for. `cell_ledger.csv.gz` gains
   `retained_state` and `retained_stage`, and needs_review lists `stress_retained` by stage, state and coarse label.

@@ -28,7 +28,7 @@ small { color: #555; } li { margin: 6px 0; }
 <tr><td><strong>① 准备样本子集</strong><br><code>persample.partition</code></td><td><strong>程序执行</strong></td><td>读取 Organize 已确认的样本映射，核对文件与版本、cell IDs、样本数量是否一致；沿用上游来源和排除记录。按确定的 cell IDs 写出有限批次的样本子集、输入名单和请求凭据。不重新推断实验边界，不重复做科学完整性裁决。</td><td>Pool 程序执行；共享读取、按有界批次准备</td></tr>
 <tr><td><strong>② 单样本 OSP 计算</strong><br><code>osp.compute</code></td><td><strong>程序执行</strong></td><td>校验子集；执行 QC（含配置启用的 Scrublet / DecontX）、保留通过细胞、归一化、HVG、PCA、邻居图、Leiden、UMAP、DEG/PAGA 和必要证据图。保存计算检查点、QC 删除记录及模型所需证据，然后释放计算资源。</td><td>Pool 程序执行；每个完整样本一个任务</td></tr>
 <tr><td><strong>③ 样本注释</strong><br><code>osp.annotate</code></td><td><strong>模型推理</strong></td><td>模型阅读固定版本证据，提出细胞标签与 QC action。需要补证据时进入下述工具回路。保存每次回复、工具结果和有效聚类版本；必须通过提交校验才能结束。此处 模型 负责细胞注释，不重新做 Organize 的样本划分。</td><td>Agent Bridge 调模型；Coordinator 校验、推进；不持有完整 AnnData 等待</td></tr>
-<tr><td><strong>④ 应用注释并发布</strong><br><code>osp.finalize</code></td><td><strong>程序执行</strong></td><td>读取有效计算版本和接受的提案，应用标签及 keep/flag/drop 标记，写出 H5AD、提案、必要报告和完成收据；验收输入 cell IDs 与 QC 删除记录的对应关系。校验与写出都属于这一块。</td><td>Pool 程序执行；每个样本，Coordinator 接受结果</td></tr>
+<tr><td><strong>④ 应用注释并发布</strong><br><code>osp.finalize</code></td><td><strong>程序执行</strong></td><td>读取有效计算版本和接受的提案，应用标签及 keep/flag 标记（决定 0026：代理只标记），写出 H5AD、提案、必要报告和完成收据；验收输入 cell IDs 与 QC 删除记录的对应关系。校验与写出都属于这一块。</td><td>Pool 程序执行；每个样本，Coordinator 接受结果</td></tr>
 </tbody>
 </table>
 <p>这是<strong>共享子集准备一块 + 各样本执行三块</strong>。①单独存在是为了复用共享输入读取；一次只准备有限批次，不等所有子集写完才开始②，也不一次物化几百个大文件。小输入或单样本可在不跨 模型 边界的前提下融合①和②。</p>

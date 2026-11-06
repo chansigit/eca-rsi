@@ -3,7 +3,7 @@ it reads (_gene_table, _qc_table, the file inventory, _subcluster_once), and the
 (schema, _validate_proposal, _apply_proposal, _plot_annotation). The session runs in eca-rsi
 (ecarsi/stages/persample.py, through osp.api); the standalone agent flow was removed with #28.
 
-Applying a proposal writes obs["_ann_coarse"], obs["_ann_fine"] and obs["_qc_action"] (keep/flag/drop) and
+Applying a proposal writes obs["_ann_coarse"], obs["_ann_fine"] and obs["_qc_action"] (keep/flag; drop only in outputs from before decision 0026) and
 renders the annotation UMAPs (coarse/fine) and a QC-action UMAP. QC actions are advice only, never applied to
 filtering here; species and tissue context come from the caller, and the package assumes no cell-type knowledge.
 """
@@ -34,7 +34,7 @@ log = logging.getLogger(__name__)
 
 _OPS = {">": operator.gt, ">=": operator.ge, "<": operator.lt, "<=": operator.le}
 _CONFIDENCE_VALUES = {"high", "medium", "low"}
-_QC_ACTIONS = {"drop", "flag"}
+_QC_ACTIONS = {"flag"}  # decision 0026: the agent flags; OSP removes cells only by its QC rules
 _QC_REASONS = {
     "doublet",
     "ambient",
@@ -157,12 +157,12 @@ _PROPOSAL_SCHEMA_DOC = """{
   "qc_actions": [
     // standardized machine-appliable records; omit entries for clean clusters
     // scope "cluster": the whole cluster
-    {"cluster": "<id>", "scope": "cluster", "action": "drop|flag",
+    {"cluster": "<id>", "scope": "cluster", "action": "flag",
      "reason": "doublet|ambient|debris|dissociation-stress|low-quality|other",
      "note": "<free text>"},
     // scope "cells": only cells of that cluster satisfying metric op value
-    {"cluster": "<id>", "scope": "cells", "metric": "<numeric obs column, e.g. decontX_contamination>",
-     "op": ">|>=|<|<=", "value": 0.6, "action": "drop|flag",
+    {"cluster": "<id>", "scope": "cells", "metric": "<numeric obs column, e.g. pct_counts_mt>",
+     "op": ">|>=|<|<=", "value": 20, "action": "flag",
      "reason": "...", "note": "..."}
   ],
   "threshold_suggestions": ["<free-text suggestions for the pipeline's QC thresholds>"],
@@ -241,7 +241,7 @@ def _validate_proposal(proposal, clusters, obs):
         if missing:
             problems.append(f"qc_actions[{index}] missing {missing}: {action}")
         if action.get("action") not in _QC_ACTIONS:
-            problems.append(f'qc_action "action" must be drop|flag: {action}')
+            problems.append(f'qc_action "action" must be flag (OSP removes cells only by its QC rules): {action}')
         if str(action.get("cluster")) not in cluster_set:
             problems.append(f"qc_action cluster {action.get('cluster')!r} is not a current cluster id: {action}")
         if action.get("reason") not in _QC_REASONS:
@@ -279,8 +279,7 @@ def _validate_proposal(proposal, clusters, obs):
 
 def _apply_proposal(ad, key, proposal):
     """Map the accepted proposal onto cells: obs["_ann_coarse"],
-    obs["_ann_fine"], and obs["_qc_action"] in {keep, flag, drop} — flags
-    applied first so drop wins where both match."""
+    obs["_ann_fine"], and obs["_qc_action"] in {keep, flag}."""
     lab = ad.obs[key].astype(str)
     ad.obs["_ann_coarse"] = lab.map({str(e["cluster"]): e["label_coarse"] for e in proposal["clusters"]}).astype(
         "category"
@@ -288,14 +287,11 @@ def _apply_proposal(ad, key, proposal):
     ad.obs["_ann_fine"] = lab.map({str(e["cluster"]): e["label_fine"] for e in proposal["clusters"]}).astype("category")
 
     action = np.array(["keep"] * ad.n_obs, dtype=object)
-    for verb in ("flag", "drop"):
-        for a in proposal.get("qc_actions", []):
-            if a["action"] != verb:
-                continue
-            mask = (lab == str(a["cluster"])).to_numpy(copy=True)  # pandas 3 CoW: .values is read-only
-            if a["scope"] == "cells":
-                mask &= _OPS[a["op"]](ad.obs[a["metric"]].to_numpy(dtype=float), float(a["value"]))
-            action[mask] = verb
+    for a in proposal.get("qc_actions", []):
+        mask = (lab == str(a["cluster"])).to_numpy(copy=True)  # pandas 3 CoW: .values is read-only
+        if a["scope"] == "cells":
+            mask &= _OPS[a["op"]](ad.obs[a["metric"]].to_numpy(dtype=float), float(a["value"]))
+        action[mask] = "flag"
     ad.obs["_qc_action"] = pd.Categorical(action, categories=["keep", "flag", "drop"])
 
 
@@ -395,8 +391,9 @@ Principles:
 - Output language: everything you submit (all text fields except gene symbols) and your final \
 narrative must be written in {language}.
 - qc_actions must use the standardized record format (scope "cluster" for whole clusters, scope \
-"cells" with metric/op/value for per-cell criteria). "drop" proposes removal, "flag" requests \
-human review. These are proposals only — nothing is auto-applied.
+"cells" with metric/op/value for per-cell criteria). The only action is "flag": it marks cells you \
+doubt, with the reason, for the cross-sample stage, whose own checks decide. No flag removes a cell; \
+OSP removes cells only by its QC rules.
 - When evidence is weak, use low confidence and state the doubts; do not force a guess.
 - Distinguish "this gene is genuinely expressed in this cluster" from "this gene is ambient \
 contamination here" — the decontx tables and heatmap exist exactly for that."""

@@ -325,8 +325,8 @@ def test_chunks_of_one_sample_skip_the_inclusion_agent(tmp_path, monkeypatch):
 
 def finalize_fixture(tmp_path, monkeypatch, policy, base=None, entries=None, extra_obs=None):
     """Eight cells in two clusters; fragment f1 was removed only by its dissociation test, f2 by its doublet
-    test, and OSP advised dropping c4 for dissociation stress. compute() turns that advice into a flag under
-    the policy keep, so the pre-annotation mask holds c4 only under remove."""
+    test, and OSP advised dropping c4 for dissociation stress. compute() turns that advice into a flag
+    (decision 0026), so the pre-annotation mask never holds c4."""
     import msp.annotate,msp.report
     monkeypatch.setattr(msp.annotate,'_plot',lambda *a:None)
     monkeypatch.setattr(msp.report,'generate_report',lambda *a:None)
@@ -334,11 +334,11 @@ def finalize_fixture(tmp_path, monkeypatch, policy, base=None, entries=None, ext
     source.mkdir()
     cells=['c'+str(i) for i in range(8)]
     obs=pd.DataFrame({BASE:pd.Categorical(base or ['0']*4+['1']*4),'doublet_score':[.1]*8,
-        'standissect_product':['f1','f1','f2']+['core']*5,'_qc_action':['keep']*4+['flag' if policy=='keep' else 'drop']+['keep']*3,
+        'standissect_product':['f1','f1','f2']+['core']*5,'_qc_action':['keep']*4+['flag']+['keep']*3,
         **(extra_obs or {})},index=cells)
     an.AnnData(np.ones((8,2)),obs=obs).write_h5ad(source/'integrated.h5ad')
     pd.DataFrame({'cell_id':cells,'source_id':['s']*8,'source_cell_id':['orig'+c for c in cells]}).to_csv(source/'input_cells.csv.gz',index=False)
-    pre=['c0','c1','c2']+(['c4'] if policy=='remove' else [])
+    pre=['c0','c1','c2']
     pd.DataFrame({'cell':cells,'recommend_removal':[c in pre for c in cells]}).to_csv(source/'preannotation_removal.csv',index=False)
     pd.DataFrame({'subcluster':['f1','f2'],'recommend_removal':[True,True],'dissociation_significant':[True,False],
         'doublet_significant':[False,True],'decontX_significant':[False,False],'mt_significant':[False,False],
@@ -356,9 +356,9 @@ def keep_entry(c, **changes):
 
 
 @pytest.mark.parametrize('policy',['remove','keep'])
-def test_the_stress_policy_keep_retains_dissociation_fragments_and_osp_stress_drops(tmp_path,monkeypatch,policy):
-    """Decision 0017: under keep, cells removed only by a fragment's dissociation test or by OSP's
-    dissociation-stress advice stay, labelled; a doublet fragment goes either way."""
+def test_the_stress_policy_keep_retains_dissociation_fragments_and_osp_advice_never_removes(tmp_path,monkeypatch,policy):
+    """Decision 0017: under keep, cells removed only by a fragment's dissociation test stay, labelled; a
+    doublet fragment goes either way. OSP's advice (c4) removes no cell under either policy (0026)."""
     source,evidence=finalize_fixture(tmp_path,monkeypatch,policy)
     types=immutable(tmp_path/'types.json',dict(accepted=True,evidence=evidence,proposal={'clusters':[keep_entry('0'),keep_entry('1')]}))
     quality=dict(clusters=[dict(cluster=c,verdict='real',action='keep',confidence='high',
@@ -372,9 +372,9 @@ def test_the_stress_policy_keep_retains_dissociation_fragments_and_osp_stress_dr
     codes={c:[r['code'] for r in json.loads(ledger.loc[c,'reason'])] for c in ledger.index}
     assert codes['c2']==['fragment_qc']
     if policy=='keep':
-        assert set(ledger.index)=={'c2'} and stored[['c0','c1','c4']].eq('dissociation').all() and stored.drop(['c0','c1','c4']).eq('').all()
+        assert set(ledger.index)=={'c2'} and stored[['c0','c1']].eq('dissociation').all() and stored.drop(['c0','c1']).eq('').all()
     else:
-        assert set(ledger.index)=={'c0','c1','c2','c4'} and codes['c4']==['osp_proposal'] and stored.eq('').all()
+        assert set(ledger.index)=={'c0','c1','c2'} and stored.eq('').all()
 
 
 def test_a_type_removal_the_code_cannot_support_stays_and_leaves_its_merge(tmp_path,monkeypatch):
@@ -397,7 +397,9 @@ def test_a_type_removal_the_code_cannot_support_stays_and_leaves_its_merge(tmp_p
 
 
 @pytest.mark.parametrize('policy',['remove','keep'])
-def test_compute_turns_osp_dissociation_stress_drops_into_flags_under_keep(tmp_path,monkeypatch,policy):
+def test_compute_turns_every_osp_drop_into_a_flag(tmp_path,monkeypatch,policy):
+    """Decision 0026: OSP removes cells only by its QC rules; its agent's drop advice in an older output, for
+    any reason and under either stress policy, reaches integration as a flag and is still recorded."""
     from ecarsi.stages import crosssample as module
 
     folder = tmp_path / 'a'
@@ -423,7 +425,9 @@ def test_compute_turns_osp_dissociation_stress_drops_into_flags_under_keep(tmp_p
     out = tmp_path / 'out'
     out.mkdir()
     module.compute(ref, inclusion, out)
-    assert [seen['action']['a'+str(i)] for i in range(6)]==(['flag','flag'] if policy=='keep' else ['drop','drop'])+['drop','drop','keep','keep']
+    assert [seen['action']['a'+str(i)] for i in range(6)]==['flag']*4+['keep','keep']
+    recorded=pd.read_csv(out/'osp_removal_proposals.csv.gz').set_index('cell')['reasons']
+    assert sorted(recorded.index)==['a0','a1','a2','a3'] and 'dissociation-stress' in recorded['a0'] and 'doublet' in recorded['a2']
 
 
 def test_contamination_runs_after_the_type_agent_on_the_cells_nothing_else_removes(tmp_path):

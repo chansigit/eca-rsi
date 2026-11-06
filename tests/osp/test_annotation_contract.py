@@ -1,5 +1,4 @@
 
-import anndata as ad
 import numpy as np
 import pandas as pd
 
@@ -59,7 +58,7 @@ def test_validator_handles_non_object_and_rejects_bad_nested_values():
     ]
     problems = annotate._validate_proposal(proposal, ["0", "1"], _obs())
     assert any("must be an object" in problem for problem in problems)
-    assert any("must be drop|flag" in problem for problem in problems)
+    assert any("must be flag" in problem for problem in problems)
     assert any("finite and numeric" in problem for problem in problems)
     assert any("numeric obs column" in problem for problem in problems)
 
@@ -76,27 +75,11 @@ def test_validator_rejects_duplicate_missing_and_unknown_clusters():
     assert any("unknown clusters" in problem for problem in problems)
 
 
-def test_drop_action_wins_over_flag_action():
-    data = ad.AnnData(np.ones((2, 2)), obs=pd.DataFrame({"cluster": ["0", "1"]}))
+def test_the_agent_can_only_flag():
+    """Decision 0026: OSP removes cells only by its QC rules, so a drop action is refused."""
     proposal = _proposal()
-    proposal["qc_actions"] = [
-        {
-            "cluster": "0",
-            "scope": "cluster",
-            "action": "drop",
-            "reason": "other",
-            "note": "drop",
-        },
-        {
-            "cluster": "0",
-            "scope": "cluster",
-            "action": "flag",
-            "reason": "other",
-            "note": "flag",
-        },
-    ]
-    annotate._apply_proposal(data, "cluster", proposal)
-    assert data.obs["_qc_action"].astype(str).tolist() == ["drop", "keep"]
+    proposal["qc_actions"] = [{"cluster": "0", "scope": "cluster", "action": "drop", "reason": "other", "note": "x"}]
+    assert any("must be flag" in problem for problem in annotate._validate_proposal(proposal, ["0", "1"], _obs()))
 
 
 def test_prompt_requires_decontx_figure_only_when_present(tmp_path):
@@ -126,9 +109,9 @@ def test_apply_proposal_cells_scope_under_copy_on_write():
     proposal = {
         "clusters": [{"cluster": "0", "label_coarse": "A", "label_fine": "a"},
                      {"cluster": "1", "label_coarse": "B", "label_fine": "b"}],
-        "qc_actions": [{"cluster": "0", "action": "drop", "scope": "cells", "metric": "pct_counts_mt", "op": ">", "value": 20}],
+        "qc_actions": [{"cluster": "0", "action": "flag", "scope": "cells", "metric": "pct_counts_mt", "op": ">", "value": 20}],
     }
     cow = pd.option_context("mode.copy_on_write", True) if int(pd.__version__.split(".")[0]) < 3 else contextlib.nullcontext()
     with cow:
         _apply_proposal(ad, "leiden", proposal)
-    assert list(ad.obs["_qc_action"]) == ["keep", "drop", "keep", "keep"]
+    assert list(ad.obs["_qc_action"]) == ["keep", "flag", "keep", "keep"]
