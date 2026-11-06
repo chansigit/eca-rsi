@@ -19,6 +19,7 @@ SCIENCE_ONLY = [
     "msp/test_compute.py",
     "msp/test_deg_expressed.py",
     "msp/test_deg_thread_isolation.py",
+    "msp/test_doublets.py",
     "msp/test_evidence_contracts.py",
     "msp/test_gene_summary.py",
     "msp/test_hvg_small_batches.py",
