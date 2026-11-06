@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.21 — 2026-11-05
+
+- **OSP removes cells only by its QC rules; its annotation agent only flags** (decision 0026). Until now every
+  `drop` the OSP agent proposed was removed at round-1 cross-sample finalize without a check of its reason, and msp
+  proposed a fragment more than half of whose cells carried one: in tabula-sapiens-clean 7,332 cells were removed
+  for OSP's advice alone, 1,663 of them by a cut-off on decontX and 627 on the Scrublet score, which 0023 gives to
+  code checks, and 93 as `other`, which 0025 never removes. The agent's `qc_actions` now take `flag` only (the
+  schema's example is a cut-off on `pct_counts_mt`, no longer on decontX), and cross-sample compute turns a `drop`
+  of an older OSP output into a flag, so a restart from round-1 cross-sample reuses OSP. Under the stress policy
+  keep, OSP's dissociation-stress advice is no longer labelled `dissociation`.
+
 ## 0.4.20 — 2026-10-28
 
 - **The code of 0.4.19 on the image pair 20261028-1**, whose HyperQueue is the upstream release v0.27.0 (it contains
